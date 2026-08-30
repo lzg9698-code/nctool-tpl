@@ -12,17 +12,23 @@
 //! # 示例
 //!
 //! ```
-//! use nctool_tpl::{parse, extract_undeclared};
+//! use nctool_tpl::{parse, extract_undeclared, Variable};
 //!
 //! let source = r#"{% set feed = 0.15 %}G1 X{{ diameter / 2 }} F{{ feed }}"#;
 //! let ast = parse(source, "demo.j2").unwrap();
 //!
-//! let undeclared: Vec<String> = extract_undeclared(&ast)
-//!     .into_iter()
-//!     .map(|v| v.name)
-//!     .collect();
-//! assert_eq!(undeclared, vec!["diameter".to_string()]);
+//! let undeclared: Vec<Variable> = extract_undeclared(&ast);
+//! assert_eq!(undeclared.len(), 1);
+//! assert_eq!(undeclared[0].name, "diameter");
+//! assert!(!undeclared[0].optional); // 必选
 //! ```
+//!
+//! # 稳定性
+//!
+//! 公共 API 为 [`parse`] / [`extract_variables`] / [`extract_undeclared`] /
+//! [`Renderer`] / [`Variable`] / [`TplError`] / [`Ast`]。[`Ast`] 内部字段已私有化
+//! （通过方法访问），[`TplError`] 标注 `#[non_exhaustive]`，以便未来扩展而不破坏
+//! 下游。v0.x 阶段 API 仍可能调整，建议在 `Cargo.toml` 中锁定 minor 版本。
 
 use std::collections::HashSet;
 use std::fmt;
@@ -69,16 +75,33 @@ pub struct Variable {
 /// 解析结果：持有模板 AST，同时保留源码与文件名引用。
 ///
 /// 变量提取只读这个结构；渲染可复用同源文本（minijinja 内部自带 JIT 编译缓存）。
+///
+/// 字段均为私有，通过 [`name`](Self::name) / [`source`](Self::source) 访问，
+/// 以便未来改变内部存储而不破坏公共 API。
 #[derive(Debug)]
 pub struct Ast<'a> {
-    /// 模板名（用于错误信息）
-    pub name: &'a str,
-    /// 模板源码
-    pub source: &'a str,
+    name: &'a str,
+    source: &'a str,
     pub(crate) stmt: Stmt<'a>,
 }
 
+impl<'a> Ast<'a> {
+    /// 模板名（用于错误信息）。
+    pub fn name(&self) -> &str {
+        self.name
+    }
+
+    /// 模板源码。
+    pub fn source(&self) -> &str {
+        self.source
+    }
+}
+
 /// 模板解析/渲染错误。
+///
+/// `#[non_exhaustive]`：未来可能新增错误变体（如 `UndefinedVariable`、
+/// `TemplateNotFound`），外部 match 应保留通配分支。
+#[non_exhaustive]
 #[derive(Debug)]
 pub enum TplError {
     /// 语法错误，带模板名与行列号。
@@ -161,7 +184,7 @@ pub fn parse<'a>(source: &'a str, name: &'a str) -> Result<Ast<'a>, TplError> {
 /// 结果按首次出现顺序去重，排除引擎内置名（`loop`/`self`/`super`/`caller`）。
 /// 每个变量的 [`Variable::optional`] 表示其全部引用是否都处于兜底上下文。
 pub fn extract_variables<'a>(ast: &Ast<'a>) -> Vec<Variable> {
-    let mut c = Collector::new(ast.source);
+    let mut c = Collector::new(ast.source());
     walk_stmt(&ast.stmt, &mut c, false);
     c.finalize();
     c.all
@@ -173,7 +196,7 @@ pub fn extract_variables<'a>(ast: &Ast<'a>) -> Vec<Variable> {
 /// 每个变量的 [`Variable::optional`]：`true` = 可选参数（全部引用均有 `default`/`defined`
 /// 兜底，缺失时模板仍可渲染）；`false` = 必选参数。
 pub fn extract_undeclared<'a>(ast: &Ast<'a>) -> Vec<Variable> {
-    let mut c = Collector::new(ast.source);
+    let mut c = Collector::new(ast.source());
     walk_stmt(&ast.stmt, &mut c, false);
     c.finalize();
     c.undeclared
