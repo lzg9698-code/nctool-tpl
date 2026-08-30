@@ -99,8 +99,10 @@ impl<'a> Ast<'a> {
 
 /// 模板解析/渲染错误。
 ///
-/// `#[non_exhaustive]`：未来可能新增错误变体（如 `UndefinedVariable`、
-/// `TemplateNotFound`），外部 match 应保留通配分支。
+/// `#[non_exhaustive]`：未来可能新增错误变体，外部 match 应保留通配分支。
+///
+/// 细分变体让上层可精准处理：例如 `UndefinedVariable` 可触发"参数缺失"提示，
+/// `TemplateNotFound` 可触发模板路径检查，而不必解析 message 字符串。
 #[non_exhaustive]
 #[derive(Debug)]
 pub enum TplError {
@@ -114,7 +116,35 @@ pub enum TplError {
         line: usize,
         col: usize,
     },
-    /// 渲染错误（未定义变量、过滤器不存在等）
+    /// 模板未找到（`{% include %}` / `{% extends %}` / `get_template` 引用了不存在的模板）。
+    TemplateNotFound {
+        name: String,
+        /// 被引用但不存在的模板名（从 minijinja 错误详情中提取，可能为空）。
+        template: String,
+        message: String,
+    },
+    /// 未定义变量（严格模式下引用了不存在的变量）。
+    UndefinedVariable {
+        name: String,
+        /// 变量名（从错误详情中提取，可能为空）。
+        variable: String,
+        message: String,
+    },
+    /// 未知过滤器（模板使用了未注册的过滤器）。
+    UnknownFilter {
+        name: String,
+        /// 过滤器名（从错误详情中提取，可能为空）。
+        filter: String,
+        message: String,
+    },
+    /// 未知测试（模板使用了未注册的测试）。
+    UnknownTest {
+        name: String,
+        /// 测试名（从错误详情中提取，可能为空）。
+        test: String,
+        message: String,
+    },
+    /// 其他渲染错误（无效操作、参数错误、序列化失败等兜底）。
     Render { name: String, message: String },
 }
 
@@ -129,6 +159,50 @@ impl fmt::Display for TplError {
             } => {
                 write!(f, "{name}:{line}: 模板语法错误: {message}")
             }
+            TplError::TemplateNotFound {
+                name,
+                template,
+                message,
+            } => {
+                if template.is_empty() {
+                    write!(f, "{name}: 模板未找到: {message}")
+                } else {
+                    write!(f, "{name}: 模板未找到 '{template}': {message}")
+                }
+            }
+            TplError::UndefinedVariable {
+                name,
+                variable,
+                message,
+            } => {
+                if variable.is_empty() {
+                    write!(f, "{name}: 未定义变量: {message}")
+                } else {
+                    write!(f, "{name}: 未定义变量 '{variable}': {message}")
+                }
+            }
+            TplError::UnknownFilter {
+                name,
+                filter,
+                message,
+            } => {
+                if filter.is_empty() {
+                    write!(f, "{name}: 未知过滤器: {message}")
+                } else {
+                    write!(f, "{name}: 未知过滤器 '{filter}': {message}")
+                }
+            }
+            TplError::UnknownTest {
+                name,
+                test,
+                message,
+            } => {
+                if test.is_empty() {
+                    write!(f, "{name}: 未知测试: {message}")
+                } else {
+                    write!(f, "{name}: 未知测试 '{test}': {message}")
+                }
+            }
             TplError::Render { name, message } => {
                 write!(f, "{name}: 渲染错误: {message}")
             }
@@ -137,6 +211,83 @@ impl fmt::Display for TplError {
 }
 
 impl std::error::Error for TplError {}
+
+/// 从错误详情字符串中提取第一个引号（单引号或双引号）内的内容。
+///
+/// minijinja 的错误详情通常形如 `unknown filter 'foo'` 或
+/// `variable 'x' is undefined`，此函数提取其中的名称。
+fn extract_quoted(s: &str) -> Option<String> {
+    let start = s.find('\'').or_else(|| s.find('"'))?;
+    let quote = s.as_bytes()[start];
+    let rest = &s[start + 1..];
+    let end = rest.find(quote as char)?;
+    Some(rest[..end].to_string())
+}
+
+/// 从 `"prefix name rest"` 格式的详情中提取 `name`（第一个空白分隔的词）。
+///
+/// 用于 minijinja 的 `"filter badfilter is unknown"` / `"test badtest is unknown"`
+/// 这类无引号格式。
+fn extract_after_prefix<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
+    s.strip_prefix(prefix)?.split_whitespace().next()
+}
+
+/// 将 minijinja 错误转换为细分的 [`TplError`]。
+///
+/// `fallback_name`：当 minijinja 错误未携带模板名时使用的名称。
+/// `source`：模板源码，用于语法错误的列号换算（可为 None，此时 col 回退为 1）。
+fn from_minijinja_error(
+    err: minijinja::Error,
+    fallback_name: &str,
+    source: Option<&str>,
+) -> TplError {
+    use minijinja::ErrorKind;
+    let name = err.name().unwrap_or(fallback_name).to_string();
+    let message = err.to_string();
+    let detail = err.detail().unwrap_or("");
+
+    match err.kind() {
+        ErrorKind::SyntaxError => {
+            let (line, col) = err
+                .range()
+                .and_then(|range| source.map(|s| line_col_at(s, range.start)))
+                .unwrap_or_else(|| (err.line().unwrap_or(1), 1));
+            TplError::Parse {
+                name,
+                message,
+                line,
+                col,
+            }
+        }
+        ErrorKind::TemplateNotFound => TplError::TemplateNotFound {
+            name,
+            template: extract_quoted(detail).unwrap_or_default(),
+            message,
+        },
+        ErrorKind::UndefinedError => TplError::UndefinedVariable {
+            name,
+            // minijinja 的 UndefinedError 不携带变量名（detail 为 None），
+            // 此字段暂为空；变量名可结合模板源码与错误位置另行定位。
+            variable: String::new(),
+            message,
+        },
+        ErrorKind::UnknownFilter => TplError::UnknownFilter {
+            name,
+            filter: extract_quoted(detail)
+                .or_else(|| extract_after_prefix(detail, "filter ").map(str::to_string))
+                .unwrap_or_default(),
+            message,
+        },
+        ErrorKind::UnknownTest => TplError::UnknownTest {
+            name,
+            test: extract_quoted(detail)
+                .or_else(|| extract_after_prefix(detail, "test ").map(str::to_string))
+                .unwrap_or_default(),
+            message,
+        },
+        _ => TplError::Render { name, message },
+    }
+}
 
 /// 由源码字节偏移换算 (行, 列)，均 1 起始；列以**字节**计（与 minijinja AST
 /// span 的 `start_col` 口径一致）。`\n` 视为行分隔符，`\r\n` 中 `\r` 归入行尾。
@@ -567,14 +718,9 @@ impl Renderer {
         let tmpl = self
             .env
             .template_from_named_str(name, source)
-            .map_err(|err| TplError::Render {
-                name: name.to_string(),
-                message: err.to_string(),
-            })?;
-        tmpl.render(context).map_err(|err| TplError::Render {
-            name: name.to_string(),
-            message: err.to_string(),
-        })
+            .map_err(|err| from_minijinja_error(err, name, Some(source)))?;
+        tmpl.render(context)
+            .map_err(|err| from_minijinja_error(err, name, None))
     }
 
     /// 注册一个内存模板（owned 字符串，无生命周期约束）。
@@ -588,12 +734,10 @@ impl Renderer {
         source: impl Into<String>,
     ) -> Result<(), TplError> {
         let name = name.into();
+        let source = source.into();
         self.env
-            .add_template_owned(name.clone(), source.into())
-            .map_err(|err| TplError::Render {
-                name,
-                message: err.to_string(),
-            })
+            .add_template_owned(name.clone(), source.clone())
+            .map_err(|err| from_minijinja_error(err, &name, Some(&source)))
     }
 
     /// 从文件系统目录动态加载模板。
@@ -618,14 +762,9 @@ impl Renderer {
         let tmpl = self
             .env
             .get_template(name)
-            .map_err(|err| TplError::Render {
-                name: name.to_string(),
-                message: err.to_string(),
-            })?;
-        tmpl.render(context).map_err(|err| TplError::Render {
-            name: name.to_string(),
-            message: err.to_string(),
-        })
+            .map_err(|err| from_minijinja_error(err, name, None))?;
+        tmpl.render(context)
+            .map_err(|err| from_minijinja_error(err, name, None))
     }
 }
 
@@ -852,13 +991,10 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
         let ctx = minijinja::context! {};
         let err = r.render_template("missing.j2", &ctx).unwrap_err();
         match err {
-            TplError::Render { message, .. } => {
-                assert!(
-                    message.contains("template") || message.contains("not found"),
-                    "应报模板未找到错误: {message}"
-                );
+            TplError::TemplateNotFound { name, .. } => {
+                assert_eq!(name, "missing.j2");
             }
-            _ => panic!("应为渲染错误"),
+            _ => panic!("应为 TemplateNotFound 错误"),
         }
     }
 
@@ -867,8 +1003,8 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
         let mut r = Renderer::new();
         let err = r.add_template("bad.j2", "{{ oops ").unwrap_err();
         match err {
-            TplError::Render { message, .. } => assert!(message.contains("syntax")),
-            _ => panic!("应为渲染错误（注册时语法检查失败）"),
+            TplError::Parse { message, .. } => assert!(message.contains("syntax")),
+            _ => panic!("应为 Parse 错误（注册时语法检查失败）"),
         }
     }
 
@@ -879,6 +1015,80 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
         let ctx = minijinja::context! { x => 42.0 };
         let out = r.render("X{{ x }}", "s.j2", &ctx).unwrap();
         assert_eq!(out, "X42.0");
+    }
+
+    // -----------------------------------------------------------------------
+    // 错误细分验证
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn error_unknown_filter_is_subdivided() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! { x => 1.0 };
+        let err = r
+            .render("{{ x | nonexistent_filter }}", "f.j2", &ctx)
+            .unwrap_err();
+        match err {
+            TplError::UnknownFilter { filter, .. } => {
+                assert_eq!(filter, "nonexistent_filter");
+            }
+            _ => panic!("应为 UnknownFilter，实际: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn error_unknown_test_is_subdivided() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! { x => 1.0 };
+        let err = r
+            .render("{% if x is nonexistent_test %}yes{% endif %}", "t.j2", &ctx)
+            .unwrap_err();
+        match err {
+            TplError::UnknownTest { test, .. } => {
+                assert_eq!(test, "nonexistent_test");
+            }
+            _ => panic!("应为 UnknownTest，实际: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn error_undefined_variable_is_subdivided() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! {};
+        let err = r.render("{{ missing }}", "u.j2", &ctx).unwrap_err();
+        match err {
+            // minijinja 的 UndefinedError 不携带变量名，variable 字段为空
+            TplError::UndefinedVariable { variable, .. } => {
+                assert!(variable.is_empty(), "minijinja 不提供变量名，应为空");
+            }
+            _ => panic!("应为 UndefinedVariable，实际: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn error_display_includes_subdivision() {
+        let err = TplError::UndefinedVariable {
+            name: "t.j2".to_string(),
+            variable: "x".to_string(),
+            message: "variable 'x' is undefined".to_string(),
+        };
+        let display = format!("{err}");
+        assert!(display.contains("未定义变量"));
+        assert!(display.contains("'x'"));
+        assert!(display.contains("t.j2"));
+    }
+
+    #[test]
+    fn extract_quoted_works() {
+        assert_eq!(
+            extract_quoted("unknown filter 'foo'"),
+            Some("foo".to_string())
+        );
+        assert_eq!(
+            extract_quoted("variable \"x\" is undefined"),
+            Some("x".to_string())
+        );
+        assert_eq!(extract_quoted("no quotes here"), None);
     }
 
     #[test]
@@ -901,13 +1111,17 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
         let ctx = minijinja::context! {};
         let err = renderer.render(src, "gcode.j2", &ctx).unwrap_err();
         match err {
-            TplError::Render { message, .. } => {
+            TplError::UndefinedVariable {
+                variable, message, ..
+            } => {
+                // minijinja 的 UndefinedError 不携带变量名
+                assert!(variable.is_empty());
                 assert!(
                     message.contains("undefined"),
                     "Strict 模式应报未定义值错误: {message}"
-                )
+                );
             }
-            _ => panic!("expected render error"),
+            _ => panic!("应为 UndefinedVariable 错误"),
         }
     }
 }

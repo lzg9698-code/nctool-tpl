@@ -15,6 +15,19 @@ NCtool 模板解析核心：基于 [minijinja](https://github.com/mitsuhiko/mini
 | `extract_undeclared(&ast)` | 提取引用但**未在模板内声明**的变量 —— 即渲染时必须由外部提供的参数；并区分**可选 / 必选** |
 | `Renderer` | 用上下文渲染出最终文本（G-code），内置数学过滤器集；支持多模板（`include`/`extends`/`import`） |
 
+## 错误类型
+
+`TplError` 已细分，上层可精准处理（`#[non_exhaustive]`，match 请保留通配分支）：
+
+| 变体 | 触发场景 | 关键字段 |
+| --- | --- | --- |
+| `Parse` | 模板语法错误 | `line`, `col`（真实行列定位） |
+| `TemplateNotFound` | `include`/`extends`/`get_template` 引用了不存在的模板 | `template` |
+| `UndefinedVariable` | Strict 模式下引用了未定义变量 | —（minijinja 不携带变量名，可结合模板源码定位） |
+| `UnknownFilter` | 使用了未注册的过滤器 | `filter` |
+| `UnknownTest` | 使用了未注册的测试 | `test` |
+| `Render` | 其他渲染错误（无效操作、参数错误等兜底） | — |
+
 ## 多模板渲染
 
 `Renderer` 支持模板间引用，两种注册方式：

@@ -241,10 +241,9 @@ fn render_missing_template_error() {
     let ctx = minijinja::context! {};
     let err = renderer.render_template("nope.j2", &ctx).unwrap_err();
     match err {
-        TplError::Render { name, message } => {
+        TplError::TemplateNotFound { name, .. } => {
             assert_eq!(name, "nope.j2");
-            assert!(!message.is_empty());
         }
-        _ => panic!("应为 Render 错误"),
+        _ => panic!("应为 TemplateNotFound 错误"),
     }
 }
