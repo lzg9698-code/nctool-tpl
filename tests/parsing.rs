@@ -126,3 +126,55 @@ fn render_rejects_nonfinite_math() {
         _ => panic!("应为渲染错误"),
     }
 }
+
+/// 解析错误应带真实列号定位，而非恒为 1 的占位值。
+#[test]
+fn parse_error_locates_column() {
+    let err = parse("G0 X10\n{{ (1 + 2 }}", "bad.j2").unwrap_err();
+    match err {
+        TplError::Parse { line, col, .. } => {
+            assert_eq!(line, 2, "应定位到第 2 行，实际 {line}");
+            assert!(col > 3, "应定位到 `}}` 附近列号，实际 col={col}");
+        }
+        _ => panic!("应为解析错误"),
+    }
+}
+
+/// 未声明变量区分「可选 / 必选」：有 default 兜底的为可选，否则为必选。
+#[test]
+fn undeclared_distinguishes_optional_required() {
+    let src = r#"{% set feed = default_feed | default(0.15) %}
+G1 X{{ diameter / 2 }} F{{ feed }}
+G1 Z{{ depth | default(-5) }}
+{% if coolant is defined %}M8{% endif %}"#;
+    let ast = parse(src, "opt.j2").unwrap();
+    let vars = extract_undeclared(&ast);
+    let opt = |n: &str| {
+        vars.iter()
+            .find(|v| v.name == n)
+            .unwrap_or_else(|| panic!("缺少变量 {n}"))
+            .optional
+    };
+
+    // 有 default 兜底 / 仅 defined 检查 → 可选
+    assert!(opt("default_feed"), "default_feed 应可选");
+    assert!(opt("depth"), "depth 应可选（default 兜底）");
+    assert!(opt("coolant"), "coolant 应可选（defined 检查）");
+    // 无任何兜底 → 必选
+    assert!(!opt("diameter"), "diameter 应必选");
+}
+
+/// extract_variables 与 extract_undeclared 中 optional 语义一致。
+#[test]
+fn variables_and_undeclared_share_optional() {
+    let src = "{{ required_x }}{{ optional_y | default(1) }}";
+    let ast = parse(src, "opt2.j2").unwrap();
+    let all = extract_variables(&ast);
+    let undeclared = extract_undeclared(&ast);
+
+    let all_opt = |n: &str| all.iter().find(|v| v.name == n).unwrap().optional;
+    let un_opt = |n: &str| undeclared.iter().find(|v| v.name == n).unwrap().optional;
+
+    assert!(!all_opt("required_x") && !un_opt("required_x"));
+    assert!(all_opt("optional_y") && un_opt("optional_y"));
+}

@@ -10,23 +10,31 @@ NCtool 模板解析核心：基于 [minijinja](https://github.com/mitsuhiko/mini
 
 | API | 说明 |
 | --- | --- |
-| `parse(source, name)` | 语法检查并生成 AST（带行号定位） |
+| `parse(source, name)` | 语法检查并生成 AST（带行列定位） |
 | `extract_variables(&ast)` | 提取模板中**引用过**的全部变量名（含模板内部声明的） |
-| `extract_undeclared(&ast)` | 提取引用但**未在模板内声明**的变量 —— 即渲染时必须由外部提供的参数 |
+| `extract_undeclared(&ast)` | 提取引用但**未在模板内声明**的变量 —— 即渲染时必须由外部提供的参数；并区分**可选 / 必选** |
 | `Renderer` | 用上下文渲染出最终文本（G-code），内置数学过滤器集 |
+
+每个返回的 `Variable` 都带有 `optional: bool` 字段：`true` 表示该变量的**全部引用**都处于「兜底上下文」（`default`/`d` 过滤器或 `is defined`/`is undefined` 测试）——对 `extract_undeclared` 而言即**可选参数**（缺失时模板仍可安全渲染），`false` 为**必选参数**。
 
 ## 快速开始
 
 ```rust
-use nctool_tpl::{parse, extract_undeclared, Renderer};
+use nctool_tpl::{parse, extract_undeclared, Renderer, Variable};
 
 let source = r#"{% set feed = 0.15 %}G1 X{{ diameter / 2 }} F{{ feed }}"#;
 let ast = parse(source, "demo.j2").unwrap();
 
 // 未声明变量 = 需要外部上下文提供的参数
-let undeclared: Vec<String> = extract_undeclared(&ast)
-    .into_iter().map(|v| v.name).collect();
-assert_eq!(undeclared, vec!["diameter".to_string()]);
+let undeclared: Vec<Variable> = extract_undeclared(&ast);
+assert_eq!(undeclared.len(), 1);
+assert_eq!(undeclared[0].name, "diameter");
+assert!(!undeclared[0].optional); // 必选
+
+// 可选参数：有 default 兜底 / defined 检查
+let src = "G1 F{{ feed | default(0.15) }} {% if coolant is defined %}M8{% endif %}";
+let vars: Vec<Variable> = extract_undeclared(&parse(src, "o.j2").unwrap());
+assert!(vars.iter().all(|v| v.optional)); // feed / coolant 均为可选
 
 // 渲染（Strict 模式：缺失变量直接报错，不静默输出不完整 G-code）
 let renderer = Renderer::new();
@@ -34,6 +42,12 @@ let ctx = minijinja::context! { diameter => 42.0 };
 let out = renderer.render(source, "demo.j2", &ctx).unwrap();
 assert_eq!(out, "G1 X21.0 F0.15");
 ```
+
+## 可选 / 必选判定规则
+
+- **可选**：变量只出现在 `x | default(默认值)`（别名 `d`）或 `x is defined` / `x is undefined` 的**操作数**位置。
+- **必选**：变量在任意非兜底位置被引用（如 `{{ x }}`、`{{ x / 2 }}`、过滤器/函数参数等），或既有兜底引用又有非兜底引用。
+- 模板内部 `set`/`for`/`with`/宏参数等声明的局部变量不进未声明集合，不受此规则影响。
 
 ## 数学过滤器
 
@@ -57,10 +71,10 @@ cargo clippy --all-targets -- -D warnings
 cargo fmt --check
 ```
 
-## 已知限制
+## 定位精度与判定边界
 
-- **错误定位**：`TplError::Parse.col` 为占位值（恒为 1），因为 minijinja 的错误对象仅暴露行号、未暴露列号；列号细节通常包含在 `message` 文本中。
-- **可选参数不区分**：`{% set feed = default_feed | default(0.15) %}` 中的 `default_feed` 虽然有默认值兜底，仍会被 `extract_undeclared` 列为「未声明变量」。工具无法区分「可选」与「必选」参数，该行为与 `jinja2.meta` 一致。
+- **解析错误列号**：`TplError::Parse.col` 取自 minijinja 错误携带的字节范围（需启用 `debug` feature）换算而来，指向**解析器停止处**的 token，是对错误位置的最佳近似（多数场景精确，个别场景如"未闭合块"只精确到行）。无法取得字节范围时回退为 `col = 1`。
+- **可选 / 必选判定边界**：只把 `default`/`d` 过滤器与 `defined`/`undefined` 测试的**直接操作数**记为可选；`defined` 保护块**内部**的引用仍记为必选（保守策略，宁多勿漏）；`default(参数)` 的默认值表达式里的变量仍记为必选（它必须存在才能求值默认值）。
 
 ## License
 

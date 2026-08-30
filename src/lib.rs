@@ -5,7 +5,8 @@
 //! 1. [`parse`]：语法检查 + 生成 AST（带行列定位）
 //! 2. [`extract_variables`]：提取模板中**引用过**的所有变量名（含模板内部声明的）
 //! 3. [`extract_undeclared`]：提取模板中引用、但**未在模板内部声明**的变量
-//!    （即运行时要由外部上下文提供的参数）—— 对标 Python `jinja2.meta.find_undeclared_variables`
+//!    （即运行时要由外部上下文提供的参数），并区分**可选 / 必选**（见 [`Variable::optional`]）
+//!    —— 对标 Python `jinja2.meta.find_undeclared_variables`
 //! 4. [`Renderer`]：用上下文渲染出最终文本（G-code），内置数学过滤器集
 //!
 //! # 示例
@@ -53,6 +54,15 @@ pub struct Variable {
     pub start: usize,
     /// 结束字节偏移（不含）
     pub end: usize,
+    /// 该变量的**所有**引用是否都处于「兜底上下文」。
+    ///
+    /// 兜底上下文指 `default`/`d` 过滤器（`{{ x | default(0.15) }}`）或
+    /// `is defined`/`is undefined` 测试（`{% if x is defined %}`）——
+    /// 这些位置上的引用在变量缺失时模板仍可安全渲染。
+    ///
+    /// 对 [`extract_undeclared`] 的语义：`true` = 可选参数（缺失时可兜底），
+    /// `false` = 必选参数（渲染时必须由外部上下文提供）。
+    pub optional: bool,
 }
 
 /// 解析结果：持有模板 AST，同时保留源码与文件名引用。
@@ -70,16 +80,14 @@ pub struct Ast<'a> {
 /// 模板解析/渲染错误。
 #[derive(Debug)]
 pub enum TplError {
-    /// 语法错误，带模板名与行号。
+    /// 语法错误，带模板名与行列号。
     ///
-    /// 注意：`col` 字段为占位值（恒为 `1`）——minijinja 的错误对象仅暴露
-    /// 行号（[`minijinja::Error::line`]），未暴露列号；列号细节一般包含在
-    /// `message` 的文本描述中，请勿将 `col` 当作准确的列定位使用。
+    /// `col` 为 minijinja 停止解析位置的最佳近似（来自其错误携带的字节范围），
+    /// 在无法取得字节范围时回退为 `1`。
     Parse {
         name: String,
         message: String,
         line: usize,
-        /// 占位列号（当前恒为 1，见枚举文档说明）
         col: usize,
     },
     /// 渲染错误（未定义变量、过滤器不存在等）
@@ -106,18 +114,42 @@ impl fmt::Display for TplError {
 
 impl std::error::Error for TplError {}
 
+/// 由源码字节偏移换算 (行, 列)，均 1 起始；列以**字节**计（与 minijinja AST
+/// span 的 `start_col` 口径一致）。`\n` 视为行分隔符，`\r\n` 中 `\r` 归入行尾。
+fn line_col_at(source: &str, byte_offset: usize) -> (usize, usize) {
+    let bytes = source.as_bytes();
+    let off = byte_offset.min(bytes.len());
+    let mut line = 1usize;
+    let mut line_start = 0usize;
+    for (i, &b) in bytes.iter().enumerate() {
+        if i >= off {
+            break;
+        }
+        if b == b'\n' {
+            line += 1;
+            line_start = i + 1;
+        }
+    }
+    (line, off - line_start + 1)
+}
+
 /// 语法检查并生成 AST。
 ///
-/// 解析失败时返回带行列定位的 [`TplError::Parse`]。
+/// 解析失败时返回带行列定位的 [`TplError::Parse`]。列号取自 minijinja 错误携带的
+/// 字节范围（需启用 `debug` feature）——它指向解析器停止处的 token，是对错误位置
+/// 的最佳近似；无法取得字节范围时回退为 `col = 1`。
 pub fn parse<'a>(source: &'a str, name: &'a str) -> Result<Ast<'a>, TplError> {
     let stmt = minijinja::machinery::parse(source, name, SyntaxConfig, WhitespaceConfig::default())
         .map_err(|err| {
-            let line = err.line().unwrap_or(1);
+            let (line, col) = err
+                .range()
+                .map(|range| line_col_at(source, range.start))
+                .unwrap_or_else(|| (err.line().unwrap_or(1), 1));
             TplError::Parse {
                 name: name.to_string(),
                 message: err.to_string(),
                 line,
-                col: 1,
+                col,
             }
         })?;
     Ok(Ast { name, source, stmt })
@@ -126,18 +158,23 @@ pub fn parse<'a>(source: &'a str, name: &'a str) -> Result<Ast<'a>, TplError> {
 /// 提取模板中**引用过**的所有变量名（含模板内部用 `set`/`for` 声明的名字）。
 ///
 /// 结果按首次出现顺序去重，排除引擎内置名（`loop`/`self`/`super`/`caller`）。
+/// 每个变量的 [`Variable::optional`] 表示其全部引用是否都处于兜底上下文。
 pub fn extract_variables<'a>(ast: &Ast<'a>) -> Vec<Variable> {
     let mut c = Collector::new(ast.source);
-    walk_stmt(&ast.stmt, &mut c);
+    walk_stmt(&ast.stmt, &mut c, false);
+    c.finalize();
     c.all
 }
 
 /// 提取模板中引用、但**未在模板内部声明**的变量 —— 即渲染时必须由外部上下文提供。
 ///
 /// 对标 Python `jinja2.meta.find_undeclared_variables(ast)`。结果按首次出现顺序去重。
+/// 每个变量的 [`Variable::optional`]：`true` = 可选参数（全部引用均有 `default`/`defined`
+/// 兜底，缺失时模板仍可渲染）；`false` = 必选参数。
 pub fn extract_undeclared<'a>(ast: &Ast<'a>) -> Vec<Variable> {
     let mut c = Collector::new(ast.source);
-    walk_stmt(&ast.stmt, &mut c);
+    walk_stmt(&ast.stmt, &mut c, false);
+    c.finalize();
     c.undeclared
 }
 
@@ -152,6 +189,8 @@ struct Collector<'a> {
     all_seen: HashSet<String>,
     undeclared: Vec<Variable>,
     undeclared_seen: HashSet<String>,
+    /// 出现过「非兜底引用」的变量名 —— 用于最终计算 `optional`。
+    required_refs: HashSet<String>,
 }
 
 impl<'a> Collector<'a> {
@@ -162,11 +201,25 @@ impl<'a> Collector<'a> {
             all_seen: HashSet::new(),
             undeclared: Vec::new(),
             undeclared_seen: HashSet::new(),
+            required_refs: HashSet::new(),
+        }
+    }
+
+    /// 按「是否出现过非兜底引用」回填所有变量的 `optional` 字段。
+    fn finalize(&mut self) {
+        for v in &mut self.all {
+            v.optional = !self.required_refs.contains(&v.name);
+        }
+        for v in &mut self.undeclared {
+            v.optional = !self.required_refs.contains(&v.name);
         }
     }
 
     /// 记录一次变量引用：进入 `all`；若未在模板内声明则进入 `undeclared`。
-    fn record(&mut self, v: &Spanned<ast::Var<'a>>) {
+    ///
+    /// `in_optional` 为 `true` 表示本次引用处于兜底上下文（`default` 过滤器 /
+    /// `defined` 测试的操作数），此时不把该变量记为「必选」。
+    fn record(&mut self, v: &Spanned<ast::Var<'a>>, in_optional: bool) {
         let name = v.id;
         if RESERVED_NAMES.contains(&name) {
             return;
@@ -178,7 +231,11 @@ impl<'a> Collector<'a> {
             col: span.start_col as usize,
             start: span.start_offset as usize,
             end: span.end_offset as usize,
+            optional: false, // 在 finalize() 中按 required_refs 统一回填
         };
+        if !in_optional {
+            self.required_refs.insert(var.name.clone());
+        }
         if self.all_seen.insert(var.name.clone()) {
             self.all.push(var.clone());
         }
@@ -206,92 +263,92 @@ fn declare_locals<'a>(expr: &Expr<'a>, c: &mut Collector<'a>) {
     }
 }
 
-fn walk_stmt<'a>(stmt: &Stmt<'a>, c: &mut Collector<'a>) {
+fn walk_stmt<'a>(stmt: &Stmt<'a>, c: &mut Collector<'a>, opt: bool) {
     match stmt {
         Stmt::Template(s) => {
             for child in &s.children {
-                walk_stmt(child, c);
+                walk_stmt(child, c, opt);
             }
         }
-        Stmt::EmitExpr(s) => walk_expr(&s.expr, c),
+        Stmt::EmitExpr(s) => walk_expr(&s.expr, c, opt),
         Stmt::EmitRaw(_) => {}
         Stmt::ForLoop(s) => {
             declare_locals(&s.target, c);
-            walk_expr(&s.iter, c);
+            walk_expr(&s.iter, c, opt);
             if let Some(f) = &s.filter_expr {
-                walk_expr(f, c);
+                walk_expr(f, c, opt);
             }
             c.locals.insert("loop");
             for child in &s.body {
-                walk_stmt(child, c);
+                walk_stmt(child, c, opt);
             }
             for child in &s.else_body {
-                walk_stmt(child, c);
+                walk_stmt(child, c, opt);
             }
         }
         Stmt::IfCond(s) => {
-            walk_expr(&s.expr, c);
+            walk_expr(&s.expr, c, opt);
             for child in &s.true_body {
-                walk_stmt(child, c);
+                walk_stmt(child, c, opt);
             }
             for child in &s.false_body {
-                walk_stmt(child, c);
+                walk_stmt(child, c, opt);
             }
         }
         Stmt::WithBlock(s) => {
             for (target, value) in &s.assignments {
                 declare_locals(target, c);
-                walk_expr(value, c);
+                walk_expr(value, c, opt);
             }
             for child in &s.body {
-                walk_stmt(child, c);
+                walk_stmt(child, c, opt);
             }
         }
         Stmt::Set(s) => {
             declare_locals(&s.target, c);
-            walk_expr(&s.expr, c);
+            walk_expr(&s.expr, c, opt);
         }
         Stmt::SetBlock(s) => {
             declare_locals(&s.target, c);
             if let Some(f) = &s.filter {
-                walk_expr(f, c);
+                walk_expr(f, c, opt);
             }
             for child in &s.body {
-                walk_stmt(child, c);
+                walk_stmt(child, c, opt);
             }
         }
         Stmt::AutoEscape(s) => {
-            walk_expr(&s.enabled, c);
+            walk_expr(&s.enabled, c, opt);
             for child in &s.body {
-                walk_stmt(child, c);
+                walk_stmt(child, c, opt);
             }
         }
         Stmt::FilterBlock(s) => {
-            walk_expr(&s.filter, c);
+            walk_expr(&s.filter, c, opt);
             for child in &s.body {
-                walk_stmt(child, c);
+                walk_stmt(child, c, opt);
             }
         }
         Stmt::Block(s) => {
             for child in &s.body {
-                walk_stmt(child, c);
+                walk_stmt(child, c, opt);
             }
         }
         Stmt::Import(s) => {
-            walk_expr(&s.expr, c);
+            walk_expr(&s.expr, c, opt);
             declare_locals(&s.name, c);
         }
         Stmt::FromImport(s) => {
-            walk_expr(&s.expr, c);
+            walk_expr(&s.expr, c, opt);
             for (alias, orig) in &s.names {
                 declare_locals(alias, c);
                 if let Some(o) = orig {
-                    walk_expr(o, c);
+                    walk_expr(o, c, opt);
                 }
             }
         }
-        Stmt::Extends(s) => walk_expr(&s.name, c),
-        Stmt::Include(s) => walk_expr(&s.name, c),
+        Stmt::Extends(s) => walk_expr(&s.name, c, opt),
+        Stmt::Include(s) => walk_expr(&s.name, c, opt),
         Stmt::Macro(s) => {
             // 宏名在模板内已定义，引用它不算“未声明变量”
             c.locals.insert(s.name);
@@ -299,112 +356,117 @@ fn walk_stmt<'a>(stmt: &Stmt<'a>, c: &mut Collector<'a>) {
                 declare_locals(arg, c);
             }
             for d in &s.defaults {
-                walk_expr(d, c);
+                walk_expr(d, c, opt);
             }
             for child in &s.body {
-                walk_stmt(child, c);
+                walk_stmt(child, c, opt);
             }
         }
         Stmt::CallBlock(s) => {
-            walk_call(&s.call, c);
+            walk_call(&s.call, c, opt);
             for arg in &s.macro_decl.args {
                 declare_locals(arg, c);
             }
             for d in &s.macro_decl.defaults {
-                walk_expr(d, c);
+                walk_expr(d, c, opt);
             }
             for child in &s.macro_decl.body {
-                walk_stmt(child, c);
+                walk_stmt(child, c, opt);
             }
         }
         Stmt::Continue(_) | Stmt::Break(_) => {}
-        Stmt::Do(s) => walk_call(&s.call, c),
+        Stmt::Do(s) => walk_call(&s.call, c, opt),
     }
 }
 
-fn walk_expr<'a>(expr: &Expr<'a>, c: &mut Collector<'a>) {
+fn walk_expr<'a>(expr: &Expr<'a>, c: &mut Collector<'a>, opt: bool) {
     match expr {
-        Expr::Var(s) => c.record(s),
+        Expr::Var(s) => c.record(s, opt),
         Expr::Const(_) => {}
         Expr::Slice(s) => {
-            walk_expr(&s.expr, c);
+            walk_expr(&s.expr, c, opt);
             if let Some(e) = &s.start {
-                walk_expr(e, c);
+                walk_expr(e, c, opt);
             }
             if let Some(e) = &s.stop {
-                walk_expr(e, c);
+                walk_expr(e, c, opt);
             }
             if let Some(e) = &s.step {
-                walk_expr(e, c);
+                walk_expr(e, c, opt);
             }
         }
-        Expr::UnaryOp(s) => walk_expr(&s.expr, c),
+        Expr::UnaryOp(s) => walk_expr(&s.expr, c, opt),
         Expr::BinOp(s) => {
-            walk_expr(&s.left, c);
-            walk_expr(&s.right, c);
+            walk_expr(&s.left, c, opt);
+            walk_expr(&s.right, c, opt);
         }
         Expr::Compare(s) => {
-            walk_expr(&s.expr, c);
+            walk_expr(&s.expr, c, opt);
             for op in &s.ops {
-                walk_expr(&op.expr, c);
+                walk_expr(&op.expr, c, opt);
             }
         }
         Expr::IfExpr(s) => {
-            walk_expr(&s.test_expr, c);
-            walk_expr(&s.true_expr, c);
+            walk_expr(&s.test_expr, c, opt);
+            walk_expr(&s.true_expr, c, opt);
             if let Some(f) = &s.false_expr {
-                walk_expr(f, c);
+                walk_expr(f, c, opt);
             }
         }
         Expr::Filter(s) => {
+            // default / d：被过滤的操作数在变量缺失时由默认值兜底 → 进入兜底上下文
+            let is_default = matches!(s.name, "default" | "d");
             if let Some(e) = &s.expr {
-                walk_expr(e, c);
+                walk_expr(e, c, opt || is_default);
             }
+            // 过滤器参数（含默认值表达式）仍需正常求值 → 透传当前 opt
             for arg in &s.args {
-                walk_call_arg(arg, c);
+                walk_call_arg(arg, c, opt);
             }
         }
         Expr::Test(s) => {
-            walk_expr(&s.expr, c);
+            // defined / undefined：被测试的表达式允许缺失 → 进入兜底上下文
+            let is_defined = matches!(s.name, "defined" | "undefined");
+            walk_expr(&s.expr, c, opt || is_defined);
             for arg in &s.args {
-                walk_call_arg(arg, c);
+                walk_call_arg(arg, c, opt);
             }
         }
-        Expr::GetAttr(s) => walk_expr(&s.expr, c),
+        Expr::GetAttr(s) => walk_expr(&s.expr, c, opt),
         Expr::GetItem(s) => {
-            walk_expr(&s.expr, c);
-            walk_expr(&s.subscript_expr, c);
+            walk_expr(&s.expr, c, opt);
+            walk_expr(&s.subscript_expr, c, opt);
         }
-        Expr::Call(s) => walk_call(s, c),
+        Expr::Call(s) => walk_call(s, c, opt),
         Expr::List(s) => {
             for item in &s.items {
-                walk_expr(item, c);
+                walk_expr(item, c, opt);
             }
         }
         Expr::Map(s) => {
             for k in &s.keys {
-                walk_expr(k, c);
+                walk_expr(k, c, opt);
             }
             for v in &s.values {
-                walk_expr(v, c);
+                walk_expr(v, c, opt);
             }
         }
     }
 }
 
-fn walk_call<'a>(call: &Spanned<ast::Call<'a>>, c: &mut Collector<'a>) {
-    walk_expr(&call.expr, c);
+fn walk_call<'a>(call: &Spanned<ast::Call<'a>>, c: &mut Collector<'a>, opt: bool) {
+    walk_expr(&call.expr, c, opt);
     for arg in &call.args {
-        walk_call_arg(arg, c);
+        walk_call_arg(arg, c, opt);
     }
 }
 
-fn walk_call_arg<'a>(arg: &ast::CallArg<'a>, c: &mut Collector<'a>) {
+fn walk_call_arg<'a>(arg: &ast::CallArg<'a>, c: &mut Collector<'a>, opt: bool) {
     match arg {
         ast::CallArg::Pos(e) | ast::CallArg::PosSplat(e) | ast::CallArg::KwargSplat(e) => {
-            walk_expr(e, c)
+            walk_expr(e, c, opt)
         }
-        ast::CallArg::Kwarg(_, e) => walk_expr(e, c),
+        ast::CallArg::Kwarg(_, e) => walk_expr(e, c, opt),
     }
 }
 
@@ -553,6 +615,107 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
             TplError::Parse { line, .. } => assert!(line >= 2),
             _ => panic!("expected parse error"),
         }
+    }
+
+    #[test]
+    fn parse_error_column_is_located() {
+        // 未闭合括号：minijinja 报 `unexpected }`，列号应精确指向 `}`（非恒 1）
+        let src = "{{ (1 + 2 }}";
+        let err = parse(src, "bad.j2").unwrap_err();
+        match err {
+            TplError::Parse { line, col, .. } => {
+                assert_eq!(line, 1);
+                assert_eq!(col, 11, "应定位到 }} 所在列，实际 col={col}");
+            }
+            _ => panic!("expected parse error"),
+        }
+    }
+
+    #[test]
+    fn parse_error_column_on_multiline() {
+        // 多行模板：行列均来自字节偏移换算，不应退化到 col=1
+        let src = "G0 X0\nG1 Z5\n  {{ x | }}\n";
+        let err = parse(src, "bad.j2").unwrap_err();
+        match err {
+            TplError::Parse { line, col, .. } => {
+                assert_eq!(line, 3);
+                assert!(col >= 6, "错误应在第 3 行 `{{ x | }}` 附近，实际 col={col}");
+            }
+            _ => panic!("expected parse error"),
+        }
+    }
+
+    #[test]
+    fn extract_undeclared_required_by_default() {
+        let src = "G1 X{{ diameter }}";
+        let ast = parse(src, "t.j2").unwrap();
+        let v = extract_undeclared(&ast);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].name, "diameter");
+        assert!(!v[0].optional, "无兜底引用的变量应为必选");
+    }
+
+    #[test]
+    fn extract_undeclared_default_chain_optional() {
+        // 直接 default 过滤器：变量缺失时由默认值兜底 → 可选
+        let src = "G1 F{{ feed | default(0.15) }}";
+        let ast = parse(src, "t.j2").unwrap();
+        let v = extract_undeclared(&ast);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].name, "feed");
+        assert!(v[0].optional, "default 兜底的变量应为可选");
+
+        // 别名 d 同样生效
+        let src = "G1 F{{ feed | d(0.15) }}";
+        let ast = parse(src, "t.j2").unwrap();
+        let v = extract_undeclared(&ast);
+        assert_eq!(v[0].name, "feed");
+        assert!(v[0].optional, "d 别名也应视为兜底");
+    }
+
+    #[test]
+    fn extract_undeclared_set_with_default_optional() {
+        // README 示例：default_feed 有 default 兜底 → 可选；feed 为模板局部
+        let src = "{% set feed = default_feed | default(0.15) %}G1 F{{ feed }}";
+        let ast = parse(src, "t.j2").unwrap();
+        let v = extract_undeclared(&ast);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].name, "default_feed");
+        assert!(v[0].optional, "default_feed 应有 default 兜底 → 可选");
+    }
+
+    #[test]
+    fn extract_undeclared_mixed_reference_is_required() {
+        // 同一变量既出现在兜底上下文、又出现在必选上下文 → 整体视为必选
+        let src = "G1 F{{ feed | default(0.15) }} X{{ feed }}";
+        let ast = parse(src, "t.j2").unwrap();
+        let v = extract_undeclared(&ast);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].name, "feed");
+        assert!(!v[0].optional, "存在非兜底引用时仍应视为必选");
+    }
+
+    #[test]
+    fn extract_undeclared_defined_test_optional() {
+        // defined 测试：被检查变量缺失时模板仍可安全执行 → 可选
+        let src = "{% if radius is defined %}{{ 'ok' }}{% else %}{{ 'missing' }}{% endif %}";
+        let ast = parse(src, "t.j2").unwrap();
+        let v = extract_undeclared(&ast);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].name, "radius");
+        assert!(v[0].optional, "defined 测试保护的变量应为可选");
+    }
+
+    #[test]
+    fn extract_variables_carries_optional() {
+        // extract_variables 同样携带 optional（表示该变量所有引用是否均在兜底上下文）
+        let src = "{{ a }}{{ b | default(1) }}";
+        let ast = parse(src, "t.j2").unwrap();
+        let all = extract_variables(&ast);
+        let a = all.iter().find(|v| v.name == "a").unwrap();
+        let b = all.iter().find(|v| v.name == "b").unwrap();
+        assert!(!a.optional);
+        assert!(b.optional);
     }
 
     #[test]

@@ -25,7 +25,8 @@ fn main() {
     let undeclared = extract_undeclared(&ast);
     println!("\n== 未声明变量（需外部提供，共 {}) ==", undeclared.len());
     for v in &undeclared {
-        println!("  {:<20} @ 行 {} 列 {}", v.name, v.line, v.col);
+        let tag = if v.optional { "可选" } else { "必选" };
+        println!("  {:<20} @ 行 {} 列 {} [{}]", v.name, v.line, v.col, tag);
     }
 
     // 3) 渲染
