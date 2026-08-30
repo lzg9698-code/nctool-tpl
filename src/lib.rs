@@ -1091,6 +1091,126 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
         assert_eq!(extract_quoted("no quotes here"), None);
     }
 
+    // -----------------------------------------------------------------------
+    // 边界 case：空模板 / 纯文本 / 注释 / 保留名
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn empty_template_parses_and_has_no_vars() {
+        let ast = parse("", "empty.j2").unwrap();
+        assert!(extract_variables(&ast).is_empty());
+        assert!(extract_undeclared(&ast).is_empty());
+    }
+
+    #[test]
+    fn pure_text_has_no_vars() {
+        let ast = parse("G1 X10 Y20\nM3 S1000", "text.j2").unwrap();
+        assert!(extract_variables(&ast).is_empty());
+        assert!(extract_undeclared(&ast).is_empty());
+    }
+
+    #[test]
+    fn comments_do_not_produce_vars() {
+        let src = "{# this is a comment with x y z #}G1 X{{ actual }}";
+        let ast = parse(src, "comment.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["actual"]);
+    }
+
+    #[test]
+    fn reserved_names_not_undeclared() {
+        // loop / self / super / caller 是引擎内置，不算未声明
+        let src = "{% for item in items %}{{ loop.index }} {{ self }} {{ super }} {{ caller }}{% endfor %}";
+        let ast = parse(src, "reserved.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["items"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // 边界 case：作用域（for / macro / set）
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn for_loop_var_not_undeclared() {
+        let src = "{% for x in xs %}{{ x }}{% endfor %}";
+        let ast = parse(src, "for.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["xs"]);
+    }
+
+    #[test]
+    fn macro_params_not_undeclared() {
+        let src = "{% macro greet(name, greeting) %}{{ greeting }} {{ name }}{% endmacro %}{{ greet(\"world\", \"Hi\") }}";
+        let ast = parse(src, "macro.j2").unwrap();
+        // 宏参数 name/greeting 不算未声明；greet 是宏调用也不算
+        assert!(extract_undeclared(&ast).is_empty());
+    }
+
+    #[test]
+    fn set_declared_var_not_undeclared() {
+        let src = "{% set x = 1 %}{% set y = x + 2 %}{{ x }} {{ y }} {{ z }}";
+        let ast = parse(src, "set.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["z"]);
+    }
+
+    #[test]
+    fn nested_default_all_optional() {
+        // {{ a | default(b | default(1)) }}：a 和 b 都在兜底上下文
+        let src = "{{ a | default(b | default(1)) }}";
+        let ast = parse(src, "nest.j2").unwrap();
+        let vars = extract_variables(&ast);
+        for v in &vars {
+            assert!(v.optional, "{} 应标记为可选", v.name);
+        }
+        assert_eq!(vars.len(), 2);
+    }
+
+    #[test]
+    fn filter_chain_extracts_vars() {
+        let src = "{{ x | abs | round(2) }}";
+        let ast = parse(src, "chain.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["x"]);
+    }
+
+    #[test]
+    fn complex_expression_vars() {
+        let src = "G1 X{{ (diameter / 2) + offset | round(2) }} F{{ feed * 1.5 }}";
+        let ast = parse(src, "complex.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["diameter", "offset", "feed"]);
+    }
+
+    #[test]
+    fn string_and_list_literals_no_vars() {
+        let src = r#"{{ "hello" }} {{ [1, 2, 3] }} {{ {"a": 1} }}"#;
+        let ast = parse(src, "literal.j2").unwrap();
+        assert!(extract_undeclared(&ast).is_empty());
+    }
+
+    #[test]
+    fn whitespace_control_parses() {
+        let src = "{%- set x = 1 -%}\n{{- x -}}\n";
+        let ast = parse(src, "ws.j2").unwrap();
+        assert!(extract_undeclared(&ast).is_empty());
+    }
+
+    #[test]
+    fn variable_name_with_underscores_and_digits() {
+        let src = "{{ my_var_1 }} {{ _private }} {{ x2 }}";
+        let ast = parse(src, "names.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["my_var_1", "_private", "x2"]);
+    }
+
     #[test]
     fn render_with_math_filters() {
         // 注意 Jinja 过滤器优先级高于算术：必须用括号把整体括起来再取整

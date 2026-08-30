@@ -247,3 +247,88 @@ fn render_missing_template_error() {
         _ => panic!("应为 TemplateNotFound 错误"),
     }
 }
+
+// -----------------------------------------------------------------------
+// 渲染边界 case
+// -----------------------------------------------------------------------
+
+/// for 循环 + loop.index 渲染。
+#[test]
+fn render_for_loop_with_index() {
+    let src = "{% for i in items %}{{ loop.index }}:{{ i }} {% endfor %}";
+    let r = Renderer::new();
+    let ctx = minijinja::context! { items => vec!["a", "b", "c"] };
+    let out = r.render(src, "for.j2", &ctx).unwrap();
+    assert_eq!(out, "1:a 2:b 3:c ");
+}
+
+/// if / elif / else 分支渲染。
+#[test]
+fn render_if_elif_else() {
+    let src = "{% if x > 10 %}big{% elif x > 5 %}medium{% else %}small{% endif %}";
+    let r = Renderer::new();
+    let ctx1 = minijinja::context! { x => 20 };
+    assert_eq!(r.render(src, "if.j2", &ctx1).unwrap(), "big");
+    let ctx2 = minijinja::context! { x => 7 };
+    assert_eq!(r.render(src, "if.j2", &ctx2).unwrap(), "medium");
+    let ctx3 = minijinja::context! { x => 1 };
+    assert_eq!(r.render(src, "if.j2", &ctx3).unwrap(), "small");
+}
+
+/// 宏定义与调用渲染。
+#[test]
+fn render_macro_call() {
+    let src = "{% macro line(x, y) %}G1 X{{ x }} Y{{ y }}{% endmacro %}{{ line(10, 20) }}";
+    let r = Renderer::new();
+    let ctx = minijinja::context! {};
+    let out = r.render(src, "macro.j2", &ctx).unwrap();
+    assert_eq!(out, "G1 X10 Y20");
+}
+
+/// loop_controls：continue 跳过偶数，break 在第 3 项停止。
+#[test]
+fn render_loop_controls_continue_and_break() {
+    let src = "{% for i in range(1, 6) %}{% if i % 2 == 0 %}{% continue %}{% endif %}{{ i }}{% if i == 3 %}{% break %}{% endif %}{% endfor %}";
+    let r = Renderer::new();
+    let ctx = minijinja::context! {};
+    let out = r.render(src, "loop.j2", &ctx).unwrap();
+    // 1（奇数，输出），2（continue 跳过），3（奇数，输出后 break）
+    assert_eq!(out, "13");
+}
+
+/// 空白控制 `{%-` / `-%}` 渲染。
+#[test]
+fn render_whitespace_control() {
+    let src = "A\n{%- set x = 1 -%}\nB\n{{- x -}}\nC";
+    let r = Renderer::new();
+    let ctx = minijinja::context! {};
+    let out = r.render(src, "ws.j2", &ctx).unwrap();
+    // lstrip 吃掉 A 后的换行，trim 吃掉 set 后的换行
+    assert_eq!(out, "AB1C");
+}
+
+/// 多行模板语法错误应定位到正确行。
+#[test]
+fn parse_error_multiline_line_number() {
+    let src = "G1 X10\nG1 Y20\n{{ (1 + 2 }}\nM3";
+    let err = parse(src, "multi.j2").unwrap_err();
+    match err {
+        TplError::Parse { line, .. } => {
+            assert_eq!(line, 3, "应定位到第 3 行，实际 {line}");
+        }
+        _ => panic!("应为 Parse 错误"),
+    }
+}
+
+/// 所有数学过滤器在正常值下可渲染。
+#[test]
+fn all_math_filters_render() {
+    let src = "{{ 4 | sqrt }} {{ 2 | exp }} {{ 10 | ln }} {{ 100 | log10 }} {{ 2 | pow(3) }} {{ 1.5 | floor }} {{ 1.5 | ceil }} {{ 0 | sin }} {{ 0 | cos }}";
+    let r = Renderer::new();
+    let ctx = minijinja::context! {};
+    let out = r.render(src, "math.j2", &ctx).unwrap();
+    assert!(out.contains("2")); // sqrt(4)
+    assert!(out.contains("8")); // pow(2,3)
+    assert!(out.contains("1")); // floor(1.5)
+    assert!(out.contains("2")); // ceil(1.5)
+}
