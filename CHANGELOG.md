@@ -1,0 +1,65 @@
+# Changelog
+
+本项目遵循 [Keep a Changelog](https://keepachangelog.com/) 格式和 [语义化版本](https://semver.org/)。
+
+## 版本策略
+
+- **0.x 阶段**：API 仍在演进，`minor` 版本升级可能包含破坏性变更（如本版本的 API 收窄、错误细分）。
+- **1.0.0**：公共 API 稳定后发布，此后严格遵循语义化版本（`major` = 破坏性变更，`minor` = 向后兼容新功能，`patch` = 向后兼容修复）。
+- 破坏性变更均在 `Changed` 节明确标注，并在 README 中说明迁移方式。
+
+---
+
+## [0.2.0] - 2026-08-30
+
+"基座打磨"版本：多模板能力、错误细分、API 稳定化、工程化全覆盖。
+
+### Added
+
+- **多模板渲染**：`Renderer::add_template`（内存注册）、`Renderer::set_path_loader`（目录加载）、`Renderer::render_template`（渲染已注册模板），支持 `{% include %}` / `{% extends %}` / `{% import %}`
+- **错误类型细分**：`TplError` 新增 `TemplateNotFound` / `UndefinedVariable` / `UnknownFilter` / `UnknownTest` 变体，上层可精准处理
+- **可选/必选参数区分**：`Variable.optional` 字段，`default`/`d` 过滤器和 `is defined`/`is undefined` 测试标记的变量为可选
+- **列号定位**：`TplError::Parse.col` 从恒为 1 的占位值改为真实列号（基于 minijinja `debug` feature 的字节范围换算）
+- **性能基准**：`criterion` benchmark（parse / extract_undeclared / render 三场景），`cargo bench` 可运行
+- **CI 流水线**：GitHub Actions（fmt / clippy / test / doc / cargo audit），push 和 PR 触发
+- **CHANGELOG**：本文件
+
+### Changed
+
+- **[破坏性] API 收窄**：`Ast` 的 `name` / `source` 从 pub 字段改为私有字段 + 访问方法（`name()` / `source()`），减少未来破坏面
+- **[破坏性] 错误枚举扩展**：`TplError` 标注 `#[non_exhaustive]`，未来新增变体不破坏下游；match 请保留通配分支
+- **minijinja 版本锁定**：从 `^2.24.0` 收窄为 `~2.24.0`（允许补丁，锁定 minor），因依赖 `unstable_machinery` AST API
+- **release 配置**：新增 `codegen-units = 1`（配合已有 LTO + strip）
+- **文档**：所有公共 API 补全 doc comment，`cargo doc --no-deps` 零警告；新增 `#![warn(missing_docs)]` lint
+
+### Fixed
+
+- 列号定位：`TplError::Parse.col` 不再恒为 1，现在指向解析器停止位置的最佳近似
+- 可选参数误报：有 `default()` 兜底的变量不再被列为必选未声明变量
+
+### 测试
+
+- 从 11 项增至 56 项（38 单元 + 17 集成 + 1 文档）
+- 新增覆盖：多模板 include/extends/import、错误细分、边界 case（空模板/纯文本/注释/保留名/循环变量/宏参数/嵌套 default/filter 链/复杂表达式）、列号定位、可选/必选区分
+
+### 性能基线（release，~260 字节 G-code 模板）
+
+| 操作 | 耗时（中位数） | 吞吐 |
+| --- | --- | --- |
+| `parse` | 2.61 µs | 98 MiB/s |
+| `extract_undeclared` | 1.97 µs | — |
+| `render` | 5.32 µs | 48 MiB/s |
+
+---
+
+## [0.1.0] - 2026-08-30
+
+初始版本：NCtool 模板解析核心。
+
+### Added
+
+- 核心 API：`parse` / `extract_variables` / `extract_undeclared` / `Renderer`
+- 数学过滤器集：sin / cos / tan / asin / acos / atan / sqrt / exp / ln / log10 / pow / floor / ceil（含 NaN/Inf 有限性校验）
+- Strict 未定义变量策略：缺失变量直接渲染失败
+- 11 项测试
+- README、MIT 许可、demo 示例、G-code 模板

@@ -1,6 +1,6 @@
 [package]
 name = "nctool-tpl"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "NCtool 模板解析核心：Jinja2 模板解析 + 变量提取 + 渲染（基于 minijinja）"
 license = "MIT"
