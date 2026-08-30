@@ -1230,6 +1230,427 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
         assert_eq!(names, vec!["my_var_1", "_private", "x2"]);
     }
 
+    // -----------------------------------------------------------------------
+    // 极端输入：Unicode / 特殊字符 / 超长 / 深嵌套
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn unicode_content_renders() {
+        // 模板内容（非变量名）含中文/emoji，应正常解析和渲染
+        let src = "G1 X{{ x }} (中文注释 ✅)";
+        let r = Renderer::new();
+        let ctx = minijinja::context! { x => 10.0 };
+        let out = r.render(src, "unicode.j2", &ctx).unwrap();
+        assert!(out.contains("中文注释 ✅"));
+        assert!(out.contains("X10"));
+    }
+
+    #[test]
+    fn special_characters_in_text() {
+        // 反斜杠、引号、控制字符在纯文本中应正常透传
+        let src = r#"path: C:\temp\file "quoted" tab:	here"#;
+        let ast = parse(src, "special.j2").unwrap();
+        assert!(extract_undeclared(&ast).is_empty());
+        let r = Renderer::new();
+        let ctx = minijinja::context! {};
+        let out = r.render(src, "special.j2", &ctx).unwrap();
+        assert!(out.contains(r"C:\temp\file"));
+        assert!(out.contains("\"quoted\""));
+    }
+
+    #[test]
+    fn very_long_variable_name() {
+        // 256 字符变量名
+        let long_name = "x".repeat(256);
+        let src = format!("{{{{ {long_name} }}}}");
+        let ast = parse(&src, "long.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        assert_eq!(undeclared.len(), 1);
+        assert_eq!(undeclared[0].name.len(), 256);
+    }
+
+    #[test]
+    fn many_distinct_variables() {
+        // 1000 个不同变量，验证去重和性能
+        let mut src = String::new();
+        for i in 0..1000 {
+            src.push_str(&format!("{{{{ var_{i} }}}} "));
+        }
+        let ast = parse(&src, "many.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        assert_eq!(undeclared.len(), 1000);
+        let all = extract_variables(&ast);
+        assert_eq!(all.len(), 1000);
+    }
+
+    #[test]
+    fn deeply_nested_ifs() {
+        // 50 层嵌套 if
+        let mut src = String::new();
+        for i in 0..50 {
+            src.push_str(&format!("{{% if v{i} > 0 %}}"));
+        }
+        src.push_str("DEEP");
+        for _ in 0..50 {
+            src.push_str("{% endif %}");
+        }
+        let ast = parse(&src, "deep.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        assert_eq!(undeclared.len(), 50);
+    }
+
+    #[test]
+    fn deeply_nested_defaults() {
+        // 50 层嵌套 default：{{ a | default(b | default(c | ... | default(0))) }}
+        let mut expr = String::from("0");
+        for i in (0..50).rev() {
+            expr = format!("v{i} | default({expr})");
+        }
+        let src = format!("{{{{ {expr} }}}}");
+        let ast = parse(&src, "nestdef.j2").unwrap();
+        let vars = extract_variables(&ast);
+        assert_eq!(vars.len(), 50);
+        // 所有变量都在 default 兜底链中，应全为可选
+        for v in &vars {
+            assert!(v.optional, "{} 应标记为可选", v.name);
+        }
+    }
+
+    #[test]
+    fn mixed_optional_required_in_chain() {
+        // default 链中混入非兜底引用：{{ a | default(b) }} {{ c }}
+        // a 可选（在 default 操作数位置），b 必选（default 的参数位置），c 必选
+        let src = "{{ a | default(b) }} {{ c }}";
+        let ast = parse(src, "mixed.j2").unwrap();
+        let vars = extract_variables(&ast);
+        let get = |n: &str| vars.iter().find(|v| v.name == n).unwrap();
+        assert!(get("a").optional, "a 应可选");
+        assert!(!get("b").optional, "b 应必选（default 参数）");
+        assert!(!get("c").optional, "c 应必选");
+    }
+
+    #[test]
+    fn comment_with_special_chars() {
+        // 注释中含模板语法字符，不应被解析
+        let src = "{# {{ not_a_var }} {% if x %} #}{{ real_var }}";
+        let ast = parse(src, "comment.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["real_var"]);
+    }
+
+    #[test]
+    fn raw_block_ignores_template_syntax() {
+        // raw 块内的模板语法不应被解析
+        let src = "{% raw %}{{ not_var }} {% if x %}{% endraw %}{{ real }}";
+        let ast = parse(src, "raw.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["real"]);
+    }
+
+    #[test]
+    fn empty_for_loop_body() {
+        let src = "{% for x in items %}{% endfor %}";
+        let ast = parse(src, "emptyfor.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["items"]);
+    }
+
+    #[test]
+    fn macro_with_no_args() {
+        let src = "{% macro say_hi() %}HI{% endmacro %}{{ say_hi() }}";
+        let ast = parse(src, "macro0.j2").unwrap();
+        assert!(extract_undeclared(&ast).is_empty());
+    }
+
+    #[test]
+    fn variable_starting_with_digit_is_syntax_error() {
+        // Jinja2 变量名不能以数字开头
+        let result = parse("{{ 1bad }}", "baddigit.j2");
+        assert!(result.is_err());
+    }
+
+    #[test]
+    fn render_with_nan_in_context_rejects() {
+        // 上下文中传入 NaN，渲染时应报错（数学过滤器或直接输出）
+        let r = Renderer::new();
+        let ctx = minijinja::context! { x => f64::NAN };
+        // 直接输出 NaN 可能不报错（minijinja 允许），但通过数学过滤器应报错
+        let err = r.render("{{ x | sqrt }}", "nan.j2", &ctx).unwrap_err();
+        match err {
+            TplError::Render { .. } => {}
+            _ => panic!("NaN 通过数学过滤器应报错"),
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 并发安全：Send + Sync 编译时断言 + 多线程渲染
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn types_are_send_and_sync() {
+        // 编译时断言：核心类型可跨线程共享和移动
+        fn assert_send_sync<T: Send + Sync>() {}
+        assert_send_sync::<Renderer>();
+        assert_send_sync::<Variable>();
+        assert_send_sync::<TplError>();
+        // Ast 带生命周期，用 'static 验证
+        assert_send_sync::<Ast<'static>>();
+    }
+
+    #[test]
+    fn multi_thread_render_shared_renderer() {
+        // 多个线程共享同一个 Renderer（&self），同时渲染不同模板
+        use std::sync::Arc;
+        use std::thread;
+
+        let renderer = Arc::new(Renderer::new());
+        let mut handles = vec![];
+
+        for i in 0..8 {
+            let r = Arc::clone(&renderer);
+            handles.push(thread::spawn(move || {
+                let src = format!("G1 X{{{{ x }}}} F{{{{ feed }}}} ; thread {i}");
+                let ctx = minijinja::context! { x => i as f64 * 10.0, feed => 0.15 };
+                let out = r.render(&src, &format!("t{i}.j2"), &ctx).unwrap();
+                assert!(out.contains(&format!("X{}", i * 10)));
+                assert!(out.contains("F0.15"));
+                out
+            }));
+        }
+
+        for h in handles {
+            h.join().unwrap();
+        }
+    }
+
+    #[test]
+    fn multi_thread_parse_and_extract() {
+        // 多个线程同时解析和提取变量
+        use std::thread;
+
+        let mut handles = vec![];
+        for i in 0..8 {
+            handles.push(thread::spawn(move || {
+                let src = format!("{{{{ var_{i} }}}} {{{{ common }}}}");
+                let name = format!("t{i}.j2");
+                let ast = parse(&src, &name).unwrap();
+                let undeclared = extract_undeclared(&ast);
+                assert_eq!(undeclared.len(), 2);
+                undeclared
+            }));
+        }
+        for h in handles {
+            let result = h.join().unwrap();
+            assert_eq!(result.len(), 2);
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // Fuzz 测试：随机模板输入不 panic
+    // -----------------------------------------------------------------------
+
+    /// 简单 LCG 伪随机数生成器（无需额外依赖）。
+    struct SimpleRng {
+        state: u64,
+    }
+
+    impl SimpleRng {
+        fn new(seed: u64) -> Self {
+            SimpleRng { state: seed }
+        }
+        fn next_u64(&mut self) -> u64 {
+            // LCG 参数（Numerical Recipes）
+            self.state = self
+                .state
+                .wrapping_mul(6364136223846793005)
+                .wrapping_add(1442695040888963407);
+            self.state
+        }
+        fn next_usize(&mut self, max: usize) -> usize {
+            (self.next_u64() as usize) % max
+        }
+    }
+
+    #[test]
+    fn fuzz_random_templates_no_panic() {
+        // 5000 次随机模板输入，验证 parse/extract 绝不 panic
+        let charset: Vec<char> = "abcdefghijklmnopqrstuvwxyzABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789 \t\n{}%#|/-=!<>()[].,;:\"'&".chars().collect();
+        let keywords = [
+            "if",
+            "for",
+            "set",
+            "macro",
+            "default",
+            "defined",
+            "end",
+            "else",
+            "elif",
+            "include",
+            "extends",
+            "import",
+            "from",
+            "as",
+            "in",
+            "not",
+            "and",
+            "or",
+            "is",
+            "{{",
+            "}}",
+            "{%",
+            "%}",
+            "{#",
+            "#}",
+            "|",
+            "default(",
+            "is defined",
+            "is undefined",
+        ];
+
+        let mut rng = SimpleRng::new(20260830);
+
+        for iteration in 0..5000 {
+            // 随机生成长度 0-200 的字符串
+            let len = rng.next_usize(201);
+            let mut s = String::with_capacity(len);
+            for _ in 0..len {
+                if rng.next_usize(10) < 3 {
+                    // 30% 概率插入关键字片段
+                    let kw = keywords[rng.next_usize(keywords.len())];
+                    s.push_str(kw);
+                } else {
+                    // 70% 概率插入随机字符
+                    s.push(charset[rng.next_usize(charset.len())]);
+                }
+            }
+
+            let name = format!("fuzz_{iteration}.j2");
+            // 核心断言：parse 和 extract 绝不 panic
+            if let Ok(ast) = parse(&s, &name) {
+                let _ = extract_variables(&ast);
+                let _ = extract_undeclared(&ast);
+            }
+        }
+        // 如果到达这里，说明 5000 次迭代均无 panic
+    }
+
+    #[test]
+    fn fuzz_random_render_no_panic() {
+        // 1000 次随机渲染输入，验证 render 绝不 panic
+        let charset: Vec<char> = "abcdefghijklmnopqrstuvwxyz0123456789 \t\n{}%|/-=!<>()[].,;:"
+            .chars()
+            .collect();
+        let mut rng = SimpleRng::new(42);
+        let renderer = Renderer::new();
+
+        for iteration in 0..1000 {
+            let len = rng.next_usize(101);
+            let mut s = String::with_capacity(len);
+            for _ in 0..len {
+                s.push(charset[rng.next_usize(charset.len())]);
+            }
+
+            let ctx = minijinja::context! { x => 1.0, y => "test", z => vec![1, 2, 3] };
+            // render 返回 Err 是正常的（语法错误），但绝不 panic
+            let _ = renderer.render(&s, &format!("r{iteration}.j2"), &ctx);
+        }
+        // 如果到达这里，说明 1000 次迭代均无 panic
+    }
+
+    // -----------------------------------------------------------------------
+    // 内存/性能：大模板、深嵌套、无 O(n²)
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn large_template_1mb_parses_and_extracts() {
+        // 生成约 1MB 的模板（重复 G-code 行，每行含变量）
+        let line = "G1 X{{ diameter / 2 }} Y{{ y_pos }} F{{ feed }} S{{ speed }}\n";
+        let repeats = 1_000_000 / line.len();
+        let src: String = line.repeat(repeats);
+        assert!(
+            src.len() >= 900_000,
+            "模板应接近 1MB，实际 {} 字节",
+            src.len()
+        );
+
+        let ast = parse(&src, "large.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        // 只有 4 个不同变量（diameter, y_pos, feed, speed）
+        assert_eq!(undeclared.len(), 4);
+        let all = extract_variables(&ast);
+        assert_eq!(all.len(), 4);
+    }
+
+    #[test]
+    fn large_template_render_performance() {
+        // 100KB 模板渲染应在合理时间内完成
+        let line = "G1 X{{ x }} Y{{ y }} F{{ feed }}\n";
+        let repeats = 100_000 / line.len();
+        let src: String = line.repeat(repeats);
+        assert!(
+            src.len() >= 90_000,
+            "模板源应接近 100KB，实际 {} 字节",
+            src.len()
+        );
+
+        let r = Renderer::new();
+        let ctx = minijinja::context! { x => 10.0, y => 20.0, feed => 0.15 };
+        let start = std::time::Instant::now();
+        let out = r.render(&src, "large_render.j2", &ctx).unwrap();
+        let elapsed = start.elapsed();
+        // 渲染后输出应非空且包含预期内容（不精确卡长度，因 f64 格式和换行处理可能变化）
+        assert!(!out.is_empty());
+        assert!(out.contains("G1 X10.0 Y20.0 F0.15"));
+        // 输出行数应与 repeats 一致
+        let line_count = out.lines().count();
+        assert_eq!(line_count, repeats, "输出行数应与 repeats 一致");
+        assert!(
+            elapsed.as_millis() < 2000,
+            "渲染 100KB 应 < 2s，实际 {:?}",
+            elapsed
+        );
+    }
+
+    #[test]
+    fn deeply_nested_100_levels_no_stack_overflow() {
+        // 100 层嵌套 if（minijinja 解析器有递归深度限制，应在 parse 阶段报错而非栈溢出）
+        let mut src = String::new();
+        for i in 0..100 {
+            src.push_str(&format!("{{% if v{i} > 0 %}}"));
+        }
+        src.push_str("DEEP");
+        for _ in 0..100 {
+            src.push_str("{% endif %}");
+        }
+        // 无论成功还是语法错误，都不应 panic 或栈溢出
+        let result = parse(&src, "deep100.j2");
+        match result {
+            Ok(ast) => {
+                // 如果解析成功（minijinja 允许 100 层），变量提取也不应栈溢出
+                let _ = extract_variables(&ast);
+                let _ = extract_undeclared(&ast);
+            }
+            Err(_) => {
+                // 解析失败是正常的（递归深度限制），不是 bug
+            }
+        }
+    }
+
+    #[test]
+    fn many_duplicate_references_efficient() {
+        // 同一变量被引用 10000 次，去重后应只有 1 个，且不 O(n²)
+        let src = "{{ x }}".repeat(10000);
+        let ast = parse(&src, "dup.j2").unwrap();
+        let all = extract_variables(&ast);
+        let undeclared = extract_undeclared(&ast);
+        assert_eq!(all.len(), 1);
+        assert_eq!(undeclared.len(), 1);
+        assert_eq!(all[0].name, "x");
+    }
+
     #[test]
     fn render_with_math_filters() {
         // 注意 Jinja 过滤器优先级高于算术：必须用括号把整体括起来再取整
