@@ -1,0 +1,13 @@
+# Rust 构建产物
+/target
+
+# 编辑器 / 系统临时文件
+*.swp
+*.swo
+.idea/
+.vscode/
+.DS_Store
+Thumbs.db
+
+# 日志与临时输出
+*.log

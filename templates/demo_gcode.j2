@@ -1,0 +1,16 @@
+; NCtool 演示模板（越程槽风格 G-code）
+; 用于展示：变量提取 + 数学过滤器 + set/for/循环
+O{{ program_number }} ( {{ program_name }} )
+G21 G40 G80
+T{{ tool_number }}
+G0 X{{ start_x }} Z{{ start_z }}
+G0 Z{{ safety_z }}
+{% set feed = default_feed | default(0.15) %}
+; 粗加工
+G1 X{{ (diameter / 2) | round(2) }} Z{{ depth }} F{{ (feed * 1.5) | round(2) }}
+{% for pass in passes %}
+G1 X{{ pass.x }} Z{{ pass.z }} F{{ feed }}
+{% endfor %}
+; 精加工
+G1 X{{ (diameter / 2) | round(2) }} Z{{ depth }} F{{ feed | round(3) }}
+M30

@@ -1,0 +1,16 @@
+[package]
+name = "nctool-tpl"
+version = "0.1.0"
+edition = "2021"
+description = "NCtool 模板解析核心：Jinja2 模板解析 + 变量提取 + 渲染（基于 minijinja）"
+license = "MIT"
+
+[dependencies]
+# minijinja: 最快、近乎零依赖的 Jinja2 引擎（作者即 Jinja2 原作者）
+#   - unstable_machinery: 暴露 AST，用于自建变量提取器（对标 jinja2.meta）
+#   - loop_controls: 支持 {% continue %}/{% break %}，补齐 Stmt 枚举变体
+minijinja = { version = "2.24.0", features = ["unstable_machinery", "loop_controls"] }
+
+[profile.release]
+lto = true
+strip = true
