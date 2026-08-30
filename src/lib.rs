@@ -26,6 +26,7 @@
 
 use std::collections::HashSet;
 use std::fmt;
+use std::path::Path;
 
 use minijinja::machinery::ast::{self, Expr, Spanned, Stmt};
 use minijinja::machinery::WhitespaceConfig;
@@ -529,6 +530,11 @@ impl Renderer {
     }
 
     /// 渲染模板。`context` 用 `minijinja::context!` 宏或 `Value::from_serialize` 构造。
+    ///
+    /// 此方法渲染**单段字符串**模板，不涉及模板间引用。如需 `{% include %}` /
+    /// `{% extends %}` / `{% import %}`，请先用 [`add_template`](Self::add_template)
+    /// 或 [`set_path_loader`](Self::set_path_loader) 注册模板，再调用
+    /// [`render_template`](Self::render_template)。
     pub fn render(
         &self,
         source: &str,
@@ -538,6 +544,57 @@ impl Renderer {
         let tmpl = self
             .env
             .template_from_named_str(name, source)
+            .map_err(|err| TplError::Render {
+                name: name.to_string(),
+                message: err.to_string(),
+            })?;
+        tmpl.render(context).map_err(|err| TplError::Render {
+            name: name.to_string(),
+            message: err.to_string(),
+        })
+    }
+
+    /// 注册一个内存模板（owned 字符串，无生命周期约束）。
+    ///
+    /// 注册后可通过 [`render_template`](Self::render_template) 按名称渲染，
+    /// 且模板内的 `{% include "name" %}` / `{% extends "name" %}` /
+    /// `{% import "name" %}` 能正确解析到已注册的模板。
+    pub fn add_template(
+        &mut self,
+        name: impl Into<String>,
+        source: impl Into<String>,
+    ) -> Result<(), TplError> {
+        let name = name.into();
+        self.env
+            .add_template_owned(name.clone(), source.into())
+            .map_err(|err| TplError::Render {
+                name,
+                message: err.to_string(),
+            })
+    }
+
+    /// 从文件系统目录动态加载模板。
+    ///
+    /// 目录下的文件按**文件名（含扩展名）**作为模板名引用，例如
+    /// `templates/sub.gcode` 可被 `{% include "sub.gcode" %}` 引用。
+    /// 模板按需加载并缓存，同一名称只加载一次。
+    pub fn set_path_loader(&mut self, dir: impl AsRef<Path>) {
+        let dir = dir.as_ref().to_path_buf();
+        self.env.set_loader(minijinja::path_loader(dir));
+    }
+
+    /// 渲染已注册或已加载的模板（支持 `include` / `extends` / `import`）。
+    ///
+    /// 模板需先通过 [`add_template`](Self::add_template) 注册，或通过
+    /// [`set_path_loader`](Self::set_path_loader) 配置目录加载。
+    pub fn render_template(
+        &self,
+        name: &str,
+        context: &minijinja::Value,
+    ) -> Result<String, TplError> {
+        let tmpl = self
+            .env
+            .get_template(name)
             .map_err(|err| TplError::Render {
                 name: name.to_string(),
                 message: err.to_string(),
@@ -716,6 +773,89 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
         let b = all.iter().find(|v| v.name == "b").unwrap();
         assert!(!a.optional);
         assert!(b.optional);
+    }
+
+    // -----------------------------------------------------------------------
+    // 多模板渲染（include / extends / import）
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn render_template_include() {
+        let mut r = Renderer::new();
+        r.add_template("sub.j2", "X{{ x }}").unwrap();
+        r.add_template("main.j2", "G0 {% include \"sub.j2\" %} Z{{ z }}")
+            .unwrap();
+        let ctx = minijinja::context! { x => 1.0, z => 2.0 };
+        let out = r.render_template("main.j2", &ctx).unwrap();
+        assert_eq!(out, "G0 X1.0 Z2.0");
+    }
+
+    #[test]
+    fn render_template_extends() {
+        let mut r = Renderer::new();
+        r.add_template(
+            "base.j2",
+            "HEAD {% block content %}default{% endblock %} TAIL",
+        )
+        .unwrap();
+        r.add_template(
+            "child.j2",
+            "{% extends \"base.j2\" %}{% block content %}GCODE{% endblock %}",
+        )
+        .unwrap();
+        let ctx = minijinja::context! {};
+        let out = r.render_template("child.j2", &ctx).unwrap();
+        assert_eq!(out, "HEAD GCODE TAIL");
+    }
+
+    #[test]
+    fn render_template_import_macro() {
+        let mut r = Renderer::new();
+        r.add_template("macros.j2", "{% macro greet(n) %}Hi {{ n }}{% endmacro %}")
+            .unwrap();
+        r.add_template(
+            "main.j2",
+            "{% from \"macros.j2\" import greet %}{{ greet(\"world\") }}",
+        )
+        .unwrap();
+        let ctx = minijinja::context! {};
+        let out = r.render_template("main.j2", &ctx).unwrap();
+        assert_eq!(out, "Hi world");
+    }
+
+    #[test]
+    fn render_template_not_found_errors() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! {};
+        let err = r.render_template("missing.j2", &ctx).unwrap_err();
+        match err {
+            TplError::Render { message, .. } => {
+                assert!(
+                    message.contains("template") || message.contains("not found"),
+                    "应报模板未找到错误: {message}"
+                );
+            }
+            _ => panic!("应为渲染错误"),
+        }
+    }
+
+    #[test]
+    fn add_template_syntax_error() {
+        let mut r = Renderer::new();
+        let err = r.add_template("bad.j2", "{{ oops ").unwrap_err();
+        match err {
+            TplError::Render { message, .. } => assert!(message.contains("syntax")),
+            _ => panic!("应为渲染错误（注册时语法检查失败）"),
+        }
+    }
+
+    #[test]
+    fn render_single_string_still_works() {
+        // 向后兼容：无模板注册时，render() 单字符串渲染不受影响
+        let r = Renderer::new();
+        let ctx = minijinja::context! { x => 42.0 };
+        let out = r.render("X{{ x }}", "s.j2", &ctx).unwrap();
+        assert_eq!(out, "X42.0");
     }
 
     #[test]

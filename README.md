@@ -13,7 +13,30 @@ NCtool 模板解析核心：基于 [minijinja](https://github.com/mitsuhiko/mini
 | `parse(source, name)` | 语法检查并生成 AST（带行列定位） |
 | `extract_variables(&ast)` | 提取模板中**引用过**的全部变量名（含模板内部声明的） |
 | `extract_undeclared(&ast)` | 提取引用但**未在模板内声明**的变量 —— 即渲染时必须由外部提供的参数；并区分**可选 / 必选** |
-| `Renderer` | 用上下文渲染出最终文本（G-code），内置数学过滤器集 |
+| `Renderer` | 用上下文渲染出最终文本（G-code），内置数学过滤器集；支持多模板（`include`/`extends`/`import`） |
+
+## 多模板渲染
+
+`Renderer` 支持模板间引用，两种注册方式：
+
+```rust
+use nctool_tpl::Renderer;
+
+let mut r = Renderer::new();
+
+// 方式一：内存注册（owned 字符串，无生命周期约束）
+r.add_template("header.j2", "O{{ prog }} ({{ name }})").unwrap();
+r.add_template("main.j2", "{% include \"header.j2\" %}\nG1 X{{ diameter / 2 }}").unwrap();
+
+// 方式二：从文件系统目录动态加载（按需加载并缓存）
+// r.set_path_loader("templates/");
+
+let ctx = minijinja::context! { prog => 1000, name => "DEMO", diameter => 42.0 };
+let out = r.render_template("main.j2", &ctx).unwrap();
+// out = "O1000 (DEMO)\nG1 X21.0"
+```
+
+`{% include %}` / `{% extends %}` / `{% import %}` 均能正确解析到已注册或目录中的模板。
 
 每个返回的 `Variable` 都带有 `optional: bool` 字段：`true` 表示该变量的**全部引用**都处于「兜底上下文」（`default`/`d` 过滤器或 `is defined`/`is undefined` 测试）——对 `extract_undeclared` 而言即**可选参数**（缺失时模板仍可安全渲染），`false` 为**必选参数**。
 

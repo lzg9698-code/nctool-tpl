@@ -178,3 +178,73 @@ fn variables_and_undeclared_share_optional() {
     assert!(!all_opt("required_x") && !un_opt("required_x"));
     assert!(all_opt("optional_y") && un_opt("optional_y"));
 }
+
+/// 多模板全链路：注册 include/extends 模板 + 变量提取 + 渲染。
+#[test]
+fn multi_template_full_pipeline() {
+    let mut renderer = Renderer::new();
+    renderer
+        .add_template("header.j2", "O{{ prog }} ({{ name }})")
+        .unwrap();
+    renderer
+        .add_template(
+            "main.j2",
+            "{% include \"header.j2\" %}\nG1 X{{ diameter / 2 }}",
+        )
+        .unwrap();
+
+    // 主模板变量提取（include 的子模板变量不会进入主模板 AST）
+    let ast = parse(
+        "{% include \"header.j2\" %}\nG1 X{{ diameter / 2 }}",
+        "main.j2",
+    )
+    .unwrap();
+    let undeclared: Vec<String> = extract_undeclared(&ast)
+        .into_iter()
+        .map(|v| v.name)
+        .collect();
+    assert_eq!(undeclared, vec!["diameter".to_string()]);
+
+    // 渲染：include 子模板的变量由上下文提供
+    let ctx = minijinja::context! {
+        prog => 1000,
+        name => "DEMO",
+        diameter => 42.0,
+    };
+    let out = renderer.render_template("main.j2", &ctx).unwrap();
+    assert!(out.contains("O1000 (DEMO)"));
+    assert!(out.contains("G1 X21"));
+}
+
+/// 从文件系统目录加载模板（path_loader）。
+#[test]
+fn path_loader_from_directory() {
+    let dir = std::env::temp_dir().join(format!("nctool_tpl_test_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("sub.j2"), "SUB{{ v }}").unwrap();
+    std::fs::write(dir.join("main.j2"), "{% include \"sub.j2\" %} END").unwrap();
+
+    let mut renderer = Renderer::new();
+    renderer.set_path_loader(&dir);
+    let ctx = minijinja::context! { v => 7.0 };
+    let out = renderer.render_template("main.j2", &ctx).unwrap();
+    assert_eq!(out, "SUB7.0 END");
+
+    // 清理
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 未注册模板渲染应报错，且错误信息可定位到模板名。
+#[test]
+fn render_missing_template_error() {
+    let renderer = Renderer::new();
+    let ctx = minijinja::context! {};
+    let err = renderer.render_template("nope.j2", &ctx).unwrap_err();
+    match err {
+        TplError::Render { name, message } => {
+            assert_eq!(name, "nope.j2");
+            assert!(!message.is_empty());
+        }
+        _ => panic!("应为 Render 错误"),
+    }
+}
