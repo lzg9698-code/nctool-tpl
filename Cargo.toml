@@ -2,8 +2,20 @@
 name = "nctool-tpl"
 version = "0.2.0"
 edition = "2021"
-description = "NCtool 模板解析核心：Jinja2 模板解析 + 变量提取 + 渲染（基于 minijinja）"
+description = "NCtool 模板解析核心：Jinja2 模板解析 + 变量提取（可选/必选区分）+ 渲染（基于 minijinja）"
 license = "MIT"
+readme = "README.md"
+keywords = ["template", "jinja2", "gcode", "nc", "minijinja"]
+categories = ["template-engine", "parser-implementations", "development-tools::build-utils"]
+# repository = "https://github.com/USER/REPO"  # 发布前请补充仓库地址
+# documentation = "https://docs.rs/nctool-tpl"  # docs.rs 自动生成，无需手动填写
+
+# 发布到 crates.io 时排除的文件
+exclude = [
+    ".github/",
+    "target/",
+    "*.probestmp",
+]
 
 [dependencies]
 # minijinja: 最快、近乎零依赖的 Jinja2 引擎（作者即 Jinja2 原作者）
