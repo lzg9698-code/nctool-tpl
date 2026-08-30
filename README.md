@@ -15,6 +15,18 @@ NCtool 模板解析核心：基于 [minijinja](https://github.com/mitsuhiko/mini
 | `extract_undeclared(&ast)` | 提取引用但**未在模板内声明**的变量 —— 即渲染时必须由外部提供的参数；并区分**可选 / 必选** |
 | `Renderer` | 用上下文渲染出最终文本（G-code），内置数学过滤器集；支持多模板（`include`/`extends`/`import`） |
 
+## 性能基线
+
+基于 criterion benchmark（`cargo bench`），中等复杂度 G-code 模板（~260 字节，含 set/default、数学过滤器、for 循环、if 条件）：
+
+| 操作 | 耗时（中位数） | 吞吐 |
+| --- | --- | --- |
+| `parse` | 2.61 µs | 98 MiB/s |
+| `extract_undeclared` | 1.97 µs | — |
+| `render` | 5.32 µs | 48 MiB/s |
+
+测试环境：release 构建（LTO + strip + codegen-units=1）。重复渲染相同模板时，建议用 `add_template` + `render_template`（minijinja 会缓存编译结果），避免每次重新编译。
+
 ## 错误类型
 
 `TplError` 已细分，上层可精准处理（`#[non_exhaustive]`，match 请保留通配分支）：
