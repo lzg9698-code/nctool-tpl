@@ -30,6 +30,8 @@
 //! （通过方法访问），[`TplError`] 标注 `#[non_exhaustive]`，以便未来扩展而不破坏
 //! 下游。v0.x 阶段 API 仍可能调整，建议在 `Cargo.toml` 中锁定 minor 版本。
 
+#![warn(missing_docs)]
+
 use std::collections::HashSet;
 use std::fmt;
 use std::path::Path;
@@ -111,41 +113,58 @@ pub enum TplError {
     /// `col` 为 minijinja 停止解析位置的最佳近似（来自其错误携带的字节范围），
     /// 在无法取得字节范围时回退为 `1`。
     Parse {
+        /// 触发错误的模板名
         name: String,
+        /// 完整错误信息（含 minijinja 原始描述）
         message: String,
+        /// 错误所在行（1 起始）
         line: usize,
+        /// 错误所在列（1 起始，最佳近似）
         col: usize,
     },
     /// 模板未找到（`{% include %}` / `{% extends %}` / `get_template` 引用了不存在的模板）。
     TemplateNotFound {
+        /// 触发错误的模板名
         name: String,
         /// 被引用但不存在的模板名（从 minijinja 错误详情中提取，可能为空）。
         template: String,
+        /// 完整错误信息
         message: String,
     },
     /// 未定义变量（严格模式下引用了不存在的变量）。
     UndefinedVariable {
+        /// 触发错误的模板名
         name: String,
-        /// 变量名（从错误详情中提取，可能为空）。
+        /// 变量名（minijinja 的 UndefinedError 不携带变量名，此字段暂为空）。
         variable: String,
+        /// 完整错误信息
         message: String,
     },
     /// 未知过滤器（模板使用了未注册的过滤器）。
     UnknownFilter {
+        /// 触发错误的模板名
         name: String,
         /// 过滤器名（从错误详情中提取，可能为空）。
         filter: String,
+        /// 完整错误信息
         message: String,
     },
     /// 未知测试（模板使用了未注册的测试）。
     UnknownTest {
+        /// 触发错误的模板名
         name: String,
         /// 测试名（从错误详情中提取，可能为空）。
         test: String,
+        /// 完整错误信息
         message: String,
     },
     /// 其他渲染错误（无效操作、参数错误、序列化失败等兜底）。
-    Render { name: String, message: String },
+    Render {
+        /// 触发错误的模板名
+        name: String,
+        /// 完整错误信息
+        message: String,
+    },
 }
 
 impl fmt::Display for TplError {
