@@ -7,10 +7,13 @@ license = "MIT"
 
 [dependencies]
 # minijinja: 最快、近乎零依赖的 Jinja2 引擎（作者即 Jinja2 原作者）
+#   版本约束 ~2.24.0：允许补丁升级（2.24.x），锁定 minor（不允许 2.25+），
+#     因为本库依赖 unstable_machinery（不稳定 AST API）和 debug feature，
+#     minor 升级可能破坏编译。升级前需跑全量测试验证兼容性。
 #   - unstable_machinery: 暴露 AST，用于自建变量提取器（对标 jinja2.meta）
 #   - loop_controls: 支持 {% continue %}/{% break %}，补齐 Stmt 枚举变体
 #   - debug: 让解析错误的 Error 携带字节范围（range()），用于精确定位列号
-minijinja = { version = "2.24.0", features = ["unstable_machinery", "loop_controls", "debug"] }
+minijinja = { version = "~2.24.0", features = ["unstable_machinery", "loop_controls", "debug"] }
 
 [profile.release]
 lto = true
