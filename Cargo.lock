@@ -279,6 +279,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nctool-core"
+version = "0.1.0"
+dependencies = [
+ "minijinja",
+ "nctool-tpl",
+ "serde",
+ "serde_json",
+]
+
+[[package]]
 name = "nctool-tpl"
 version = "0.3.0"
 dependencies = [

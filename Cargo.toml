@@ -1,3 +1,7 @@
+[workspace]
+members = [".", "core"]
+resolver = "2"
+
 [package]
 name = "nctool-tpl"
 version = "0.3.0"
