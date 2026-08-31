@@ -15,6 +15,29 @@ NCtool 模板解析核心：基于 [minijinja](https://github.com/mitsuhiko/mini
 | `extract_undeclared(&ast)` | 提取引用但**未在模板内声明**的变量 —— 即渲染时必须由外部提供的参数；并区分**可选 / 必选** |
 | `Renderer` | 用上下文渲染出最终文本（G-code），内置数学过滤器集；支持多模板（`include`/`extends`/`import`） |
 
+## NC 数值格式化过滤器
+
+G-code 对数值格式敏感，`Renderer` 内置三个专用过滤器：
+
+| 过滤器 | 用法 | 输入 | 输出 | 用途 |
+| --- | --- | --- | --- | --- |
+| `nc_fixed(N)` | `{{ x \| nc_fixed(3) }}` | `21.0` | `21.000` | 固定小数位的坐标值 |
+| `nc_strip` | `{{ x \| nc_strip }}` | `21.0` | `21` | 去尾零，避免 `X21.0` |
+| `nc_pad(N)` | `{{ n \| nc_pad(4) }}` | `1` | `0001` | 程序号/行号前导零 |
+
+```jinja
+O{{ prog | nc_pad(4) }}
+N{{ line | nc_pad(4) }} G1 X{{ x | nc_fixed(3) }} Y{{ y | nc_fixed(3) }} F{{ feed | nc_strip }}
+```
+
+渲染结果（prog=1, line=10, x=21.0, y=15.5, feed=0.150）：
+```
+O0001
+N0010 G1 X21.000 Y15.500 F0.15
+```
+
+所有 NC 过滤器对非有限数（NaN/Inf）报错，防止非法数值写入 G-code。
+
 ## 性能基线
 
 基于 criterion benchmark（`cargo bench`），中等复杂度 G-code 模板（~260 字节，含 set/default、数学过滤器、for 循环、if 条件）：

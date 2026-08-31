@@ -668,13 +668,18 @@ fn walk_call_arg<'a>(arg: &ast::CallArg<'a>, c: &mut Collector<'a>, opt: bool) {
 // 渲染器：minijinja Environment + 数学过滤器集
 // ---------------------------------------------------------------------------
 
-/// 渲染器。内部持有 minijinja `Environment`，并注册一组数学过滤器。
+/// 渲染器。内部持有 minijinja `Environment`，并注册一组数学过滤器和 NC 数值格式化过滤器。
 ///
-/// 过滤器集（全部基于 Rust 标准库 `f64`，零额外依赖）：
+/// 数学过滤器集（全部基于 Rust 标准库 `f64`，零额外依赖）：
 /// `sin` `cos` `tan` `asin` `acos` `atan` `sqrt` `exp` `ln` `log10` `pow` `floor` `ceil`
 ///
-/// 所有数学过滤器对结果做**有限性校验**：一旦产生 `NaN`/`Inf`（如 `sqrt(-1)`、`asin(2)`、
-/// `ln(0)`），渲染立即失败并报 [`TplError::Render`]，避免非法坐标静默写入 G-code。
+/// NC 数值格式化过滤器（G-code 专用）：
+/// - `nc_fixed(N)`：固定小数位，`{{ x | nc_fixed(3) }}` → `21.000`
+/// - `nc_strip`：去尾零，`{{ x | nc_strip }}` → `21`（输入 21.0）
+/// - `nc_pad(N)`：前导零填充，`{{ n | nc_pad(4) }}` → `0001`（程序号/行号用）
+///
+/// 所有数学过滤器和 NC 过滤器对结果做**有限性校验**：一旦产生 `NaN`/`Inf`（如 `sqrt(-1)`、
+/// `asin(2)`、`ln(0)`），渲染立即失败并报 [`TplError::Render`]，避免非法坐标静默写入 G-code。
 #[derive(Debug)]
 pub struct Renderer {
     env: Environment<'static>,
@@ -690,6 +695,58 @@ fn checked_math(value: f64, filter: &'static str) -> Result<f64, minijinja::Erro
             format!("数学过滤器 `{filter}` 输出非有限数（NaN/Inf），拒绝渲染"),
         ))
     }
+}
+
+// ---------------------------------------------------------------------------
+// NC 数值格式化过滤器（G-code 专用）
+// ---------------------------------------------------------------------------
+
+/// 固定小数位：`{{ x | nc_fixed(3) }}` → `21.000`。
+///
+/// 用于需要固定精度的坐标值（如 `X21.000 Y15.500`）。非有限数（NaN/Inf）报错。
+fn filter_nc_fixed(value: f64, decimals: usize) -> Result<String, minijinja::Error> {
+    if !value.is_finite() {
+        return Err(minijinja::Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            "nc_fixed: 输入非有限数（NaN/Inf）",
+        ));
+    }
+    Ok(format!("{:.*}", decimals, value))
+}
+
+/// 去尾零：`{{ x | nc_strip }}` → `21`（输入 21.0）或 `21.5`（输入 21.50）。
+///
+/// 用于不需要固定精度的数值，避免输出 `X21.0` 而期望 `X21`。非有限数报错。
+fn filter_nc_strip(value: f64) -> Result<String, minijinja::Error> {
+    if !value.is_finite() {
+        return Err(minijinja::Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            "nc_strip: 输入非有限数（NaN/Inf）",
+        ));
+    }
+    // Rust f64 Display 已自动去尾零：21.0 → "21"，21.50 → "21.5"
+    Ok(format!("{}", value))
+}
+
+/// 前导零填充：`{{ n | nc_pad(4) }}` → `0001`（输入 1）。
+///
+/// 用于程序号（`O0001`）、行号（`N0010`）等需要固定宽度的整数。
+/// 输入为浮点数时截断小数部分取整。非有限数报错。
+fn filter_nc_pad(value: f64, width: usize) -> Result<String, minijinja::Error> {
+    if !value.is_finite() {
+        return Err(minijinja::Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            "nc_pad: 输入非有限数（NaN/Inf）",
+        ));
+    }
+    if width == 0 {
+        return Err(minijinja::Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            "nc_pad: 宽度不能为 0",
+        ));
+    }
+    let int_val = value.trunc() as i64;
+    Ok(format!("{:0>width$}", int_val, width = width))
 }
 
 impl Default for Renderer {
@@ -719,6 +776,10 @@ impl Renderer {
         env.add_filter("pow", |v: f64, e: f64| checked_math(v.powf(e), "pow"));
         env.add_filter("floor", |v: f64| checked_math(v.floor(), "floor"));
         env.add_filter("ceil", |v: f64| checked_math(v.ceil(), "ceil"));
+        // NC 数值格式化过滤器（G-code 专用）
+        env.add_filter("nc_fixed", filter_nc_fixed);
+        env.add_filter("nc_strip", filter_nc_strip);
+        env.add_filter("nc_pad", filter_nc_pad);
         Self { env }
     }
 
@@ -1383,6 +1444,133 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
             TplError::Render { .. } => {}
             _ => panic!("NaN 通过数学过滤器应报错"),
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // NC 数值格式化过滤器（nc_fixed / nc_strip / nc_pad）
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn nc_fixed_decimal_places() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! { x => 21.0, y => 15.5 };
+        // 固定 3 位小数
+        let out = r
+            .render(
+                "X{{ x | nc_fixed(3) }} Y{{ y | nc_fixed(3) }}",
+                "f.j2",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "X21.000 Y15.500");
+        // 固定 0 位小数（取整）
+        let out = r.render("X{{ x | nc_fixed(0) }}", "f0.j2", &ctx).unwrap();
+        assert_eq!(out, "X21");
+    }
+
+    #[test]
+    fn nc_strip_trailing_zeros() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! { x => 21.0, y => 15.50, z => 0.0 };
+        let out = r
+            .render(
+                "X{{ x | nc_strip }} Y{{ y | nc_strip }} Z{{ z | nc_strip }}",
+                "s.j2",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "X21 Y15.5 Z0");
+    }
+
+    #[test]
+    fn nc_pad_leading_zeros() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! { n => 1, line => 10, big => 12345 };
+        // 程序号 O0001
+        let out = r
+            .render("O{{ n | nc_pad(4) }} N{{ line | nc_pad(4) }}", "p.j2", &ctx)
+            .unwrap();
+        assert_eq!(out, "O0001 N0010");
+        // 数值超过宽度时不截断
+        let out = r.render("{{ big | nc_pad(3) }}", "pbig.j2", &ctx).unwrap();
+        assert_eq!(out, "12345");
+    }
+
+    #[test]
+    fn nc_filters_accept_integer_input() {
+        // 整数字面量应能被 f64 参数的过滤器接受
+        let r = Renderer::new();
+        let ctx = minijinja::context! {};
+        let out = r
+            .render(
+                "{{ 42 | nc_fixed(2) }} {{ 7 | nc_strip }} {{ 5 | nc_pad(4) }}",
+                "int.j2",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "42.00 7 0005");
+    }
+
+    #[test]
+    fn nc_filters_negative_values() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! { x => -21.5 };
+        let out = r
+            .render("X{{ x | nc_fixed(3) }} X{{ x | nc_strip }}", "neg.j2", &ctx)
+            .unwrap();
+        assert_eq!(out, "X-21.500 X-21.5");
+    }
+
+    #[test]
+    fn nc_filters_reject_non_finite() {
+        let r = Renderer::new();
+        // NaN
+        let ctx_nan = minijinja::context! { x => f64::NAN };
+        let err = r
+            .render("{{ x | nc_fixed(2) }}", "nan.j2", &ctx_nan)
+            .unwrap_err();
+        match err {
+            TplError::Render { .. } => {}
+            _ => panic!("NaN 应报错"),
+        }
+        // Inf
+        let ctx_inf = minijinja::context! { x => f64::INFINITY };
+        let err = r
+            .render("{{ x | nc_strip }}", "inf.j2", &ctx_inf)
+            .unwrap_err();
+        match err {
+            TplError::Render { .. } => {}
+            _ => panic!("Inf 应报错"),
+        }
+    }
+
+    #[test]
+    fn nc_pad_zero_width_rejects() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! { n => 1 };
+        let err = r
+            .render("{{ n | nc_pad(0) }}", "pad0.j2", &ctx)
+            .unwrap_err();
+        match err {
+            TplError::Render { message, .. } => assert!(message.contains("宽度不能为 0")),
+            _ => panic!("nc_pad(0) 应报错"),
+        }
+    }
+
+    #[test]
+    fn nc_filters_combined_in_gcode() {
+        // 模拟真实 G-code 场景：程序号 + 坐标 + 行号
+        let r = Renderer::new();
+        let ctx = minijinja::context! {
+            prog => 1,
+            x => 21.0,
+            y => 15.5,
+            feed => 0.150,
+            line => 10,
+        };
+        let src = "O{{ prog | nc_pad(4) }}\nN{{ line | nc_pad(4) }} G1 X{{ x | nc_fixed(3) }} Y{{ y | nc_fixed(3) }} F{{ feed | nc_strip }}";
+        let out = r.render(src, "gcode.j2", &ctx).unwrap();
+        assert_eq!(out, "O0001\nN0010 G1 X21.000 Y15.500 F0.15");
     }
 
     // -----------------------------------------------------------------------
