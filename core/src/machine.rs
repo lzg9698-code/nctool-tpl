@@ -105,11 +105,6 @@ impl MachinePreset {
             },
         }
     }
-
-    /// 便捷构造 [`MachineConfig`] 的引用（供渲染上下文使用）。
-    pub fn to_config(self) -> MachineConfig {
-        self.config()
-    }
 }
 
 /// 通用编程约定默认值（所有预设的基础）。

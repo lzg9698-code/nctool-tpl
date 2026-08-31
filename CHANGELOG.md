@@ -10,6 +10,49 @@
 
 ---
 
+## [Unreleased] - 2026-08-31
+
+"第二轮全面代码审查修复"：修正变量提取的作用域语义，补齐错误定位与 NC 输出健壮性。
+
+### Fixed（nctool-tpl）
+
+- **set/with 自引用漏报**：`{% set total = total + price %}` 中右侧引用原被误判为模板局部，
+  导致必选参数校验漏报、严格渲染才报错。现 RHS 先在外层作用域求值，再绑定目标
+- **作用域泄漏**：`for` / `with` / `macro` 现在创建独立作用域（与 Jinja2 语义一致），
+  循环/块内 `set` 的名字不再泄漏到块外；`if` 仍不创建作用域
+- **UndefinedVariable 恢复变量名**：debug feature 下错误携带字节范围，尽力从源码恢复缺失变量名
+  （`{{ missing }}` → `"missing"`）；属性链场景无法判定缺失位置时留空（宁缺毋错）
+- **nc_pad 拒绝负数**：负输入会拼出 `O-001` 这类非法 G-code，现报渲染错误
+
+### Fixed（nctool-core）
+
+- **machine 元信息注入**：`machine.id` / `vendor` / `model` 现可被模板直接引用
+  （原先只注入 `config` 键值表）；config 同名键以元信息优先
+- **校验错误类型**：`TemplateRegistry::validate` 错误从 `String` 改为 `RegistryError`
+  （新增 `NotFound` 变体）；管线中校验失败不再误映射为 `PipelineError::Render`
+- **头部注释 ASCII 化**：管线头部注释改为英文 ASCII 文本（许多 CNC 控制器对非 ASCII 敏感）
+- **Memory 模板去重存储**：`TemplateSource::Memory` 不再复制一份源码（源码以
+  `TemplateEntry::source_text` 为单一权威来源）
+
+### Added
+
+- **`GenerationOptions::ascii_only`**：开启后 G-code 输出中的非 ASCII 字符替换为 `?`
+  （含头部注释与模板名）；仅对 `OutputFormat::Gcode` 生效，`Text` 始终原样
+
+### Changed（破坏性，0.x 阶段）
+
+- `TemplateSource::Memory` 从 `Memory(String)` 改为无载荷变体（源码统一读 `source_text`）
+- `MachinePreset::to_config` 移除（与 `config()` 重复）
+- `TemplateRegistry::validate` 返回 `Result<ValidationReport, RegistryError>`
+- core 依赖 `minijinja` 去除多余的 `unstable_machinery` 等 feature 声明（由 nctool-tpl 启用并合并）
+
+### 其他
+
+- 新增 `.gitattributes`（统一 LF），消除 Windows 下 autocrlf 幻影改动
+- `set_path_loader` 文档补充路径穿越安全性说明（模板视为可信输入）
+
+---
+
 ## [0.1.0] nctool-core - 2026-08-31
 
 "阶段 1 核心库"：workspace 新增子 crate `core/`（nctool-core v0.1.0），在 nctool-tpl 之上提供面向 G-code 生成的生产级能力，并通过阶段性代码审查。

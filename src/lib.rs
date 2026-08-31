@@ -135,7 +135,7 @@ pub enum TplError {
     UndefinedVariable {
         /// 触发错误的模板名
         name: String,
-        /// 变量名（minijinja 的 UndefinedError 不携带变量名，此字段暂为空）。
+        /// 变量名（尽力从源码错误位置恢复；无法定位时为空）。
         variable: String,
         /// 完整错误信息
         message: String,
@@ -251,6 +251,48 @@ fn extract_after_prefix<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
     s.strip_prefix(prefix)?.split_whitespace().next()
 }
 
+/// 从源码 `offset` 处尽力提取一个标识符（变量名）。
+///
+/// 用于从 minijinja 运行时错误的字节范围中恢复未定义变量名：
+/// debug feature 下错误携带字节范围，通常指向出错的表达式起点
+/// （如 `{{ missing }}` 的 `missing`）。无法定位或该处不是标识符时返回 `None`。
+fn extract_identifier_at(source: &str, offset: usize) -> Option<String> {
+    // 对齐到 UTF-8 字符边界（错误范围可能落在多字节字符中间）
+    let mut off = offset.min(source.len());
+    while off > 0 && !source.is_char_boundary(off) {
+        off -= 1;
+    }
+    let rest = &source[off..];
+    let mut chars = rest.chars();
+    let first = chars.next()?;
+    if !(first == '_' || first.is_alphabetic()) {
+        return None;
+    }
+    let len = first.len_utf8()
+        + chars
+            .take_while(|c| c.is_alphanumeric() || *c == '_')
+            .map(char::len_utf8)
+            .sum::<usize>();
+    Some(rest[..len].to_string())
+}
+
+/// 从源码与错误字节范围中尽力恢复未定义变量的名字。
+///
+/// minijinja 的 `UndefinedError` 不携带变量名，但 debug feature 下错误携带
+/// 字节范围。范围通常覆盖整个出错的表达式（如 `x.missing_attr` 整条属性链），
+/// 仅当范围起点恰好是一个**裸标识符**（后面不紧跟 `.` / `[` 等访问符）时才
+/// 认定其为缺失变量名 —— 属性链中无法确定缺失的是基础名还是某个属性，
+/// 此时返回 `None`（宁缺毋错，避免误导）。
+fn extract_undefined_var_name(source: &str, range: std::ops::Range<usize>) -> Option<String> {
+    let rest = source.get(range.start..)?;
+    let id = extract_identifier_at(rest, 0)?;
+    let after = rest[id.len()..].trim_start();
+    if after.starts_with('.') || after.starts_with('[') {
+        return None;
+    }
+    Some(id)
+}
+
 /// 将 minijinja 错误转换为细分的 [`TplError`]。
 ///
 /// `fallback_name`：当 minijinja 错误未携带模板名时使用的名称。
@@ -285,9 +327,14 @@ fn from_minijinja_error(
         },
         ErrorKind::UndefinedError => TplError::UndefinedVariable {
             name,
-            // minijinja 的 UndefinedError 不携带变量名（detail 为 None），
-            // 此字段暂为空；变量名可结合模板源码与错误位置另行定位。
-            variable: String::new(),
+            // minijinja 的 UndefinedError 不直接携带变量名；debug feature 下
+            // 错误携带字节范围（指向出错表达式），尽力从源码恢复变量名。
+            variable: source
+                .and_then(|src| {
+                    err.range()
+                        .and_then(|range| extract_undefined_var_name(src, range))
+                })
+                .unwrap_or_default(),
             message,
         },
         ErrorKind::UnknownFilter => TplError::UnknownFilter {
@@ -377,8 +424,10 @@ pub fn extract_undeclared<'a>(ast: &Ast<'a>) -> Vec<Variable> {
 // ---------------------------------------------------------------------------
 
 struct Collector<'a> {
-    /// 模板内部已声明的名字（set 目标 / for 目标 / with 赋值 / macro 参数 / import 别名）
-    locals: HashSet<&'a str>,
+    /// 作用域栈：`scopes[0]` 为模板顶层，`for`/`with`/`macro` 各推入独立作用域
+    /// （与 Jinja2 语义一致：`if`/`block` 不创建作用域）。
+    /// 每层存放该作用域内声明的名字（set 目标 / for 目标 / with 赋值 / macro 参数 / import 别名）。
+    scopes: Vec<HashSet<&'a str>>,
     all: Vec<Variable>,
     all_seen: HashSet<String>,
     undeclared: Vec<Variable>,
@@ -390,13 +439,36 @@ struct Collector<'a> {
 impl<'a> Collector<'a> {
     fn new(_src: &'a str) -> Self {
         Collector {
-            locals: HashSet::new(),
+            scopes: vec![HashSet::new()],
             all: Vec::new(),
             all_seen: HashSet::new(),
             undeclared: Vec::new(),
             undeclared_seen: HashSet::new(),
             required_refs: HashSet::new(),
         }
+    }
+
+    /// 推入新作用域（for 循环体 / with 块 / macro 体）。
+    fn push_scope(&mut self) {
+        self.scopes.push(HashSet::new());
+    }
+
+    /// 弹出当前作用域。
+    fn pop_scope(&mut self) {
+        self.scopes.pop();
+    }
+
+    /// 在当前（栈顶）作用域声明一个名字。
+    fn declare(&mut self, name: &'a str) {
+        self.scopes
+            .last_mut()
+            .expect("作用域栈不应为空")
+            .insert(name);
+    }
+
+    /// 名字是否在任意可见作用域中已声明。
+    fn is_local(&self, name: &str) -> bool {
+        self.scopes.iter().any(|scope| scope.contains(name))
     }
 
     /// 按「是否出现过非兜底引用」回填所有变量的 `optional` 字段。
@@ -433,7 +505,7 @@ impl<'a> Collector<'a> {
         if self.all_seen.insert(var.name.clone()) {
             self.all.push(var.clone());
         }
-        if !self.locals.contains(name)
+        if !self.is_local(name)
             && !BUILTIN_GLOBALS.contains(&name)
             && self.undeclared_seen.insert(var.name.clone())
         {
@@ -442,11 +514,11 @@ impl<'a> Collector<'a> {
     }
 }
 
-/// 把赋值目标（Var 或解构的 List）里的名字登记为模板局部变量。
+/// 把赋值目标（Var 或解构的 List）里的名字登记为当前作用域的模板局部变量。
 fn declare_locals<'a>(expr: &Expr<'a>, c: &mut Collector<'a>) {
     match expr {
         Expr::Var(s) => {
-            c.locals.insert(s.id);
+            c.declare(s.id);
         }
         Expr::List(s) => {
             for item in &s.items {
@@ -467,15 +539,20 @@ fn walk_stmt<'a>(stmt: &Stmt<'a>, c: &mut Collector<'a>, opt: bool) {
         Stmt::EmitExpr(s) => walk_expr(&s.expr, c, opt),
         Stmt::EmitRaw(_) => {}
         Stmt::ForLoop(s) => {
-            declare_locals(&s.target, c);
+            // 迭代表达式在外层作用域求值（循环变量此时还不存在）
             walk_expr(&s.iter, c, opt);
+            c.push_scope();
+            declare_locals(&s.target, c);
+            c.declare("loop");
+            // 过滤表达式与循环体可引用循环变量（Jinja2 语义）
             if let Some(f) = &s.filter_expr {
                 walk_expr(f, c, opt);
             }
-            c.locals.insert("loop");
             for child in &s.body {
                 walk_stmt(child, c, opt);
             }
+            c.pop_scope();
+            // else 体在循环变量不可见的外层作用域执行
             for child in &s.else_body {
                 walk_stmt(child, c, opt);
             }
@@ -490,26 +567,37 @@ fn walk_stmt<'a>(stmt: &Stmt<'a>, c: &mut Collector<'a>, opt: bool) {
             }
         }
         Stmt::WithBlock(s) => {
-            for (target, value) in &s.assignments {
-                declare_locals(target, c);
+            // 赋值表达式先在外层作用域求值（与 Jinja2 语义一致，
+            // 避免 {% with y = y + 1 %} 把右侧 y 误当作新局部）
+            for (_target, value) in &s.assignments {
                 walk_expr(value, c, opt);
+            }
+            c.push_scope();
+            for (target, _) in &s.assignments {
+                declare_locals(target, c);
             }
             for child in &s.body {
                 walk_stmt(child, c, opt);
             }
+            c.pop_scope();
         }
         Stmt::Set(s) => {
-            declare_locals(&s.target, c);
+            // RHS 先在外层作用域求值，再声明目标：
+            // {% set total = total + x %} 中右侧 total 引用的是外层/上下文值，
+            // 若先声明会把必选变量 total 误判为模板局部，导致校验漏报。
             walk_expr(&s.expr, c, opt);
+            declare_locals(&s.target, c);
         }
         Stmt::SetBlock(s) => {
-            declare_locals(&s.target, c);
+            // 块体与过滤表达式先在外层作用域求值（块体中对目标名的引用
+            // 指向外层同名变量），求值完毕后再绑定目标。
             if let Some(f) = &s.filter {
                 walk_expr(f, c, opt);
             }
             for child in &s.body {
                 walk_stmt(child, c, opt);
             }
+            declare_locals(&s.target, c);
         }
         Stmt::AutoEscape(s) => {
             walk_expr(&s.enabled, c, opt);
@@ -544,20 +632,24 @@ fn walk_stmt<'a>(stmt: &Stmt<'a>, c: &mut Collector<'a>, opt: bool) {
         Stmt::Extends(s) => walk_expr(&s.name, c, opt),
         Stmt::Include(s) => walk_expr(&s.name, c, opt),
         Stmt::Macro(s) => {
-            // 宏名在模板内已定义，引用它不算“未声明变量”
-            c.locals.insert(s.name);
+            // 宏名在外层作用域定义，引用它不算“未声明变量”
+            c.declare(s.name);
+            c.push_scope();
             for arg in &s.args {
                 declare_locals(arg, c);
             }
+            // 默认值在宏作用域内求值（调用时绑定，可引用更早声明的参数名）
             for d in &s.defaults {
                 walk_expr(d, c, opt);
             }
             for child in &s.body {
                 walk_stmt(child, c, opt);
             }
+            c.pop_scope();
         }
         Stmt::CallBlock(s) => {
             walk_call(&s.call, c, opt);
+            c.push_scope();
             for arg in &s.macro_decl.args {
                 declare_locals(arg, c);
             }
@@ -567,6 +659,7 @@ fn walk_stmt<'a>(stmt: &Stmt<'a>, c: &mut Collector<'a>, opt: bool) {
             for child in &s.macro_decl.body {
                 walk_stmt(child, c, opt);
             }
+            c.pop_scope();
         }
         Stmt::Continue(_) | Stmt::Break(_) => {}
         Stmt::Do(s) => walk_call(&s.call, c, opt),
@@ -732,13 +825,20 @@ fn filter_nc_strip(value: f64) -> Result<String, minijinja::Error> {
 
 /// 前导零填充：`{{ n | nc_pad(4) }}` → `0001`（输入 1）。
 ///
-/// 用于程序号（`O0001`）、行号（`N0010`）等需要固定宽度的整数。
-/// 输入为浮点数时截断小数部分取整。非有限数报错。
+/// 用于程序号（`O0001`）、行号（`N0010`）等需要固定宽度的**非负**整数。
+/// 输入为浮点数时截断小数部分取整。负数或非有限数报错
+/// （负数会拼出 `O-001` 这类非法 G-code）。
 fn filter_nc_pad(value: f64, width: usize) -> Result<String, minijinja::Error> {
     if !value.is_finite() {
         return Err(minijinja::Error::new(
             minijinja::ErrorKind::InvalidOperation,
             "nc_pad: 输入非有限数（NaN/Inf）",
+        ));
+    }
+    if value < 0.0 {
+        return Err(minijinja::Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            "nc_pad: 输入为负数（程序号/行号不可为负）",
         ));
     }
     if width == 0 {
@@ -832,7 +932,7 @@ impl Renderer {
             .template_from_named_str(name, source)
             .map_err(|err| from_minijinja_error(err, name, Some(source)))?;
         tmpl.render(context)
-            .map_err(|err| from_minijinja_error(err, name, None))
+            .map_err(|err| from_minijinja_error(err, name, Some(source)))
     }
 
     /// 注册一个内存模板（owned 字符串，无生命周期约束）。
@@ -857,6 +957,12 @@ impl Renderer {
     /// 目录下的文件按**文件名（含扩展名）**作为模板名引用，例如
     /// `templates/sub.gcode` 可被 `{% include "sub.gcode" %}` 引用。
     /// 模板按需加载并缓存，同一名称只加载一次。
+    ///
+    /// # 安全性
+    ///
+    /// 模板内容视为**可信输入**：模板名直接与目录拼接解析路径，
+    /// `{% include "../x" %}` 这类相对路径可以加载目录之外的文件。
+    /// 请勿将不受信任来源的模板交给本加载器。
     pub fn set_path_loader(&mut self, dir: impl AsRef<Path>) {
         let dir = dir.as_ref().to_path_buf();
         self.env.set_loader(minijinja::path_loader(dir));
@@ -876,7 +982,7 @@ impl Renderer {
             .get_template(name)
             .map_err(|err| from_minijinja_error(err, name, None))?;
         tmpl.render(context)
-            .map_err(|err| from_minijinja_error(err, name, None))
+            .map_err(|err| from_minijinja_error(err, name, Some(tmpl.source())))
     }
 }
 
@@ -1169,12 +1275,62 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
         let ctx = minijinja::context! {};
         let err = r.render("{{ missing }}", "u.j2", &ctx).unwrap_err();
         match err {
-            // minijinja 的 UndefinedError 不携带变量名，variable 字段为空
+            // 变量名从源码错误位置尽力恢复
             TplError::UndefinedVariable { variable, .. } => {
-                assert!(variable.is_empty(), "minijinja 不提供变量名，应为空");
+                assert_eq!(variable, "missing", "应恢复出变量名");
             }
             _ => panic!("应为 UndefinedVariable，实际: {err:?}"),
         }
+    }
+
+    #[test]
+    fn undefined_variable_attr_chain_leaves_empty() {
+        // 属性链缺失时无法确定缺失的是基础名还是属性 → variable 为空（宁缺毋错）
+        let r = Renderer::new();
+        let ctx = minijinja::context! { x => 42.0 };
+        let err = r.render("{{ x.missing_attr }}", "a.j2", &ctx).unwrap_err();
+        match err {
+            TplError::UndefinedVariable { variable, .. } => {
+                assert!(variable.is_empty(), "属性链场景不应给出误导性名字");
+            }
+            _ => panic!("应为 UndefinedVariable，实际: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn undefined_variable_recovered_in_registered_template() {
+        // render_template 路径（env 内模板）同样恢复变量名
+        let mut r = Renderer::new();
+        r.add_template("t.j2", "V={{ missing2 }}").unwrap();
+        let ctx = minijinja::context! {};
+        let err = r.render_template("t.j2", &ctx).unwrap_err();
+        match err {
+            TplError::UndefinedVariable { variable, .. } => assert_eq!(variable, "missing2"),
+            _ => panic!("应为 UndefinedVariable，实际: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn extract_identifier_and_var_name_work() {
+        assert_eq!(
+            extract_identifier_at("{{ missing }}", 3),
+            Some("missing".to_string())
+        );
+        assert_eq!(
+            extract_identifier_at("G1 X{{ m1 }}", 7),
+            Some("m1".to_string())
+        );
+        assert_eq!(extract_identifier_at("(( x", 0), None);
+        // 裸标识符 → 恢复；属性/下标链 → 宁缺毋错
+        assert_eq!(
+            extract_undefined_var_name("{{ missing }}", 3..10),
+            Some("missing".to_string())
+        );
+        assert_eq!(
+            extract_undefined_var_name("{{ x.missing_attr }}", 3..17),
+            None
+        );
+        assert_eq!(extract_undefined_var_name("{{ table[key] }}", 3..13), None);
     }
 
     #[test]
@@ -1329,6 +1485,94 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
         let undeclared = extract_undeclared(&ast);
         let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
         assert_eq!(names, vec!["z"]);
+    }
+
+    // -----------------------------------------------------------------------
+    // 作用域语义：set/with/for/macro 的作用域正确性
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn self_referential_set_reports_undeclared() {
+        // {% set total = total + price %}：右侧 total 引用外层（上下文）值，
+        // 必须出现在未声明集合中，否则校验漏报、严格渲染才报错
+        let src = "{% set total = total + price %}T{{ total }}";
+        let ast = parse(src, "selfset.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["total", "price"]);
+        assert!(
+            undeclared.iter().all(|v| !v.optional),
+            "自引用 set 引用的变量应为必选"
+        );
+    }
+
+    #[test]
+    fn set_inside_for_does_not_leak() {
+        // for 是独立作用域（Jinja2 语义）：循环内 set 的名字在循环外不可见，
+        // 循环后引用 hx 应视为未声明（渲染时缺失会报错）
+        let src = "{% for h in holes %}{% set hx = h.x %}{{ hx }}{% endfor %}{{ hx }}";
+        let ast = parse(src, "leak.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["holes", "hx"]);
+    }
+
+    #[test]
+    fn for_var_not_visible_after_loop() {
+        let src = "{% for x in items %}{{ x }}{% endfor %}{{ x }}";
+        let ast = parse(src, "forleak.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["items", "x"]);
+    }
+
+    #[test]
+    fn with_var_not_visible_after_block() {
+        let src = "{% with y = 1 %}{{ y }}{% endwith %}{{ y }}";
+        let ast = parse(src, "withleak.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["y"]);
+    }
+
+    #[test]
+    fn set_inside_if_persists_to_template_scope() {
+        // if 不创建作用域（Jinja2 语义）：if 内 set 的名字在其后可见
+        let src = "{% if cond %}{% set tmp = 1 %}{% endif %}{{ tmp }}";
+        let ast = parse(src, "ifset.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["cond"]);
+    }
+
+    #[test]
+    fn for_filter_expr_sees_loop_var() {
+        // for 的 if 过滤表达式可引用循环变量（Jinja2 语义）
+        let src = "{% for x in items if x > 0 %}{{ x }}{% endfor %}";
+        let ast = parse(src, "forfilter.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["items"]);
+    }
+
+    #[test]
+    fn macro_body_scoped() {
+        // 宏体内 set 的名字不泄漏到外层
+        let src = "{% macro m() %}{% set inner = 1 %}{{ inner }}{% endmacro %}{{ m() }}{{ inner }}";
+        let ast = parse(src, "macrosc.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["inner"]);
+    }
+
+    #[test]
+    fn with_self_referential_value_reports_outer_var() {
+        // {% with y = y + 1 %}：右侧 y 引用外层/上下文值，不应被误判为局部
+        let src = "{% with y = y + base %}{{ y }}{% endwith %}";
+        let ast = parse(src, "withself.j2").unwrap();
+        let undeclared = extract_undeclared(&ast);
+        let names: Vec<&str> = undeclared.iter().map(|v| v.name.as_str()).collect();
+        assert_eq!(names, vec!["y", "base"]);
     }
 
     #[test]
@@ -1651,6 +1895,20 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
     }
 
     #[test]
+    fn nc_pad_negative_rejects() {
+        // 负数会拼出 O-001 这类非法 G-code，应报错
+        let r = Renderer::new();
+        let ctx = minijinja::context! { n => -1.0 };
+        let err = r
+            .render("O{{ n | nc_pad(4) }}", "padneg.j2", &ctx)
+            .unwrap_err();
+        match err {
+            TplError::Render { message, .. } => assert!(message.contains("负数")),
+            _ => panic!("nc_pad 负数应报错"),
+        }
+    }
+
+    #[test]
     fn nc_filters_combined_in_gcode() {
         // 模拟真实 G-code 场景：程序号 + 坐标 + 行号
         let r = Renderer::new();
@@ -1955,8 +2213,8 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
             TplError::UndefinedVariable {
                 variable, message, ..
             } => {
-                // minijinja 的 UndefinedError 不携带变量名
-                assert!(variable.is_empty());
+                // 变量名从源码错误位置尽力恢复
+                assert_eq!(variable, "missing_var", "应恢复出变量名");
                 assert!(
                     message.contains("undefined"),
                     "Strict 模式应报未定义值错误: {message}"

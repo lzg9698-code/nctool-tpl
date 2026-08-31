@@ -192,8 +192,11 @@ impl ParameterSet {
 
 /// 机床配置：封装不同机床（WFL/INDEX/通用）的 G-code 编程约定差异。
 ///
-/// 渲染时作为 `machine` 变量注入上下文，模板通过 `{{ machine.xxx }}` 引用，
+/// 渲染时作为 `machine` 变量注入上下文，模板通过 `{{ machine.xxx }}` 引用：
+/// `config` 的全部键值（字符串）以及元信息 `id` / `vendor` / `model` 均可引用，
 /// 实现"一套模板适配多种机床"。
+///
+/// 注意：`config` 值均为字符串，模板中做数值比较需先转换（如 `| int`）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct MachineConfig {
     /// 机床唯一标识（如 `wfl_m65`、`index_ms40`、`generic`）

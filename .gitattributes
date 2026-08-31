@@ -1,0 +1,8 @@
+# 统一换行策略：仓库内与检出均使用 LF（Rust 生态惯例），
+# 避免 Windows 下 autocrlf 造成的幻影改动（文件未变却显示 modified）。
+* text=auto eol=lf
+
+# 二进制文件不做换行转换
+*.png binary
+*.jpg binary
+*.ico binary

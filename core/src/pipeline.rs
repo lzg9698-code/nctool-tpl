@@ -57,6 +57,12 @@ pub struct GenerationOptions {
     pub add_header_comment: bool,
     /// 是否删除空行
     pub strip_blank_lines: bool,
+    /// 仅输出 ASCII 字符（非 ASCII 字符替换为 `?`）。
+    ///
+    /// 许多 CNC 控制器对 G-code 中的非 ASCII 字符（如中文注释）处理不稳定，
+    /// 直传机床的场景建议开启。仅对 [`OutputFormat::Gcode`] 生效，
+    /// [`OutputFormat::Text`] 始终原样输出。
+    pub ascii_only: bool,
 }
 
 impl Default for GenerationOptions {
@@ -68,6 +74,7 @@ impl Default for GenerationOptions {
             max_line_number: 9999,
             add_header_comment: false,
             strip_blank_lines: false,
+            ascii_only: false,
         }
     }
 }
@@ -128,13 +135,12 @@ impl GCodeGenerator {
             None => return Err(PipelineError::TemplateNotFound(template.to_string())),
         };
 
-        // 2. 参数校验（渲染前）
-        let report = self.registry.validate(template, params).map_err(|msg| {
-            PipelineError::Render(nctool_tpl::TplError::Render {
-                name: template.to_string(),
-                message: msg,
-            })
-        })?;
+        // 2. 参数校验（渲染前）。校验阶段的唯一失败情形是模板不存在，
+        //    统一映射为 TemplateNotFound（第 1 步已拦截，此处为兜底）
+        let report = self
+            .registry
+            .validate(template, params)
+            .map_err(|_| PipelineError::TemplateNotFound(template.to_string()))?;
         if report.has_errors() {
             return Err(PipelineError::Validation(report));
         }
@@ -188,16 +194,28 @@ fn apply_spec_defaults(specs: &[crate::model::ParamSpec], params: &ParameterSet)
 /// [`ParamValue`] 以**裸值**注入（数值→数字、字符串→字符串、布尔→布尔），
 /// 使模板能直接以 `{{ x }}` 引用参数。数值直接经 minijinja 序列化，**不经过
 /// JSON 中间层**，因此 NaN/Inf 不会被静默篡改（校验层已拒绝它们进入管线）。
+///
+/// `machine` 对象包含 `config` 的全部键值（**字符串**，如 `{{ machine.rapid }}`）
+/// 以及元信息 `id` / `vendor` / `model`。若 `config` 中存在同名键，元信息优先。
+/// 注意 `config` 值均为字符串，模板中做数值比较需先转换（如 `| int`）。
 fn build_context(params: &ParameterSet, machine: &MachineConfig) -> minijinja::Value {
     let mut map: std::collections::BTreeMap<String, minijinja::Value> =
         std::collections::BTreeMap::new();
     for (k, v) in &params.values {
         map.insert(k.clone(), param_to_minijinja(v));
     }
-    // 注入 machine 对象（模板通过 {{ machine.xxx }} 引用）
+    // 注入 machine 对象（config 键值 + 元信息，模板通过 {{ machine.xxx }} 引用）
+    let mut machine_obj: std::collections::BTreeMap<&str, minijinja::Value> =
+        std::collections::BTreeMap::new();
+    for (k, v) in &machine.config {
+        machine_obj.insert(k.as_str(), minijinja::Value::from(v.as_str()));
+    }
+    machine_obj.insert("id", minijinja::Value::from(machine.id.as_str()));
+    machine_obj.insert("vendor", minijinja::Value::from(machine.vendor.as_str()));
+    machine_obj.insert("model", minijinja::Value::from(machine.model.as_str()));
     map.insert(
         "machine".to_string(),
-        minijinja::Value::from_serialize(&machine.config),
+        minijinja::Value::from_serialize(&machine_obj),
     );
     minijinja::Value::from_serialize(&map)
 }
@@ -211,22 +229,36 @@ fn param_to_minijinja(v: &ParamValue) -> minijinja::Value {
     }
 }
 
+/// 非 ASCII 字符替换为 `?`（`GenerationOptions::ascii_only` 后处理）。
+fn sanitize_ascii(s: &str) -> String {
+    s.chars()
+        .map(|c| if c.is_ascii() { c } else { '?' })
+        .collect()
+}
+
 /// 后处理：头部注释 / 行号 / 空行清理。
 ///
-/// - **Text 格式**：仅渲染，保留原始行内容（不 trim、不编号、不清理空行）
-/// - **Gcode 格式**：可生成行号、清理空行；每行 trim 首尾空白
+/// - **Text 格式**：仅渲染，保留原始行内容（不 trim、不编号、不清理空行、不做 ASCII 清洗）
+/// - **Gcode 格式**：可生成行号、清理空行；每行 trim 首尾空白；`ascii_only` 开启时
+///   非 ASCII 字符替换为 `?`（头部注释与模板名同样清洗）
 ///
 /// 行号规则：程序号行（`O` 开头）与已有 `N` 前缀的行不重复编号；
 /// 行号达到 `max_line_number` 后不再递增。
 fn postprocess(rendered: &str, template: &str, opts: &GenerationOptions) -> String {
     let mut out = String::new();
 
-    // 头部注释（两种格式均生效，由用户显式开启）
+    // 头部注释（两种格式均生效，由用户显式开启）；文本为 ASCII，
+    // 模板名若含非 ASCII 字符且开启 ascii_only 时同样被清洗
     if opts.add_header_comment {
-        out.push_str(&format!(
-            "( ================================== )\n( nctool 生成 G-code )\n( 模板: {} )\n( ================================== )\n",
+        let header = format!(
+            "( ================================== )\n( nctool generated G-code )\n( template: {} )\n( ================================== )\n",
             template
-        ));
+        );
+        if opts.ascii_only {
+            out.push_str(&sanitize_ascii(&header));
+        } else {
+            out.push_str(&header);
+        }
     }
 
     // Text 格式：仅渲染，不做任何后处理
@@ -235,7 +267,7 @@ fn postprocess(rendered: &str, template: &str, opts: &GenerationOptions) -> Stri
         return out;
     }
 
-    // Gcode 格式：行号 + 空行清理 + trim
+    // Gcode 格式：行号 + 空行清理 + trim + 可选 ASCII 清洗
     let mut line_no: u32 = 0;
     for line in rendered.lines() {
         let trimmed = line.trim();
@@ -246,6 +278,13 @@ fn postprocess(rendered: &str, template: &str, opts: &GenerationOptions) -> Stri
             out.push('\n');
             continue;
         }
+        let line_buf;
+        let content: &str = if opts.ascii_only {
+            line_buf = sanitize_ascii(trimmed);
+            &line_buf
+        } else {
+            trimmed
+        };
         if opts.line_numbers {
             let is_program = trimmed.starts_with('O') || trimmed.starts_with('o');
             let already_numbered = trimmed.starts_with('N') || trimmed.starts_with('n');
@@ -257,7 +296,7 @@ fn postprocess(rendered: &str, template: &str, opts: &GenerationOptions) -> Stri
                 out.push_str(&format!("N{:04} ", line_no));
             }
         }
-        out.push_str(trimmed);
+        out.push_str(content);
         out.push('\n');
     }
     out
@@ -435,6 +474,30 @@ mod tests {
     }
 
     #[test]
+    fn machine_meta_injected_into_context() {
+        // machine.id / vendor / model 应一并注入，模板可直接引用
+        let mut g = GCodeGenerator::new();
+        g.registry_mut()
+            .add_memory(
+                "machine_meta",
+                crate::registry::TemplateCategory::General,
+                "",
+                "{{ machine.id }} {{ machine.vendor }} {{ machine.model }}",
+                vec![],
+            )
+            .unwrap();
+        let out = g
+            .generate(
+                "machine_meta",
+                &ParameterSet::new(),
+                &machine(),
+                &GenerationOptions::default(),
+            )
+            .unwrap();
+        assert_eq!(out.trim(), "generic Generic CNC");
+    }
+
+    #[test]
     fn param_naked_values_in_context() {
         // 参数应以裸值注入：数值/字符串/布尔可直接引用
         let mut g = GCodeGenerator::new();
@@ -509,6 +572,70 @@ mod tests {
         assert!(out.contains("  G0 X1  "), "Text 不应 trim: {:?}", out);
         assert!(out.contains("\n\n"), "Text 不应清理空行: {:?}", out);
         assert!(!out.contains("N00"), "Text 不应加行号: {:?}", out);
+    }
+
+    #[test]
+    fn ascii_only_replaces_non_ascii_in_gcode() {
+        // 中文注释（零件名）在 ascii_only 开启时替换为 ?，输出全 ASCII
+        let mut g = GCodeGenerator::new();
+        g.registry_mut()
+            .add_memory(
+                "cn_note",
+                crate::registry::TemplateCategory::General,
+                "",
+                "( {{ note }} )\nG1 X1",
+                vec![],
+            )
+            .unwrap();
+        let mut ps = ParameterSet::new();
+        ps.set_string("note", "轴类零件");
+        let opts = GenerationOptions {
+            ascii_only: true,
+            ..Default::default()
+        };
+        let out = g.generate("cn_note", &ps, &machine(), &opts).unwrap();
+        assert!(out.is_ascii(), "输出应全 ASCII: {out}");
+        assert!(out.contains("( ???? )"), "4 个汉字替换为 4 个 ?: {out}");
+        assert!(out.contains("G1 X1"), "ASCII 内容不受影响: {out}");
+    }
+
+    #[test]
+    fn ascii_only_default_off_keeps_non_ascii() {
+        // 默认关闭：非 ASCII 原样保留
+        let mut g = GCodeGenerator::new();
+        g.registry_mut()
+            .add_memory(
+                "cn_note2",
+                crate::registry::TemplateCategory::General,
+                "",
+                "( {{ note }} )",
+                vec![],
+            )
+            .unwrap();
+        let mut ps = ParameterSet::new();
+        ps.set_string("note", "轴类零件");
+        let out = g
+            .generate("cn_note2", &ps, &machine(), &GenerationOptions::default())
+            .unwrap();
+        assert!(out.contains("轴类零件"), "默认应保留非 ASCII: {out}");
+    }
+
+    #[test]
+    fn ascii_only_sanitizes_header_comment() {
+        // 开启 ascii_only 后，头部注释（含模板名）同样被清洗
+        let g = GCodeGenerator::new();
+        let mut ps = ParameterSet::new();
+        ps.set_number("prog", 1.0);
+        let opts = GenerationOptions {
+            add_header_comment: true,
+            ascii_only: true,
+            ..Default::default()
+        };
+        let out = g
+            .generate("program_header", &ps, &machine(), &opts)
+            .unwrap();
+        assert!(out.is_ascii(), "头部注释应全 ASCII: {out}");
+        assert!(out.contains("nctool generated G-code"));
     }
 
     #[test]

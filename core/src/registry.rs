@@ -44,8 +44,8 @@ impl TemplateCategory {
 /// 模板源码来源。
 #[derive(Debug, Clone)]
 pub enum TemplateSource {
-    /// 内存模板（源码直接提供）
-    Memory(String),
+    /// 内存模板（源码见 [`TemplateEntry::source_text`]，不重复存储）
+    Memory,
     /// 文件系统模板（注册时加载内容，记录路径）
     File(PathBuf),
     /// 内置模板库
@@ -72,6 +72,8 @@ pub struct TemplateEntry {
 /// 注册表错误。
 #[derive(Debug)]
 pub enum RegistryError {
+    /// 模板不存在
+    NotFound(String),
     /// 模板名重复
     Duplicate(String),
     /// 模板源码为空
@@ -85,6 +87,7 @@ pub enum RegistryError {
 impl std::fmt::Display for RegistryError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
+            RegistryError::NotFound(name) => write!(f, "模板不存在: {name}"),
             RegistryError::Duplicate(name) => write!(f, "模板名重复: {name}"),
             RegistryError::EmptySource(name) => write!(f, "模板源码为空: {name}"),
             RegistryError::Compile(name) => write!(f, "模板无法编译: {name}"),
@@ -150,7 +153,7 @@ impl TemplateRegistry {
             name,
             category,
             description: description.into(),
-            source: TemplateSource::Memory(source_text.clone()),
+            source: TemplateSource::Memory,
             params,
             source_text,
         })
@@ -203,17 +206,18 @@ impl TemplateRegistry {
 
     /// 校验指定模板的参数（渲染前调用）。
     ///
-    /// 返回 [`ValidationReport`]，调用方据 [`ValidationReport::is_ok`] 决定是否渲染。
+    /// 返回 [`ValidationReport`]，调用方据 [`ValidationReport::is_ok`] 决定是否渲染；
+    /// 模板不存在时返回 [`RegistryError::NotFound`]。
     /// 系统注入变量（默认 `machine`）视为已提供，不要求参数集提供。
     pub fn validate(
         &self,
         name: &str,
         params: &crate::model::ParameterSet,
-    ) -> Result<ValidationReport, String> {
+    ) -> Result<ValidationReport, RegistryError> {
         let entry = self
             .entries
             .get(name)
-            .ok_or_else(|| format!("模板不存在: {name}"))?;
+            .ok_or_else(|| RegistryError::NotFound(name.to_string()))?;
         let system: Vec<&str> = self.system_vars.iter().map(String::as_str).collect();
         Ok(validate_template(
             &entry.source_text,
@@ -258,7 +262,6 @@ impl TemplateRegistry {
     /// 安装内置模板库。
     fn install_builtins(&mut self) {
         for (name, category, description, source, params) in builtin_templates() {
-            // 内置模板注册失败视为编程错误（源码应为合法模板）
             let entry = TemplateEntry {
                 name: name.to_string(),
                 category,
@@ -485,6 +488,15 @@ mod tests {
         let report = r.validate("drill_cycle", &ps).unwrap();
         assert!(report.has_errors());
         assert!(report.errors().any(|e| e.param.as_deref() == Some("x")));
+    }
+
+    #[test]
+    fn validate_unknown_template_is_not_found() {
+        // 校验不存在的模板 → RegistryError::NotFound（不再是 String 错误）
+        let r = TemplateRegistry::new();
+        let err = r.validate("no_such", &ParameterSet::new()).unwrap_err();
+        assert!(matches!(err, RegistryError::NotFound(_)));
+        assert!(err.to_string().contains("no_such"));
     }
 
     #[test]

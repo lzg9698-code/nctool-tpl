@@ -10,9 +10,11 @@ categories = ["template-engine", "parser-implementations"]
 
 [dependencies]
 # nctool-tpl：模板解析 + 变量提取（可选/必选）+ 渲染（含 NC 数值格式化过滤器）
-nctool-tpl = { path = ".." }
+#   path 依赖必须同时声明 version，否则 cargo publish 到 crates.io 会失败
+nctool-tpl = { path = "..", version = "0.3.0" }
 # minijinja：与 nctool-tpl 锁定同版本，用于 ParameterSet → 渲染上下文转换
-minijinja = { version = "~2.24.0", features = ["unstable_machinery", "loop_controls", "debug"] }
+#   （unstable_machinery 等 feature 由 nctool-tpl 启用，经 feature 合并生效）
+minijinja = { version = "~2.24.0" }
 # serde：数据模型（参数集/机床配置等）的序列化，供 CLI / 配置文件使用
 serde = { version = "1", features = ["derive"] }
 
