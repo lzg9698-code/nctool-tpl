@@ -280,7 +280,7 @@ dependencies = [
 
 [[package]]
 name = "nctool-core"
-version = "0.1.0"
+version = "0.2.0"
 dependencies = [
  "minijinja",
  "nctool-tpl",
@@ -290,7 +290,7 @@ dependencies = [
 
 [[package]]
 name = "nctool-tpl"
-version = "0.3.0"
+version = "0.3.1"
 dependencies = [
  "criterion",
  "minijinja",

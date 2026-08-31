@@ -1,0 +1,39 @@
+name: Release
+
+on:
+  push:
+    tags:
+      - "tpl-v*"
+      - "core-v*"
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  publish:
+    name: Publish ${{ startsWith(github.ref_name, 'tpl-') && 'nctool-tpl' || 'nctool-core' }}
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      - name: Verify (test)
+        run: cargo test --workspace
+
+      - name: Publish nctool-tpl
+        if: startsWith(github.ref_name, 'tpl-')
+        run: cargo publish -p nctool-tpl
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Publish nctool-core
+        if: startsWith(github.ref_name, 'core-')
+        run: cargo publish -p nctool-core
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}

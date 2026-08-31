@@ -10,21 +10,16 @@
 
 ---
 
-## [Unreleased] - 2026-08-31
+## [nctool-core 0.2.0] - 2026-08-31
 
-"第二轮全面代码审查修复"：修正变量提取的作用域语义，补齐错误定位与 NC 输出健壮性。
+"第二轮全面代码审查修复"：补齐错误定位与 NC 输出健壮性；模板作用域语义修复见 [nctool-tpl 0.3.1]。
 
-### Fixed（nctool-tpl）
+### Added
 
-- **set/with 自引用漏报**：`{% set total = total + price %}` 中右侧引用原被误判为模板局部，
-  导致必选参数校验漏报、严格渲染才报错。现 RHS 先在外层作用域求值，再绑定目标
-- **作用域泄漏**：`for` / `with` / `macro` 现在创建独立作用域（与 Jinja2 语义一致），
-  循环/块内 `set` 的名字不再泄漏到块外；`if` 仍不创建作用域
-- **UndefinedVariable 恢复变量名**：debug feature 下错误携带字节范围，尽力从源码恢复缺失变量名
-  （`{{ missing }}` → `"missing"`）；属性链场景无法判定缺失位置时留空（宁缺毋错）
-- **nc_pad 拒绝负数**：负输入会拼出 `O-001` 这类非法 G-code，现报渲染错误
+- **`GenerationOptions::ascii_only`**：开启后 G-code 输出中的非 ASCII 字符替换为 `?`
+  （含头部注释与模板名）；仅对 `OutputFormat::Gcode` 生效，`Text` 始终原样
 
-### Fixed（nctool-core）
+### Fixed
 
 - **machine 元信息注入**：`machine.id` / `vendor` / `model` 现可被模板直接引用
   （原先只注入 `config` 键值表）；config 同名键以元信息优先
@@ -34,27 +29,47 @@
 - **Memory 模板去重存储**：`TemplateSource::Memory` 不再复制一份源码（源码以
   `TemplateEntry::source_text` 为单一权威来源）
 
-### Added
-
-- **`GenerationOptions::ascii_only`**：开启后 G-code 输出中的非 ASCII 字符替换为 `?`
-  （含头部注释与模板名）；仅对 `OutputFormat::Gcode` 生效，`Text` 始终原样
-
 ### Changed（破坏性，0.x 阶段）
 
 - `TemplateSource::Memory` 从 `Memory(String)` 改为无载荷变体（源码统一读 `source_text`）
 - `MachinePreset::to_config` 移除（与 `config()` 重复）
 - `TemplateRegistry::validate` 返回 `Result<ValidationReport, RegistryError>`
 - core 依赖 `minijinja` 去除多余的 `unstable_machinery` 等 feature 声明（由 nctool-tpl 启用并合并）
+- 依赖升级：`nctool-tpl` 0.3.0 → 0.3.1
+
+### 其他
+
+- 补全发布元数据：`nctool-core` 的 `repository` 指向 GitHub 仓库
+
+### 测试
+
+- nctool-core 52 单元 + 8 集成，workspace 总计 163 项
+
+---
+
+## [nctool-tpl 0.3.1] - 2026-08-31
+
+"第二轮全面代码审查修复"：修正变量提取的作用域语义，补齐错误定位与 NC 输出健壮性。
+
+### Fixed
+
+- **set/with 自引用漏报**：`{% set total = total + price %}` 中右侧引用原被误判为模板局部，
+  导致必选参数校验漏报、严格渲染才报错。现 RHS 先在外层作用域求值，再绑定目标
+- **作用域泄漏**：`for` / `with` / `macro` 现在创建独立作用域（与 Jinja2 语义一致），
+  循环/块内 `set` 的名字不再泄漏到块外；`if` 仍不创建作用域
+- **UndefinedVariable 恢复变量名**：debug feature 下错误携带字节范围，尽力从源码恢复缺失变量名
+  （`{{ missing }}` → `"missing"`）；属性链场景无法判定缺失位置时留空（宁缺毋错）
+- **nc_pad 拒绝负数**：负输入会拼出 `O-001` 这类非法 G-code，现报渲染错误
 
 ### 其他
 
 - 新增 `.gitattributes`（统一 LF），消除 Windows 下 autocrlf 幻影改动
 - `set_path_loader` 文档补充路径穿越安全性说明（模板视为可信输入）
-- 补全发布元数据：`nctool-tpl` / `nctool-core` 的 `repository` 指向 GitHub 仓库
+- 补全发布元数据：`nctool-tpl` 的 `repository` 指向 GitHub 仓库
 
 ### 测试
 
-- workspace 总计 163 项（原 146 + 新增 17）：nctool-tpl 85 单元 + 17 集成 + 1 文档，nctool-core 52 单元 + 8 集成
+- nctool-tpl 85 单元 + 17 集成 + 1 文档（workspace 总计 163 项，含 nctool-core）
 
 ---
 

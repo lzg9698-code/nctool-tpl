@@ -1,6 +1,6 @@
 [package]
 name = "nctool-core"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2021"
 description = "NCtool 核心库：数据模型 + 参数校验 + 模板注册表 + G-code 生成管线"
 license = "MIT"
@@ -12,7 +12,7 @@ repository = "https://github.com/lzg9698-code/nctool-tpl"
 [dependencies]
 # nctool-tpl：模板解析 + 变量提取（可选/必选）+ 渲染（含 NC 数值格式化过滤器）
 #   path 依赖必须同时声明 version，否则 cargo publish 到 crates.io 会失败
-nctool-tpl = { path = "..", version = "0.3.0" }
+nctool-tpl = { path = "..", version = "0.3.1" }
 # minijinja：与 nctool-tpl 锁定同版本，用于 ParameterSet → 渲染上下文转换
 #   （unstable_machinery 等 feature 由 nctool-tpl 启用，经 feature 合并生效）
 minijinja = { version = "~2.24.0" }
