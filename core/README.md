@@ -69,7 +69,7 @@ G-code 输出
 ## 示例
 
 ```bash
-cargo run -p nctool-core --example demo
+cargo run -p nctool-core --example pipeline_demo
 ```
 
 ## 测试

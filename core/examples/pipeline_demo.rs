@@ -6,7 +6,7 @@
 //! 3. 切换到 WFL M65 机床配置
 //! 4. 演示参数校验失败时的结构化错误
 //!
-//! 运行：`cargo run -p nctool-core --example demo`
+//! 运行：`cargo run -p nctool-core --example pipeline_demo`
 
 use nctool_core::machine::MachinePreset;
 use nctool_core::pipeline::{GCodeGenerator, GenerationOptions, PipelineError};
