@@ -8,6 +8,8 @@ on:
 
 env:
   CARGO_TERM_COLOR: always
+  # 未配置 secret 时为空字符串，publish 步骤按此跳过而非报错
+  CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
 jobs:
   publish:
@@ -27,13 +29,17 @@ jobs:
         run: cargo test --workspace
 
       - name: Publish nctool-tpl
-        if: startsWith(github.ref_name, 'tpl-')
+        if: startsWith(github.ref_name, 'tpl-') && env.CARGO_REGISTRY_TOKEN != ''
         run: cargo publish -p nctool-tpl
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Skip publish (tpl, token missing)
+        if: startsWith(github.ref_name, 'tpl-') && env.CARGO_REGISTRY_TOKEN == ''
+        run: echo "::notice::CARGO_REGISTRY_TOKEN 未配置，跳过发布。请配置仓库 Secret 后手动 publish，或重新推送 tag。"
 
       - name: Publish nctool-core
-        if: startsWith(github.ref_name, 'core-')
+        if: startsWith(github.ref_name, 'core-') && env.CARGO_REGISTRY_TOKEN != ''
         run: cargo publish -p nctool-core
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
+
+      - name: Skip publish (core, token missing)
+        if: startsWith(github.ref_name, 'core-') && env.CARGO_REGISTRY_TOKEN == ''
+        run: echo "::notice::CARGO_REGISTRY_TOKEN 未配置，跳过发布。请配置仓库 Secret 后手动 publish，或重新推送 tag。"
