@@ -11,7 +11,7 @@ license = "MIT"
 readme = "README.md"
 keywords = ["template", "jinja2", "gcode", "nc", "minijinja"]
 categories = ["template-engine", "parser-implementations", "development-tools::build-utils"]
-# repository = "https://github.com/USER/REPO"  # 发布前请补充仓库地址
+repository = "https://github.com/lzg9698-code/nctool-tpl"
 # documentation = "https://docs.rs/nctool-tpl"  # docs.rs 自动生成，无需手动填写
 
 # 发布到 crates.io 时排除的文件

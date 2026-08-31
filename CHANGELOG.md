@@ -50,6 +50,7 @@
 
 - 新增 `.gitattributes`（统一 LF），消除 Windows 下 autocrlf 幻影改动
 - `set_path_loader` 文档补充路径穿越安全性说明（模板视为可信输入）
+- 补全发布元数据：`nctool-tpl` / `nctool-core` 的 `repository` 指向 GitHub 仓库
 
 ### 测试
 
