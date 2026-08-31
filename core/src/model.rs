@@ -83,14 +83,19 @@ impl ParamKind {
 
 /// 参数规格：模板的元数据，描述一个参数的类型、必选性、默认值与用途。
 ///
-/// 由模板注册表维护，用于渲染前的参数校验。
+/// 由模板注册表维护，用于渲染前的参数校验与 CLI 帮助信息展示。
+///
+/// **必选性语义**：`required` 是**文档性声明**（用于帮助信息），实际的
+/// 必选性由**模板引用**决定——模板引用了该参数且无 `default` 兜底时即必选。
+/// 因此 `required` 与 `default` 的取值以模板实际引用情况为准，规格中的声明
+/// 主要用于人类可读的说明。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ParamSpec {
     /// 参数名（与模板中变量名一致）
     pub name: String,
     /// 参数类型
     pub kind: ParamKind,
-    /// 是否必选（缺失即校验失败）
+    /// 是否必选（**文档性声明**；实际必选性由模板引用 + 是否有 default 决定）
     pub required: bool,
     /// 默认值（可选参数缺失时的兜底；与 `required` 互斥）
     pub default: Option<ParamValue>,

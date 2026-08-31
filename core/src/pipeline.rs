@@ -185,38 +185,43 @@ fn apply_spec_defaults(specs: &[crate::model::ParamSpec], params: &ParameterSet)
 
 /// 构建渲染上下文：`params`（裸值）+ `machine`（机床配置对象）。
 ///
-/// [`ParamValue`] 序列化为**裸值**（数值→数字、字符串→字符串、布尔→布尔），
-/// 使模板能直接以 `{{ x }}` 引用参数。
+/// [`ParamValue`] 以**裸值**注入（数值→数字、字符串→字符串、布尔→布尔），
+/// 使模板能直接以 `{{ x }}` 引用参数。数值直接经 minijinja 序列化，**不经过
+/// JSON 中间层**，因此 NaN/Inf 不会被静默篡改（校验层已拒绝它们进入管线）。
 fn build_context(params: &ParameterSet, machine: &MachineConfig) -> minijinja::Value {
-    let mut obj = serde_json::Map::new();
+    let mut map: std::collections::BTreeMap<String, minijinja::Value> =
+        std::collections::BTreeMap::new();
     for (k, v) in &params.values {
-        obj.insert(k.clone(), param_value_to_json(v));
+        map.insert(k.clone(), param_to_minijinja(v));
     }
     // 注入 machine 对象（模板通过 {{ machine.xxx }} 引用）
-    obj.insert(
+    map.insert(
         "machine".to_string(),
-        serde_json::to_value(&machine.config)
-            .unwrap_or(serde_json::Value::Object(Default::default())),
+        minijinja::Value::from_serialize(&machine.config),
     );
-    minijinja::Value::from_serialize(serde_json::Value::Object(obj))
+    minijinja::Value::from_serialize(&map)
 }
 
-/// 将 [`ParamValue`] 转为 JSON 裸值。
-fn param_value_to_json(v: &ParamValue) -> serde_json::Value {
+/// 将 [`ParamValue`] 转为 minijinja 裸值（数值/字符串/布尔）。
+fn param_to_minijinja(v: &ParamValue) -> minijinja::Value {
     match v {
-        ParamValue::Number(n) => serde_json::Number::from_f64(*n)
-            .map(serde_json::Value::Number)
-            .unwrap_or_else(|| serde_json::Value::Number(serde_json::Number::from(0))),
-        ParamValue::String(s) => serde_json::Value::String(s.clone()),
-        ParamValue::Bool(b) => serde_json::Value::Bool(*b),
+        ParamValue::Number(n) => minijinja::Value::from_serialize(n),
+        ParamValue::String(s) => minijinja::Value::from_serialize(s),
+        ParamValue::Bool(b) => minijinja::Value::from_serialize(b),
     }
 }
 
-/// 后处理：行号 / 头部注释 / 空行清理。
+/// 后处理：头部注释 / 行号 / 空行清理。
+///
+/// - **Text 格式**：仅渲染，保留原始行内容（不 trim、不编号、不清理空行）
+/// - **Gcode 格式**：可生成行号、清理空行；每行 trim 首尾空白
+///
+/// 行号规则：程序号行（`O` 开头）与已有 `N` 前缀的行不重复编号；
+/// 行号达到 `max_line_number` 后不再递增。
 fn postprocess(rendered: &str, template: &str, opts: &GenerationOptions) -> String {
     let mut out = String::new();
 
-    // 头部注释
+    // 头部注释（两种格式均生效，由用户显式开启）
     if opts.add_header_comment {
         out.push_str(&format!(
             "( ================================== )\n( nctool 生成 G-code )\n( 模板: {} )\n( ================================== )\n",
@@ -224,39 +229,35 @@ fn postprocess(rendered: &str, template: &str, opts: &GenerationOptions) -> Stri
         ));
     }
 
-    let mut line_no = 0u32;
-    let mut line_counter = 0u32;
+    // Text 格式：仅渲染，不做任何后处理
+    if opts.format == OutputFormat::Text {
+        out.push_str(rendered);
+        return out;
+    }
+
+    // Gcode 格式：行号 + 空行清理 + trim
+    let mut line_no: u32 = 0;
     for line in rendered.lines() {
         let trimmed = line.trim();
-        // 空行清理
-        if opts.strip_blank_lines && trimmed.is_empty() {
-            continue;
-        }
-        // 跳过纯空行（未启用清理时保留原样，但不编号）
         if trimmed.is_empty() {
-            out.push_str(line);
+            if opts.strip_blank_lines {
+                continue;
+            }
             out.push('\n');
             continue;
         }
-
-        let mut out_line = String::new();
-        if opts.format == OutputFormat::Gcode && opts.line_numbers {
-            // 行号规则：
-            // - 程序号行（O 开头）不加 N
-            // - 已有 N 前缀的行不重复加
-            // - 超过 max_line_number 后不再编号
-            let starts_with_program = trimmed.starts_with('O') || trimmed.starts_with('o');
+        if opts.line_numbers {
+            let is_program = trimmed.starts_with('O') || trimmed.starts_with('o');
             let already_numbered = trimmed.starts_with('N') || trimmed.starts_with('n');
-            if !starts_with_program && !already_numbered && line_counter < opts.max_line_number {
+            if !is_program
+                && !already_numbered
+                && line_no + opts.line_number_step <= opts.max_line_number
+            {
                 line_no += opts.line_number_step;
-                if line_no <= opts.max_line_number {
-                    out_line.push_str(&format!("N{:04} ", line_no));
-                }
+                out.push_str(&format!("N{:04} ", line_no));
             }
-            line_counter += 1;
         }
-        out_line.push_str(trimmed);
-        out.push_str(&out_line);
+        out.push_str(trimmed);
         out.push('\n');
     }
     out
@@ -455,5 +456,90 @@ mod tests {
             .unwrap();
         // minijinja 默认显示：f64 21.0 → "21.0"，bool true → "True"
         assert_eq!(out.trim(), "21.0 hello True");
+    }
+
+    #[test]
+    fn nan_param_stops_pipeline() {
+        // NaN 参数应被校验拦截，返回 Validation 错误而非渲染出非法坐标
+        let g = GCodeGenerator::new();
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", f64::NAN)
+            .set_number("y", 15.0)
+            .set_number("depth", -10.0)
+            .set_number("feed", 100.0);
+        let err = g
+            .generate(
+                "drill_cycle",
+                &ps,
+                &machine(),
+                &GenerationOptions::default(),
+            )
+            .unwrap_err();
+        match err {
+            PipelineError::Validation(report) => {
+                assert!(report.has_errors(), "NaN 应产生错误: {}", report.summary())
+            }
+            other => panic!("应为校验错误, 实际: {other}"),
+        }
+    }
+
+    #[test]
+    fn text_format_preserves_original_lines() {
+        // Text 格式仅渲染，不做 trim/空行清理/行号
+        let mut g = GCodeGenerator::new();
+        g.registry_mut()
+            .add_memory(
+                "keep_ws",
+                crate::registry::TemplateCategory::General,
+                "",
+                "  G0 X1  \n\n  G1 Z-5  ",
+                vec![],
+            )
+            .unwrap();
+        let opts = GenerationOptions {
+            format: OutputFormat::Text,
+            strip_blank_lines: true,
+            line_numbers: true,
+            ..Default::default()
+        };
+        let out = g
+            .generate("keep_ws", &ParameterSet::new(), &machine(), &opts)
+            .unwrap();
+        // 保留前导空格、空行与行号不应出现
+        assert!(out.contains("  G0 X1  "), "Text 不应 trim: {:?}", out);
+        assert!(out.contains("\n\n"), "Text 不应清理空行: {:?}", out);
+        assert!(!out.contains("N00"), "Text 不应加行号: {:?}", out);
+    }
+
+    #[test]
+    fn line_numbers_stop_at_max() {
+        // 行号超过 max_line_number 后不再编号，且行内容仍保留
+        let mut g = GCodeGenerator::new();
+        let tpl: String = (0..3)
+            .map(|i| format!("G{} X{}", i, i))
+            .collect::<Vec<_>>()
+            .join("\n");
+        g.registry_mut()
+            .add_memory(
+                "num_test",
+                crate::registry::TemplateCategory::General,
+                "",
+                &tpl,
+                vec![],
+            )
+            .unwrap();
+        let opts = GenerationOptions {
+            format: OutputFormat::Gcode,
+            line_numbers: true,
+            max_line_number: 10,
+            ..Default::default()
+        };
+        let out = g
+            .generate("num_test", &ParameterSet::new(), &machine(), &opts)
+            .unwrap();
+        // 只有一行编号 (N0010)，其余不编号但内容保留
+        assert!(out.contains("N0010 G0 X0"));
+        assert!(out.contains("G1 X1"), "未编号行内容应保留: {out}");
+        assert!(out.contains("G2 X2"), "未编号行内容应保留: {out}");
     }
 }

@@ -177,8 +177,38 @@ pub fn validate_template(
             }
         }
     };
+    // 2. 共享校验核心
+    check_vars(&vars, specs, params, system_vars)
+}
 
-    // 2. 规格索引：参数名 → ParamSpec
+/// 从 nctool-tpl 的 `Variable` 列表直接校验（跳过重新解析）。
+///
+/// 适用于已解析过模板、想复用提取结果的场景。
+pub fn validate_with_vars(
+    vars: &[nctool_tpl::Variable],
+    specs: &[ParamSpec],
+    params: &ParameterSet,
+    system_vars: &[&str],
+) -> ValidationReport {
+    check_vars(vars, specs, params, system_vars)
+}
+
+/// 校验共享核心：对照变量列表、规格与参数集逐项检查。
+///
+/// 检查规则：
+/// - **缺失**：模板引用的必选变量（无 `default` 兜底）参数集未提供 → 错误
+/// - **类型**：参数规格声明类型与参数集实际类型不匹配 → 错误
+/// - **有限性**：数值参数为 NaN/Inf（会污染 G-code）→ 错误
+/// - **冗余**：参数集提供了模板未引用的参数 → 警告
+///
+/// `system_vars` 由系统在渲染时注入，视为已提供，不参与缺失/冗余检查。
+fn check_vars(
+    vars: &[nctool_tpl::Variable],
+    specs: &[ParamSpec],
+    params: &ParameterSet,
+    system_vars: &[&str],
+) -> ValidationReport {
+    // 规格索引：参数名 → ParamSpec
     let spec_map: std::collections::HashMap<&str, &ParamSpec> =
         specs.iter().map(|s| (s.name.as_str(), s)).collect();
 
@@ -186,19 +216,25 @@ pub fn validate_template(
     let mut provided: BTreeSet<String> = BTreeSet::new();
     provided.extend(params.values.keys().cloned());
     // 系统注入变量视为已提供（不参与缺失/冗余检查）
-    for sv in system_vars {
-        provided.insert(sv.to_string());
-    }
+    provided.extend(system_vars.iter().map(|s| s.to_string()));
 
-    // 3. 逐变量检查
-    for var in &vars {
+    // 逐变量检查
+    for var in vars {
         let name = var.name.as_str();
-        let provided_value = params.get(name);
         let spec = spec_map.get(name).copied();
 
-        match provided_value {
+        match params.get(name) {
             Some(value) => {
-                // 已提供：检查类型是否匹配规格（若有规格）
+                // 有限性检查：数值必须有限（NaN/Inf 会写入非法坐标）
+                if let crate::model::ParamValue::Number(n) = value {
+                    if !n.is_finite() {
+                        report.issues.push(ValidationIssue::error(
+                            name,
+                            "数值参数为 NaN/Inf（非有限数），拒绝生成",
+                        ));
+                    }
+                }
+                // 类型检查：规格声明类型与实际提供类型必须匹配
                 if let Some(spec) = spec {
                     if !spec.kind.matches(value) {
                         report.issues.push(ValidationIssue::error(
@@ -211,7 +247,6 @@ pub fn validate_template(
                         ));
                     }
                 }
-                // 已在参数集中标记为已提供，用于后续冗余检查
             }
             None => {
                 // 未提供：若为系统变量则跳过，否则判定是否可接受
@@ -229,7 +264,7 @@ pub fn validate_template(
         }
     }
 
-    // 4. 冗余参数检查：参数集提供了、但模板未引用的参数
+    // 冗余参数检查：参数集提供了、但模板未引用的参数
     let referenced: BTreeSet<&str> = vars.iter().map(|v| v.name.as_str()).collect();
     for name in &provided {
         if !referenced.contains(name.as_str()) && !system_vars.contains(&name.as_str()) {
@@ -247,76 +282,6 @@ pub fn validate_template(
 pub fn has_errors(report: &ValidationReport) -> bool {
     report.has_errors()
 }
-
-/// 从 nctool-tpl 的 `Variable` 列表直接校验（跳过重新解析）。
-///
-/// 适用于已解析过模板、想复用提取结果的场景。
-pub fn validate_with_vars(
-    vars: &[nctool_tpl::Variable],
-    specs: &[ParamSpec],
-    params: &ParameterSet,
-    system_vars: &[&str],
-) -> ValidationReport {
-    let spec_map: std::collections::HashMap<&str, &ParamSpec> =
-        specs.iter().map(|s| (s.name.as_str(), s)).collect();
-
-    let mut report = ValidationReport::default();
-    let mut provided: BTreeSet<String> = BTreeSet::new();
-    provided.extend(params.values.keys().cloned());
-    for sv in system_vars {
-        provided.insert(sv.to_string());
-    }
-
-    for var in vars {
-        let name = var.name.as_str();
-        match params.get(name) {
-            Some(value) => {
-                if let Some(spec) = spec_map.get(name).copied() {
-                    if !spec.kind.matches(value) {
-                        report.issues.push(ValidationIssue::error(
-                            name,
-                            format!(
-                                "类型不匹配：规格要求 {}, 实际提供 {}",
-                                spec.kind.label(),
-                                value_kind_label(value)
-                            ),
-                        ));
-                    }
-                }
-            }
-            None => {
-                if system_vars.contains(&name) {
-                    continue;
-                }
-                let has_default = var.optional
-                    || spec_map
-                        .get(name)
-                        .and_then(|s| s.default.as_ref())
-                        .is_some();
-                if !has_default {
-                    report.issues.push(ValidationIssue::error(
-                        name,
-                        "必选参数缺失（模板引用且无默认值兜底，参数集未提供）",
-                    ));
-                }
-            }
-        }
-    }
-
-    let referenced: BTreeSet<&str> = vars.iter().map(|v| v.name.as_str()).collect();
-    for name in &provided {
-        if !referenced.contains(name.as_str()) && !system_vars.contains(&name.as_str()) {
-            report.issues.push(ValidationIssue::warning(
-                name,
-                "参数集提供了该参数，但模板未引用（可能是模板选错或参数名拼写错误）",
-            ));
-        }
-    }
-
-    report
-}
-
-/// 参数值的人类可读类型名（用于错误信息）。
 fn value_kind_label(value: &crate::model::ParamValue) -> &'static str {
     match value {
         crate::model::ParamValue::Number(_) => "数值",
@@ -451,5 +416,45 @@ mod tests {
         let s = report.summary();
         assert!(s.contains("错误"));
         assert!(s.contains("x"));
+    }
+
+    #[test]
+    fn nan_number_rejected() {
+        // NaN 数值参数应被拒绝（避免污染 G-code），而非静默通过
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", f64::NAN).set_number("z", 5.0);
+        let report = validate_template(TPL, "t.j2", &[], &ps, &[]);
+        assert!(report.has_errors(), "NaN 应报错: {}", report.summary());
+        assert!(
+            report.errors().any(|e| e.param.as_deref() == Some("x")),
+            "NaN 错误应定位到 x"
+        );
+    }
+
+    #[test]
+    fn infinity_number_rejected() {
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", f64::INFINITY).set_number("z", 5.0);
+        let report = validate_template(TPL, "t.j2", &[], &ps, &[]);
+        assert!(report.has_errors());
+    }
+
+    #[test]
+    fn finite_numbers_accepted() {
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", -10.5).set_number("z", 0.0);
+        let report = validate_template(TPL, "t.j2", &[], &ps, &[]);
+        assert!(report.is_ok(), "有限数应通过: {}", report.summary());
+    }
+
+    #[test]
+    fn nan_via_with_vars_rejected() {
+        // 经 validate_with_vars 路径也应拦截 NaN
+        let ast = nctool_tpl::parse(TPL, "t.j2").unwrap();
+        let vars = nctool_tpl::extract_undeclared(&ast);
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", f64::NAN).set_number("z", 5.0);
+        let report = validate_with_vars(&vars, &[], &ps, &[]);
+        assert!(report.has_errors());
     }
 }

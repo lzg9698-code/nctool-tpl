@@ -75,5 +75,5 @@ cargo run -p nctool-core --example demo
 ## 测试
 
 ```bash
-cargo test -p nctool-core   # 41 单元 + 8 集成
+cargo test -p nctool-core   # 47 单元 + 8 集成（workspace 总计 146）
 ```

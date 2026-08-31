@@ -15,5 +15,8 @@ nctool-tpl = { path = ".." }
 minijinja = { version = "~2.24.0", features = ["unstable_machinery", "loop_controls", "debug"] }
 # serde：数据模型（参数集/机床配置等）的序列化，供 CLI / 配置文件使用
 serde = { version = "1", features = ["derive"] }
+
+[dev-dependencies]
+# 集成测试中的 JSON 序列化往返验证
 serde_json = "1"
 

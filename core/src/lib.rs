@@ -24,7 +24,10 @@ pub use model::{
     MachineConfig, Operation, ParamKind, ParamSpec, ParamValue, ParameterSet, Part, Tool,
 };
 // 校验
-pub use validate::{ValidationIssue, ValidationLevel, ValidationReport, ValidationResult};
+pub use validate::{
+    spec, validate_template, validate_with_vars, ValidationIssue, ValidationLevel,
+    ValidationReport, ValidationResult,
+};
 // 模板注册表
 pub use registry::{TemplateCategory, TemplateEntry, TemplateRegistry, TemplateSource};
 // 生成管线

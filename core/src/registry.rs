@@ -76,6 +76,8 @@ pub enum RegistryError {
     Duplicate(String),
     /// 模板源码为空
     EmptySource(String),
+    /// 模板源码无法编译（语法错误等）
+    Compile(String),
     /// 读取文件失败
     Io(std::io::Error),
 }
@@ -85,6 +87,7 @@ impl std::fmt::Display for RegistryError {
         match self {
             RegistryError::Duplicate(name) => write!(f, "模板名重复: {name}"),
             RegistryError::EmptySource(name) => write!(f, "模板源码为空: {name}"),
+            RegistryError::Compile(name) => write!(f, "模板无法编译: {name}"),
             RegistryError::Io(err) => write!(f, "文件读取失败: {err}"),
         }
     }
@@ -127,7 +130,7 @@ impl TemplateRegistry {
         // 同步到渲染器（支持模板间 include/extends/import）
         self.renderer
             .add_template(entry.name.clone(), entry.source_text.clone())
-            .map_err(|err| RegistryError::Io(std::io::Error::other(err.to_string())))?;
+            .map_err(|err| RegistryError::Compile(format!("{}: {err}", entry.name)))?;
         self.entries.insert(entry.name.clone(), entry);
         Ok(())
     }
@@ -264,7 +267,8 @@ impl TemplateRegistry {
                 params,
                 source_text: source.to_string(),
             };
-            let _ = self.add_entry(entry);
+            // 内置模板注册失败视为编程错误（源码应为合法模板）
+            self.add_entry(entry).expect("内置模板注册失败");
         }
     }
 }
@@ -410,7 +414,7 @@ fn builtin_templates() -> Vec<(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::model::{ParamKind, ParameterSet};
+    use crate::model::ParameterSet;
 
     #[test]
     fn registry_installs_builtins() {
@@ -522,7 +526,7 @@ mod tests {
         let machine = crate::machine::MachinePreset::Generic.config();
         let mut ctx_map = std::collections::BTreeMap::new();
         ctx_map.insert("machine", minijinja::Value::from_serialize(&machine.config));
-        ctx_map.insert("prog", minijinja::Value::from_serialize(&1.0));
+        ctx_map.insert("prog", minijinja::Value::from_serialize(1.0));
         let ctx = minijinja::Value::from_serialize(&ctx_map);
         let out = r.render_template("program_header", &ctx).unwrap();
         assert!(out.starts_with("O0001"));
@@ -558,11 +562,5 @@ mod tests {
         let ps = ParameterSet::new();
         let err = r.render("no_such_template", &ps).unwrap_err();
         assert!(matches!(err, nctool_tpl::TplError::TemplateNotFound { .. }));
-    }
-
-    #[test]
-    fn param_kind_reuse_in_tests() {
-        // 确保 ParamKind 可在此模块中使用（避免未使用告警）
-        let _ = ParamKind::Number;
     }
 }
