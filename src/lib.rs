@@ -683,6 +683,8 @@ fn walk_call_arg<'a>(arg: &ast::CallArg<'a>, c: &mut Collector<'a>, opt: bool) {
 #[derive(Debug)]
 pub struct Renderer {
     env: Environment<'static>,
+    /// 宽松模式下未定义变量渲染为空字符串（而非报错）。
+    lenient: bool,
 }
 
 /// 数学过滤器结果校验：`NaN`/`Inf` 一律转为渲染错误，防止非法数值进入 G-code。
@@ -780,7 +782,37 @@ impl Renderer {
         env.add_filter("nc_fixed", filter_nc_fixed);
         env.add_filter("nc_strip", filter_nc_strip);
         env.add_filter("nc_pad", filter_nc_pad);
-        Self { env }
+        Self {
+            env,
+            lenient: false,
+        }
+    }
+
+    /// 切换为**宽松模式**：模板中未定义变量渲染为空字符串，而非报错。
+    ///
+    /// 消费式 builder 方法，便于链式构造：`Renderer::new().with_lenient()`。
+    /// 默认构造已是严格模式，此方法用于需要宽松渲染的场景（如先渲染、后由
+    /// [`extract_undeclared`] 校验必选参数的流程）。
+    pub fn with_lenient(mut self) -> Self {
+        self.env
+            .set_undefined_behavior(minijinja::UndefinedBehavior::Lenient);
+        self.lenient = true;
+        self
+    }
+
+    /// 显式切换为**严格模式**（默认）：模板中未定义变量渲染报错。
+    ///
+    /// 消费式 builder 方法，便于链式构造：`Renderer::new().with_strict()`。
+    pub fn with_strict(mut self) -> Self {
+        self.env
+            .set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
+        self.lenient = false;
+        self
+    }
+
+    /// 当前是否为宽松模式（未定义变量渲染为空而非报错）。
+    pub fn is_lenient(&self) -> bool {
+        self.lenient
     }
 
     /// 渲染模板。`context` 用 `minijinja::context!` 宏或 `Value::from_serialize` 构造。
@@ -1156,6 +1188,67 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
         assert!(display.contains("未定义变量"));
         assert!(display.contains("'x'"));
         assert!(display.contains("t.j2"));
+    }
+
+    // -----------------------------------------------------------------------
+    // 严格 / 宽松模式切换
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn default_is_strict_mode() {
+        let r = Renderer::new();
+        assert!(!r.is_lenient(), "默认应为严格模式");
+        let ctx = minijinja::context! {};
+        let err = r.render("{{ missing }}", "s.j2", &ctx).unwrap_err();
+        match err {
+            TplError::UndefinedVariable { .. } => {}
+            _ => panic!("严格模式下未定义变量应报错，实际: {err:?}"),
+        }
+    }
+
+    #[test]
+    fn with_lenient_renders_undefined_as_empty() {
+        let r = Renderer::new().with_lenient();
+        assert!(r.is_lenient());
+        let ctx = minijinja::context! { x => 42 };
+        let out = r.render("X{{ x }} {{ missing }}", "l.j2", &ctx).unwrap();
+        assert_eq!(out, "X42 ", "宽松模式下未定义变量渲染为空字符串");
+    }
+
+    #[test]
+    fn with_strict_switches_back_to_strict() {
+        let r = Renderer::new().with_lenient().with_strict();
+        assert!(!r.is_lenient());
+        let ctx = minijinja::context! {};
+        let err = r.render("{{ missing }}", "s2.j2", &ctx).unwrap_err();
+        match err {
+            TplError::UndefinedVariable { .. } => {}
+            _ => panic!("切回严格模式后未定义变量应报错"),
+        }
+    }
+
+    #[test]
+    fn lenient_mode_still_extracts_required_variables() {
+        // 宽松模式只影响渲染行为，不影响 extract_undeclared 的必选判定
+        let _r = Renderer::new().with_lenient();
+        let ast = parse("X{{ x }} Y{{ y | default(1) }}", "e.j2").unwrap();
+        let vars = extract_undeclared(&ast);
+        let names: Vec<&str> = vars.iter().map(|v| v.name.as_str()).collect();
+        assert!(names.contains(&"x"), "无 default 的 x 应仍为必选");
+        let x = vars.iter().find(|v| v.name == "x").unwrap();
+        assert!(!x.optional, "宽松模式不影响 optional 判定");
+    }
+
+    #[test]
+    fn strict_mode_lenient_mode_render_consistency() {
+        // 提供完整参数时，严格与宽松模式输出应一致
+        let r_strict = Renderer::new();
+        let r_lenient = Renderer::new().with_lenient();
+        let ctx = minijinja::context! { x => 21.0, y => 15.5 };
+        let src = "X{{ x | nc_fixed(3) }} Y{{ y | nc_fixed(3) }}";
+        let a = r_strict.render(src, "c.j2", &ctx).unwrap();
+        let b = r_lenient.render(src, "c.j2", &ctx).unwrap();
+        assert_eq!(a, b);
     }
 
     #[test]

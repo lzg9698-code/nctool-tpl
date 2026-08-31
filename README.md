@@ -38,6 +38,22 @@ N0010 G1 X21.000 Y15.500 F0.15
 
 所有 NC 过滤器对非有限数（NaN/Inf）报错，防止非法数值写入 G-code。
 
+## 严格 / 宽松模式
+
+`Renderer` 默认**严格模式**：引用未定义变量直接渲染失败，避免静默输出不完整 G-code。需要宽松渲染时用 `with_lenient()` 切换：
+
+```rust
+// 严格模式（默认）：未定义变量报错
+let r = Renderer::new();
+r.render("X{{ x }}", "t.j2", &minijinja::context!{})?;  // Err(UndefinedVariable)
+
+// 宽松模式：未定义变量渲染为空字符串
+let r = Renderer::new().with_lenient();
+r.render("X{{ x }}", "t.j2", &minijinja::context!{})?;  // Ok("X")
+```
+
+典型流程：`extract_undeclared` 先校验必选参数是否齐全，校验通过后再用严格模式渲染（保证输出完整）；宽松模式适合「参数可缺省、缺失即留空」的柔性模板。`is_lenient()` 可查询当前模式。
+
 ## 性能基线
 
 基于 criterion benchmark（`cargo bench`），中等复杂度 G-code 模板（~260 字节，含 set/default、数学过滤器、for 循环、if 条件）：
