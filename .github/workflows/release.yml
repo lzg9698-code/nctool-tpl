@@ -3,8 +3,8 @@ name: Release
 on:
   push:
     tags:
-      - "tpl-v*"
-      - "core-v*"
+      - "nctool-tpl-v*"
+      - "nctool-core-v*"
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,7 +13,7 @@ env:
 
 jobs:
   publish:
-    name: Publish ${{ startsWith(github.ref_name, 'tpl-') && 'nctool-tpl' || 'nctool-core' }}
+    name: Publish ${{ startsWith(github.ref_name, 'nctool-tpl-') && 'nctool-tpl' || 'nctool-core' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -29,17 +29,17 @@ jobs:
         run: cargo test --workspace
 
       - name: Publish nctool-tpl
-        if: startsWith(github.ref_name, 'tpl-') && env.CARGO_REGISTRY_TOKEN != ''
+        if: startsWith(github.ref_name, 'nctool-tpl-') && env.CARGO_REGISTRY_TOKEN != ''
         run: cargo publish -p nctool-tpl
 
       - name: Skip publish (tpl, token missing)
-        if: startsWith(github.ref_name, 'tpl-') && env.CARGO_REGISTRY_TOKEN == ''
+        if: startsWith(github.ref_name, 'nctool-tpl-') && env.CARGO_REGISTRY_TOKEN == ''
         run: echo "::notice::CARGO_REGISTRY_TOKEN 未配置，跳过发布。请配置仓库 Secret 后手动 publish，或重新推送 tag。"
 
       - name: Publish nctool-core
-        if: startsWith(github.ref_name, 'core-') && env.CARGO_REGISTRY_TOKEN != ''
+        if: startsWith(github.ref_name, 'nctool-core-') && env.CARGO_REGISTRY_TOKEN != ''
         run: cargo publish -p nctool-core
 
       - name: Skip publish (core, token missing)
-        if: startsWith(github.ref_name, 'core-') && env.CARGO_REGISTRY_TOKEN == ''
+        if: startsWith(github.ref_name, 'nctool-core-') && env.CARGO_REGISTRY_TOKEN == ''
         run: echo "::notice::CARGO_REGISTRY_TOKEN 未配置，跳过发布。请配置仓库 Secret 后手动 publish，或重新推送 tag。"
