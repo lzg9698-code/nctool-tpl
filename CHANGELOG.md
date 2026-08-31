@@ -51,6 +51,10 @@
 - 新增 `.gitattributes`（统一 LF），消除 Windows 下 autocrlf 幻影改动
 - `set_path_loader` 文档补充路径穿越安全性说明（模板视为可信输入）
 
+### 测试
+
+- workspace 总计 163 项（原 146 + 新增 17）：nctool-tpl 85 单元 + 17 集成 + 1 文档，nctool-core 52 单元 + 8 集成
+
 ---
 
 ## [0.1.0] nctool-core - 2026-08-31
