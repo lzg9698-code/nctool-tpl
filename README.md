@@ -130,6 +130,38 @@ let out = renderer.render(source, "demo.j2", &ctx).unwrap();
 assert_eq!(out, "G1 X21.0 F0.15");
 ```
 
+## 命令行工具 nctool（nctool-cli）
+
+工作区新增 `cli/` crate，提供二进制 `nctool`，覆盖模板浏览、变量提取、参数校验与 G-code 生成全流程（基于 `nctool-core` 管线，golden 测试保证输出逐字节一致）：
+
+```bash
+# 浏览内置模板
+nctool templates list
+
+# 提取模板必选/可选参数（含行列定位）
+nctool inspect drill_cycle
+
+# 参数校验（缺失必选 → 退出码 1 + 结构化报告）
+nctool validate drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100
+
+# 生成 G-code：行号 + 头部注释 + 写文件
+nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100 \
+    --line-numbers --header --out demo.nc
+
+# 参数文件（JSON）批量输入；显式 --param 覆盖文件值
+nctool render my_op.j2 --params-file params.json
+
+# 机床配置查看 / 配置初始化 / shell 补全
+nctool machine show wfl_m65
+nctool config init
+nctool completion bash
+
+# 机器可读输出（--format json）
+nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100 --format json
+```
+
+运行方式：开发 `cargo run -p nctool-cli -- <命令>`；安装 `cargo install --path cli` 后直接使用 `nctool`。
+
 ## 可选 / 必选判定规则
 
 - **可选**：变量只出现在 `x | default(默认值)`（别名 `d`）或 `x is defined` / `x is undefined` 的**操作数**位置。

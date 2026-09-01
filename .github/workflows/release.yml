@@ -5,6 +5,7 @@ on:
     tags:
       - "nctool-tpl-v*"
       - "nctool-core-v*"
+      - "nctool-cli-v*"
 
 env:
   CARGO_TERM_COLOR: always
@@ -13,7 +14,7 @@ env:
 
 jobs:
   publish:
-    name: Publish ${{ startsWith(github.ref_name, 'nctool-tpl-') && 'nctool-tpl' || 'nctool-core' }}
+    name: Publish ${{ startsWith(github.ref_name, 'nctool-tpl-') && 'nctool-tpl' || (startsWith(github.ref_name, 'nctool-core-') && 'nctool-core') || 'nctool-cli' }}
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -42,4 +43,12 @@ jobs:
 
       - name: Skip publish (core, token missing)
         if: startsWith(github.ref_name, 'nctool-core-') && env.CARGO_REGISTRY_TOKEN == ''
+        run: echo "::notice::CARGO_REGISTRY_TOKEN 未配置，跳过发布。请配置仓库 Secret 后手动 publish，或重新推送 tag。"
+
+      - name: Publish nctool-cli
+        if: startsWith(github.ref_name, 'nctool-cli-') && env.CARGO_REGISTRY_TOKEN != ''
+        run: cargo publish -p nctool-cli
+
+      - name: Skip publish (cli, token missing)
+        if: startsWith(github.ref_name, 'nctool-cli-') && env.CARGO_REGISTRY_TOKEN == ''
         run: echo "::notice::CARGO_REGISTRY_TOKEN 未配置，跳过发布。请配置仓库 Secret 后手动 publish，或重新推送 tag。"

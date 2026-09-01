@@ -1,0 +1,27 @@
+[package]
+name = "nctool-cli"
+version = "0.2.0"
+edition = "2021"
+description = "nctool 命令行工具：模板浏览 / 变量提取 / 参数校验 / G-code 生成"
+license = "MIT"
+repository = "https://github.com/lzg9698-code/nctool-tpl"
+keywords = ["gcode", "nc", "cli", "template", "jinja2"]
+categories = ["command-line-utilities", "template-engine"]
+
+[dependencies]
+nctool-core = { path = "../core", version = "0.2.0" }
+nctool-tpl = { path = "..", version = "0.3.1" }
+minijinja = { version = "~2.24.0" }
+clap = { version = "4", features = ["derive"] }
+clap_complete = "4"
+serde = { version = "1", features = ["derive"] }
+serde_json = "1"
+toml = "0.8"
+
+[dev-dependencies]
+assert_cmd = "2"
+predicates = "3"
+
+[[bin]]
+name = "nctool"
+path = "src/main.rs"

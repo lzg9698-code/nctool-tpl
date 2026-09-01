@@ -9,9 +9,10 @@
 
 ### 现状（已核验）
 
-- workspace 两个 crate：`nctool-tpl` v0.3.1（parse / extract_variables / extract_undeclared / Renderer + NC 数值过滤器 + 严格/宽松模式）、`nctool-core` v0.2.0（数据模型 / 参数校验 / 模板注册表 + 5 个内置模板 / 机床预设 Generic·WFL M65·INDEX MS40 / G-code 生成管线）。
-- 质量基座齐备：163 项测试、CI（fmt / clippy / test / doc / cargo audit）、criterion benchmark、CHANGELOG。
-- **当前无任何 CLI / UI**：无 `src/main.rs`、无 `bin/` 目录、无服务端、无前端。
+- workspace 三个 crate：`nctool-tpl` v0.3.1（parse / extract_variables / extract_undeclared / Renderer + NC 数值过滤器 + 严格/宽松模式）、`nctool-core` v0.2.0（数据模型 / 参数校验 / 模板注册表 + 5 个内置模板 / 机床预设 Generic·WFL M65·INDEX MS40 / G-code 生成管线）、`nctool-cli` v0.2.0（binary `nctool`）。
+- 质量基座齐备：211 项测试、CI（fmt / clippy / test / doc / cargo audit）、criterion benchmark、CHANGELOG。
+- **CLI 已完成阶段 0/1**：命令树（templates/inspect/validate/render/machine/config/completion）+ 参数输入（`--param` 类型推断 / `--params-file`）+ 配置层叠 + `--format text|json` 统一输出 + `--lenient` 宽松渲染，golden 测试与库管线逐字节一致。
+- **Web UI 尚未开始**：`ui` 子命令已占位（返回"规划于阶段 2"），无服务端、无前端。
 
 ### 目标
 
@@ -129,21 +130,24 @@ nctool
 
 ## 7. 阶段计划
 
-### 阶段 0 — 脚手架与命令框架（→ `nctool-cli v0.1.0`）
+### 阶段 0 — 脚手架与命令框架（→ `nctool-cli v0.1.0`） ✅ 已完成（2026-09-01）
 
 - 目标：命令树全貌可用，工程化基线建立。
 - 任务：新增 `cli/` crate 并接入 workspace；clap 命令树骨架；全局选项（`--machine`/`--format`/`--param`/`--params-file`/`--template-dir`）；统一错误输出（text/JSON）；`version` 子命令；CI 扩展新 crate；参数解析单元测试。
 - 产出：`nctool --help` 展示完整命令树。
 - 验收：参数解析单测通过；CI 五道门对新 crate 全绿；`cargo clippy -D warnings` 零告警。
 - 依赖：`nctool-core` v0.1.0（不改其代码）。
+- **完成情况**：全部达成。clap 命令树含 9 个子命令；19 项参数/配置单元测试；fmt/clippy/test/doc 全绿。
 
-### 阶段 1 — 核心 CLI 能力（→ `nctool-cli v0.2.0`）
+### 阶段 1 — 核心 CLI 能力（→ `nctool-cli v0.2.0`） ✅ 已完成（2026-09-01）
 
 - 目标：脚本化生成 G-code 全流程可用。
 - 任务：`templates list/show/new`（new 生成带参数规格注释的骨架）；`inspect`（必选/可选 + 行列 + JSON schema）；`validate`（结构化报告）；`render/generate`（全部 `GenerationOptions` + 输出文件 + 规格默认值兜底）；`machine list/show` + 自定义机床配置加载；`config init/show` + 层叠加载；缺失必选参数时交互式补全（stdin 提示）。
 - 产出：一条命令从模板到 .nc 文件；可进 CI。
 - 验收：golden 测试——CLI 渲染输出与 `nctool-core` 管线结果逐字节一致；`--format json` 输出 schema 稳定；配置层叠（项目覆盖全局）生效。
 - 依赖：阶段 0。
+- **完成情况**：全部达成。29 项集成测试（含 golden/退出码/JSON/脚手架/配置）；`--lenient` 宽松渲染已实现。
+- **待办（阶段 1 收尾，可选）**：缺失必选参数时的 **stdin 交互式补全**尚未实现（当前缺失即报错退出，适合脚本；交互补全可后续补上）。
 
 ### 阶段 2 — UI 服务与前端骨架（→ `nctool-cli v0.3.0`）
 
@@ -152,6 +156,7 @@ nctool
 - 产出：浏览器打开模板库并查看参数。
 - 验收：API 集成测试通过；前端列表/详情渲染正确；确认仅监听本机回环地址。
 - 依赖：阶段 1 的校验/生成能力。
+- **状态：未开始**（`ui` 子命令已占位）。
 
 ### 阶段 3 — UI 完整交互（→ `nctool-cli v0.4.0`）
 

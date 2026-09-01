@@ -10,6 +10,45 @@
 
 ---
 
+## [nctool-cli 0.2.0] - 2026-09-01
+
+"阶段 1 CLI 核心能力"：脚本化生成 G-code 全流程可用；同时承载阶段 0 的命令树骨架与工程基线。
+
+### Added
+
+- **完整命令树**：`templates list/show/new`、`inspect`、`validate`、`render/generate`、`machine list/show`、`config init/show`、`completion`（`ui`/`part` 为阶段 2/4 占位）
+- **参数输入**：`--param k=v`（类型自动推断：数值/字符串/布尔）+ `--params-file`（JSON 对象，显式 `--param` 覆盖文件）
+- **配置层叠**：全局 `~/.config/nctool/config.toml` + 项目 `./nctool.toml`，项目覆盖全局（模板目录/默认机床/自定义机床表）
+- **统一错误输出**：`--format text|json` 双通道；JSON 输出结构化错误对象 `{ok, error:{kind, message}}`
+- **宽松模式**：`render --lenient` 未定义变量渲染为空（缺失参数不阻断）
+- **模板脚手架**：`templates new` 生成带参数规格注释的骨架
+- **golden 测试**：CLI 渲染输出与 `nctool-core` 管线逐字节一致
+
+### Changed
+
+- 新增 `cli/` crate 并接入 workspace（`members = [".", "core", "cli"]`），binary 名 `nctool`
+- `release.yml` 增加 `nctool-cli-v*` tag 发布通道（对齐 tpl/core 命名约定）
+
+### 测试
+
+- nctool-cli：19 单元 + 29 集成（含 golden / 退出码 / JSON / 脚手架 / 配置层叠），workspace 总计 211 项
+
+---
+
+## [nctool-cli 0.1.0] - 2026-09-01
+
+"阶段 0 脚手架与命令框架"：clap 命令树骨架 + 全局选项 + 工程基线。
+
+### Added
+
+- 新增 `cli/` crate（package `nctool-cli`，binary `nctool`），依赖 `nctool-core` + `nctool-tpl`
+- clap derive 命令树；全局选项 `--machine` / `--template-dir` / `--format` / `--verbose`
+- 统一错误类型 `CliError`（text/JSON 双输出通道）
+- 参数解析单元测试（类型推断 / params-file / 覆盖优先级）
+- CI 五道门（fmt / clippy / test / doc / cargo audit）经 workspace 级命令自动覆盖新 crate
+
+---
+
 ## [nctool-core 0.2.0] - 2026-08-31
 
 "第二轮全面代码审查修复"：补齐错误定位与 NC 输出健壮性；模板作用域语义修复见 [nctool-tpl 0.3.1]。
