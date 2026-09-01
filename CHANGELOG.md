@@ -61,7 +61,8 @@
 
 ### 测试
 
-- workspace 总计 234 → **245** 项；详见此前各批次条目
+- workspace 总计 211 → **245** 项（相对 nctool-cli 0.2.0 基线 +34）：nctool-tpl 94 单元 + 18 集成 + 1 文档、
+  nctool-core 63 单元 + 8 集成、nctool-cli 23 单元 + 38 集成
 
 ### nctool-tpl 修复
 
@@ -123,17 +124,6 @@
   program_header 同源的 `GG54` 问题）
 - `--lenient` 帮助文案对齐实际语义（经过滤器引用的变量仍需具体值才能求值）
 
-### 测试
-
-- workspace 总计 211 → **234** 项：
-  - tpl +6：from 别名 / block 作用域（提取+渲染双端）/ 未定义名不错位恢复 /
-    列口径字符化 / path loader 逃逸拒绝 / `extract_template_refs`
-  - core +8：include 穿透与环引用 / registry render 口径 / `generate_lenient`×3 /
-    tool_change 与 safe_move 字节级 golden
-  - cli 集成 +5（lenient 超集 / tool_change golden / `--out` 建目录与同路径拒绝 /
-    completion 豁免损坏配置），program_header golden 升级字节级；单测净 -2
-    （删除随副本移除的 3 个实现细节测试，新增同路径检测 1 个）
-
 ---
 
 ## [nctool-cli 0.2.0] - 2026-09-01
@@ -157,7 +147,7 @@
 
 ### 测试
 
-- nctool-cli：19 单元 + 29 集成（含 golden / 退出码 / JSON / 脚手架 / 配置层叠），workspace 总计 211 项
+- nctool-cli：19 单元 + 29 集成（含 golden / 退出码 / JSON / 脚手架 / 配置层叠），workspace 总计 211 项（本发布基线；当前工作区见 [未发布]：23 单元 + 38 集成 / 总计 245 项）
 
 ---
 

@@ -1,6 +1,6 @@
 # nctool CLI + UI 开发计划
 
-> 版本：草案 v0.1 · 2026-08-31
+> 版本：草案 v0.1 · 2026-09-01
 > 范围：在现有 `nctool-tpl`（模板解析）+ `nctool-core`（生成管线）之上，新增**命令行工具**与**本地 Web UI** 两个交付面。
 
 ---
@@ -10,7 +10,7 @@
 ### 现状（已核验）
 
 - workspace 三个 crate：`nctool-tpl` v0.3.1（parse / extract_variables / extract_undeclared / Renderer + NC 数值过滤器 + 严格/宽松模式）、`nctool-core` v0.2.0（数据模型 / 参数校验 / 模板注册表 + 5 个内置模板 / 机床预设 Generic·WFL M65·INDEX MS40 / G-code 生成管线）、`nctool-cli` v0.2.0（binary `nctool`）。
-- 质量基座齐备：211 项测试、CI（fmt / clippy / test / doc / cargo audit）、criterion benchmark、CHANGELOG。
+- 质量基座齐备：245 项测试、CI（fmt / clippy / test / doc / cargo audit）、criterion benchmark、CHANGELOG。
 - **CLI 已完成阶段 0/1**：命令树（templates/inspect/validate/render/machine/config/completion）+ 参数输入（`--param` 类型推断 / `--params-file`）+ 配置层叠 + `--format text|json` 统一输出 + `--lenient` 宽松渲染，golden 测试与库管线逐字节一致。
 - **Web UI 尚未开始**：`ui` 子命令已占位（返回"规划于阶段 2"），无服务端、无前端。
 
