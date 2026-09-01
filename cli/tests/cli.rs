@@ -118,6 +118,21 @@ fn templates_new_rejects_path_traversal() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 名字已带 .j2 时不追加扩展名（避免生成 a.j2.j2）。
+#[test]
+fn templates_new_preserves_j2_extension() {
+    let dir = tmp_dir("j2ext");
+    std::fs::create_dir_all(dir.join("templates")).unwrap();
+    nctool()
+        .current_dir(&dir)
+        .args(["templates", "new", "my_op.j2"])
+        .assert()
+        .success();
+    assert!(dir.join("templates/my_op.j2").exists());
+    assert!(!dir.join("templates/my_op.j2.j2").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ---------------------------------------------------------------------------
 // inspect
 // ---------------------------------------------------------------------------
@@ -222,6 +237,11 @@ fn validate_json_failure_is_single_object() {
         .unwrap_or_else(|e| panic!("stdout 应为单个合法 JSON 对象: {e}\n{stdout}"));
     assert_eq!(v["ok"], serde_json::Value::Bool(false));
     assert!(v["data"]["errors"].as_i64().unwrap() >= 1);
+    // 统一失败结构：error:{kind,message} 与 data 并存（脚本可据 kind 分流）
+    assert_eq!(
+        v["error"]["kind"],
+        serde_json::Value::String("validation".into())
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -275,14 +295,50 @@ fn render_with_line_numbers_and_header() {
 
 #[test]
 fn render_program_header_golden() {
-    // 程序头：规格默认值兜底 + machine 注入
+    // 程序头：规格默认值兜底 + machine 注入；字节级 golden
+    // （坐标系/进给模式直接输出配置值 G54/G94，不重复 G 前缀）
     nctool()
         .args(["render", "program_header", "--param", "prog=1"])
         .assert()
         .success()
-        .stdout(predicate::str::contains("O0001"))
-        .stdout(predicate::str::contains("G54"))
-        .stdout(predicate::str::contains("G94"));
+        .stdout("O0001\n(  )\n(  )\nG21 (metric)\nG54\nG94\nM5\nM9\n");
+}
+
+#[test]
+fn render_tool_change_golden() {
+    // 刀具号 T 字址只接受整数：CLI 类型推断 tool_num=5 → f64 5.0 → nc_strip → 5
+    nctool()
+        .args(["render", "tool_change", "--param", "tool_num=5"])
+        .assert()
+        .success()
+        .stdout("M5\nM6 T5\nG40 (取消刀具补偿)\n");
+}
+
+#[test]
+fn render_lenient_applies_spec_defaults_and_postprocess() {
+    // 宽松模式是严格模式的超集：省略 r_plane（规格默认 5.0）+ --lenient
+    // + 行号/头部——兜底与后处理均应生效（修复前该组合直接渲染失败）
+    nctool()
+        .args([
+            "render",
+            "drill_cycle",
+            "--param",
+            "x=21",
+            "--param",
+            "y=15",
+            "--param",
+            "depth=-10",
+            "--param",
+            "feed=100",
+            "--lenient",
+            "--line-numbers",
+            "--header",
+        ])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("( nctool generated G-code )"))
+        .stdout(predicate::str::contains("N0010 G0 X21.000 Y15.000"))
+        .stdout(predicate::str::contains("R5.000"));
 }
 
 #[test]
@@ -318,6 +374,53 @@ fn render_out_file_writes() {
         .stdout(predicate::str::contains("已写入"));
     let content = std::fs::read_to_string(&out).unwrap();
     assert!(content.contains("G81"), "输出文件应含 G81: {content}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--out` 父目录缺失时自动创建（与 `templates new` 的目录策略一致）。
+#[test]
+fn render_out_creates_parent_dirs() {
+    let dir = tmp_dir("out_dirs");
+    let out = dir.join("sub/dir/result.nc");
+    nctool()
+        .args([
+            "render",
+            "drill_cycle",
+            "--param",
+            "x=1",
+            "--param",
+            "y=2",
+            "--param",
+            "depth=-3",
+            "--param",
+            "feed=4",
+            "--out",
+        ])
+        .arg(&out)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("已写入"));
+    assert!(out.exists(), "父目录应被创建: {}", out.display());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// `--out` 指向源模板自身时拒绝写入（防止渲染结果覆盖并销毁模板源码）。
+#[test]
+fn render_out_rejects_overwriting_source_template() {
+    let dir = tmp_dir("out_self");
+    let tpl = dir.join("tpl.j2");
+    std::fs::write(&tpl, "G1 X{{ x }}").unwrap();
+    nctool()
+        .args(["render", "tpl.j2", "--template-dir"])
+        .arg(&dir)
+        .args(["--param", "x=1", "--out"])
+        .arg(&tpl)
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("相同"));
+    // 模板源码必须完好
+    let content = std::fs::read_to_string(&tpl).unwrap();
+    assert_eq!(content, "G1 X{{ x }}");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
@@ -463,6 +566,20 @@ fn completion_generates_script() {
         .assert()
         .success()
         .stdout(predicate::str::contains("_nctool"));
+}
+
+/// completion/ui/part 不依赖配置文件：CWD 存在损坏的 nctool.toml 也不应失败。
+#[test]
+fn completion_ignores_broken_project_config() {
+    let dir = tmp_dir("cfg_broken");
+    std::fs::write(dir.join("nctool.toml"), "not [ valid toml").unwrap();
+    nctool()
+        .current_dir(&dir)
+        .args(["completion", "bash"])
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("_nctool"));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 #[test]

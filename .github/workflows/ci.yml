@@ -12,8 +12,12 @@ env:
 
 jobs:
   quality:
-    name: Test / Lint / Doc / Audit
-    runs-on: ubuntu-latest
+    name: Test / Lint / Doc / Audit (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      # Windows 覆盖路径分隔符/配置目录等平台特有行为（开发环境即 Windows）
+      matrix:
+        os: [ubuntu-latest, windows-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v4

@@ -25,21 +25,42 @@ fn init(ctx: &Ctx) -> Result<(), CliError> {
     Ok(())
 }
 
-/// `config show`：展示全局 + 项目层叠合并后的生效配置。
+/// `config show`：展示全局 + 项目层叠合并后的生效配置（含来源路径）。
 fn show(ctx: &Ctx) -> Result<(), CliError> {
-    let merged = config::merged_config()?;
-    let text = merged_text(&merged);
+    let loaded = &ctx.loaded;
+    let text = merged_text(loaded);
     let data = serde_json::json!({
-        "template_dir": merged.template_dir,
-        "default_machine": merged.default_machine,
-        "machine": merged.machine,
+        "template_dir": loaded.merged.template_dir,
+        "default_machine": loaded.merged.default_machine,
+        "machine": loaded.merged.machine,
+        "sources": {
+            "global": loaded.global_path.as_ref().map(|p| p.display().to_string()),
+            "project": loaded.project_path.as_ref().map(|p| p.display().to_string()),
+        },
     });
     ctx.style.print_ok(&text, data);
     Ok(())
 }
 
-fn merged_text(cfg: &config::NctoolConfig) -> String {
+fn merged_text(loaded: &config::LoadedConfig) -> String {
+    let cfg = &loaded.merged;
     let mut s = String::from("生效配置:\n");
+    s.push_str(&format!(
+        "  全局配置: {}\n",
+        loaded
+            .global_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(未发现)".to_string())
+    ));
+    s.push_str(&format!(
+        "  项目配置: {}\n",
+        loaded
+            .project_path
+            .as_ref()
+            .map(|p| p.display().to_string())
+            .unwrap_or_else(|| "(未发现)".to_string())
+    ));
     s.push_str(&format!(
         "  模板目录: {}\n",
         cfg.template_dir

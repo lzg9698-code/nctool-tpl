@@ -62,6 +62,7 @@ G-code 输出
 ## 设计要点
 
 - **渲染前可发现错误**：校验阶段定位缺失/类型问题，而非生成后才暴露
+- **组合模板校验穿透**：`{% include %}`/`{% extends %}` 引用的已注册模板，其必选参数同样参与校验（环引用防护）
 - **规格默认值兜底**：`ParamSpec.default` 在渲染前自动应用，校验与渲染保持一致
 - **系统变量注入**：`machine` 是系统注入变量，校验时视为已提供，不要求参数集提供
 - **一套模板适配多机床**：模板引用 `{{ machine.xxx }}`，切换机床配置即可
@@ -75,5 +76,5 @@ cargo run -p nctool-core --example pipeline_demo
 ## 测试
 
 ```bash
-cargo test -p nctool-core   # 52 单元 + 8 集成（workspace 总计 163）
+cargo test -p nctool-core   # 63 单元 + 8 集成（workspace 总计 245）
 ```

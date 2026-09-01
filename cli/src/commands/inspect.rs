@@ -8,8 +8,8 @@ use super::templates::{extract_variables, resolve_source};
 
 /// `inspect <template>`：解析模板并提取其引用的外部变量。
 pub fn run(ctx: &Ctx, args: &InspectArgs) -> Result<(), CliError> {
-    let (name, source, _) = resolve_source(ctx, &args.template)?;
-    let vars = extract_variables(&source, &name)?;
+    let (name, source, _, system_vars) = resolve_source(ctx, &args.template)?;
+    let vars = extract_variables(&source, &name, &system_vars)?;
 
     let required: Vec<_> = vars.iter().filter(|v| !v.optional).collect();
     let optional: Vec<_> = vars.iter().filter(|v| v.optional).collect();

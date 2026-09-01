@@ -3,7 +3,6 @@
 use nctool_core::machine::MachinePreset;
 
 use crate::cli::{MachineArgs, MachineCommand, MachineShowArgs};
-use crate::config;
 use crate::context::Ctx;
 use crate::output::CliError;
 
@@ -24,17 +23,18 @@ fn list(ctx: &Ctx) -> Result<(), CliError> {
             "id": p.id(),
             "vendor": cfg.vendor,
             "model": cfg.model,
+            "builtin": true,
         }));
         text.push_str(&format!("  {:<12} {} {}\n", p.id(), cfg.vendor, cfg.model));
     }
-    // 追加配置文件中的自定义机床
-    let cfg = config::merged_config()?;
-    for (id, m) in &cfg.machine {
+    // 追加配置文件中的自定义机床（复用启动时缓存的一次性配置加载）
+    for (id, m) in &ctx.loaded.merged.machine {
         if MachinePreset::from_id(id).is_none() {
             presets.push(serde_json::json!({
                 "id": id,
                 "vendor": m.vendor,
                 "model": m.model,
+                "builtin": false,
             }));
             text.push_str(&format!("  {:<12} {} {} (自定义)\n", id, m.vendor, m.model));
         }

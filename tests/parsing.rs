@@ -234,6 +234,39 @@ fn path_loader_from_directory() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// path_loader 模板名不逃逸根目录：盘符前缀 / 绝对路径 / `..` 段一律视为
+/// 模板不存在（前两者由本库校验拦截，`..` 由引擎 safe_join 拦截）。
+#[test]
+fn path_loader_rejects_escape_names() {
+    let dir = std::env::temp_dir().join(format!("nctool_tpl_esc_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(dir.join("in.j2"), "IN").unwrap();
+
+    let mut renderer = Renderer::new();
+    renderer.set_path_loader(&dir);
+    let ctx = minijinja::context! {};
+    for name in [
+        "C:/evil",
+        "C:\\evil",
+        "/etc/passwd",
+        "\\evil",
+        "../in.j2",
+        "",
+    ] {
+        let err = renderer.render_template(name, &ctx).unwrap_err();
+        assert!(
+            matches!(err, TplError::TemplateNotFound { .. }),
+            "{name:?} 应视为模板不存在: {err:?}"
+        );
+    }
+    // 目录内正常加载不受影响
+    let out = renderer.render_template("in.j2", &ctx).unwrap();
+    assert_eq!(out, "IN");
+
+    // 清理
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// 未注册模板渲染应报错，且错误信息可定位到模板名。
 #[test]
 fn render_missing_template_error() {

@@ -2,6 +2,7 @@
 name = "nctool-core"
 version = "0.2.0"
 edition = "2021"
+rust-version = "1.82"
 description = "NCtool 核心库：数据模型 + 参数校验 + 模板注册表 + G-code 生成管线"
 license = "MIT"
 readme = "README.md"

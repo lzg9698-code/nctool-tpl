@@ -14,12 +14,17 @@ use crate::cli::{Command, GlobalArgs};
 use crate::context::Ctx;
 use crate::output::CliError;
 
-/// 系统注入变量：渲染时由管线注入上下文（如 `machine`），不算外部必选参数。
-pub const SYSTEM_VARS: &[&str] = &["machine"];
-
 impl Command {
     /// 执行当前子命令。
     pub fn run(&self, g: &GlobalArgs) -> Result<(), CliError> {
+        // 与配置无关的命令先行分发：completion/ui/part 不读配置文件，
+        // 避免 CWD 存在损坏的 nctool.toml 时连补全生成也被拦下
+        match self {
+            Command::Completion(a) => return completion::run(a),
+            Command::Ui(a) => return ui::run(a),
+            Command::Part(a) => return part::run(a),
+            _ => {}
+        }
         let ctx = Ctx::from_global(g)?;
         match self {
             Command::Templates(a) => templates::run(&ctx, a),
@@ -28,9 +33,8 @@ impl Command {
             Command::Render(a) | Command::Generate(a) => render::run(&ctx, a),
             Command::Machine(a) => machine::run(&ctx, a),
             Command::Config(a) => config_cmd::run(&ctx, a),
-            Command::Ui(a) => ui::run(&ctx, a),
-            Command::Part(a) => part::run(&ctx, a),
-            Command::Completion(a) => completion::run(a),
+            // 已在上方无配置分发（此臂仅满足穷尽性）
+            Command::Ui(_) | Command::Part(_) | Command::Completion(_) => unreachable!(),
         }
     }
 }

@@ -7,24 +7,56 @@ use nctool_core::{ParamValue, ParameterSet};
 use crate::output::CliError;
 
 /// 解析单个 `k=v` 参数，并按值推断类型：
+/// - `k:s=v` / `k:n=v` / `k:b=v` 强制字符串/数值/布尔（消除歧义的通道）
 /// - `true`/`false`（不区分大小写）→ 布尔
-/// - 可解析为 f64 → 数值（含整数 `21`、科学计数 `1e3`）
+/// - 可解析为 f64 → 数值（含整数 `21`、科学计数 `1e3`）；前导零纯数字（如
+///   `007`）保持字符串（数值会丢前导零）
 /// - 其余 → 字符串（如 `D12`、`轴`）
 pub fn parse_kv(s: &str) -> Result<(String, ParamValue), CliError> {
     let (k, v) = s
         .split_once('=')
         .ok_or_else(|| CliError::new("args", format!("参数格式应为 k=v，得到: {s}")))?;
-    let key = k.trim();
-    if key.is_empty() {
+    // 类型后缀：k:s=v / k:n=v / k:b=v（后缀必须是 s/n/b 才解析为强制类型）
+    let (raw_key, forced) = match k.trim().rsplit_once(':') {
+        Some((name, ty)) if matches!(ty, "s" | "n" | "b") => (name.trim(), Some(ty)),
+        _ => (k.trim(), None),
+    };
+    if raw_key.is_empty() {
         return Err(CliError::new("args", "参数名不能为空"));
     }
-    Ok((key.to_string(), infer_param_value(v.trim())))
+    let value = match forced {
+        Some("s") => ParamValue::String(v.trim().to_string()),
+        Some("n") => match v.trim().parse::<f64>() {
+            Ok(n) if n.is_finite() => ParamValue::Number(n),
+            _ => {
+                return Err(CliError::new(
+                    "args",
+                    format!("强制数值参数 {raw_key}={} 无法解析为有限数", v.trim()),
+                ))
+            }
+        },
+        Some("b") => {
+            if v.trim().eq_ignore_ascii_case("true") {
+                ParamValue::Bool(true)
+            } else if v.trim().eq_ignore_ascii_case("false") {
+                ParamValue::Bool(false)
+            } else {
+                return Err(CliError::new(
+                    "args",
+                    format!("强制布尔参数 {raw_key} 应为 true/false，得到: {}", v.trim()),
+                ));
+            }
+        }
+        _ => infer_param_value(v.trim()),
+    };
+    Ok((raw_key.to_string(), value))
 }
 
 /// 按值文本推断参数类型。
 ///
 /// 注意：`NaN` / `inf` / `Infinity` 等非有限数**不**判为数值（落到字符串），
-/// 避免把"NaN"这类文本误判为数值传入渲染上下文。
+/// 避免把"NaN"这类文本误判为数值传入渲染上下文；前导零纯数字（`007`/`00`）
+/// 同样保持字符串（数值类型会静默丢前导零，如 `T007`→`T7`）。
 pub fn infer_param_value(v: &str) -> ParamValue {
     if v.eq_ignore_ascii_case("true") {
         return ParamValue::Bool(true);
@@ -32,12 +64,21 @@ pub fn infer_param_value(v: &str) -> ParamValue {
     if v.eq_ignore_ascii_case("false") {
         return ParamValue::Bool(false);
     }
+    if has_leading_zero(v) {
+        return ParamValue::String(v.to_string());
+    }
     if let Ok(n) = v.parse::<f64>() {
         if n.is_finite() {
             return ParamValue::Number(n);
         }
     }
     ParamValue::String(v.to_string())
+}
+
+/// 前导零纯数字（`007`/`00`）：数值化会丢前导零，保持字符串。
+fn has_leading_zero(v: &str) -> bool {
+    let bytes = v.as_bytes();
+    bytes.len() > 1 && bytes[0] == b'0' && v.chars().all(|c| c.is_ascii_digit())
 }
 
 /// 从 JSON 对象构造参数集：`{"x": 21.0, "tool": "D12", "coolant": true}`。
@@ -65,6 +106,14 @@ pub fn load_params_file(path: &Path) -> Result<ParameterSet, CliError> {
                 let f = n
                     .as_f64()
                     .ok_or_else(|| CliError::new("args", format!("参数 {k} 数值无法解析为 f64")))?;
+                // 与 --param 推断路径对齐：非有限数拒绝进入参数集
+                // （JSON 字面量 1e999 会被解析为 f64::INFINITY）
+                if !f.is_finite() {
+                    return Err(CliError::new(
+                        "args",
+                        format!("参数 {k} 为非有限数（NaN/Inf），拒绝生成"),
+                    ));
+                }
                 set.set_number(k.clone(), f);
             }
             serde_json::Value::String(s) => {
@@ -167,6 +216,47 @@ mod tests {
     fn parse_kv_missing_equals() {
         assert!(parse_kv("nokey").is_err());
         assert!(parse_kv("=1").is_err());
+    }
+
+    #[test]
+    fn infer_leading_zero_stays_string() {
+        // 前导零纯数字保持字符串（数值会丢前导零：T007 → T7）
+        assert_eq!(infer_param_value("007"), ParamValue::String("007".into()));
+        assert_eq!(infer_param_value("00"), ParamValue::String("00".into()));
+        assert_eq!(infer_param_value("0"), ParamValue::Number(0.0));
+        assert_eq!(infer_param_value("0.5"), ParamValue::Number(0.5));
+        assert_eq!(infer_param_value("10"), ParamValue::Number(10.0));
+    }
+
+    #[test]
+    fn parse_kv_type_suffix() {
+        let (k, v) = parse_kv("tool:s=D12").unwrap();
+        assert_eq!(k, "tool");
+        assert_eq!(v, ParamValue::String("D12".into()));
+        let (_, v) = parse_kv("n:n=21").unwrap();
+        assert_eq!(v, ParamValue::Number(21.0));
+        let (_, v) = parse_kv("flag:b=TRUE").unwrap();
+        assert_eq!(v, ParamValue::Bool(true));
+        // true/false 文本经 :s 可强制为字符串
+        let (_, v) = parse_kv("note:s=true").unwrap();
+        assert_eq!(v, ParamValue::String("true".into()));
+        // 强制类型失败 → 报错
+        assert!(parse_kv("x:n=abc").is_err());
+        assert!(parse_kv("x:b=yes").is_err());
+    }
+
+    #[test]
+    fn params_file_non_finite_rejected() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("nctool_test_inf_{}.json", std::process::id()));
+        std::fs::write(&path, r#"{"x": 1e999}"#).unwrap();
+        let err = load_params_file(&path).unwrap_err();
+        std::fs::remove_file(&path).ok();
+        assert!(
+            err.message.contains("非有限数") || err.message.contains("合法 JSON"),
+            "1e999 应被拒绝（非有限数或解析错误）: {}",
+            err.message
+        );
     }
 
     #[test]

@@ -142,9 +142,6 @@ impl ValidationReport {
     }
 }
 
-/// 校验结果：`Ok(())` 表示通过，`Err(ValidationReport)` 表示存在问题。
-pub type ValidationResult = Result<(), ValidationReport>;
-
 /// 完整校验：解析模板 → 提取变量 → 对照规格与参数集检查。
 ///
 /// # 参数
@@ -178,7 +175,7 @@ pub fn validate_template(
         }
     };
     // 2. 共享校验核心
-    check_vars(&vars, specs, params, system_vars)
+    check_vars(&vars, specs, params, system_vars, Some(template_name))
 }
 
 /// 从 nctool-tpl 的 `Variable` 列表直接校验（跳过重新解析）。
@@ -190,7 +187,7 @@ pub fn validate_with_vars(
     params: &ParameterSet,
     system_vars: &[&str],
 ) -> ValidationReport {
-    check_vars(vars, specs, params, system_vars)
+    check_vars(vars, specs, params, system_vars, None)
 }
 
 /// 校验共享核心：对照变量列表、规格与参数集逐项检查。
@@ -202,21 +199,19 @@ pub fn validate_with_vars(
 /// - **冗余**：参数集提供了模板未引用的参数 → 警告
 ///
 /// `system_vars` 由系统在渲染时注入，视为已提供，不参与缺失/冗余检查。
+/// `template_name`：仅供错误消息定位（`validate_with_vars` 场景可为 `None`）。
 fn check_vars(
     vars: &[nctool_tpl::Variable],
     specs: &[ParamSpec],
     params: &ParameterSet,
     system_vars: &[&str],
+    template_name: Option<&str>,
 ) -> ValidationReport {
     // 规格索引：参数名 → ParamSpec
     let spec_map: std::collections::HashMap<&str, &ParamSpec> =
         specs.iter().map(|s| (s.name.as_str(), s)).collect();
 
     let mut report = ValidationReport::default();
-    let mut provided: BTreeSet<String> = BTreeSet::new();
-    provided.extend(params.values.keys().cloned());
-    // 系统注入变量视为已提供（不参与缺失/冗余检查）
-    provided.extend(system_vars.iter().map(|s| s.to_string()));
 
     // 逐变量检查
     for var in vars {
@@ -230,7 +225,10 @@ fn check_vars(
                     if !n.is_finite() {
                         report.issues.push(ValidationIssue::error(
                             name,
-                            "数值参数为 NaN/Inf（非有限数），拒绝生成",
+                            format!(
+                                "数值参数为 NaN/Inf（非有限数），拒绝生成{}",
+                                location_suffix(template_name, var)
+                            ),
                         ));
                     }
                 }
@@ -240,9 +238,10 @@ fn check_vars(
                         report.issues.push(ValidationIssue::error(
                             name,
                             format!(
-                                "类型不匹配：规格要求 {}, 实际提供 {}",
+                                "类型不匹配：规格要求 {}, 实际提供 {}{}",
                                 spec.kind.label(),
-                                value_kind_label(value)
+                                value_kind_label(value),
+                                location_suffix(template_name, var)
                             ),
                         ));
                     }
@@ -257,7 +256,10 @@ fn check_vars(
                 if !has_default {
                     report.issues.push(ValidationIssue::error(
                         name,
-                        "必选参数缺失（模板引用且无默认值兜底，参数集未提供）",
+                        format!(
+                            "必选参数缺失（模板引用且无默认值兜底，参数集未提供）{}",
+                            location_suffix(template_name, var)
+                        ),
                     ));
                 }
             }
@@ -266,8 +268,16 @@ fn check_vars(
 
     // 冗余参数检查：参数集提供了、但模板未引用的参数
     let referenced: BTreeSet<&str> = vars.iter().map(|v| v.name.as_str()).collect();
-    for name in &provided {
-        if !referenced.contains(name.as_str()) && !system_vars.contains(&name.as_str()) {
+    for name in params.values.keys() {
+        if system_vars.contains(&name.as_str()) {
+            // 与系统注入变量同名：渲染时被系统值覆盖，用户提供的值无效
+            report.issues.push(ValidationIssue::warning(
+                name,
+                "参数与系统注入变量（machine 等）同名，渲染时将被系统值覆盖（该参数无效）",
+            ));
+            continue;
+        }
+        if !referenced.contains(name.as_str()) {
             report.issues.push(ValidationIssue::warning(
                 name,
                 "参数集提供了该参数，但模板未引用（可能是模板选错或参数名拼写错误）",
@@ -278,10 +288,15 @@ fn check_vars(
     report
 }
 
-/// 校验结果是否为错误（含错误级问题）。
-pub fn has_errors(report: &ValidationReport) -> bool {
-    report.has_errors()
+/// 校验问题定位后缀（nctool-tpl 的 `Variable` 携带行列）：
+/// `（模板 name 第 L 行第 C 列引用）`；模板名不可用时仅行列。
+fn location_suffix(template_name: Option<&str>, v: &nctool_tpl::Variable) -> String {
+    match template_name {
+        Some(t) => format!("（模板 {t} 第 {} 行第 {} 列引用）", v.line, v.col),
+        None => format!("（第 {} 行第 {} 列引用）", v.line, v.col),
+    }
 }
+
 fn value_kind_label(value: &crate::model::ParamValue) -> &'static str {
     match value {
         crate::model::ParamValue::Number(_) => "数值",

@@ -15,7 +15,7 @@ use super::render::resolve_registry;
 /// - `--format json` 失败时输出**单个**对象（`ok:false` + 完整报告），
 ///   避免与统一错误输出产生两段 JSON。
 pub fn run(ctx: &Ctx, args: &ValidateArgs) -> Result<(), CliError> {
-    let (gen, name) = resolve_registry(ctx, &args.template)?;
+    let (gen, name, _) = resolve_registry(ctx, &args.template)?;
     let params =
         crate::context::build_params(args.params.params_file.as_deref(), &args.params.param)?;
 
@@ -27,8 +27,13 @@ pub fn run(ctx: &Ctx, args: &ValidateArgs) -> Result<(), CliError> {
     let text = format!("模板: {name}\n{}", report.summary());
 
     if has_errors && ctx.style == OutputStyle::Json {
-        // 单对象输出，避免 print_error 的第二个 JSON 对象破坏契约
-        let obj = serde_json::json!({ "ok": false, "data": data });
+        // 单对象输出：统一失败结构 {ok:false, error, data}（report 附于 data），
+        // 避免 print_error 的第二个 JSON 对象破坏"单对象"契约
+        let obj = serde_json::json!({
+            "ok": false,
+            "data": data,
+            "error": { "kind": "validation", "message": report.summary() },
+        });
         println!("{}", serde_json::to_string_pretty(&obj).unwrap_or_default());
         return Err(CliError::new("validation", "参数校验未通过").silent());
     }

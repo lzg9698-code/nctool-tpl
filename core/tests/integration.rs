@@ -44,9 +44,11 @@ fn builtin_program_header_with_wfl_machine() {
     let out = g
         .generate("program_header", &ps, &wfl, &GenerationOptions::default())
         .unwrap();
-    assert!(out.starts_with("O0042"));
-    assert!(out.contains("( GEAR_SHAFT )"));
-    assert!(out.contains("G54"), "应引用 machine.coordinate_system");
+    // 字节级 golden：坐标系/进给模式直接输出配置值（不重复 G 前缀）
+    assert_eq!(
+        out,
+        "O0042\n( GEAR_SHAFT )\n(  )\nG21 (metric)\nG54\nG94\nM5\nM9\n"
+    );
 }
 
 #[test]

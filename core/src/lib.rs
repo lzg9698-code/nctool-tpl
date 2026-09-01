@@ -25,8 +25,7 @@ pub use model::{
 };
 // 校验
 pub use validate::{
-    spec, validate_template, validate_with_vars, ValidationIssue, ValidationLevel,
-    ValidationReport, ValidationResult,
+    spec, validate_template, validate_with_vars, ValidationIssue, ValidationLevel, ValidationReport,
 };
 // 模板注册表
 pub use registry::{TemplateCategory, TemplateEntry, TemplateRegistry, TemplateSource};

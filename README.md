@@ -36,7 +36,7 @@ O0001
 N0010 G1 X21.000 Y15.500 F0.15
 ```
 
-所有 NC 过滤器对非有限数（NaN/Inf）报错，防止非法数值写入 G-code。
+所有 NC 过滤器对非有限数（NaN/Inf）报错，防止非法数值写入 G-code。该防线覆盖本库注册的过滤器；裸 `{{ x }}` 输出或 minijinja 内建操作（如 `round`、算术）产生的 NaN/Inf 不经此校验，请先经上层参数校验（`nctool-core`）保证参数值有限。
 
 ## 严格 / 宽松模式
 
@@ -174,7 +174,7 @@ nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param fe
 
 `sin` `cos` `tan` `asin` `acos` `atan` `sqrt` `exp` `ln` `log10` `pow` `floor` `ceil`
 
-**有限性校验**：所有数学过滤器对结果做 `is_finite()` 检查，一旦产生 `NaN`/`Inf`（如 `sqrt(-1)`、`ln(0)`），渲染立即失败并报错，避免非法坐标静默写入 G-code。
+**有限性校验**：所有数学过滤器对结果做 `is_finite()` 检查，一旦产生 `NaN`/`Inf`（如 `sqrt(-1)`、`ln(0)`），渲染立即失败并报错，避免非法坐标静默写入 G-code。同 NC 过滤器一样，该防线仅覆盖本库注册的过滤器；裸输出与内建操作不在保护范围。
 
 ## 示例与测试
 

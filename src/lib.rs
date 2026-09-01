@@ -32,959 +32,20 @@
 
 #![warn(missing_docs)]
 
-use std::collections::HashSet;
-use std::fmt;
-use std::path::Path;
+mod error;
+mod extract;
+mod filters;
+mod renderer;
 
-use minijinja::machinery::ast::{self, Expr, Spanned, Stmt};
-use minijinja::machinery::WhitespaceConfig;
-use minijinja::syntax::SyntaxConfig;
-use minijinja::Environment;
+// 公共 API 再导出
+pub use error::TplError;
+pub use extract::{
+    extract_template_refs, extract_undeclared, extract_variables, parse, Ast, Variable,
+};
+pub use renderer::Renderer;
 
-/// 引擎内置、不由上下文提供的名字（出现在模板里也不算“未声明变量”）。
-const RESERVED_NAMES: &[&str] = &["loop", "self", "super", "caller"];
-
-/// Jinja 自动注入的内置全局（函数/构造器），同样不算“需要外部提供的参数”。
-/// 与 `jinja2.meta` 一致：无参数使用的这些全局名不进入未声明集合。
-const BUILTIN_GLOBALS: &[&str] = &["range", "dict", "lipsum", "cycler", "joiner", "namespace"];
-
-/// 模板中出现的一个变量及其在源码中的位置。
-///
-/// `line` / `col` 均为 1 起始，`start` / `end` 为源码字节偏移。
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct Variable {
-    /// 变量名
-    pub name: String,
-    /// 起始行（1 起始）
-    pub line: usize,
-    /// 起始列（1 起始）
-    pub col: usize,
-    /// 起始字节偏移
-    pub start: usize,
-    /// 结束字节偏移（不含）
-    pub end: usize,
-    /// 该变量的**所有**引用是否都处于「兜底上下文」。
-    ///
-    /// 兜底上下文指 `default`/`d` 过滤器（`{{ x | default(0.15) }}`）或
-    /// `is defined`/`is undefined` 测试（`{% if x is defined %}`）——
-    /// 这些位置上的引用在变量缺失时模板仍可安全渲染。
-    ///
-    /// 对 [`extract_undeclared`] 的语义：`true` = 可选参数（缺失时可兜底），
-    /// `false` = 必选参数（渲染时必须由外部上下文提供）。
-    pub optional: bool,
-}
-
-/// 解析结果：持有模板 AST，同时保留源码与文件名引用。
-///
-/// 变量提取只读这个结构；渲染可复用同源文本（minijinja 内部自带 JIT 编译缓存）。
-///
-/// 字段均为私有，通过 [`name`](Self::name) / [`source`](Self::source) 访问，
-/// 以便未来改变内部存储而不破坏公共 API。
-#[derive(Debug)]
-pub struct Ast<'a> {
-    name: &'a str,
-    source: &'a str,
-    pub(crate) stmt: Stmt<'a>,
-}
-
-impl<'a> Ast<'a> {
-    /// 模板名（用于错误信息）。
-    pub fn name(&self) -> &str {
-        self.name
-    }
-
-    /// 模板源码。
-    pub fn source(&self) -> &str {
-        self.source
-    }
-}
-
-/// 模板解析/渲染错误。
-///
-/// `#[non_exhaustive]`：未来可能新增错误变体，外部 match 应保留通配分支。
-///
-/// 细分变体让上层可精准处理：例如 `UndefinedVariable` 可触发"参数缺失"提示，
-/// `TemplateNotFound` 可触发模板路径检查，而不必解析 message 字符串。
-#[non_exhaustive]
-#[derive(Debug)]
-pub enum TplError {
-    /// 语法错误，带模板名与行列号。
-    ///
-    /// `col` 为 minijinja 停止解析位置的最佳近似（来自其错误携带的字节范围），
-    /// 在无法取得字节范围时回退为 `1`。
-    Parse {
-        /// 触发错误的模板名
-        name: String,
-        /// 完整错误信息（含 minijinja 原始描述）
-        message: String,
-        /// 错误所在行（1 起始）
-        line: usize,
-        /// 错误所在列（1 起始，最佳近似）
-        col: usize,
-    },
-    /// 模板未找到（`{% include %}` / `{% extends %}` / `get_template` 引用了不存在的模板）。
-    TemplateNotFound {
-        /// 触发错误的模板名
-        name: String,
-        /// 被引用但不存在的模板名（从 minijinja 错误详情中提取，可能为空）。
-        template: String,
-        /// 完整错误信息
-        message: String,
-    },
-    /// 未定义变量（严格模式下引用了不存在的变量）。
-    UndefinedVariable {
-        /// 触发错误的模板名
-        name: String,
-        /// 变量名（尽力从源码错误位置恢复；无法定位时为空）。
-        variable: String,
-        /// 完整错误信息
-        message: String,
-    },
-    /// 未知过滤器（模板使用了未注册的过滤器）。
-    UnknownFilter {
-        /// 触发错误的模板名
-        name: String,
-        /// 过滤器名（从错误详情中提取，可能为空）。
-        filter: String,
-        /// 完整错误信息
-        message: String,
-    },
-    /// 未知测试（模板使用了未注册的测试）。
-    UnknownTest {
-        /// 触发错误的模板名
-        name: String,
-        /// 测试名（从错误详情中提取，可能为空）。
-        test: String,
-        /// 完整错误信息
-        message: String,
-    },
-    /// 其他渲染错误（无效操作、参数错误、序列化失败等兜底）。
-    Render {
-        /// 触发错误的模板名
-        name: String,
-        /// 完整错误信息
-        message: String,
-    },
-}
-
-impl fmt::Display for TplError {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        match self {
-            TplError::Parse {
-                name,
-                message,
-                line,
-                ..
-            } => {
-                write!(f, "{name}:{line}: 模板语法错误: {message}")
-            }
-            TplError::TemplateNotFound {
-                name,
-                template,
-                message,
-            } => {
-                if template.is_empty() {
-                    write!(f, "{name}: 模板未找到: {message}")
-                } else {
-                    write!(f, "{name}: 模板未找到 '{template}': {message}")
-                }
-            }
-            TplError::UndefinedVariable {
-                name,
-                variable,
-                message,
-            } => {
-                if variable.is_empty() {
-                    write!(f, "{name}: 未定义变量: {message}")
-                } else {
-                    write!(f, "{name}: 未定义变量 '{variable}': {message}")
-                }
-            }
-            TplError::UnknownFilter {
-                name,
-                filter,
-                message,
-            } => {
-                if filter.is_empty() {
-                    write!(f, "{name}: 未知过滤器: {message}")
-                } else {
-                    write!(f, "{name}: 未知过滤器 '{filter}': {message}")
-                }
-            }
-            TplError::UnknownTest {
-                name,
-                test,
-                message,
-            } => {
-                if test.is_empty() {
-                    write!(f, "{name}: 未知测试: {message}")
-                } else {
-                    write!(f, "{name}: 未知测试 '{test}': {message}")
-                }
-            }
-            TplError::Render { name, message } => {
-                write!(f, "{name}: 渲染错误: {message}")
-            }
-        }
-    }
-}
-
-impl std::error::Error for TplError {}
-
-/// 从错误详情字符串中提取第一个引号（单引号或双引号）内的内容。
-///
-/// minijinja 的错误详情通常形如 `unknown filter 'foo'` 或
-/// `variable 'x' is undefined`，此函数提取其中的名称。
-fn extract_quoted(s: &str) -> Option<String> {
-    let start = s.find('\'').or_else(|| s.find('"'))?;
-    let quote = s.as_bytes()[start];
-    let rest = &s[start + 1..];
-    let end = rest.find(quote as char)?;
-    Some(rest[..end].to_string())
-}
-
-/// 从 `"prefix name rest"` 格式的详情中提取 `name`（第一个空白分隔的词）。
-///
-/// 用于 minijinja 的 `"filter badfilter is unknown"` / `"test badtest is unknown"`
-/// 这类无引号格式。
-fn extract_after_prefix<'a>(s: &'a str, prefix: &str) -> Option<&'a str> {
-    s.strip_prefix(prefix)?.split_whitespace().next()
-}
-
-/// 从源码 `offset` 处尽力提取一个标识符（变量名）。
-///
-/// 用于从 minijinja 运行时错误的字节范围中恢复未定义变量名：
-/// debug feature 下错误携带字节范围，通常指向出错的表达式起点
-/// （如 `{{ missing }}` 的 `missing`）。无法定位或该处不是标识符时返回 `None`。
-fn extract_identifier_at(source: &str, offset: usize) -> Option<String> {
-    // 对齐到 UTF-8 字符边界（错误范围可能落在多字节字符中间）
-    let mut off = offset.min(source.len());
-    while off > 0 && !source.is_char_boundary(off) {
-        off -= 1;
-    }
-    let rest = &source[off..];
-    let mut chars = rest.chars();
-    let first = chars.next()?;
-    if !(first == '_' || first.is_alphabetic()) {
-        return None;
-    }
-    let len = first.len_utf8()
-        + chars
-            .take_while(|c| c.is_alphanumeric() || *c == '_')
-            .map(char::len_utf8)
-            .sum::<usize>();
-    Some(rest[..len].to_string())
-}
-
-/// 从源码与错误字节范围中尽力恢复未定义变量的名字。
-///
-/// minijinja 的 `UndefinedError` 不携带变量名，但 debug feature 下错误携带
-/// 字节范围。范围通常覆盖整个出错的表达式（如 `x.missing_attr` 整条属性链），
-/// 仅当范围起点恰好是一个**裸标识符**（后面不紧跟 `.` / `[` 等访问符）时才
-/// 认定其为缺失变量名 —— 属性链中无法确定缺失的是基础名还是某个属性，
-/// 此时返回 `None`（宁缺毋错，避免误导）。
-fn extract_undefined_var_name(source: &str, range: std::ops::Range<usize>) -> Option<String> {
-    let rest = source.get(range.start..)?;
-    let id = extract_identifier_at(rest, 0)?;
-    let after = rest[id.len()..].trim_start();
-    if after.starts_with('.') || after.starts_with('[') {
-        return None;
-    }
-    Some(id)
-}
-
-/// 将 minijinja 错误转换为细分的 [`TplError`]。
-///
-/// `fallback_name`：当 minijinja 错误未携带模板名时使用的名称。
-/// `source`：模板源码，用于语法错误的列号换算（可为 None，此时 col 回退为 1）。
-fn from_minijinja_error(
-    err: minijinja::Error,
-    fallback_name: &str,
-    source: Option<&str>,
-) -> TplError {
-    use minijinja::ErrorKind;
-    let name = err.name().unwrap_or(fallback_name).to_string();
-    let message = err.to_string();
-    let detail = err.detail().unwrap_or("");
-
-    match err.kind() {
-        ErrorKind::SyntaxError => {
-            let (line, col) = err
-                .range()
-                .and_then(|range| source.map(|s| line_col_at(s, range.start)))
-                .unwrap_or_else(|| (err.line().unwrap_or(1), 1));
-            TplError::Parse {
-                name,
-                message,
-                line,
-                col,
-            }
-        }
-        ErrorKind::TemplateNotFound => TplError::TemplateNotFound {
-            name,
-            template: extract_quoted(detail).unwrap_or_default(),
-            message,
-        },
-        ErrorKind::UndefinedError => TplError::UndefinedVariable {
-            name,
-            // minijinja 的 UndefinedError 不直接携带变量名；debug feature 下
-            // 错误携带字节范围（指向出错表达式），尽力从源码恢复变量名。
-            variable: source
-                .and_then(|src| {
-                    err.range()
-                        .and_then(|range| extract_undefined_var_name(src, range))
-                })
-                .unwrap_or_default(),
-            message,
-        },
-        ErrorKind::UnknownFilter => TplError::UnknownFilter {
-            name,
-            filter: extract_quoted(detail)
-                .or_else(|| extract_after_prefix(detail, "filter ").map(str::to_string))
-                .unwrap_or_default(),
-            message,
-        },
-        ErrorKind::UnknownTest => TplError::UnknownTest {
-            name,
-            test: extract_quoted(detail)
-                .or_else(|| extract_after_prefix(detail, "test ").map(str::to_string))
-                .unwrap_or_default(),
-            message,
-        },
-        _ => TplError::Render { name, message },
-    }
-}
-
-/// 由源码字节偏移换算 (行, 列)，均 1 起始；列以**字节**计（与 minijinja AST
-/// span 的 `start_col` 口径一致）。`\n` 视为行分隔符，`\r\n` 中 `\r` 归入行尾。
-fn line_col_at(source: &str, byte_offset: usize) -> (usize, usize) {
-    let bytes = source.as_bytes();
-    let off = byte_offset.min(bytes.len());
-    let mut line = 1usize;
-    let mut line_start = 0usize;
-    for (i, &b) in bytes.iter().enumerate() {
-        if i >= off {
-            break;
-        }
-        if b == b'\n' {
-            line += 1;
-            line_start = i + 1;
-        }
-    }
-    (line, off - line_start + 1)
-}
-
-/// 语法检查并生成 AST。
-///
-/// 解析失败时返回带行列定位的 [`TplError::Parse`]。列号取自 minijinja 错误携带的
-/// 字节范围（需启用 `debug` feature）——它指向解析器停止处的 token，是对错误位置
-/// 的最佳近似；无法取得字节范围时回退为 `col = 1`。
-pub fn parse<'a>(source: &'a str, name: &'a str) -> Result<Ast<'a>, TplError> {
-    let stmt = minijinja::machinery::parse(source, name, SyntaxConfig, WhitespaceConfig::default())
-        .map_err(|err| {
-            let (line, col) = err
-                .range()
-                .map(|range| line_col_at(source, range.start))
-                .unwrap_or_else(|| (err.line().unwrap_or(1), 1));
-            TplError::Parse {
-                name: name.to_string(),
-                message: err.to_string(),
-                line,
-                col,
-            }
-        })?;
-    Ok(Ast { name, source, stmt })
-}
-
-/// 提取模板中**引用过**的所有变量名（含模板内部用 `set`/`for` 声明的名字）。
-///
-/// 结果按首次出现顺序去重，排除引擎内置名（`loop`/`self`/`super`/`caller`）。
-/// 每个变量的 [`Variable::optional`] 表示其全部引用是否都处于兜底上下文。
-pub fn extract_variables<'a>(ast: &Ast<'a>) -> Vec<Variable> {
-    let mut c = Collector::new(ast.source());
-    walk_stmt(&ast.stmt, &mut c, false);
-    c.finalize();
-    c.all
-}
-
-/// 提取模板中引用、但**未在模板内部声明**的变量 —— 即渲染时必须由外部上下文提供。
-///
-/// 对标 Python `jinja2.meta.find_undeclared_variables(ast)`。结果按首次出现顺序去重。
-/// 每个变量的 [`Variable::optional`]：`true` = 可选参数（全部引用均有 `default`/`defined`
-/// 兜底，缺失时模板仍可渲染）；`false` = 必选参数。
-pub fn extract_undeclared<'a>(ast: &Ast<'a>) -> Vec<Variable> {
-    let mut c = Collector::new(ast.source());
-    walk_stmt(&ast.stmt, &mut c, false);
-    c.finalize();
-    c.undeclared
-}
-
-// ---------------------------------------------------------------------------
-// 变量提取：AST 遍历器
-// ---------------------------------------------------------------------------
-
-struct Collector<'a> {
-    /// 作用域栈：`scopes[0]` 为模板顶层，`for`/`with`/`macro` 各推入独立作用域
-    /// （与 Jinja2 语义一致：`if`/`block` 不创建作用域）。
-    /// 每层存放该作用域内声明的名字（set 目标 / for 目标 / with 赋值 / macro 参数 / import 别名）。
-    scopes: Vec<HashSet<&'a str>>,
-    all: Vec<Variable>,
-    all_seen: HashSet<String>,
-    undeclared: Vec<Variable>,
-    undeclared_seen: HashSet<String>,
-    /// 出现过「非兜底引用」的变量名 —— 用于最终计算 `optional`。
-    required_refs: HashSet<String>,
-}
-
-impl<'a> Collector<'a> {
-    fn new(_src: &'a str) -> Self {
-        Collector {
-            scopes: vec![HashSet::new()],
-            all: Vec::new(),
-            all_seen: HashSet::new(),
-            undeclared: Vec::new(),
-            undeclared_seen: HashSet::new(),
-            required_refs: HashSet::new(),
-        }
-    }
-
-    /// 推入新作用域（for 循环体 / with 块 / macro 体）。
-    fn push_scope(&mut self) {
-        self.scopes.push(HashSet::new());
-    }
-
-    /// 弹出当前作用域。
-    fn pop_scope(&mut self) {
-        self.scopes.pop();
-    }
-
-    /// 在当前（栈顶）作用域声明一个名字。
-    fn declare(&mut self, name: &'a str) {
-        self.scopes
-            .last_mut()
-            .expect("作用域栈不应为空")
-            .insert(name);
-    }
-
-    /// 名字是否在任意可见作用域中已声明。
-    fn is_local(&self, name: &str) -> bool {
-        self.scopes.iter().any(|scope| scope.contains(name))
-    }
-
-    /// 按「是否出现过非兜底引用」回填所有变量的 `optional` 字段。
-    fn finalize(&mut self) {
-        for v in &mut self.all {
-            v.optional = !self.required_refs.contains(&v.name);
-        }
-        for v in &mut self.undeclared {
-            v.optional = !self.required_refs.contains(&v.name);
-        }
-    }
-
-    /// 记录一次变量引用：进入 `all`；若未在模板内声明则进入 `undeclared`。
-    ///
-    /// `in_optional` 为 `true` 表示本次引用处于兜底上下文（`default` 过滤器 /
-    /// `defined` 测试的操作数），此时不把该变量记为「必选」。
-    fn record(&mut self, v: &Spanned<ast::Var<'a>>, in_optional: bool) {
-        let name = v.id;
-        if RESERVED_NAMES.contains(&name) {
-            return;
-        }
-        let span = v.span();
-        let var = Variable {
-            name: name.to_string(),
-            line: span.start_line as usize,
-            col: span.start_col as usize,
-            start: span.start_offset as usize,
-            end: span.end_offset as usize,
-            optional: false, // 在 finalize() 中按 required_refs 统一回填
-        };
-        if !in_optional {
-            self.required_refs.insert(var.name.clone());
-        }
-        if self.all_seen.insert(var.name.clone()) {
-            self.all.push(var.clone());
-        }
-        if !self.is_local(name)
-            && !BUILTIN_GLOBALS.contains(&name)
-            && self.undeclared_seen.insert(var.name.clone())
-        {
-            self.undeclared.push(var);
-        }
-    }
-}
-
-/// 把赋值目标（Var 或解构的 List）里的名字登记为当前作用域的模板局部变量。
-fn declare_locals<'a>(expr: &Expr<'a>, c: &mut Collector<'a>) {
-    match expr {
-        Expr::Var(s) => {
-            c.declare(s.id);
-        }
-        Expr::List(s) => {
-            for item in &s.items {
-                declare_locals(item, c);
-            }
-        }
-        _ => {}
-    }
-}
-
-fn walk_stmt<'a>(stmt: &Stmt<'a>, c: &mut Collector<'a>, opt: bool) {
-    match stmt {
-        Stmt::Template(s) => {
-            for child in &s.children {
-                walk_stmt(child, c, opt);
-            }
-        }
-        Stmt::EmitExpr(s) => walk_expr(&s.expr, c, opt),
-        Stmt::EmitRaw(_) => {}
-        Stmt::ForLoop(s) => {
-            // 迭代表达式在外层作用域求值（循环变量此时还不存在）
-            walk_expr(&s.iter, c, opt);
-            c.push_scope();
-            declare_locals(&s.target, c);
-            c.declare("loop");
-            // 过滤表达式与循环体可引用循环变量（Jinja2 语义）
-            if let Some(f) = &s.filter_expr {
-                walk_expr(f, c, opt);
-            }
-            for child in &s.body {
-                walk_stmt(child, c, opt);
-            }
-            c.pop_scope();
-            // else 体在循环变量不可见的外层作用域执行
-            for child in &s.else_body {
-                walk_stmt(child, c, opt);
-            }
-        }
-        Stmt::IfCond(s) => {
-            walk_expr(&s.expr, c, opt);
-            for child in &s.true_body {
-                walk_stmt(child, c, opt);
-            }
-            for child in &s.false_body {
-                walk_stmt(child, c, opt);
-            }
-        }
-        Stmt::WithBlock(s) => {
-            // 赋值表达式先在外层作用域求值（与 Jinja2 语义一致，
-            // 避免 {% with y = y + 1 %} 把右侧 y 误当作新局部）
-            for (_target, value) in &s.assignments {
-                walk_expr(value, c, opt);
-            }
-            c.push_scope();
-            for (target, _) in &s.assignments {
-                declare_locals(target, c);
-            }
-            for child in &s.body {
-                walk_stmt(child, c, opt);
-            }
-            c.pop_scope();
-        }
-        Stmt::Set(s) => {
-            // RHS 先在外层作用域求值，再声明目标：
-            // {% set total = total + x %} 中右侧 total 引用的是外层/上下文值，
-            // 若先声明会把必选变量 total 误判为模板局部，导致校验漏报。
-            walk_expr(&s.expr, c, opt);
-            declare_locals(&s.target, c);
-        }
-        Stmt::SetBlock(s) => {
-            // 块体与过滤表达式先在外层作用域求值（块体中对目标名的引用
-            // 指向外层同名变量），求值完毕后再绑定目标。
-            if let Some(f) = &s.filter {
-                walk_expr(f, c, opt);
-            }
-            for child in &s.body {
-                walk_stmt(child, c, opt);
-            }
-            declare_locals(&s.target, c);
-        }
-        Stmt::AutoEscape(s) => {
-            walk_expr(&s.enabled, c, opt);
-            for child in &s.body {
-                walk_stmt(child, c, opt);
-            }
-        }
-        Stmt::FilterBlock(s) => {
-            walk_expr(&s.filter, c, opt);
-            for child in &s.body {
-                walk_stmt(child, c, opt);
-            }
-        }
-        Stmt::Block(s) => {
-            for child in &s.body {
-                walk_stmt(child, c, opt);
-            }
-        }
-        Stmt::Import(s) => {
-            walk_expr(&s.expr, c, opt);
-            declare_locals(&s.name, c);
-        }
-        Stmt::FromImport(s) => {
-            walk_expr(&s.expr, c, opt);
-            for (alias, orig) in &s.names {
-                declare_locals(alias, c);
-                if let Some(o) = orig {
-                    walk_expr(o, c, opt);
-                }
-            }
-        }
-        Stmt::Extends(s) => walk_expr(&s.name, c, opt),
-        Stmt::Include(s) => walk_expr(&s.name, c, opt),
-        Stmt::Macro(s) => {
-            // 宏名在外层作用域定义，引用它不算“未声明变量”
-            c.declare(s.name);
-            c.push_scope();
-            for arg in &s.args {
-                declare_locals(arg, c);
-            }
-            // 默认值在宏作用域内求值（调用时绑定，可引用更早声明的参数名）
-            for d in &s.defaults {
-                walk_expr(d, c, opt);
-            }
-            for child in &s.body {
-                walk_stmt(child, c, opt);
-            }
-            c.pop_scope();
-        }
-        Stmt::CallBlock(s) => {
-            walk_call(&s.call, c, opt);
-            c.push_scope();
-            for arg in &s.macro_decl.args {
-                declare_locals(arg, c);
-            }
-            for d in &s.macro_decl.defaults {
-                walk_expr(d, c, opt);
-            }
-            for child in &s.macro_decl.body {
-                walk_stmt(child, c, opt);
-            }
-            c.pop_scope();
-        }
-        Stmt::Continue(_) | Stmt::Break(_) => {}
-        Stmt::Do(s) => walk_call(&s.call, c, opt),
-    }
-}
-
-fn walk_expr<'a>(expr: &Expr<'a>, c: &mut Collector<'a>, opt: bool) {
-    match expr {
-        Expr::Var(s) => c.record(s, opt),
-        Expr::Const(_) => {}
-        Expr::Slice(s) => {
-            walk_expr(&s.expr, c, opt);
-            if let Some(e) = &s.start {
-                walk_expr(e, c, opt);
-            }
-            if let Some(e) = &s.stop {
-                walk_expr(e, c, opt);
-            }
-            if let Some(e) = &s.step {
-                walk_expr(e, c, opt);
-            }
-        }
-        Expr::UnaryOp(s) => walk_expr(&s.expr, c, opt),
-        Expr::BinOp(s) => {
-            walk_expr(&s.left, c, opt);
-            walk_expr(&s.right, c, opt);
-        }
-        Expr::Compare(s) => {
-            walk_expr(&s.expr, c, opt);
-            for op in &s.ops {
-                walk_expr(&op.expr, c, opt);
-            }
-        }
-        Expr::IfExpr(s) => {
-            walk_expr(&s.test_expr, c, opt);
-            walk_expr(&s.true_expr, c, opt);
-            if let Some(f) = &s.false_expr {
-                walk_expr(f, c, opt);
-            }
-        }
-        Expr::Filter(s) => {
-            // default / d：被过滤的操作数在变量缺失时由默认值兜底 → 进入兜底上下文
-            let is_default = matches!(s.name, "default" | "d");
-            if let Some(e) = &s.expr {
-                walk_expr(e, c, opt || is_default);
-            }
-            // 过滤器参数（含默认值表达式）仍需正常求值 → 透传当前 opt
-            for arg in &s.args {
-                walk_call_arg(arg, c, opt);
-            }
-        }
-        Expr::Test(s) => {
-            // defined / undefined：被测试的表达式允许缺失 → 进入兜底上下文
-            let is_defined = matches!(s.name, "defined" | "undefined");
-            walk_expr(&s.expr, c, opt || is_defined);
-            for arg in &s.args {
-                walk_call_arg(arg, c, opt);
-            }
-        }
-        Expr::GetAttr(s) => walk_expr(&s.expr, c, opt),
-        Expr::GetItem(s) => {
-            walk_expr(&s.expr, c, opt);
-            walk_expr(&s.subscript_expr, c, opt);
-        }
-        Expr::Call(s) => walk_call(s, c, opt),
-        Expr::List(s) => {
-            for item in &s.items {
-                walk_expr(item, c, opt);
-            }
-        }
-        Expr::Map(s) => {
-            for k in &s.keys {
-                walk_expr(k, c, opt);
-            }
-            for v in &s.values {
-                walk_expr(v, c, opt);
-            }
-        }
-    }
-}
-
-fn walk_call<'a>(call: &Spanned<ast::Call<'a>>, c: &mut Collector<'a>, opt: bool) {
-    walk_expr(&call.expr, c, opt);
-    for arg in &call.args {
-        walk_call_arg(arg, c, opt);
-    }
-}
-
-fn walk_call_arg<'a>(arg: &ast::CallArg<'a>, c: &mut Collector<'a>, opt: bool) {
-    match arg {
-        ast::CallArg::Pos(e) | ast::CallArg::PosSplat(e) | ast::CallArg::KwargSplat(e) => {
-            walk_expr(e, c, opt)
-        }
-        ast::CallArg::Kwarg(_, e) => walk_expr(e, c, opt),
-    }
-}
-
-// ---------------------------------------------------------------------------
-// 渲染器：minijinja Environment + 数学过滤器集
-// ---------------------------------------------------------------------------
-
-/// 渲染器。内部持有 minijinja `Environment`，并注册一组数学过滤器和 NC 数值格式化过滤器。
-///
-/// 数学过滤器集（全部基于 Rust 标准库 `f64`，零额外依赖）：
-/// `sin` `cos` `tan` `asin` `acos` `atan` `sqrt` `exp` `ln` `log10` `pow` `floor` `ceil`
-///
-/// NC 数值格式化过滤器（G-code 专用）：
-/// - `nc_fixed(N)`：固定小数位，`{{ x | nc_fixed(3) }}` → `21.000`
-/// - `nc_strip`：去尾零，`{{ x | nc_strip }}` → `21`（输入 21.0）
-/// - `nc_pad(N)`：前导零填充，`{{ n | nc_pad(4) }}` → `0001`（程序号/行号用）
-///
-/// 所有数学过滤器和 NC 过滤器对结果做**有限性校验**：一旦产生 `NaN`/`Inf`（如 `sqrt(-1)`、
-/// `asin(2)`、`ln(0)`），渲染立即失败并报 [`TplError::Render`]，避免非法坐标静默写入 G-code。
-#[derive(Debug)]
-pub struct Renderer {
-    env: Environment<'static>,
-    /// 宽松模式下未定义变量渲染为空字符串（而非报错）。
-    lenient: bool,
-}
-
-/// 数学过滤器结果校验：`NaN`/`Inf` 一律转为渲染错误，防止非法数值进入 G-code。
-fn checked_math(value: f64, filter: &'static str) -> Result<f64, minijinja::Error> {
-    if value.is_finite() {
-        Ok(value)
-    } else {
-        Err(minijinja::Error::new(
-            minijinja::ErrorKind::InvalidOperation,
-            format!("数学过滤器 `{filter}` 输出非有限数（NaN/Inf），拒绝渲染"),
-        ))
-    }
-}
-
-// ---------------------------------------------------------------------------
-// NC 数值格式化过滤器（G-code 专用）
-// ---------------------------------------------------------------------------
-
-/// 固定小数位：`{{ x | nc_fixed(3) }}` → `21.000`。
-///
-/// 用于需要固定精度的坐标值（如 `X21.000 Y15.500`）。非有限数（NaN/Inf）报错。
-fn filter_nc_fixed(value: f64, decimals: usize) -> Result<String, minijinja::Error> {
-    if !value.is_finite() {
-        return Err(minijinja::Error::new(
-            minijinja::ErrorKind::InvalidOperation,
-            "nc_fixed: 输入非有限数（NaN/Inf）",
-        ));
-    }
-    Ok(format!("{:.*}", decimals, value))
-}
-
-/// 去尾零：`{{ x | nc_strip }}` → `21`（输入 21.0）或 `21.5`（输入 21.50）。
-///
-/// 用于不需要固定精度的数值，避免输出 `X21.0` 而期望 `X21`。非有限数报错。
-fn filter_nc_strip(value: f64) -> Result<String, minijinja::Error> {
-    if !value.is_finite() {
-        return Err(minijinja::Error::new(
-            minijinja::ErrorKind::InvalidOperation,
-            "nc_strip: 输入非有限数（NaN/Inf）",
-        ));
-    }
-    // Rust f64 Display 已自动去尾零：21.0 → "21"，21.50 → "21.5"
-    Ok(format!("{}", value))
-}
-
-/// 前导零填充：`{{ n | nc_pad(4) }}` → `0001`（输入 1）。
-///
-/// 用于程序号（`O0001`）、行号（`N0010`）等需要固定宽度的**非负**整数。
-/// 输入为浮点数时截断小数部分取整。负数或非有限数报错
-/// （负数会拼出 `O-001` 这类非法 G-code）。
-fn filter_nc_pad(value: f64, width: usize) -> Result<String, minijinja::Error> {
-    if !value.is_finite() {
-        return Err(minijinja::Error::new(
-            minijinja::ErrorKind::InvalidOperation,
-            "nc_pad: 输入非有限数（NaN/Inf）",
-        ));
-    }
-    if value < 0.0 {
-        return Err(minijinja::Error::new(
-            minijinja::ErrorKind::InvalidOperation,
-            "nc_pad: 输入为负数（程序号/行号不可为负）",
-        ));
-    }
-    if width == 0 {
-        return Err(minijinja::Error::new(
-            minijinja::ErrorKind::InvalidOperation,
-            "nc_pad: 宽度不能为 0",
-        ));
-    }
-    let int_val = value.trunc() as i64;
-    Ok(format!("{:0>width$}", int_val, width = width))
-}
-
-impl Default for Renderer {
-    fn default() -> Self {
-        Self::new()
-    }
-}
-
-impl Renderer {
-    /// 新建渲染器（带数学过滤器集）。
-    ///
-    /// 默认使用 **Strict** 未定义变量策略：模板引用缺失变量时直接渲染失败并报错，
-    /// 避免静默输出不完整 G-code（与 `jinja2.meta` + `StrictUndefined` 的做法一致）。
-    pub fn new() -> Self {
-        let mut env = Environment::new();
-        env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
-        env.add_filter("sin", |v: f64| checked_math(v.sin(), "sin"));
-        env.add_filter("cos", |v: f64| checked_math(v.cos(), "cos"));
-        env.add_filter("tan", |v: f64| checked_math(v.tan(), "tan"));
-        env.add_filter("asin", |v: f64| checked_math(v.asin(), "asin"));
-        env.add_filter("acos", |v: f64| checked_math(v.acos(), "acos"));
-        env.add_filter("atan", |v: f64| checked_math(v.atan(), "atan"));
-        env.add_filter("sqrt", |v: f64| checked_math(v.sqrt(), "sqrt"));
-        env.add_filter("exp", |v: f64| checked_math(v.exp(), "exp"));
-        env.add_filter("ln", |v: f64| checked_math(v.ln(), "ln"));
-        env.add_filter("log10", |v: f64| checked_math(v.log10(), "log10"));
-        env.add_filter("pow", |v: f64, e: f64| checked_math(v.powf(e), "pow"));
-        env.add_filter("floor", |v: f64| checked_math(v.floor(), "floor"));
-        env.add_filter("ceil", |v: f64| checked_math(v.ceil(), "ceil"));
-        // NC 数值格式化过滤器（G-code 专用）
-        env.add_filter("nc_fixed", filter_nc_fixed);
-        env.add_filter("nc_strip", filter_nc_strip);
-        env.add_filter("nc_pad", filter_nc_pad);
-        Self {
-            env,
-            lenient: false,
-        }
-    }
-
-    /// 切换为**宽松模式**：模板中未定义变量渲染为空字符串，而非报错。
-    ///
-    /// 消费式 builder 方法，便于链式构造：`Renderer::new().with_lenient()`。
-    /// 默认构造已是严格模式，此方法用于需要宽松渲染的场景（如先渲染、后由
-    /// [`extract_undeclared`] 校验必选参数的流程）。
-    pub fn with_lenient(mut self) -> Self {
-        self.env
-            .set_undefined_behavior(minijinja::UndefinedBehavior::Lenient);
-        self.lenient = true;
-        self
-    }
-
-    /// 显式切换为**严格模式**（默认）：模板中未定义变量渲染报错。
-    ///
-    /// 消费式 builder 方法，便于链式构造：`Renderer::new().with_strict()`。
-    pub fn with_strict(mut self) -> Self {
-        self.env
-            .set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
-        self.lenient = false;
-        self
-    }
-
-    /// 当前是否为宽松模式（未定义变量渲染为空而非报错）。
-    pub fn is_lenient(&self) -> bool {
-        self.lenient
-    }
-
-    /// 渲染模板。`context` 用 `minijinja::context!` 宏或 `Value::from_serialize` 构造。
-    ///
-    /// 此方法渲染**单段字符串**模板，不涉及模板间引用。如需 `{% include %}` /
-    /// `{% extends %}` / `{% import %}`，请先用 [`add_template`](Self::add_template)
-    /// 或 [`set_path_loader`](Self::set_path_loader) 注册模板，再调用
-    /// [`render_template`](Self::render_template)。
-    pub fn render(
-        &self,
-        source: &str,
-        name: &str,
-        context: &minijinja::Value,
-    ) -> Result<String, TplError> {
-        let tmpl = self
-            .env
-            .template_from_named_str(name, source)
-            .map_err(|err| from_minijinja_error(err, name, Some(source)))?;
-        tmpl.render(context)
-            .map_err(|err| from_minijinja_error(err, name, Some(source)))
-    }
-
-    /// 注册一个内存模板（owned 字符串，无生命周期约束）。
-    ///
-    /// 注册后可通过 [`render_template`](Self::render_template) 按名称渲染，
-    /// 且模板内的 `{% include "name" %}` / `{% extends "name" %}` /
-    /// `{% import "name" %}` 能正确解析到已注册的模板。
-    pub fn add_template(
-        &mut self,
-        name: impl Into<String>,
-        source: impl Into<String>,
-    ) -> Result<(), TplError> {
-        let name = name.into();
-        let source = source.into();
-        self.env
-            .add_template_owned(name.clone(), source.clone())
-            .map_err(|err| from_minijinja_error(err, &name, Some(&source)))
-    }
-
-    /// 从文件系统目录动态加载模板。
-    ///
-    /// 目录下的文件按**文件名（含扩展名）**作为模板名引用，例如
-    /// `templates/sub.gcode` 可被 `{% include "sub.gcode" %}` 引用。
-    /// 模板按需加载并缓存，同一名称只加载一次。
-    ///
-    /// # 安全性
-    ///
-    /// 模板内容视为**可信输入**：模板名直接与目录拼接解析路径，
-    /// `{% include "../x" %}` 这类相对路径可以加载目录之外的文件。
-    /// 请勿将不受信任来源的模板交给本加载器。
-    pub fn set_path_loader(&mut self, dir: impl AsRef<Path>) {
-        let dir = dir.as_ref().to_path_buf();
-        self.env.set_loader(minijinja::path_loader(dir));
-    }
-
-    /// 渲染已注册或已加载的模板（支持 `include` / `extends` / `import`）。
-    ///
-    /// 模板需先通过 [`add_template`](Self::add_template) 注册，或通过
-    /// [`set_path_loader`](Self::set_path_loader) 配置目录加载。
-    pub fn render_template(
-        &self,
-        name: &str,
-        context: &minijinja::Value,
-    ) -> Result<String, TplError> {
-        let tmpl = self
-            .env
-            .get_template(name)
-            .map_err(|err| from_minijinja_error(err, name, None))?;
-        tmpl.render(context)
-            .map_err(|err| from_minijinja_error(err, name, Some(tmpl.source())))
-    }
-}
+#[cfg(test)]
+use error::{extract_identifier_at, extract_quoted, extract_undefined_var_name};
 
 #[cfg(test)]
 mod tests {
@@ -1204,6 +265,134 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
     }
 
     #[test]
+    fn from_import_alias_binds_alias_not_original() {
+        // {% from "m" import helper as h %}：绑定的是别名 h（对齐 minijinja 语义），
+        // helper 与 h 都不应记为未声明变量
+        let src = r#"{% from "macros.j2" import helper as h %}{{ h() }}"#;
+        let vars = extract_undeclared(&parse(src, "alias.j2").unwrap());
+        assert!(
+            vars.iter().all(|v| v.name != "h" && v.name != "helper"),
+            "导入绑定不应记为未声明: {vars:?}"
+        );
+        // 渲染端对齐：别名可调用（严格模式不报 undefined）
+        let mut r = Renderer::new();
+        r.add_template("macros.j2", "{% macro helper() %}H{% endmacro %}")
+            .unwrap();
+        let out = r.render(src, "alias.j2", &minijinja::context! {}).unwrap();
+        assert_eq!(out, "H");
+    }
+
+    #[test]
+    fn set_inside_block_does_not_leak() {
+        // block 体是独立作用域（对齐 minijinja VM 的帧语义）：
+        // 块内 set 的名字块外不可见，块外引用按未声明处理
+        let src = "{% block prep %}{% set feed = 0.1 %}{% endblock %}G1 F{{ feed }}";
+        let vars = extract_undeclared(&parse(src, "blk.j2").unwrap());
+        assert!(
+            vars.iter().any(|v| v.name == "feed" && !v.optional),
+            "块内 set 不应消除块外引用的未声明性: {vars:?}"
+        );
+        // 渲染端对齐：严格模式报未定义；宽松模式留空（G1 F，而非 G1 F0.1）
+        let mut strict = Renderer::new();
+        strict.add_template("blk.j2", src).unwrap();
+        assert!(matches!(
+            strict.render_template("blk.j2", &minijinja::context! {}),
+            Err(TplError::UndefinedVariable { .. })
+        ));
+        let mut lenient = Renderer::new().with_lenient();
+        lenient.add_template("blk.j2", src).unwrap();
+        let out = lenient
+            .render_template("blk.j2", &minijinja::context! {})
+            .unwrap();
+        assert_eq!(out, "G1 F");
+    }
+
+    #[test]
+    fn undefined_var_in_included_template_not_recovered_from_main_source() {
+        // extends 的父模板块内未定义变量：错误可能未包装直接冒泡（携带父模板
+        // 名与字节范围），此时不能用主（子）模板源码恢复变量名（范围错位会
+        // 得到无关标识符，宁缺毋错）
+        let mut r = Renderer::new();
+        r.add_template("base.j2", "{% block c %}{{ missing }}{% endblock %}")
+            .unwrap();
+        r.add_template("child.j2", "{% extends \"base.j2\" %}")
+            .unwrap();
+        let err = r
+            .render_template("child.j2", &minijinja::context! {})
+            .unwrap_err();
+        match err {
+            TplError::UndefinedVariable { name, variable, .. } => {
+                assert_eq!(name, "base.j2");
+                assert_eq!(variable, "", "不应从子模板源码错误恢复变量名");
+            }
+            TplError::Render { .. } => {
+                // minijinja 将子模板错误包为 BadInclude/EvalBlock 时，顶层即
+                // Render 变体、不触发变量名恢复——同样符合"不错位恢复"
+            }
+            other => panic!("应为 UndefinedVariable/Render: {other:?}"),
+        }
+        // include 路径：子模板错误被包为 BadInclude，消息可定位子模板名
+        let mut r2 = Renderer::new();
+        r2.add_template("sub.j2", "{{ missing }}").unwrap();
+        r2.add_template("main.j2", "{% include \"sub.j2\" %}")
+            .unwrap();
+        let err = r2
+            .render_template("main.j2", &minijinja::context! {})
+            .unwrap_err();
+        match err {
+            TplError::Render { name, message } => {
+                assert_eq!(name, "main.j2");
+                assert!(message.contains("sub.j2"), "消息应可定位子模板: {message}");
+            }
+            other => panic!("应为 Render（BadInclude 包装）: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn parse_error_column_counts_chars_not_bytes() {
+        // 列号按字符计（与 Variable.col 的 minijinja span 口径一致）：
+        // 两个仅前缀字节构成不同、字符构成相同的模板，错误列应相同
+        let a = parse("( xx ) {{ 1 + }}", "a.j2").unwrap_err();
+        let b = parse("( 中文 ) {{ 1 + }}", "b.j2").unwrap_err();
+        let (la, ca) = match a {
+            TplError::Parse { line, col, .. } => (line, col),
+            other => panic!("应为 Parse 错误: {other:?}"),
+        };
+        let (lb, cb) = match b {
+            TplError::Parse { line, col, .. } => (line, col),
+            other => panic!("应为 Parse 错误: {other:?}"),
+        };
+        assert_eq!(la, lb);
+        assert!(ca > 1, "应携带字节范围（col 非回退值 1）");
+        assert_eq!(
+            ca, cb,
+            "等字符数前缀（'( xx ) ' 与 '( 中文 ) '）后的同一语法错误，列号应按字符口径一致"
+        );
+    }
+
+    #[test]
+    fn extract_template_refs_static_names() {
+        // 静态（字符串字面量）引用按出现顺序去重；动态引用（变量名）忽略
+        let ast = parse(
+            "{% include \"a.j2\" %}{% include \"a.j2\" %}{% include name %}",
+            "r.j2",
+        )
+        .unwrap();
+        assert_eq!(extract_template_refs(&ast), vec!["a.j2".to_string()]);
+
+        // 嵌套语句体内与 import/from 同样收集
+        let ast = parse(
+            "{% for i in items %}{% include \"b.j2\" %}{% endfor %}",
+            "r2.j2",
+        )
+        .unwrap();
+        assert_eq!(extract_template_refs(&ast), vec!["b.j2".to_string()]);
+
+        let ast = parse("{% from \"d.j2\" import x %}", "r3.j2").unwrap();
+        assert_eq!(extract_template_refs(&ast), vec!["d.j2".to_string()]);
+    }
+
+    #[test]
     fn render_template_not_found_errors() {
         let r = Renderer::new();
         let ctx = minijinja::context! {};
@@ -1233,6 +422,48 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
         let ctx = minijinja::context! { x => 42.0 };
         let out = r.render("X{{ x }}", "s.j2", &ctx).unwrap();
         assert_eq!(out, "X42.0");
+    }
+
+    #[test]
+    fn nc_pad_huge_value_rejects_overflow() {
+        // 饱和转换（1e300 → i64::MAX）应报错，而非静默输出错误数字
+        let r = Renderer::new();
+        let ctx = minijinja::context! { x => 1e300 };
+        let err = r.render("{{ x | nc_pad(8) }}", "p.j2", &ctx).unwrap_err();
+        assert!(err.to_string().contains("整数范围"), "应报溢出错误: {err}");
+    }
+
+    #[test]
+    fn nc_fixed_decimals_overflow_rejected() {
+        // 超大小数位会触发巨量分配/进程 abort：应报错
+        let r = Renderer::new();
+        let ctx = minijinja::context! { x => 21.0 };
+        let err = r
+            .render("{{ x | nc_fixed(999999999) }}", "f.j2", &ctx)
+            .unwrap_err();
+        assert!(err.to_string().contains("小数位"), "应报上限错误: {err}");
+    }
+
+    #[test]
+    fn nc_pad_width_overflow_rejected() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! { n => 1.0 };
+        let err = r
+            .render("{{ n | nc_pad(999999999) }}", "p2.j2", &ctx)
+            .unwrap_err();
+        assert!(err.to_string().contains("宽度"), "应报上限错误: {err}");
+    }
+
+    #[test]
+    fn add_template_same_name_replaces_silently() {
+        // 同名注册静默替换（后者覆盖前者）
+        let mut r = Renderer::new();
+        r.add_template("dup.j2", "ONE").unwrap();
+        r.add_template("dup.j2", "TWO {{ x }}").unwrap();
+        let out = r
+            .render_template("dup.j2", &minijinja::context! { x => 2 })
+            .unwrap();
+        assert_eq!(out, "TWO 2");
     }
 
     // -----------------------------------------------------------------------

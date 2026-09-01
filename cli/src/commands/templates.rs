@@ -49,15 +49,34 @@ fn list(ctx: &Ctx, args: &TemplatesListArgs) -> Result<(), CliError> {
     Ok(())
 }
 
-/// 解析模板源码与参数规格：`show` / `inspect` / `validate` 共用。
+/// 解析模板源码与参数规格：`show` / `inspect` 共用。
 ///
-/// 返回 `(模板名, 源码, 参数规格)`；文件模板无规格 → `None`，
-/// 注册表模板 → `Some(params)`。
+/// 返回 `(模板名, 源码, 参数规格, 系统变量)`；文件模板无规格 → `None`。
+/// 优先级与 `render`/`validate` 一致：**已注册模板名（内置/目录）→ 文件路径**，
+/// 保证"查看的源码"与"实际渲染的源码"是同一份。
 pub fn resolve_source(
     ctx: &Ctx,
     name_or_path: &str,
-) -> Result<(String, String, Option<Vec<nctool_core::ParamSpec>>), CliError> {
-    // 1) 文件路径 → 读源码（名称用文件名）
+) -> Result<
+    (
+        String,
+        String,
+        Option<Vec<nctool_core::ParamSpec>>,
+        Vec<String>,
+    ),
+    CliError,
+> {
+    // 1) 已注册模板（内置 / 目录）
+    let gen = ctx.build_registry()?;
+    if let Some(entry) = gen.registry().get(name_or_path) {
+        return Ok((
+            entry.name.clone(),
+            entry.source_text.clone(),
+            Some(entry.params.clone()),
+            gen.registry().system_vars().to_vec(),
+        ));
+    }
+    // 2) 文件路径 → 读源码（名称用文件名）
     if let Some(path) = ctx.find_template_file(name_or_path) {
         let source = std::fs::read_to_string(&path)
             .map_err(|e| CliError::new("io", format!("读取模板失败 {}: {e}", path.display())))?;
@@ -65,35 +84,34 @@ pub fn resolve_source(
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| name_or_path.to_string());
-        return Ok((name, source, None));
+        return Ok((name, source, None, gen.registry().system_vars().to_vec()));
     }
-    // 2) 已注册模板（内置 / 目录）
-    let gen = ctx.build_registry()?;
-    let entry = gen.registry().get(name_or_path).ok_or_else(|| {
-        CliError::new("template_not_found", format!("模板不存在: {name_or_path}"))
-    })?;
-    Ok((
-        entry.name.clone(),
-        entry.source_text.clone(),
-        Some(entry.params.clone()),
+    Err(CliError::new(
+        "template_not_found",
+        format!("模板不存在: {name_or_path}"),
     ))
 }
 
 /// 提取模板变量（必选/可选 + 行列定位）。
 ///
 /// 过滤系统注入变量（如 `machine`）——它们由管线注入上下文，不算外部必选参数。
-pub fn extract_variables(source: &str, name: &str) -> Result<Vec<nctool_tpl::Variable>, CliError> {
+/// `system_vars` 取自注册表（单一事实源，避免 CLI 侧常量与 core 漂移）。
+pub fn extract_variables(
+    source: &str,
+    name: &str,
+    system_vars: &[String],
+) -> Result<Vec<nctool_tpl::Variable>, CliError> {
     let ast = nctool_tpl::parse(source, name)?;
     let vars = extract_undeclared(&ast);
     Ok(vars
         .into_iter()
-        .filter(|v| !super::SYSTEM_VARS.contains(&v.name.as_str()))
+        .filter(|v| !system_vars.iter().any(|s| s == &v.name))
         .collect())
 }
 
 fn show(ctx: &Ctx, name_or_path: &str) -> Result<(), CliError> {
-    let (name, source, _) = resolve_source(ctx, name_or_path)?;
-    let vars = extract_variables(&source, &name)?;
+    let (name, source, _, system_vars) = resolve_source(ctx, name_or_path)?;
+    let vars = extract_variables(&source, &name, &system_vars)?;
 
     let required: Vec<_> = vars.iter().filter(|v| !v.optional).collect();
     let optional: Vec<_> = vars.iter().filter(|v| v.optional).collect();
@@ -146,8 +164,8 @@ fn scaffold_source(name: &str, category: &str) -> String {
          ( 参数规格注释: 模板引用的变量即参数；无 default 兜底的为必选 )\n\
          ( 示例: 使用内置数学过滤器与 NC 数值格式化过滤器 )\n\
          \n\
-         O{{{{ prog | nc_pad(4) }}}}\n\
-         G{{{{ machine.coordinate_system }}}}\n\
+         {{{{ machine.program_prefix }}}}{{{{ prog | nc_pad(machine.program_digits | int) }}}}\n\
+         {{{{ machine.coordinate_system }}}}\n\
          G0 X{{{{ x | nc_fixed(3) }}}} Y{{{{ y | nc_fixed(3) }}}}\n\
          G1 Z{{{{ depth | nc_fixed(3) }}}} F{{{{ feed | nc_fixed(3) }}}}\n\
          M5\nM9\n\
@@ -170,7 +188,13 @@ fn new(ctx: &Ctx, args: &TemplatesNewArgs) -> Result<(), CliError> {
     std::fs::create_dir_all(&dir)
         .map_err(|e| CliError::new("io", format!("创建目录失败 {}: {e}", dir.display())))?;
 
-    let path = dir.join(format!("{}.j2", args.name));
+    // 名字已带 .j2 时不再追加扩展名（避免生成 a.j2.j2）
+    let file_name = if args.name.to_lowercase().ends_with(".j2") {
+        args.name.clone()
+    } else {
+        format!("{}.j2", args.name)
+    };
+    let path = dir.join(file_name);
     if path.exists() {
         return Err(CliError::new(
             "io",

@@ -37,9 +37,21 @@ impl CliError {
         self
     }
 
-    /// 命令失败对应的进程退出码（1 = 校验/执行失败）。
+    /// 命令失败对应的进程退出码。
+    ///
+    /// 矩阵：`0` 成功；`1` 参数校验未通过；`2` 参数/用法错误（与 clap 一致）；
+    /// `3` IO 失败；`4` 配置错误；`5` 模板/机床未找到；`6` 渲染失败；
+    /// 其余分类兜底归 `1`。
     pub fn exit_code(&self) -> u8 {
-        1
+        match self.kind {
+            "validation" => 1,
+            "args" => 2,
+            "io" => 3,
+            "config" => 4,
+            "template_not_found" | "machine_not_found" => 5,
+            "render" => 6,
+            _ => 1,
+        }
     }
 }
 
@@ -59,12 +71,14 @@ impl From<std::io::Error> for CliError {
 
 impl From<RegistryError> for CliError {
     fn from(err: RegistryError) -> Self {
-        let kind = match err {
+        // RegistryError 为 non_exhaustive：未来新增变体归入 registry 分类
+        let kind = match &err {
             RegistryError::NotFound(_) => "template_not_found",
             RegistryError::Duplicate(_) => "template_duplicate",
             RegistryError::EmptySource(_) => "template_empty",
-            RegistryError::Compile(_) => "template_compile",
+            RegistryError::Compile { .. } => "template_compile",
             RegistryError::Io(_) => "io",
+            _ => "registry",
         };
         CliError::new(kind, err.to_string())
     }
@@ -72,12 +86,15 @@ impl From<RegistryError> for CliError {
 
 impl From<PipelineError> for CliError {
     fn from(err: PipelineError) -> Self {
+        // PipelineError 为 non_exhaustive：未来新增变体归入 pipeline 分类
         match err {
             PipelineError::TemplateNotFound(name) => {
                 CliError::new("template_not_found", format!("模板不存在: {name}"))
             }
             PipelineError::Validation(report) => CliError::new("validation", report.summary()),
             PipelineError::Render(err) => CliError::new("render", err.to_string()),
+            PipelineError::Registry(err) => CliError::new("registry", err.to_string()),
+            _ => CliError::new("pipeline", err.to_string()),
         }
     }
 }
@@ -104,6 +121,21 @@ impl From<&FormatArg> for OutputStyle {
     }
 }
 
+/// 向 stdout 写入文本。
+///
+/// 断管道（`BrokenPipe`，如 `nctool ... | head`）静默忽略、进程正常退出；
+/// 其余写入错误打印到 stderr。避免 `println!` 在管道下游提前关闭时以 panic 收场。
+fn write_stdout_quiet(text: &str) {
+    use std::io::Write;
+    let stdout = std::io::stdout();
+    let mut lock = stdout.lock();
+    if let Err(e) = lock.write_all(text.as_bytes()) {
+        if e.kind() != std::io::ErrorKind::BrokenPipe {
+            eprintln!("error: 输出失败: {e}");
+        }
+    }
+}
+
 impl OutputStyle {
     /// 输出错误：text → stderr 单行；json → 结构化错误对象（stdout）。
     ///
@@ -121,7 +153,8 @@ impl OutputStyle {
                     "ok": false,
                     "error": { "kind": err.kind, "message": err.message },
                 });
-                println!("{}", serde_json::to_string_pretty(&obj).unwrap_or_default());
+                let text = serde_json::to_string_pretty(&obj).unwrap_or_default();
+                write_stdout_quiet(&format!("{text}\n"));
             }
         }
     }
@@ -130,14 +163,16 @@ impl OutputStyle {
     pub fn print_ok<T: serde::Serialize>(&self, text: &str, data: T) {
         match self {
             OutputStyle::Text => {
-                print!("{text}");
+                let mut buf = text.to_string();
                 if !text.ends_with('\n') {
-                    println!();
+                    buf.push('\n');
                 }
+                write_stdout_quiet(&buf);
             }
             OutputStyle::Json => {
                 let obj = serde_json::json!({ "ok": true, "data": data });
-                println!("{}", serde_json::to_string_pretty(&obj).unwrap_or_default());
+                let text = serde_json::to_string_pretty(&obj).unwrap_or_default();
+                write_stdout_quiet(&format!("{text}\n"));
             }
         }
     }

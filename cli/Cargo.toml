@@ -2,6 +2,7 @@
 name = "nctool-cli"
 version = "0.2.0"
 edition = "2021"
+rust-version = "1.82"
 description = "nctool 命令行工具：模板浏览 / 变量提取 / 参数校验 / G-code 生成"
 license = "MIT"
 repository = "https://github.com/lzg9698-code/nctool-tpl"

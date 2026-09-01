@@ -97,7 +97,11 @@ pub struct ParamSpec {
     pub kind: ParamKind,
     /// 是否必选（**文档性声明**；实际必选性由模板引用 + 是否有 default 决定）
     pub required: bool,
-    /// 默认值（可选参数缺失时的兜底；与 `required` 互斥）
+    /// 默认值（可选参数缺失时的兜底）。
+    ///
+    /// 与 `required` **无互斥约束**：`required` 仅是文档性声明，实际必选性由
+    /// 模板引用决定；两者可同时声明（`required=true + default` 意为"文档上
+    /// 必选，但缺失时可用默认值兜底"）。
     pub default: Option<ParamValue>,
     /// 用途说明（文档/错误提示用）
     pub description: String,
@@ -214,6 +218,61 @@ impl MachineConfig {
     pub fn get(&self, key: &str) -> Option<&str> {
         self.config.get(key).map(String::as_str)
     }
+}
+
+/// 应用参数规格的默认值兜底（渲染前）：规格声明了 `default`、且参数集未
+/// 提供的参数，渲染前自动填入默认值（用户提供的值优先，不被覆盖）。
+///
+/// 校验层（将规格默认值视为已提供）与渲染层共用本函数，保证
+/// "校验通过 ⇒ 渲染不因缺参失败" 的口径一致。
+///
+/// 优先级：**用户提供的值 > 规格默认值 > 模板内联 `default`**——规格默认值
+/// 注入后，模板中的 `{{ x | default(v) }}` 内联兜底不再触发（且规格默认的
+/// 数值是 f64，内联默认是字面量，两者格式化输出可能不同）。
+pub(crate) fn apply_spec_defaults(specs: &[ParamSpec], params: &ParameterSet) -> ParameterSet {
+    let mut effective = params.clone();
+    for spec in specs {
+        if !effective.contains(&spec.name) {
+            if let Some(default) = &spec.default {
+                effective.values.insert(spec.name.clone(), default.clone());
+            }
+        }
+    }
+    effective
+}
+
+/// 构建渲染上下文：`params`（裸值）+ `machine`（机床配置对象）。
+///
+/// [`ParamValue`] 以**裸值**注入（数值→数字、字符串→字符串、布尔→布尔），
+/// 使模板能直接以 `{{ x }}` 引用参数。数值直接经 minijinja 序列化，**不经过
+/// JSON 中间层**，因此 NaN/Inf 不会被静默篡改（校验层已拒绝它们进入管线）。
+///
+/// `machine` 对象包含 `config` 的全部键值（**字符串**，如 `{{ machine.rapid }}`）
+/// 以及元信息 `id` / `vendor` / `model`。若 `config` 中存在同名键，元信息优先。
+/// 注意 `config` 值均为字符串，模板中做数值比较需先转换（如 `| int`）。
+pub(crate) fn build_render_context(
+    params: &ParameterSet,
+    machine: &MachineConfig,
+) -> minijinja::Value {
+    let mut map: std::collections::BTreeMap<String, minijinja::Value> =
+        std::collections::BTreeMap::new();
+    for (k, v) in &params.values {
+        map.insert(k.clone(), param_to_minijinja(v));
+    }
+    // 注入 machine 对象（config 键值 + 元信息，模板通过 {{ machine.xxx }} 引用）
+    let mut machine_obj: std::collections::BTreeMap<&str, minijinja::Value> =
+        std::collections::BTreeMap::new();
+    for (k, v) in &machine.config {
+        machine_obj.insert(k.as_str(), minijinja::Value::from(v.as_str()));
+    }
+    machine_obj.insert("id", minijinja::Value::from(machine.id.as_str()));
+    machine_obj.insert("vendor", minijinja::Value::from(machine.vendor.as_str()));
+    machine_obj.insert("model", minijinja::Value::from(machine.model.as_str()));
+    map.insert(
+        "machine".to_string(),
+        minijinja::Value::from_serialize(&machine_obj),
+    );
+    minijinja::Value::from_serialize(&map)
 }
 
 /// 刀具。

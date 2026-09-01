@@ -1,4 +1,4 @@
-//! 配置层叠加载：全局 `~/.config/nctool/config.toml` + 项目 `./nctool.toml`。
+//! 配置层叠加载：全局（平台约定路径）+ 项目 `./nctool.toml`（向上递归查找）。
 //!
 //! 项目配置覆盖全局配置（模板目录、默认机床、自定义机床、默认生成选项）。
 
@@ -24,17 +24,53 @@ pub struct NctoolConfig {
     pub machine: BTreeMap<String, MachineConfig>,
 }
 
-/// 全局配置路径：`$HOME/.config/nctool/config.toml`。
-///
-/// Windows 无 `HOME` 时回退 `USERPROFILE`。
-fn global_config_path() -> Option<PathBuf> {
-    let home = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE"))?;
-    Some(
-        PathBuf::from(home)
-            .join(".config")
-            .join("nctool")
-            .join("config.toml"),
-    )
+/// 已加载的层叠配置（含来源路径，供 `config show` 排障展示）。
+#[derive(Debug, Clone, Default)]
+pub struct LoadedConfig {
+    /// 实际生效的全局配置文件路径（未发现则为 `None`）
+    pub global_path: Option<PathBuf>,
+    /// 实际生效的项目配置文件路径（未发现则为 `None`）
+    pub project_path: Option<PathBuf>,
+    /// 层叠合并后的配置
+    pub merged: NctoolConfig,
+}
+
+/// 全局配置候选路径（按优先级）：
+/// - Windows：`%APPDATA%\nctool\config.toml`
+/// - Unix：`$XDG_CONFIG_HOME/nctool/config.toml`
+/// - 兜底：`$HOME/.config/nctool/config.toml`（兼容既有路径；Windows 无 HOME 时取 `USERPROFILE`）
+fn global_config_candidates() -> Vec<PathBuf> {
+    let mut paths = Vec::new();
+    if cfg!(windows) {
+        if let Some(app) = std::env::var_os("APPDATA") {
+            paths.push(PathBuf::from(app).join("nctool").join("config.toml"));
+        }
+    } else if let Some(xdg) = std::env::var_os("XDG_CONFIG_HOME") {
+        paths.push(PathBuf::from(xdg).join("nctool").join("config.toml"));
+    }
+    if let Some(home) = std::env::var_os("HOME").or_else(|| std::env::var_os("USERPROFILE")) {
+        paths.push(
+            PathBuf::from(home)
+                .join(".config")
+                .join("nctool")
+                .join("config.toml"),
+        );
+    }
+    paths
+}
+
+/// 项目配置路径：从当前目录**向上递归**查找（到文件系统根为止），与 git 式
+/// 工具的直觉一致——在项目子目录执行命令也能命中仓库根的 `nctool.toml`。
+fn find_project_config() -> Option<PathBuf> {
+    let cwd = std::env::current_dir().ok()?;
+    let mut dir = cwd.as_path();
+    loop {
+        let candidate = dir.join("nctool.toml");
+        if candidate.is_file() {
+            return Some(candidate);
+        }
+        dir = dir.parent()?;
+    }
 }
 
 fn read_config_file(path: &Path) -> Result<Option<NctoolConfig>, CliError> {
@@ -52,20 +88,21 @@ fn read_config_file(path: &Path) -> Result<Option<NctoolConfig>, CliError> {
     Ok(Some(cfg))
 }
 
-/// 加载层叠配置：(全局, 项目)。
-pub fn load_config() -> Result<(Option<NctoolConfig>, Option<NctoolConfig>), CliError> {
-    let global = match global_config_path() {
-        Some(path) => read_config_file(&path)?,
-        None => None,
+/// 加载层叠配置（全局候选取第一个存在的；项目配置向上递归查找）。
+pub fn load() -> Result<LoadedConfig, CliError> {
+    let mut global_path = None;
+    let mut global = None;
+    for path in global_config_candidates() {
+        if let Some(cfg) = read_config_file(&path)? {
+            global_path = Some(path);
+            global = Some(cfg);
+            break;
+        }
+    }
+    let (project_path, project) = match find_project_config() {
+        Some(path) => (Some(path.clone()), read_config_file(&path)?),
+        None => (None, None),
     };
-    let project_path = PathBuf::from("nctool.toml");
-    let project = read_config_file(&project_path)?;
-    Ok((global, project))
-}
-
-/// 合并全局与项目配置：项目覆盖全局的同名标量；自定义机床表按 id 合并（项目覆盖同名）。
-pub fn merged_config() -> Result<NctoolConfig, CliError> {
-    let (global, project) = load_config()?;
     let mut merged = global.unwrap_or_default();
     if let Some(proj) = project {
         if proj.template_dir.is_some() {
@@ -78,7 +115,11 @@ pub fn merged_config() -> Result<NctoolConfig, CliError> {
             merged.machine.insert(id, cfg);
         }
     }
-    Ok(merged)
+    Ok(LoadedConfig {
+        global_path,
+        project_path,
+        merged,
+    })
 }
 
 /// 示例配置文件内容（`nctool config init` 生成）。

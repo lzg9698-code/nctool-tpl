@@ -122,7 +122,7 @@ pub struct TemplatesNewArgs {
     /// 分类
     #[arg(long, value_enum, default_value_t = CategoryArg::General)]
     pub category: CategoryArg,
-    /// 输出目录（默认 ./templates）
+    /// 输出目录（默认：配置的 template_dir，未配置时 ./templates）
     #[arg(long)]
     pub dir: Option<PathBuf>,
 }
@@ -184,7 +184,8 @@ pub struct InspectArgs {
 /// 校验/渲染共享的参数输入选项。
 #[derive(Debug, Args)]
 pub struct ParamInputArgs {
-    /// 参数 k=v（类型自动推断：数值/字符串/布尔）
+    /// 参数 k=v（类型自动推断：数值/字符串/布尔；k:s=v 强制字符串、
+    /// k:n=v 强制数值、k:b=v 强制布尔；前导零纯数字按字符串处理）
     #[arg(long = "param", value_name = "K=V")]
     pub param: Vec<String>,
 
@@ -230,7 +231,7 @@ pub struct RenderArgs {
     #[arg(long)]
     pub strip_blank: bool,
 
-    /// 宽松模式：未定义变量渲染为空（缺失参数不再阻断）
+    /// 宽松模式：未定义变量渲染为空字符串（经过滤器引用的变量仍需具体值）
     #[arg(long)]
     pub lenient: bool,
 }

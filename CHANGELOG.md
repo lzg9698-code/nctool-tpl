@@ -10,6 +10,132 @@
 
 ---
 
+## [未发布]
+
+全 workspace 第三轮彻底代码审查修复（P1×3 / P2×10；P3 改进见下）。
+
+### P3 改进（同轮审查补录）
+
+**nctool-tpl**
+
+- `nc_pad` 超范围值（如 `1e300`）不再饱和截断为 `i64::MAX`，直接报错
+- `nc_fixed(小数位)` / `nc_pad(宽度)` 设上限（32 / 1024），消除巨量分配导致的进程 abort
+- 文档明确有限性防线范围：仅覆盖本库注册的过滤器，裸 `{{ x }}` 与内建操作不保护
+- `add_template` 同名静默替换语义写入文档
+- **模块拆分**：`lib.rs`（约 2500 行 → 文档 + 再导出 + 测试）拆为
+  `error.rs` / `extract.rs` / `filters.rs` / `renderer.rs` 四个模块，公共 API 不变
+
+**nctool-core**
+
+- 声明 `rust-version = "1.82"`（三个 crate）
+- `GenerationOptions` 行号生成修复：`step=0` 视为 1（此前产出全 `N0000`）；加法改
+  `checked_add` 防溢出
+- 删除死公共 API：自由函数 `has_errors`、类型别名 `ValidationResult`（零调用）
+- `ParamSpec` 文档修正：`default` 与 `required` 非互斥（与既有用法/测试一致）
+- 校验错误消息携带模板名 + 行列定位（此前只报参数名）
+- 参数名与系统注入变量（`machine` 等）同名时输出警告（此前被静默覆盖）
+- **机床配置键接线**：`program_prefix`/`program_digits` 接入 program_header，
+  `units` 替代硬编码 metric；`line_number_prefix`/`line_number_digits` 接入
+  G-code 后处理行号（此前均为装饰性键）
+- `registry.render`/`render_with_machine` 文档标注绕过校验层的 NaN 风险；
+  `apply_spec_defaults` 文档写明优先级（用户值 > 规格默认 > 模板内联 default）
+
+**nctool-cli**
+
+- **退出码矩阵**：0 成功 / 1 校验失败 / 2 参数错误（与 clap 一致）/ 3 IO / 4 配置 /
+  5 模板·机床未找到 / 6 渲染失败（此前一律 1）
+- `validate --format json` 失败输出补齐 `error:{kind,message}`（此前仅 `data`）
+- `--param` 类型强制后缀 `k:s=k:n=k:b=`；前导零纯数字（`007`）保持字符串；
+  `--help` 写明推断规则
+- `--params-file` 数值走 `is_finite` 防护（`1e999` → inf 拒绝），与 `--param` 对齐
+- 全局配置路径遵循平台约定（Windows `%APPDATA%\nctool`、Unix `XDG_CONFIG_HOME`），
+  兼容回退 `~/.config`；项目配置从 CWD **向上递归**查找
+- `config show` 展示全局/项目配置来源路径；配置单次加载并缓存于 `Ctx`
+  （`machine list`/`resolve_machine`/`config show` 不再重复读盘）
+- `machine list` JSON 增加 `builtin` 标记（text 通道原有"自定义"标注对齐）
+- `render` JSON 成功输出附 `warnings` 数组
+- `templates show`/`inspect` 模板解析优先级与 `render`/`validate` 统一（注册表名 → 文件路径）
+- stdout 断管道（`| head`）不再 panic；`templates new a.j2` 不再生成 `a.j2.j2`；
+  `--dir`/`--param` 帮助文案对齐实际行为
+- CI 增加 `windows-latest`（此前仅 ubuntu，平台特有路径/目录行为无覆盖）
+
+### 测试
+
+- workspace 总计 234 → **245** 项；详见此前各批次条目
+
+### nctool-tpl 修复
+
+- **`{% from %}` 别名语义修复**：`{% from "m" import a as b %}` 此前把导入名与别名的
+  角色弄反——别名被误报为外部必选参数（上层校验要求用户提供根本不需要的参数）、
+  导入名被误判为模板局部（漏报真实引用）。现对齐 minijinja 绑定语义（有别名绑定
+  别名，无别名绑定导入名），两者均不再进入未声明集合
+- **`{% block %}` 作用域修复**：块体按 minijinja VM 帧语义视为独立作用域，块内
+  `set` 不再外泄。修复"块内 `set` + 块外引用"时校验放行、宽松模式静默输出不完整
+  G-code（如 `G1 F`）的漏报
+- **未定义变量名恢复防错位**：include/extends 期间子模板报错时，不再用主模板源码
+  恢复变量名（子模板字节范围套在主模板上会得到同偏移处的无关标识符）；仅当错误
+  确属所传源码对应模板时才恢复
+- **`Parse.col` 列口径统一为字符**（与 `Variable.col` 的 minijinja span 口径一致）：
+  错误行内含多字节字符（如中文注释）时列号不再虚高
+- **`set_path_loader` 安全加固**：模板名自加校验，拒绝空名、Windows 盘符前缀
+  （`C:`——`PathBuf::push` 会整体替换 base，可逃出根目录）、绝对路径；安全文档
+  改写为与引擎实际行为一致（`..`/`.`/`\` 段本就被 minijinja `safe_join` 拦截，
+  原文档示例方向反了）
+- **新增 `extract_template_refs`**：提取 `{% include %}`/`{% extends %}`/
+  `{% import %}`/`{% from %}` 的静态（字符串字面量）模板引用名，供上层递归校验
+  组合模板
+
+### nctool-core 修复
+
+- **内置模板 `program_header` 修复（P1）**：`G{{ machine.coordinate_system }}` 与
+  配置值 `G54`/`G94` 叠加产出非法双前缀 `GG54`/`GG94`；改为直接输出配置值。
+  原三处 `contains("G54")` 弱断言被 `"GG54"` 穿透，现全部升级为字节级 golden
+- **内置模板 `tool_change` 修复（P1）**：刀具号裸输出 f64（`M6 T5.0`，T 字址标准
+  只接受整数）；改为 `T{{ tool_num | nc_strip }}`，并补 tool_change/safe_move 的
+  字节级渲染测试（原零覆盖）
+- **校验穿透 include/extends（P2）**：组合模板引用的已注册模板，其必选参数同样
+  参与渲染前校验（环引用防护）；此前主模板 include 子模板时，子模板必选参数
+  缺失只能在渲染阶段才暴露，违背"渲染前可发现错误"的设计承诺
+- **`registry.render` 与 `validate` 口径对齐（P2）**：render 应用规格默认值兜底；
+  新增 `render_with_machine`（注入机床系统变量 + 兜底）。消除文档推荐流程
+  "validate 通过 → render 失败"的分歧
+- **新增 `GCodeGenerator::generate_lenient`（P1，配合 CLI）**：宽松生成复用严格
+  管线的规格默认值兜底、`machine` 注入与后处理，保证宽松输出是严格输出的超集
+- **错误链完整化（P2）**：`PipelineError`/`RegistryError` 标记 `#[non_exhaustive]`
+  并实现 `source()`；管线不再 `map_err(|_|…)` 吞掉注册表错误（新增
+  `PipelineError::Registry` 变体）；`RegistryError::Compile` 结构化携带
+  `(name, TplError)`，Display 不再三层重复模板名
+- **去重**：`apply_spec_defaults`/`build_render_context`/`param_to_minijinja` 收敛
+  到 model 模块单份实现（原先 core 内两份 + CLI 一份共三处拷贝）
+
+### nctool-cli 修复
+
+- **`render --lenient` 收编核心管线（P1）**：此前宽松路径绕过规格默认值兜底与
+  全部后处理——旗舰模板 `drill_cycle` 省略 `r_plane` + `--lenient` 反而渲染失败
+  （宽松比严格更易失败），`--line-numbers/--header/--ascii/--strip-blank` 在该分支
+  静默失效。现改走 `GCodeGenerator::generate_lenient`，并删除 CLI 侧
+  `build_context`/`render_lenient` 副本（上下文构建收归 core 单份实现）
+- **`--out` 写入安全（P2）**：拒绝输出路径与源模板相同（防止渲染结果覆盖并销毁
+  模板源码）；父目录缺失时自动创建（对齐 `templates new` 的目录策略）
+- **配置解析不再 gate 全部命令（P2）**：`completion`/`ui`/`part` 不读配置文件，
+  CWD 存在损坏的 `nctool.toml` 时补全生成不再一并失败
+- **脚手架修复**：`templates new` 骨架的坐标系行删除多余 `G` 前缀（与
+  program_header 同源的 `GG54` 问题）
+- `--lenient` 帮助文案对齐实际语义（经过滤器引用的变量仍需具体值才能求值）
+
+### 测试
+
+- workspace 总计 211 → **234** 项：
+  - tpl +6：from 别名 / block 作用域（提取+渲染双端）/ 未定义名不错位恢复 /
+    列口径字符化 / path loader 逃逸拒绝 / `extract_template_refs`
+  - core +8：include 穿透与环引用 / registry render 口径 / `generate_lenient`×3 /
+    tool_change 与 safe_move 字节级 golden
+  - cli 集成 +5（lenient 超集 / tool_change golden / `--out` 建目录与同路径拒绝 /
+    completion 豁免损坏配置），program_header golden 升级字节级；单测净 -2
+    （删除随副本移除的 3 个实现细节测试，新增同路径检测 1 个）
+
+---
+
 ## [nctool-cli 0.2.0] - 2026-09-01
 
 "阶段 1 CLI 核心能力"：脚本化生成 G-code 全流程可用；同时承载阶段 0 的命令树骨架与工程基线。

@@ -6,12 +6,13 @@
 //! 管线在渲染**前**完成参数校验（发现缺失/类型问题），渲染后做后处理
 //! （行号、头部注释、空行清理）。
 
-use crate::model::{MachineConfig, ParamValue, ParameterSet};
+use crate::model::{apply_spec_defaults, build_render_context, MachineConfig, ParameterSet};
 use crate::registry::TemplateRegistry;
 use crate::validate::ValidationReport;
 
 /// 管线错误。
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum PipelineError {
     /// 模板不存在
     TemplateNotFound(String),
@@ -19,19 +20,32 @@ pub enum PipelineError {
     Validation(ValidationReport),
     /// 渲染失败（模板语法、未知过滤器等）
     Render(nctool_tpl::TplError),
+    /// 注册表错误（校验阶段的兜底路径：模板存在性已前置检查，正常不可达）
+    Registry(crate::registry::RegistryError),
 }
 
 impl std::fmt::Display for PipelineError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
             PipelineError::TemplateNotFound(name) => write!(f, "模板不存在: {name}"),
-            PipelineError::Validation(report) => write!(f, "参数校验未通过:\n{}", report.summary()),
+            PipelineError::Validation(report) => {
+                write!(f, "参数校验未通过:\n{}", report.summary())
+            }
             PipelineError::Render(err) => write!(f, "渲染失败: {err}"),
+            PipelineError::Registry(err) => write!(f, "注册表错误: {err}"),
         }
     }
 }
 
-impl std::error::Error for PipelineError {}
+impl std::error::Error for PipelineError {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            PipelineError::Render(err) => Some(err),
+            PipelineError::Registry(err) => Some(err),
+            _ => None,
+        }
+    }
+}
 
 /// 输出格式。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -49,7 +63,7 @@ pub struct GenerationOptions {
     pub format: OutputFormat,
     /// 是否生成行号（`N0010 N0020 ...`）
     pub line_numbers: bool,
-    /// 行号步进
+    /// 行号步进（0 视为 1，即每行都编号）
     pub line_number_step: u32,
     /// 行号上限（超过后不再编号）
     pub max_line_number: u32,
@@ -135,26 +149,56 @@ impl GCodeGenerator {
             None => return Err(PipelineError::TemplateNotFound(template.to_string())),
         };
 
-        // 2. 参数校验（渲染前）。校验阶段的唯一失败情形是模板不存在，
-        //    统一映射为 TemplateNotFound（第 1 步已拦截，此处为兜底）
+        // 2. 参数校验（渲染前）。校验阶段的失败情形理论上只有模板不存在
+        //    （第 1 步已拦截）；保留原始 RegistryError 而非吞掉，防止未来
+        //    新增错误变体时信息静默丢失
         let report = self
             .registry
             .validate(template, params)
-            .map_err(|_| PipelineError::TemplateNotFound(template.to_string()))?;
+            .map_err(PipelineError::Registry)?;
         if report.has_errors() {
             return Err(PipelineError::Validation(report));
         }
 
         // 3. 规格默认值兜底 + 合并上下文 + 渲染
         let effective = apply_spec_defaults(&entry.params, params);
-        let context = build_context(&effective, machine);
+        let context = build_render_context(&effective, machine);
         let rendered = self
             .registry
             .render_template(template, &context)
             .map_err(PipelineError::Render)?;
 
         // 4. 后处理
-        Ok(postprocess(&rendered, template, opts))
+        Ok(postprocess(&rendered, template, opts, machine))
+    }
+
+    /// 宽松模式端到端生成：不做校验阻断，未定义变量（裸引用）渲染为空。
+    ///
+    /// 与 [`Self::generate`] 的区别仅在"校验不阻断"：规格默认值兜底、
+    /// `machine` 注入与后处理（行号/头部注释/ASCII 清洗等）**全部保留**，
+    /// 保证宽松输出是严格输出的超集（参数缺失留空而非失败）。
+    ///
+    /// 注意：经**过滤器**（如 `nc_fixed`）引用的未定义变量仍会报错——
+    /// 过滤器需要具体值求值，无法以空字符串替代。
+    pub fn generate_lenient(
+        &self,
+        template: &str,
+        params: &ParameterSet,
+        machine: &MachineConfig,
+        opts: &GenerationOptions,
+    ) -> Result<String, PipelineError> {
+        let entry = match self.registry.get(template) {
+            Some(e) => e,
+            None => return Err(PipelineError::TemplateNotFound(template.to_string())),
+        };
+        // 与 generate 相同的兜底与上下文构建（宽松只影响渲染器行为）
+        let effective = apply_spec_defaults(&entry.params, params);
+        let context = build_render_context(&effective, machine);
+        let rendered = self
+            .registry
+            .render_template_lenient(template, &context)
+            .map_err(PipelineError::Render)?;
+        Ok(postprocess(&rendered, template, opts, machine))
     }
 
     /// 便捷：使用通用机床配置生成 G-code。
@@ -175,60 +219,6 @@ impl Default for GCodeGenerator {
     }
 }
 
-/// 应用参数规格的默认值兜底：规格声明了 `default`、且参数集未提供的参数，
-/// 渲染前自动填入默认值（用户提供的值优先，不被覆盖）。
-fn apply_spec_defaults(specs: &[crate::model::ParamSpec], params: &ParameterSet) -> ParameterSet {
-    let mut effective = params.clone();
-    for spec in specs {
-        if !effective.contains(&spec.name) {
-            if let Some(default) = &spec.default {
-                effective.values.insert(spec.name.clone(), default.clone());
-            }
-        }
-    }
-    effective
-}
-
-/// 构建渲染上下文：`params`（裸值）+ `machine`（机床配置对象）。
-///
-/// [`ParamValue`] 以**裸值**注入（数值→数字、字符串→字符串、布尔→布尔），
-/// 使模板能直接以 `{{ x }}` 引用参数。数值直接经 minijinja 序列化，**不经过
-/// JSON 中间层**，因此 NaN/Inf 不会被静默篡改（校验层已拒绝它们进入管线）。
-///
-/// `machine` 对象包含 `config` 的全部键值（**字符串**，如 `{{ machine.rapid }}`）
-/// 以及元信息 `id` / `vendor` / `model`。若 `config` 中存在同名键，元信息优先。
-/// 注意 `config` 值均为字符串，模板中做数值比较需先转换（如 `| int`）。
-fn build_context(params: &ParameterSet, machine: &MachineConfig) -> minijinja::Value {
-    let mut map: std::collections::BTreeMap<String, minijinja::Value> =
-        std::collections::BTreeMap::new();
-    for (k, v) in &params.values {
-        map.insert(k.clone(), param_to_minijinja(v));
-    }
-    // 注入 machine 对象（config 键值 + 元信息，模板通过 {{ machine.xxx }} 引用）
-    let mut machine_obj: std::collections::BTreeMap<&str, minijinja::Value> =
-        std::collections::BTreeMap::new();
-    for (k, v) in &machine.config {
-        machine_obj.insert(k.as_str(), minijinja::Value::from(v.as_str()));
-    }
-    machine_obj.insert("id", minijinja::Value::from(machine.id.as_str()));
-    machine_obj.insert("vendor", minijinja::Value::from(machine.vendor.as_str()));
-    machine_obj.insert("model", minijinja::Value::from(machine.model.as_str()));
-    map.insert(
-        "machine".to_string(),
-        minijinja::Value::from_serialize(&machine_obj),
-    );
-    minijinja::Value::from_serialize(&map)
-}
-
-/// 将 [`ParamValue`] 转为 minijinja 裸值（数值/字符串/布尔）。
-fn param_to_minijinja(v: &ParamValue) -> minijinja::Value {
-    match v {
-        ParamValue::Number(n) => minijinja::Value::from_serialize(n),
-        ParamValue::String(s) => minijinja::Value::from_serialize(s),
-        ParamValue::Bool(b) => minijinja::Value::from_serialize(b),
-    }
-}
-
 /// 非 ASCII 字符替换为 `?`（`GenerationOptions::ascii_only` 后处理）。
 fn sanitize_ascii(s: &str) -> String {
     s.chars()
@@ -244,7 +234,12 @@ fn sanitize_ascii(s: &str) -> String {
 ///
 /// 行号规则：程序号行（`O` 开头）与已有 `N` 前缀的行不重复编号；
 /// 行号达到 `max_line_number` 后不再递增。
-fn postprocess(rendered: &str, template: &str, opts: &GenerationOptions) -> String {
+fn postprocess(
+    rendered: &str,
+    template: &str,
+    opts: &GenerationOptions,
+    machine: &MachineConfig,
+) -> String {
     let mut out = String::new();
 
     // 头部注释（两种格式均生效，由用户显式开启）；文本为 ASCII，
@@ -267,7 +262,18 @@ fn postprocess(rendered: &str, template: &str, opts: &GenerationOptions) -> Stri
         return out;
     }
 
-    // Gcode 格式：行号 + 空行清理 + trim + 可选 ASCII 清洗
+    // Gcode 格式：行号 + 空行清理 + trim + 可选 ASCII 清洗。
+    // 行号前缀/宽度与程序号前缀来自机床配置（generic 默认 N / 4 / O），
+    // 实现"换机床即换编程约定"；键缺失时回退默认值。
+    let line_prefix = machine.get("line_number_prefix").unwrap_or("N");
+    let line_digits = machine
+        .get("line_number_digits")
+        .and_then(|d| d.parse::<usize>().ok())
+        .unwrap_or(4)
+        .max(1);
+    let program_prefix = machine.get("program_prefix").unwrap_or("O");
+    // step=0 视为 1：否则行号原地不动，产出重复的 N0000 行
+    let step = opts.line_number_step.max(1);
     let mut line_no: u32 = 0;
     for line in rendered.lines() {
         let trimmed = line.trim();
@@ -286,14 +292,22 @@ fn postprocess(rendered: &str, template: &str, opts: &GenerationOptions) -> Stri
             trimmed
         };
         if opts.line_numbers {
-            let is_program = trimmed.starts_with('O') || trimmed.starts_with('o');
-            let already_numbered = trimmed.starts_with('N') || trimmed.starts_with('n');
-            if !is_program
-                && !already_numbered
-                && line_no + opts.line_number_step <= opts.max_line_number
-            {
-                line_no += opts.line_number_step;
-                out.push_str(&format!("N{:04} ", line_no));
+            let is_program = trimmed.starts_with(program_prefix)
+                || (program_prefix == "O" && trimmed.starts_with('o'));
+            let already_numbered = trimmed.starts_with(line_prefix)
+                || (line_prefix == "N" && trimmed.starts_with('n'));
+            if !is_program && !already_numbered {
+                // checked_add：防止 line_no + step 溢出（debug 构建 panic / release 回绕）
+                if let Some(next) = line_no.checked_add(step) {
+                    if next <= opts.max_line_number {
+                        line_no = next;
+                        out.push_str(&format!(
+                            "{line_prefix}{:0width$} ",
+                            line_no,
+                            width = line_digits
+                        ));
+                    }
+                }
             }
         }
         out.push_str(content);
@@ -372,6 +386,158 @@ mod tests {
         assert!(out.contains("\nN0010 "));
         // 无空行（strip）
         assert!(!out.contains("\n\n"));
+    }
+
+    #[test]
+    fn generate_lenient_applies_spec_defaults_and_postprocess() {
+        // 宽松模式是严格模式的超集：规格默认值兜底 + 后处理均生效
+        // （修复前：宽松路径跳过规格默认值，r_plane 缺失时 nc_fixed 硬失败）
+        let g = GCodeGenerator::new();
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", 21.0)
+            .set_number("y", 15.0)
+            .set_number("depth", -10.0)
+            .set_number("feed", 100.0);
+        let opts = GenerationOptions {
+            line_numbers: true,
+            ..Default::default()
+        };
+        let out = g
+            .generate_lenient("drill_cycle", &ps, &machine(), &opts)
+            .unwrap();
+        assert!(out.contains("R5.000"), "规格默认值应兜底: {out}");
+        assert!(out.contains("N0010 G0"), "后处理行号应生效: {out}");
+    }
+
+    #[test]
+    fn generate_lenient_renders_bare_missing_var_empty() {
+        // 宽松模式：裸引用的未定义变量渲染为空（不阻断）
+        let mut g = GCodeGenerator::new();
+        g.registry_mut()
+            .add_memory(
+                "flex",
+                crate::registry::TemplateCategory::General,
+                "",
+                "G1 X{{ x | default(0) }} F{{ feed }}",
+                vec![],
+            )
+            .unwrap();
+        let out = g
+            .generate_lenient(
+                "flex",
+                &ParameterSet::new(),
+                &machine(),
+                &GenerationOptions::default(),
+            )
+            .unwrap();
+        assert_eq!(out, "G1 X0 F\n");
+    }
+
+    #[test]
+    fn generate_lenient_filter_on_undefined_still_errors() {
+        // 宽松只放宽裸引用：经过滤器（nc_pad）引用的未定义变量仍报错
+        let g = GCodeGenerator::new();
+        let err = g
+            .generate_lenient(
+                "program_header",
+                &ParameterSet::new(),
+                &machine(),
+                &GenerationOptions::default(),
+            )
+            .unwrap_err();
+        assert!(
+            err.to_string().contains("undefined"),
+            "应报 undefined 转换错误: {err}"
+        );
+    }
+
+    #[test]
+    fn render_tool_change_integer_tool_number() {
+        // 刀具号 T 字址只接受整数：nc_strip 去掉 f64 尾零（5.0 → 5）
+        let g = GCodeGenerator::new();
+        let mut ps = ParameterSet::new();
+        ps.set_number("tool_num", 5.0);
+        let out = g
+            .generate(
+                "tool_change",
+                &ps,
+                &machine(),
+                &GenerationOptions::default(),
+            )
+            .unwrap();
+        assert_eq!(out, "M5\nM6 T5\nG40 (取消刀具补偿)\n");
+    }
+
+    #[test]
+    fn render_safe_move_with_spec_default() {
+        // safe_z 规格默认 100.0 兜底
+        let g = GCodeGenerator::new();
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", 21.0).set_number("y", 15.0);
+        let out = g
+            .generate("safe_move", &ps, &machine(), &GenerationOptions::default())
+            .unwrap();
+        assert_eq!(out, "G0 G90 Z100.0\nG0 X21.0 Y15.0\n");
+    }
+
+    #[test]
+    fn machine_config_controls_program_and_line_format() {
+        // 机床配置接线：program_prefix/digits 与 line_number_prefix/digits
+        // 应实际生效（不再是装饰性键）
+        let g = GCodeGenerator::new();
+        let mut m = machine();
+        m.config.insert("program_prefix".into(), "P".into());
+        m.config.insert("program_digits".into(), "6".into());
+        m.config.insert("line_number_prefix".into(), "L".into());
+        m.config.insert("line_number_digits".into(), "3".into());
+        let mut ps = ParameterSet::new();
+        ps.set_number("prog", 42.0);
+        let opts = GenerationOptions {
+            line_numbers: true,
+            ..Default::default()
+        };
+        let out = g.generate("program_header", &ps, &m, &opts).unwrap();
+        assert!(out.contains("P000042"), "自定义程序号格式: {out}");
+        assert!(out.contains("\nL010 "), "自定义行号格式: {out}");
+    }
+
+    #[test]
+    fn line_number_step_zero_is_normalized() {
+        // step=0：不产出重复的 N0000，按 step=1 处理
+        let g = GCodeGenerator::new();
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", 21.0)
+            .set_number("y", 15.0)
+            .set_number("depth", -10.0)
+            .set_number("feed", 100.0);
+        let opts = GenerationOptions {
+            line_numbers: true,
+            line_number_step: 0,
+            ..Default::default()
+        };
+        let out = g.generate("drill_cycle", &ps, &machine(), &opts).unwrap();
+        assert!(out.contains("N0001 "), "step=0 应按 1 编号: {out}");
+        assert!(!out.contains("N0000"), "不应出现 N0000: {out}");
+    }
+
+    #[test]
+    fn line_number_overflow_is_safe() {
+        // 巨大步进 + 大上限：checked_add 防溢出（debug 不再 panic）
+        let g = GCodeGenerator::new();
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", 21.0)
+            .set_number("y", 15.0)
+            .set_number("depth", -10.0)
+            .set_number("feed", 100.0);
+        let opts = GenerationOptions {
+            line_numbers: true,
+            line_number_step: 3_000_000_000,
+            max_line_number: u32::MAX,
+            ..Default::default()
+        };
+        let out = g.generate("drill_cycle", &ps, &machine(), &opts).unwrap();
+        // 第一行编号 3e9，第二次加法溢出 → 后续行不再编号（不 panic）
+        assert!(out.contains("N3000000000 "), "首行应编号: {out}");
     }
 
     #[test]
