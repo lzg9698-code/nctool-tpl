@@ -158,6 +158,7 @@ fn scaffold_source(name: &str, category: &str) -> String {
 }
 
 fn new(ctx: &Ctx, args: &TemplatesNewArgs) -> Result<(), CliError> {
+    validate_template_name(&args.name)?;
     // 目录：显式 --dir 优先，否则配置模板目录，否则 ./templates
     let dir: PathBuf = match &args.dir {
         Some(d) => d.clone(),
@@ -184,4 +185,46 @@ fn new(ctx: &Ctx, args: &TemplatesNewArgs) -> Result<(), CliError> {
     let data = serde_json::json!({ "path": path.display().to_string(), "name": args.name });
     ctx.style.print_ok(&text, data);
     Ok(())
+}
+
+/// 校验模板名：必须是单个合法文件名组件，禁止路径分隔符与 `..`，
+/// 防止 `templates new` 逃出模板目录（路径穿越）。
+fn validate_template_name(name: &str) -> Result<(), CliError> {
+    if name.is_empty() {
+        return Err(CliError::new("args", "模板名不能为空"));
+    }
+    if name == "." || name == ".." {
+        return Err(CliError::new("args", format!("非法模板名: {name}")));
+    }
+    let components = std::path::Path::new(name).components().count();
+    if components != 1 {
+        return Err(CliError::new(
+            "args",
+            format!("模板名不能包含路径分隔符: {name}"),
+        ));
+    }
+    Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::validate_template_name;
+
+    #[test]
+    fn valid_names() {
+        assert!(validate_template_name("my_op").is_ok());
+        assert!(validate_template_name("my.op").is_ok());
+        assert!(validate_template_name("钻_孔循环").is_ok());
+    }
+
+    #[test]
+    fn path_traversal_rejected() {
+        assert!(validate_template_name("../evil").is_err());
+        assert!(validate_template_name("a/b").is_err());
+        assert!(validate_template_name("..").is_err());
+        assert!(validate_template_name(".").is_err());
+        assert!(validate_template_name("").is_err());
+        assert!(validate_template_name(r"..\evil").is_err());
+        assert!(validate_template_name("sub\\evil").is_err());
+    }
 }

@@ -103,6 +103,21 @@ fn templates_new_rejects_duplicate() {
     let _ = std::fs::remove_dir_all(&dir);
 }
 
+/// 回归：模板名含路径分隔符/`..` 应被拒绝（防止逃出模板目录）。
+#[test]
+fn templates_new_rejects_path_traversal() {
+    let dir = tmp_dir("trav");
+    std::fs::create_dir_all(dir.join("templates")).unwrap();
+    nctool()
+        .current_dir(&dir)
+        .args(["templates", "new", "../evil"])
+        .assert()
+        .failure()
+        .stderr(predicate::str::contains("路径分隔符"));
+    assert!(!dir.join("..").join("evil.j2").exists());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 // ---------------------------------------------------------------------------
 // inspect
 // ---------------------------------------------------------------------------
@@ -175,6 +190,38 @@ fn validate_with_params_file() {
         .success()
         .stdout(predicate::str::contains("校验通过"));
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 回归：模板目录外的文件路径也应正常校验（不再误报"模板不存在"）。
+#[test]
+fn validate_external_file_path_works() {
+    let dir = tmp_dir("valext");
+    std::fs::write(dir.join("op.j2"), "G1 X{{ a }}").unwrap();
+    nctool()
+        .current_dir(&dir)
+        .args(["validate", "op.j2"])
+        .assert()
+        .code(1)
+        .stdout(predicate::str::contains("必选参数缺失"))
+        .stdout(predicate::str::contains("a"))
+        .stderr(predicate::str::contains("模板不存在").not());
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 回归：validate 失败时 JSON 输出必须是单个可解析对象，且 ok:false。
+#[test]
+fn validate_json_failure_is_single_object() {
+    let output = nctool()
+        .args(["validate", "drill_cycle", "--format", "json"])
+        .assert()
+        .code(1)
+        .get_output()
+        .clone();
+    let stdout = String::from_utf8(output.stdout).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&stdout)
+        .unwrap_or_else(|e| panic!("stdout 应为单个合法 JSON 对象: {e}\n{stdout}"));
+    assert_eq!(v["ok"], serde_json::Value::Bool(false));
+    assert!(v["data"]["errors"].as_i64().unwrap() >= 1);
 }
 
 // ---------------------------------------------------------------------------

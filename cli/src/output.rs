@@ -10,12 +10,16 @@ use crate::cli::FormatArg;
 /// CLI 错误：所有命令失败的统一出口。
 ///
 /// `kind` 为 JSON 输出使用的错误分类；`message` 为人类可读描述。
+/// `silent`：命令已自行输出完整错误（如 validate 已打印报告），
+/// 仅抑制 JSON 通道的重复错误对象；text 通道的 stderr 提示仍保留。
 #[derive(Debug)]
 pub struct CliError {
     /// 错误分类标识（JSON 输出用）
     pub kind: &'static str,
     /// 人类可读错误描述
     pub message: String,
+    /// 是否抑制 JSON 通道的重复输出（命令已自行输出完整错误）
+    pub silent: bool,
 }
 
 impl CliError {
@@ -23,7 +27,14 @@ impl CliError {
         Self {
             kind,
             message: message.into(),
+            silent: false,
         }
+    }
+
+    /// 标记为"已输出完整错误"，抑制 JSON 通道的重复错误对象。
+    pub fn silent(mut self) -> Self {
+        self.silent = true;
+        self
     }
 
     /// 命令失败对应的进程退出码（1 = 校验/执行失败）。
@@ -95,12 +106,17 @@ impl From<&FormatArg> for OutputStyle {
 
 impl OutputStyle {
     /// 输出错误：text → stderr 单行；json → 结构化错误对象（stdout）。
+    ///
+    /// `silent` 错误在 JSON 通道不重复输出（命令已自行输出完整错误）。
     pub fn print_error(&self, err: &CliError) {
         match self {
             OutputStyle::Text => {
                 eprintln!("error: {}", err.message);
             }
             OutputStyle::Json => {
+                if err.silent {
+                    return;
+                }
                 let obj = serde_json::json!({
                     "ok": false,
                     "error": { "kind": err.kind, "message": err.message },

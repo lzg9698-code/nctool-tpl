@@ -22,6 +22,9 @@ pub fn parse_kv(s: &str) -> Result<(String, ParamValue), CliError> {
 }
 
 /// 按值文本推断参数类型。
+///
+/// 注意：`NaN` / `inf` / `Infinity` 等非有限数**不**判为数值（落到字符串），
+/// 避免把"NaN"这类文本误判为数值传入渲染上下文。
 pub fn infer_param_value(v: &str) -> ParamValue {
     if v.eq_ignore_ascii_case("true") {
         return ParamValue::Bool(true);
@@ -30,7 +33,9 @@ pub fn infer_param_value(v: &str) -> ParamValue {
         return ParamValue::Bool(false);
     }
     if let Ok(n) = v.parse::<f64>() {
-        return ParamValue::Number(n);
+        if n.is_finite() {
+            return ParamValue::Number(n);
+        }
     }
     ParamValue::String(v.to_string())
 }
@@ -128,6 +133,23 @@ mod tests {
         assert_eq!(
             infer_param_value("X21"),
             ParamValue::String("X21".to_string())
+        );
+    }
+
+    #[test]
+    fn infer_non_finite_is_string() {
+        // NaN / inf / Infinity 不判为数值，避免污染渲染上下文
+        assert_eq!(
+            infer_param_value("NaN"),
+            ParamValue::String("NaN".to_string())
+        );
+        assert_eq!(
+            infer_param_value("inf"),
+            ParamValue::String("inf".to_string())
+        );
+        assert_eq!(
+            infer_param_value("Infinity"),
+            ParamValue::String("Infinity".to_string())
         );
     }
 
