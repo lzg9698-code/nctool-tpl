@@ -1,6 +1,9 @@
 # Rust 构建产物
 /target
 
+# WorkBuddy 项目运行数据（本地记忆、任务状态等）
+.workbuddy-ai/
+
 # 编辑器 / 系统临时文件
 *.swp
 *.swo

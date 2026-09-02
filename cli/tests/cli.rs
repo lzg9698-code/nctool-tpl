@@ -266,7 +266,7 @@ fn render_drill_cycle_golden() {
         ])
         .assert()
         .success()
-        .stdout("G0 X21.000 Y15.000\nG1 G98 G81 R5.000 Z-10.000 F100.000\nG80 (取消循环)\n");
+        .stdout("G0 X21.000 Y15.000\nG98 G81 R5.000 Z-10.000 F100.000\nG80 (取消循环)\n");
 }
 
 #[test]
@@ -301,17 +301,30 @@ fn render_program_header_golden() {
         .args(["render", "program_header", "--param", "prog=1"])
         .assert()
         .success()
-        .stdout("O0001\n(  )\n(  )\nG21 (metric)\nG54\nG94\nM5\nM9\n");
+        .stdout(
+            "%\nO0001\n(  )\n(  )\nG21 (metric)\nG90 G17 (绝对坐标 / XY 平面)\nG40 G49 G80 (取消刀补 / 刀长补偿 / 固定循环)\nG54\nG94\nM5\nM9\n",
+        );
 }
 
 #[test]
 fn render_tool_change_golden() {
     // 刀具号 T 字址只接受整数：CLI 类型推断 tool_num=5 → f64 5.0 → nc_strip → 5
+    // 主轴启动：tool_change 内置模板新增必选 spindle_speed，发出 M3 S<转速> 与
+    // 刀长补偿 G43 H、冷却 M8（修复前整套程序从不启动主轴）。
     nctool()
-        .args(["render", "tool_change", "--param", "tool_num=5"])
+        .args([
+            "render",
+            "tool_change",
+            "--param",
+            "tool_num=5",
+            "--param",
+            "spindle_speed=3000",
+        ])
         .assert()
         .success()
-        .stdout("M5\nM6 T5\nG40 (取消刀具补偿)\n");
+        .stdout(
+            "M5\nM9\nM6 T5\nG40 (取消刀补)\nG43 H5 (刀长补偿)\nM3 S3000 (主轴正转)\nM8 (冷却开)\n",
+        );
 }
 
 #[test]
@@ -588,6 +601,7 @@ fn ui_reports_not_implemented() {
         .args(["ui"])
         .assert()
         .failure()
+        .code(7)
         .stderr(predicate::str::contains("尚未实现"));
 }
 
@@ -597,6 +611,7 @@ fn part_reports_not_implemented() {
         .args(["part", "generate", "x.json"])
         .assert()
         .failure()
+        .code(7)
         .stderr(predicate::str::contains("尚未实现"));
 }
 

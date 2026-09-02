@@ -16,7 +16,19 @@ const RESERVED_NAMES: &[&str] = &["loop", "self", "super", "caller"];
 
 /// Jinja 自动注入的内置全局（函数/构造器），同样不算“需要外部提供的参数”。
 /// 与 `jinja2.meta` 一致：无参数使用的这些全局名不进入未声明集合。
-const BUILTIN_GLOBALS: &[&str] = &["range", "dict", "lipsum", "cycler", "joiner", "namespace"];
+///
+/// 注意：`debug` 是 minijinja 启用 `debug` feature 后才注入的全局。本库依赖
+/// `debug` feature（用于解析错误的字节范围定位），故必须在此列出，否则
+/// `{{ debug() }}` 会被误报为必选参数。
+const BUILTIN_GLOBALS: &[&str] = &[
+    "range",
+    "dict",
+    "lipsum",
+    "cycler",
+    "joiner",
+    "namespace",
+    "debug",
+];
 
 /// 模板中出现的一个变量及其在源码中的位置。
 ///
@@ -35,9 +47,14 @@ pub struct Variable {
     pub end: usize,
     /// 该变量的**所有**引用是否都处于「兜底上下文」。
     ///
-    /// 兜底上下文指 `default`/`d` 过滤器（`{{ x | default(0.15) }}`）或
-    /// `is defined`/`is undefined` 测试（`{% if x is defined %}`）——
-    /// 这些位置上的引用在变量缺失时模板仍可安全渲染。
+    /// 兜底上下文指：作为 `default`/`d` 过滤器或 `is defined`/`is undefined`
+    /// 测试的**直接裸变量操作数**（如 `{{ x | default(0.15) }}`、
+    /// `{% if x is defined %}`）——这些位置上的引用在变量缺失时模板仍可安全渲染。
+    ///
+    /// **兜底不向下传播**：`{{ (a+b) | default(1) }}`、`{{ a.b | default(1) }}`、
+    /// `{% if a.b is defined %}` 中的 `a`/`b` **不**算兜底引用——minijinja 会先
+    /// 求值子表达式（运算 / 取属性），undefined 参与即报错，`default` 无法兜底。
+    /// 这类变量记为必选，避免上层校验放行后严格模式渲染失败。
     ///
     /// 对 [`extract_undeclared`] 的语义：`true` = 可选参数（缺失时可兜底），
     /// `false` = 必选参数（渲染时必须由外部上下文提供）。
@@ -356,13 +373,16 @@ fn walk_stmt<'a>(stmt: &Stmt<'a>, c: &mut Collector<'a>, opt: bool) {
             }
         }
         Stmt::WithBlock(s) => {
-            // 赋值表达式先在外层作用域求值（与 Jinja2 语义一致，
-            // 避免 {% with y = y + 1 %} 把右侧 y 误当作新局部）
-            for (_target, value) in &s.assignments {
-                walk_expr(value, c, opt);
-            }
+            // minijinja 按「求值右值 → 绑定目标」**逐条交错**执行（实测：
+            // {% with a=1, b=a+1 %}{{ b }}{% endwith %} 输出 2，即便外部传入
+            // a=99 也不影响 —— b 的初值看到的是本块绑定的 a）。
+            //
+            // 因此必须推入作用域后逐条交替处理，两种语义都才能判对：
+            //   - {% with a=1, b=a+1 %} → b 的 a 命中本块局部，不进未声明集合（避免误报）
+            //   - {% with y = y + 1 %}  → 右值在 y 绑定**前**求值，y 仍记必选（避免漏报）
             c.push_scope();
-            for (target, _) in &s.assignments {
+            for (target, value) in &s.assignments {
+                walk_expr(value, c, opt);
                 declare_locals(target, c);
             }
             for child in &s.body {
@@ -459,6 +479,14 @@ fn walk_stmt<'a>(stmt: &Stmt<'a>, c: &mut Collector<'a>, opt: bool) {
     }
 }
 
+/// 表达式是否为「裸变量引用」（单个 `Expr::Var`，无属性/下标/运算包裹）。
+///
+/// 只有裸变量才能被 `default` 过滤器 / `defined` 测试安全兜底：minijinja 对
+/// undefined 值取属性、下标或参与运算都会直接报错，不会走到兜底逻辑。
+fn is_bare_var(expr: &Expr) -> bool {
+    matches!(expr, Expr::Var(_))
+}
+
 fn walk_expr<'a>(expr: &Expr<'a>, c: &mut Collector<'a>, opt: bool) {
     match expr {
         Expr::Var(s) => c.record(s, opt),
@@ -494,10 +522,19 @@ fn walk_expr<'a>(expr: &Expr<'a>, c: &mut Collector<'a>, opt: bool) {
             }
         }
         Expr::Filter(s) => {
-            // default / d：被过滤的操作数在变量缺失时由默认值兜底 → 进入兜底上下文
+            // default / d：被过滤的操作数在变量缺失时由默认值兜底。
+            //
+            // 关键：兜底**只对直接操作数生效，且操作数必须是裸变量**。
+            // minijinja 先求值操作数再套用过滤器，因此：
+            //   - `{{ x | default(1) }}`            操作数即 x，undefined 被兜底 → 可选
+            //   - `{{ (a+b) | default(1) }}`        先算 a+b，undefined 参与运算即报错，
+            //                                      default 救不了 → a、b 必选
+            //   - `{{ a.b | default(1) }}`          先取属性，undefined 父值报错 → a 必选
+            // 若把兜底标记传播进子树，会把上述后两类误判为可选，导致上层
+            // 校验放行、严格模式渲染却失败 —— 产出不完整 G-code 的最坏失败模式。
             let is_default = matches!(s.name, "default" | "d");
             if let Some(e) = &s.expr {
-                walk_expr(e, c, opt || is_default);
+                walk_expr(e, c, opt || (is_default && is_bare_var(e)));
             }
             // 过滤器参数（含默认值表达式）仍需正常求值 → 透传当前 opt
             for arg in &s.args {
@@ -505,9 +542,11 @@ fn walk_expr<'a>(expr: &Expr<'a>, c: &mut Collector<'a>, opt: bool) {
             }
         }
         Expr::Test(s) => {
-            // defined / undefined：被测试的表达式允许缺失 → 进入兜底上下文
+            // defined / undefined：同样**只对裸变量直接操作数**兜底。
+            // `{% if a.b is defined %}` 会先对 undefined 的 a 取属性并报错，
+            // 故 a 必选；只有 `{% if x is defined %}` 这类裸变量才记可选。
             let is_defined = matches!(s.name, "defined" | "undefined");
-            walk_expr(&s.expr, c, opt || is_defined);
+            walk_expr(&s.expr, c, opt || (is_defined && is_bare_var(&s.expr)));
             for arg in &s.args {
                 walk_call_arg(arg, c, opt);
             }

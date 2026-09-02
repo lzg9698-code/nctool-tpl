@@ -8,7 +8,7 @@
 
 use crate::model::{apply_spec_defaults, build_render_context, MachineConfig, ParameterSet};
 use crate::registry::TemplateRegistry;
-use crate::validate::ValidationReport;
+use crate::validate::{IssueKind, ValidationReport};
 
 /// 管线错误。
 #[derive(Debug)]
@@ -172,11 +172,16 @@ impl GCodeGenerator {
         Ok(postprocess(&rendered, template, opts, machine))
     }
 
-    /// 宽松模式端到端生成：不做校验阻断，未定义变量（裸引用）渲染为空。
+    /// 宽松模式端到端生成：未定义变量（裸引用）渲染为空，校验问题不阻断。
     ///
-    /// 与 [`Self::generate`] 的区别仅在"校验不阻断"：规格默认值兜底、
-    /// `machine` 注入与后处理（行号/头部注释/ASCII 清洗等）**全部保留**，
-    /// 保证宽松输出是严格输出的超集（参数缺失留空而非失败）。
+    /// 与 [`Self::generate`] 的区别：规格默认值兜底、`machine` 注入与后处理
+    /// （行号/头部注释/ASCII 清洗等）全部保留，仅放宽"校验阻断"。
+    ///
+    /// **唯一仍然硬失败的情形是 NaN/Inf**（[`IssueKind::NonFinite`]）。
+    /// 参数缺失可以留空，但非法坐标会让机床走到错误位置——这不是"参数可
+    /// 缺省"，而是"参数值非法"，宽松模式没有放行理由。其余问题（缺失/类型/
+    /// 越界/非整数）降级为警告，由 [`Self::generate_lenient_with_report`]
+    /// 返回供调用方提示。
     ///
     /// 注意：经**过滤器**（如 `nc_fixed`）引用的未定义变量仍会报错——
     /// 过滤器需要具体值求值，无法以空字符串替代。
@@ -187,10 +192,39 @@ impl GCodeGenerator {
         machine: &MachineConfig,
         opts: &GenerationOptions,
     ) -> Result<String, PipelineError> {
+        self.generate_lenient_with_report(template, params, machine, opts)
+            .map(|(out, _report)| out)
+    }
+
+    /// 宽松生成并返回校验报告：与 [`Self::generate_lenient`] 行为一致，
+    /// 额外把降级后的报告交还调用方（用于向用户提示"生成了，但有隐患"）。
+    ///
+    /// 报告中所有非 [`IssueKind::NonFinite`] 的 Error 均已降级为 Warning，
+    /// 因此 `report.is_ok()` 为 `true` 时表示"除 NaN/Inf 外无阻断项"。
+    pub fn generate_lenient_with_report(
+        &self,
+        template: &str,
+        params: &ParameterSet,
+        machine: &MachineConfig,
+        opts: &GenerationOptions,
+    ) -> Result<(String, ValidationReport), PipelineError> {
         let entry = match self.registry.get(template) {
             Some(e) => e,
             None => return Err(PipelineError::TemplateNotFound(template.to_string())),
         };
+
+        // 宽松模式同样跑校验：NaN/Inf 必须拦截，其余问题降级为提示。
+        // 早期实现直接跳过 validate，导致 X{{ x }} 能吐出 XNaN —— 校验层
+        // 唯一的"防非法数值写入 G-code"防线在宽松路径上完全失效。
+        let mut report = self
+            .registry
+            .validate(template, params)
+            .map_err(PipelineError::Registry)?;
+        if report.has_kind(IssueKind::NonFinite) {
+            return Err(PipelineError::Validation(report));
+        }
+        report.downgrade_errors_except(&[IssueKind::NonFinite]);
+
         // 与 generate 相同的兜底与上下文构建（宽松只影响渲染器行为）
         let effective = apply_spec_defaults(&entry.params, params);
         let context = build_render_context(&effective, machine);
@@ -198,7 +232,7 @@ impl GCodeGenerator {
             .registry
             .render_template_lenient(template, &context)
             .map_err(PipelineError::Render)?;
-        Ok(postprocess(&rendered, template, opts, machine))
+        Ok((postprocess(&rendered, template, opts, machine), report))
     }
 
     /// 便捷：使用通用机床配置生成 G-code。
@@ -227,6 +261,22 @@ fn sanitize_ascii(s: &str) -> String {
 }
 
 /// 后处理：头部注释 / 行号 / 空行清理。
+///
+/// 行号宽度默认值（机床配置缺 `line_number_digits` 时）。
+const DEFAULT_LINE_NUMBER_DIGITS: usize = 4;
+/// 行号宽度上限。
+///
+/// 机床配置的 `line_number_digits` 是用户可编辑的字符串，解析后若无上界，
+/// 配置一个 `1000000000` 就会让**每一行**都去分配 GB 级缓冲 —— 而 Rust 的
+/// 分配失败是进程 abort，**不可捕获**。
+///
+/// 取值 32 而非对齐 `nc_pad` 的 `MAX_NC_PAD_WIDTH`（1024），是因为两者的
+/// 放大倍数不同：`nc_pad` 只作用于**一行**（程序号），而行号前缀作用于
+/// **每一行**，总分配量是 `行数 × 位宽`。1024 位在万行程序上就是 10 MB 的
+/// 纯前导零，既无意义又拖慢后处理。32 位已远超任何真实控制器（常见 4–5 位）。
+const MAX_LINE_NUMBER_DIGITS: usize = 32;
+
+/// 后处理：行号 / 头部注释 / 空行清理 / ASCII 清洗。
 ///
 /// - **Text 格式**：仅渲染，保留原始行内容（不 trim、不编号、不清理空行、不做 ASCII 清洗）
 /// - **Gcode 格式**：可生成行号、清理空行；每行 trim 首尾空白；`ascii_only` 开启时
@@ -266,11 +316,14 @@ fn postprocess(
     // 行号前缀/宽度与程序号前缀来自机床配置（generic 默认 N / 4 / O），
     // 实现"换机床即换编程约定"；键缺失时回退默认值。
     let line_prefix = machine.get("line_number_prefix").unwrap_or("N");
+    // 宽度夹在 [1, MAX_LINE_NUMBER_DIGITS]：机床配置是用户可编辑的字符串，
+    // 缺失下界会产出无内容的行号，缺失上界则一行就能触发 GB 级分配
+    // （分配失败是进程 abort，不是可捕获错误）。
     let line_digits = machine
         .get("line_number_digits")
         .and_then(|d| d.parse::<usize>().ok())
-        .unwrap_or(4)
-        .max(1);
+        .unwrap_or(DEFAULT_LINE_NUMBER_DIGITS)
+        .clamp(1, MAX_LINE_NUMBER_DIGITS);
     let program_prefix = machine.get("program_prefix").unwrap_or("O");
     // step=0 视为 1：否则行号原地不动，产出重复的 N0000 行
     let step = opts.line_number_step.max(1);
@@ -340,7 +393,7 @@ mod tests {
                 &GenerationOptions::default(),
             )
             .unwrap();
-        assert!(out.contains("G1 G98 G81 R5.000 Z-10.000 F100.000"));
+        assert!(out.contains("G98 G81 R5.000 Z-10.000 F100.000"));
         assert!(out.contains("G80"));
     }
 
@@ -452,11 +505,115 @@ mod tests {
     }
 
     #[test]
+    fn generate_lenient_still_blocks_nan() {
+        // 回归：早期 generate_lenient 完全跳过 validate，NaN 一路放行到 G-code。
+        // 参数缺失可以留空，但非法坐标会让机床走到错误位置——宽松模式也不该放行。
+        let mut g = GCodeGenerator::new();
+        g.registry_mut()
+            .add_memory(
+                "flex",
+                crate::registry::TemplateCategory::General,
+                "",
+                "G1 X{{ x }}",
+                vec![],
+            )
+            .unwrap();
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", f64::NAN);
+        let err = g
+            .generate_lenient("flex", &ps, &machine(), &GenerationOptions::default())
+            .unwrap_err();
+        match &err {
+            PipelineError::Validation(report) => assert!(
+                report.has_kind(crate::validate::IssueKind::NonFinite),
+                "NaN 应触发 NonFinite 校验失败: {}",
+                report.summary()
+            ),
+            other => panic!("应返回校验错误，实际: {other}"),
+        }
+    }
+
+    #[test]
+    fn generate_lenient_with_report_downgrades_other_errors() {
+        // 除 NonFinite 外的错误降级为警告，报告仍可交还调用方提示。
+        // 用**裸引用**模板：经 nc_fixed/nc_pad 等过滤器引用的缺失变量会在
+        // 渲染阶段就失败（过滤器需要具体值），走不到降级逻辑。
+        let mut g = GCodeGenerator::new();
+        g.registry_mut()
+            .add_memory(
+                "flex",
+                crate::registry::TemplateCategory::General,
+                "",
+                "G1 X{{ x }} F{{ feed }}",
+                vec![],
+            )
+            .unwrap();
+        let (out, report) = g
+            .generate_lenient_with_report(
+                "flex",
+                &ParameterSet::new(),
+                &machine(),
+                &GenerationOptions::default(),
+            )
+            .unwrap();
+        assert!(!out.is_empty(), "宽松模式不应阻断生成");
+        assert!(
+            !report.has_errors(),
+            "非 NonFinite 问题应已降级: {}",
+            report.summary()
+        );
+        assert!(
+            report.has_warnings(),
+            "缺失的必选参数应降级为警告而非消失: {}",
+            report.summary()
+        );
+        // 关键：报告里仍能看到"哪些参数缺失了"，调用方可据此提示用户
+        assert!(
+            report.has_kind(crate::validate::IssueKind::Missing),
+            "降级后仍应保留 Missing 类别供提示: {}",
+            report.summary()
+        );
+    }
+
+    #[test]
+    fn line_number_digits_is_clamped_to_upper_bound() {
+        // 回归：位宽无上界时，配置 "1000000000" 会让每行分配 GB 级缓冲，
+        // 而 Rust 分配失败是进程 abort（不可捕获）。必须夹紧到安全上限。
+        let g = GCodeGenerator::new();
+        let mut m = machine();
+        m.config
+            .insert("line_number_digits".into(), "1000000000".to_string());
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", 21.0)
+            .set_number("y", 15.0)
+            .set_number("depth", -10.0)
+            .set_number("feed", 100.0);
+        let opts = GenerationOptions {
+            line_numbers: true,
+            ..GenerationOptions::default()
+        };
+        let out = g.generate("drill_cycle", &ps, &m, &opts).unwrap();
+        // 行号字段宽度应为 MAX_LINE_NUMBER_DIGITS（而非配置里的 1000000000）
+        let first = out.lines().next().expect("至少一行输出");
+        let n_field = first.split(' ').next().unwrap_or("");
+        assert!(n_field.starts_with('N'), "应以行号前缀开头，实际: {first}");
+        assert_eq!(
+            n_field.len(),
+            1 + MAX_LINE_NUMBER_DIGITS,
+            "行号字段应夹紧到 {MAX_LINE_NUMBER_DIGITS} 位宽，实际 {} 位: {n_field}",
+            n_field.len() - 1
+        );
+        // 仍可正常编号（末尾是递增值）
+        assert!(n_field.ends_with("10"), "行号应递增，实际: {n_field}");
+    }
+
+    #[test]
     fn render_tool_change_integer_tool_number() {
         // 刀具号 T 字址只接受整数：nc_strip 去掉 f64 尾零（5.0 → 5）
         let g = GCodeGenerator::new();
         let mut ps = ParameterSet::new();
-        ps.set_number("tool_num", 5.0);
+        ps.set_number("tool_num", 5.0)
+            .set_number("spindle_speed", 3000.0);
         let out = g
             .generate(
                 "tool_change",
@@ -465,7 +622,10 @@ mod tests {
                 &GenerationOptions::default(),
             )
             .unwrap();
-        assert_eq!(out, "M5\nM6 T5\nG40 (取消刀具补偿)\n");
+        assert_eq!(
+            out,
+            "M5\nM9\nM6 T5\nG40 (取消刀补)\nG43 H5 (刀长补偿)\nM3 S3000 (主轴正转)\nM8 (冷却开)\n"
+        );
     }
 
     #[test]
@@ -477,7 +637,7 @@ mod tests {
         let out = g
             .generate("safe_move", &ps, &machine(), &GenerationOptions::default())
             .unwrap();
-        assert_eq!(out, "G0 G90 Z100.0\nG0 X21.0 Y15.0\n");
+        assert_eq!(out, "G0 G90 Z100.000\nG0 X21.000 Y15.000\n");
     }
 
     #[test]
@@ -498,7 +658,7 @@ mod tests {
         };
         let out = g.generate("program_header", &ps, &m, &opts).unwrap();
         assert!(out.contains("P000042"), "自定义程序号格式: {out}");
-        assert!(out.contains("\nL010 "), "自定义行号格式: {out}");
+        assert!(out.contains("L010 "), "自定义行号格式: {out}");
     }
 
     #[test]

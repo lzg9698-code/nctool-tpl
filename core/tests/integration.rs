@@ -1,9 +1,22 @@
 //! nctool-core 集成测试：通过公共 API 验证端到端能力。
 
+use std::path::Path;
+
 use nctool_core::machine::MachinePreset;
 use nctool_core::pipeline::{GCodeGenerator, GenerationOptions, PipelineError};
 use nctool_core::registry::{TemplateCategory, TemplateRegistry};
 use nctool_core::{ParamKind, ParamValue, ParameterSet};
+
+fn assert_golden(name: &str, actual: &str) {
+    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("tests")
+        .join("golden")
+        .join(name);
+    let expected = std::fs::read_to_string(&path)
+        .unwrap_or_else(|err| panic!("读取 golden 文件失败 {}: {err}", path.display()));
+    assert_eq!(actual, expected, "golden 不匹配: {}", path.display());
+}
 
 #[test]
 fn end_to_end_custom_template_generation() {
@@ -44,10 +57,73 @@ fn builtin_program_header_with_wfl_machine() {
     let out = g
         .generate("program_header", &ps, &wfl, &GenerationOptions::default())
         .unwrap();
-    // 字节级 golden：坐标系/进给模式直接输出配置值（不重复 G 前缀）
-    assert_eq!(
-        out,
-        "O0042\n( GEAR_SHAFT )\n(  )\nG21 (metric)\nG54\nG94\nM5\nM9\n"
+    // WFL 当前只覆盖通用模板键；至少验证预设身份与可生成性，不把 generic
+    // 字节输出误当作 WFL 专属适配已经生效。
+    assert_eq!(wfl.vendor, "WFL");
+    assert!(out.contains("O0042"));
+
+    let mut golden_params = ParameterSet::new();
+    golden_params
+        .set_integer("prog", 1)
+        .set_string("part_name", "DEMO");
+    assert_golden(
+        "program_header_generic.nc",
+        &g.generate(
+            "program_header",
+            &golden_params,
+            &MachinePreset::Generic.config(),
+            &GenerationOptions::default(),
+        )
+        .unwrap(),
+    );
+}
+
+#[test]
+fn builtin_templates_match_golden_files() {
+    let g = GCodeGenerator::new();
+    let machine = MachinePreset::Generic.config();
+
+    assert_golden(
+        "program_footer_generic.nc",
+        &g.generate(
+            "program_footer",
+            &ParameterSet::new(),
+            &machine,
+            &GenerationOptions::default(),
+        )
+        .unwrap(),
+    );
+
+    let mut tool_params = ParameterSet::new();
+    tool_params
+        .set_integer("tool_num", 5)
+        .set_integer("spindle_speed", 3000);
+    assert_golden(
+        "tool_change_generic.nc",
+        &g.generate(
+            "tool_change",
+            &tool_params,
+            &machine,
+            &GenerationOptions::default(),
+        )
+        .unwrap(),
+    );
+
+    let mut drill_params = ParameterSet::new();
+    drill_params
+        .set_number("x", 21.0)
+        .set_number("y", 15.0)
+        .set_number("depth", -10.0)
+        .set_number("feed", 100.0);
+    assert_golden(
+        "drill_cycle_generic.nc",
+        &g.generate(
+            "drill_cycle",
+            &drill_params,
+            &machine,
+            &GenerationOptions::default(),
+        )
+        .unwrap(),
     );
 }
 

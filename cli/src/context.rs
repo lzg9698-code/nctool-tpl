@@ -31,6 +31,12 @@ impl Ctx {
     /// 从全局选项解析上下文（读配置层叠）。
     pub fn from_global(g: &GlobalArgs) -> Result<Self, CliError> {
         let loaded = config::load()?;
+        // 损坏的 TOML 已在配置层降级为空配置；主动提示用户，但不阻断
+        // 当前命令。这样只读命令仍可使用内置模板/机床，用户也不会误以为
+        // 配置已生效。
+        for warning in &loaded.warnings {
+            eprintln!("warning: {warning}");
+        }
         Ok(Ctx {
             style: OutputStyle::from(&g.format),
             verbose: g.verbose,

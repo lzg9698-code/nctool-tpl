@@ -102,7 +102,7 @@ let out = r.render_template("main.j2", &ctx).unwrap();
 
 `{% include %}` / `{% extends %}` / `{% import %}` 均能正确解析到已注册或目录中的模板。
 
-每个返回的 `Variable` 都带有 `optional: bool` 字段：`true` 表示该变量的**全部引用**都处于「兜底上下文」（`default`/`d` 过滤器或 `is defined`/`is undefined` 测试）——对 `extract_undeclared` 而言即**可选参数**（缺失时模板仍可安全渲染），`false` 为**必选参数**。
+每个返回的 `Variable` 都带有 `optional: bool` 字段：`true` 表示该变量的**全部引用**都处于「兜底上下文」（作为 `default`/`d` 过滤器或 `is defined`/`is undefined` 测试的**直接裸变量操作数**）——对 `extract_undeclared` 而言即**可选参数**（缺失时模板仍可安全渲染），`false` 为**必选参数**。详见下方[可选 / 必选判定规则](#可选--必选判定规则)。
 
 ## 快速开始
 
@@ -164,8 +164,24 @@ nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param fe
 
 ## 可选 / 必选判定规则
 
-- **可选**：变量只出现在 `x | default(默认值)`（别名 `d`）或 `x is defined` / `x is undefined` 的**操作数**位置。
+- **可选**：变量的**全部**引用都是 `x | default(默认值)`（别名 `d`）或 `x is defined` / `x is undefined` 的**直接裸变量操作数**。
 - **必选**：变量在任意非兜底位置被引用（如 `{{ x }}`、`{{ x / 2 }}`、过滤器/函数参数等），或既有兜底引用又有非兜底引用。
+
+**兜底不向下传播**——这是最容易踩的坑。minijinja 会**先求值操作数、再套用过滤器/测试**，
+因此只有裸变量能被安全兜底；操作数是运算、属性或下标时，undefined 参与求值即直接报错，
+`default` / `defined` 根本来不及生效：
+
+| 模板 | 判定 | 原因 |
+| --- | --- | --- |
+| `{{ x \| default(1) }}` | `x` **可选** | 操作数即裸变量，undefined 被兜底 |
+| `{{ x \| default(1) \| nc_fixed(3) }}` | `x` **可选** | 兜底后串接过滤器仍安全 |
+| `{% if x is defined %}` | `x` **可选** | 同上 |
+| `{{ (a+b) \| default(1) }}` | `a`、`b` **必选** | 先算 `a+b`，undefined 参与运算即报错 |
+| `{{ a.b \| default(1) }}` | `a` **必选** | 先对 undefined 的 `a` 取属性，报错 |
+| `{% if a.b is defined %}` | `a` **必选** | 同上 |
+
+若把后三类误判为可选，上层校验会放行、严格模式渲染却失败，产出**不完整的 G-code**。
+因此判定策略是**宁多勿漏**：有疑问即记为必选。
 - 模板内部 `set`/`for`/`with`/宏参数等声明的局部变量不进未声明集合，不受此规则影响。
 
 ## 数学过滤器
@@ -193,7 +209,7 @@ cargo fmt --check
 ## 定位精度与判定边界
 
 - **解析错误列号**：`TplError::Parse.col` 取自 minijinja 错误携带的字节范围（需启用 `debug` feature）换算而来，指向**解析器停止处**的 token，是对错误位置的最佳近似（多数场景精确，个别场景如"未闭合块"只精确到行）。无法取得字节范围时回退为 `col = 1`。
-- **可选 / 必选判定边界**：只把 `default`/`d` 过滤器与 `defined`/`undefined` 测试的**直接操作数**记为可选；`defined` 保护块**内部**的引用仍记为必选（保守策略，宁多勿漏）；`default(参数)` 的默认值表达式里的变量仍记为必选（它必须存在才能求值默认值）。
+- **可选 / 必选判定边界**：只把 `default`/`d` 过滤器与 `defined`/`undefined` 测试的**直接裸变量操作数**记为可选，兜底**不向下传播**到子树（`(a+b) | default(1)`、`a.b | default(1)`、`a.b is defined` 中的变量均记为必选）；`defined` 保护块**内部**的引用仍记为必选（保守策略，宁多勿漏）；`default(参数)` 的默认值表达式里的变量仍记为必选（它必须存在才能求值默认值）。
 
 ## License
 

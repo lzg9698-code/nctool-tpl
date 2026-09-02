@@ -36,6 +36,7 @@ fn show(ctx: &Ctx) -> Result<(), CliError> {
         "sources": {
             "global": loaded.global_path.as_ref().map(|p| p.display().to_string()),
             "project": loaded.project_path.as_ref().map(|p| p.display().to_string()),
+            "warnings": loaded.warnings,
         },
     });
     ctx.style.print_ok(&text, data);
@@ -61,6 +62,12 @@ fn merged_text(loaded: &config::LoadedConfig) -> String {
             .map(|p| p.display().to_string())
             .unwrap_or_else(|| "(未发现)".to_string())
     ));
+    if !loaded.warnings.is_empty() {
+        s.push_str("  配置警告:\n");
+        for warning in &loaded.warnings {
+            s.push_str(&format!("    - {warning}\n"));
+        }
+    }
     s.push_str(&format!(
         "  模板目录: {}\n",
         cfg.template_dir

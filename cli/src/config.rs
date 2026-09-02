@@ -33,6 +33,11 @@ pub struct LoadedConfig {
     pub project_path: Option<PathBuf>,
     /// 层叠合并后的配置
     pub merged: NctoolConfig,
+    /// 配置文件问题（目前仅损坏 TOML）：降级为警告，不阻断命令执行。
+    ///
+    /// 读文件权限等 IO 错误仍然返回 `CliError`，因为此时无法安全判断
+    /// 配置内容；只有确定是用户可修复的 TOML 语法错误才回退为空配置。
+    pub warnings: Vec<String>,
 }
 
 /// 全局配置候选路径（按优先级）：
@@ -88,19 +93,42 @@ fn read_config_file(path: &Path) -> Result<Option<NctoolConfig>, CliError> {
     Ok(Some(cfg))
 }
 
+/// 读取配置的容错入口：损坏 TOML 降级为空配置并记录警告。
+///
+/// 配置是辅助输入，不应让 `templates list` / `machine show` 等只读命令
+/// 因一个拼写错误全部 exit 4；但读文件权限等 IO 错误仍必须阻断，避免
+/// 用户误以为配置已生效。
+fn read_config_file_lossy(
+    path: &Path,
+    warnings: &mut Vec<String>,
+) -> Result<Option<NctoolConfig>, CliError> {
+    match read_config_file(path) {
+        Ok(cfg) => Ok(cfg),
+        Err(err) if err.kind == "config" => {
+            warnings.push(format!("{}；已忽略该配置并使用默认值", err.message));
+            Ok(None)
+        }
+        Err(err) => Err(err),
+    }
+}
+
 /// 加载层叠配置（全局候选取第一个存在的；项目配置向上递归查找）。
 pub fn load() -> Result<LoadedConfig, CliError> {
+    let mut warnings = Vec::new();
     let mut global_path = None;
     let mut global = None;
     for path in global_config_candidates() {
-        if let Some(cfg) = read_config_file(&path)? {
+        if let Some(cfg) = read_config_file_lossy(&path, &mut warnings)? {
             global_path = Some(path);
             global = Some(cfg);
             break;
         }
     }
     let (project_path, project) = match find_project_config() {
-        Some(path) => (Some(path.clone()), read_config_file(&path)?),
+        Some(path) => (
+            Some(path.clone()),
+            read_config_file_lossy(&path, &mut warnings)?,
+        ),
         None => (None, None),
     };
     let mut merged = global.unwrap_or_default();
@@ -119,6 +147,7 @@ pub fn load() -> Result<LoadedConfig, CliError> {
         global_path,
         project_path,
         merged,
+        warnings,
     })
 }
 

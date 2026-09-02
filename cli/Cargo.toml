@@ -12,7 +12,6 @@ categories = ["command-line-utilities", "template-engine"]
 [dependencies]
 nctool-core = { path = "../core", version = "0.2.0" }
 nctool-tpl = { path = "..", version = "0.3.1" }
-minijinja = { version = "~2.24.0" }
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 serde = { version = "1", features = ["derive"] }

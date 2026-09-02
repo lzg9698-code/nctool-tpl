@@ -96,6 +96,18 @@ pub(crate) fn filter_nc_pad(value: f64, width: usize) -> Result<String, minijinj
             "nc_pad: 输入超出整数范围（截断后超过 i64 上限）",
         ));
     }
+    // 拒绝小数输入：程序号/行号传 `1.7` 时 `trunc()` 会静默产出 `O0001`，
+    // 调用方以为写的是 1.7。这类"渲染成功但结果错误"比直接报错危险得多，
+    // 因为它在下游是不可见的。需要取整请显式用 `| int` / `| round` / `| round(0)`。
+    if value.fract() != 0.0 {
+        return Err(minijinja::Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            format!(
+                "nc_pad: 输入 {value} 不是整数（程序号/行号不接受小数；\
+                 请先用 `| int` 或 `| round` 显式取整）"
+            ),
+        ));
+    }
     let int_val = value.trunc() as i64;
     Ok(format!("{:0>width$}", int_val, width = width))
 }

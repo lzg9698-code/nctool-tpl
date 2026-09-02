@@ -8,7 +8,7 @@
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use nctool_tpl::Renderer;
+use nctool_tpl::{Renderer, Value};
 
 use crate::model::ParamSpec;
 use crate::validate::{validate_template, ValidationReport};
@@ -361,7 +361,7 @@ impl TemplateRegistry {
     pub fn render_template(
         &self,
         name: &str,
-        context: &minijinja::Value,
+        context: &Value,
     ) -> Result<String, nctool_tpl::TplError> {
         self.renderer.render_template(name, context)
     }
@@ -374,7 +374,7 @@ impl TemplateRegistry {
     pub fn render_template_lenient(
         &self,
         name: &str,
-        context: &minijinja::Value,
+        context: &Value,
     ) -> Result<String, nctool_tpl::TplError> {
         let mut renderer = nctool_tpl::Renderer::new().with_lenient();
         for entry in self.entries.values() {
@@ -437,12 +437,18 @@ fn builtin_templates() -> Vec<(
         (
             "program_header",
             TemplateCategory::General,
-            "程序头：程序号 + 注释头 + 单位/坐标系初始化",
+            "程序头：纸带起始符 + 程序号 + 注释头 + 单位/坐标系/取消态初始化",
             concat!(
+                "%\n",
                 "{{ machine.program_prefix | default('O') }}{{ prog | nc_pad(machine.program_digits | default(4) | int) }}\n",
                 "( {{ part_name | default('') }} )\n",
                 "( {{ op_name | default('') }} )\n",
-                "G21 ({{ machine.units | default('metric') }})\n",
+                // 单位与 G 码联动：imperial 出 G20，其余出 G21。
+                // 用 `machine.units | default(...)` 裸变量形式，保证该变量仍判为可选，
+                // 不会因模板引用而把 `machine` 变成必选参数。
+                "{{ 'G20' if machine.units | default('metric') == 'imperial' else 'G21' }} ({{ machine.units | default('metric') }})\n",
+                "G90 G17 (绝对坐标 / XY 平面)\n",
+                "G40 G49 G80 (取消刀补 / 刀长补偿 / 固定循环)\n",
                 "{{ machine.coordinate_system }}\n",
                 "{{ machine.feed_mode }}\n",
                 "M5\nM9\n",
@@ -450,11 +456,13 @@ fn builtin_templates() -> Vec<(
             vec![
                 crate::validate::spec(
                     "prog",
-                    ParamKind::Number,
+                    ParamKind::Integer,
                     true,
                     None,
                     "程序号（前导零填充 4 位）",
-                ),
+                )
+                .with_range(1.0, 9999.0)
+                .with_unit("号"),
                 crate::validate::spec(
                     "part_name",
                     ParamKind::String,
@@ -474,34 +482,58 @@ fn builtin_templates() -> Vec<(
         (
             "program_footer",
             TemplateCategory::General,
-            "程序尾：主轴/冷却关闭 + 程序结束",
-            concat!("M5\nM9\n", "{{ machine.program_end }}\n"),
+            "程序尾：主轴/冷却关闭 + 取消循环 + 程序结束 + 纸带结束符",
+            concat!(
+                "M5\nM9\n",
+                "G80 (取消固定循环)\n",
+                "{{ machine.program_end }}\n",
+                "%\n",
+            ),
             vec![],
         ),
         (
             "tool_change",
             TemplateCategory::General,
-            "换刀：主轴停止 + 换刀 + 取消刀具补偿",
+            "换刀：主轴停止 + 换刀 + 刀长补偿 + 启动主轴与冷却",
             concat!(
-                "M5\n",
+                "M5\nM9\n",
                 "{{ machine.tool_change }} T{{ tool_num | nc_strip }}\n",
-                "G40 (取消刀具补偿)\n",
+                "G40 (取消刀补)\n",
+                "G43 H{{ tool_num | nc_strip }} (刀长补偿)\n",
+                // 主轴启动：此前内置模板从不发射 M3，导致钻孔循环在主轴停止状态下执行。
+                // spindle_speed 设为必选——主轴转速不可静默取默认值。
+                "{{ machine.spindle_on }} S{{ spindle_speed | nc_strip }} (主轴正转)\n",
+                "{{ machine.coolant_on }} (冷却开)\n",
             ),
-            vec![crate::validate::spec(
-                "tool_num",
-                ParamKind::Number,
-                true,
-                None,
-                "刀具号",
-            )],
+            vec![
+                crate::validate::spec(
+                    "tool_num",
+                    ParamKind::Integer,
+                    true,
+                    None,
+                    "刀具号",
+                )
+                .with_range(1.0, 999.0)
+                .with_unit("号"),
+                crate::validate::spec(
+                    "spindle_speed",
+                    ParamKind::Integer,
+                    true,
+                    None,
+                    "主轴转速（S 值，正整数）",
+                )
+                .with_range(1.0, 6000.0)
+                .with_unit("r/min"),
+            ],
         ),
         (
             "safe_move",
             TemplateCategory::General,
             "安全移动：抬刀到安全高度 + 定位",
             concat!(
-                "{{ machine.rapid }} G90 Z{{ safe_z | default(100) }}\n",
-                "{{ machine.rapid }} X{{ x }} Y{{ y }}\n",
+                // 统一用 nc_fixed(3) 格式化，避免此处输出 Z100.0 而钻孔循环输出 Z5.000
+                "{{ machine.rapid }} G90 Z{{ safe_z | default(100) | nc_fixed(3) }}\n",
+                "{{ machine.rapid }} X{{ x | nc_fixed(3) }} Y{{ y | nc_fixed(3) }}\n",
             ),
             vec![
                 crate::validate::spec(
@@ -524,7 +556,9 @@ fn builtin_templates() -> Vec<(
                     false,
                     Some(ParamValue::Number(100.0)),
                     "安全高度 Z",
-                ),
+                )
+                .with_min(0.0)
+                .with_unit("mm"),
             ],
         ),
         (
@@ -533,21 +567,33 @@ fn builtin_templates() -> Vec<(
             "钻孔循环：G81 标准钻孔",
             concat!(
                 "{{ machine.rapid }} X{{ x | nc_fixed(3) }} Y{{ y | nc_fixed(3) }}\n",
-                "{{ machine.linear }} G98 G81 R{{ r_plane | nc_fixed(3) }} Z{{ depth | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n",
+                // 固定循环块不带 G1：G1 与 G81 同属 01 组模态，前缀 G1 冗余，
+                // 且部分控制器对同组重复 G 码敏感，可移植性差。
+                "G98 G81 R{{ r_plane | nc_fixed(3) }} Z{{ depth | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n",
                 "G80 (取消循环)\n",
             ),
             vec![
-                crate::validate::spec("x", ParamKind::Number, true, None, "孔 X 坐标"),
-                crate::validate::spec("y", ParamKind::Number, true, None, "孔 Y 坐标"),
+                crate::validate::spec("x", ParamKind::Number, true, None, "孔 X 坐标")
+                    .with_unit("mm"),
+                crate::validate::spec("y", ParamKind::Number, true, None, "孔 Y 坐标")
+                    .with_unit("mm"),
                 crate::validate::spec(
                     "r_plane",
                     ParamKind::Number,
                     false,
                     Some(ParamValue::Number(5.0)),
                     "R 平面（安全高度）",
-                ),
-                crate::validate::spec("depth", ParamKind::Number, true, None, "钻孔深度"),
-                crate::validate::spec("feed", ParamKind::Number, true, None, "进给速度"),
+                )
+                .with_min(0.0)
+                .with_unit("mm")
+                .with_min(0.0)
+                .with_unit("mm"),
+                crate::validate::spec("depth", ParamKind::Number, true, None, "钻孔深度")
+                    .with_max(0.0)
+                    .with_unit("mm"),
+                crate::validate::spec("feed", ParamKind::Number, true, None, "进给速度")
+                    .with_min(0.001)
+                    .with_unit("mm/min"),
             ],
         ),
     ]
@@ -676,13 +722,16 @@ mod tests {
         let r = TemplateRegistry::new();
         let machine = crate::machine::MachinePreset::Generic.config();
         let mut ctx_map = std::collections::BTreeMap::new();
-        ctx_map.insert("machine", minijinja::Value::from_serialize(&machine.config));
-        ctx_map.insert("prog", minijinja::Value::from_serialize(1.0));
-        let ctx = minijinja::Value::from_serialize(&ctx_map);
+        ctx_map.insert("machine", Value::from_serialize(&machine.config));
+        ctx_map.insert("prog", Value::from_serialize(1.0));
+        let ctx = Value::from_serialize(&ctx_map);
         let out = r.render_template("program_header", &ctx).unwrap();
         // 字节级 golden：坐标系/进给模式直接输出配置值（不重复 G 前缀）。
         // 裸渲染不经过管线后处理，minijinja 默认剥离模板尾换行（无结尾 \n）
-        assert_eq!(out, "O0001\n(  )\n(  )\nG21 (metric)\nG54\nG94\nM5\nM9");
+        assert_eq!(
+            out,
+            "%\nO0001\n(  )\n(  )\nG21 (metric)\nG90 G17 (绝对坐标 / XY 平面)\nG40 G49 G80 (取消刀补 / 刀长补偿 / 固定循环)\nG54\nG94\nM5\nM9"
+        );
     }
 
     #[test]
@@ -781,7 +830,7 @@ mod tests {
                 &crate::pipeline::GenerationOptions::default(),
             )
             .unwrap();
-        assert!(out.contains("G1 G98 G81 R5.000 Z-10.000 F100.000"));
+        assert!(out.contains("G98 G81 R5.000 Z-10.000 F100.000"));
     }
 
     #[test]

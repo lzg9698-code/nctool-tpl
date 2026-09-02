@@ -434,7 +434,6 @@ dependencies = [
  "assert_cmd",
  "clap",
  "clap_complete",
- "minijinja",
  "nctool-core",
  "nctool-tpl",
  "predicates",
@@ -447,7 +446,6 @@ dependencies = [
 name = "nctool-core"
 version = "0.2.0"
 dependencies = [
- "minijinja",
  "nctool-tpl",
  "serde",
  "serde_json",

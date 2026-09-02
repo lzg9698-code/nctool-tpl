@@ -44,6 +44,17 @@ pub use extract::{
 };
 pub use renderer::Renderer;
 
+/// 渲染上下文值类型（`minijinja::Value` 的**再导出**）。
+///
+/// 下游（如 `nctool-core`）应统一从这里引用，**而不是**在自己的 `Cargo.toml`
+/// 里再声明一份 `minijinja` 依赖。原因：渲染上下文是本库公共签名的一部分
+/// （见 [`Renderer::render`]），一旦下游解析到不同的 minijinja 版本，
+/// 两边的 `Value` 就是**两个不同的类型**，拼不到一起。
+///
+/// 由本 crate 单点持有依赖并再导出，可保证整个 workspace 里只有一个
+/// `minijinja::Value`，把"版本漂移导致类型不匹配"从可能变成不可能。
+pub use minijinja::Value;
+
 #[cfg(test)]
 use error::{extract_identifier_at, extract_quoted, extract_undefined_var_name};
 
@@ -202,6 +213,97 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
         assert_eq!(v.len(), 1);
         assert_eq!(v[0].name, "radius");
         assert!(v[0].optional, "defined 测试保护的变量应为可选");
+    }
+
+    #[test]
+    fn extract_undeclared_default_does_not_protect_arithmetic() {
+        // 回归：default 兜底**不**向下传播到操作数子树。
+        // minijinja 先求值 (a + b) 再套 default —— undefined 参与加法即报错，
+        // default 救不了。若误判为可选，上层校验会放行、严格模式渲染却失败，
+        // 产出不完整 G-code（本领域最坏的失败模式）。
+        let src = "G1 X{{ (a + b) | default(1) }}";
+        let ast = parse(src, "t.j2").unwrap();
+        let v = extract_undeclared(&ast);
+        assert_eq!(v.len(), 2, "a、b 都应被提取");
+        for var in &v {
+            assert!(
+                !var.optional,
+                "{} 参与运算，default 无法兜底，应为必选",
+                var.name
+            );
+        }
+    }
+
+    #[test]
+    fn extract_undeclared_default_does_not_protect_attribute_chain() {
+        // 回归：{{ a.b | default(1) }} 会先对 undefined 的 a 取属性并报错，
+        // 故根变量 a 必选——不能因外层 default 判为可选。
+        let src = "G1 X{{ a.b | default(1) }}";
+        let ast = parse(src, "t.j2").unwrap();
+        let v = extract_undeclared(&ast);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].name, "a");
+        assert!(!v[0].optional, "属性链的根变量应为必选");
+    }
+
+    #[test]
+    fn extract_undeclared_defined_does_not_protect_attribute_chain() {
+        // 回归：与 default 同理，{% if a.b is defined %} 中的 a 必选。
+        let src = "{% if a.b is defined %}G1{% endif %}";
+        let ast = parse(src, "t.j2").unwrap();
+        let v = extract_undeclared(&ast);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].name, "a");
+        assert!(!v[0].optional, "属性链的根变量应为必选");
+    }
+
+    #[test]
+    fn extract_undeclared_optional_survives_filter_chain() {
+        // 裸变量经 default 兜底后，再串接其他过滤器仍应判可选：
+        // x 缺失 → default 补 1 → nc_fixed 求值，全程不报错。
+        // 防止「只认直接操作数」的修复误伤过滤器链场景。
+        let src = "G1 X{{ x | default(1) | nc_fixed(3) }}";
+        let ast = parse(src, "t.j2").unwrap();
+        let v = extract_undeclared(&ast);
+        assert_eq!(v.len(), 1);
+        assert_eq!(v[0].name, "x");
+        assert!(v[0].optional, "过滤器链不应破坏 default 兜底");
+    }
+
+    #[test]
+    fn extract_debug_global_is_not_undeclared() {
+        // 回归：debug 是 minijinja 启用 debug feature 后注入的内置全局，
+        // 不应被当作需要外部提供的参数。
+        let src = "{{ debug() }}";
+        let ast = parse(src, "t.j2").unwrap();
+        let v = extract_undeclared(&ast);
+        assert!(v.is_empty(), "debug 为内置全局，不应进入未声明集合: {v:?}");
+    }
+
+    #[test]
+    fn extract_with_block_binds_progressively() {
+        // 回归：minijinja 的 {% with %} 按「求值右值 → 绑定目标」逐条交错执行，
+        // 故 {% with a=1, b=a+1 %} 中 b 的初值看到的是本块绑定的 a，而非外部变量。
+        // 提取器若先求值全部右值再统一绑定，会把 a 误报为必选（渲染其实正常）。
+        let src = "{% with a=1, b=a+1 %}{{ b }}{% endwith %}";
+        let ast = parse(src, "t.j2").unwrap();
+        let v = extract_undeclared(&ast);
+        assert!(
+            v.is_empty(),
+            "a 已由 with 块绑定，不应进入未声明集合: {v:?}"
+        );
+    }
+
+    #[test]
+    fn extract_with_block_rhs_sees_outer_binding() {
+        // 反向回归：右值在目标绑定**前**求值，故 {% with y = y + 1 %} 的 y 仍必选。
+        // 防止「逐条交错」的修复把自引用场景误判为模板局部（漏报）。
+        let src = "{% with y = y + 1 %}{{ y }}{% endwith %}";
+        let ast = parse(src, "t.j2").unwrap();
+        let v = extract_undeclared(&ast);
+        assert_eq!(v.len(), 1, "自引用右值中的 y 应记为必选: {v:?}");
+        assert_eq!(v[0].name, "y");
+        assert!(!v[0].optional);
     }
 
     #[test]
@@ -1137,6 +1239,48 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
             TplError::Render { message, .. } => assert!(message.contains("负数")),
             _ => panic!("nc_pad 负数应报错"),
         }
+    }
+
+    #[test]
+    fn nc_pad_fractional_rejects() {
+        // 回归：1.7 经 trunc() 会静默变成 O0001 —— 程序号写错却不报错，
+        // 是"渲染成功但结果错误"中最危险的一类。必须拒绝而非截断。
+        let r = Renderer::new();
+        let ctx = minijinja::context! { n => 1.7 };
+        let err = r
+            .render("O{{ n | nc_pad(4) }}", "padfrac.j2", &ctx)
+            .unwrap_err();
+        match err {
+            TplError::Render { message, .. } => assert!(
+                message.contains("不是整数"),
+                "小数输入应被拒绝，实际: {message}"
+            ),
+            _ => panic!("nc_pad 小数输入应报错"),
+        }
+    }
+
+    #[test]
+    fn nc_pad_accepts_integral_float() {
+        // 整值浮点（1.0）应正常通过：JSON/CLI 常把 1 解析成 1.0，
+        // 不能因小数拒绝而误伤这种常见表示。
+        let r = Renderer::new();
+        let ctx = minijinja::context! { n => 1.0 };
+        assert_eq!(
+            r.render("O{{ n | nc_pad(4) }}", "ok.j2", &ctx).unwrap(),
+            "O0001"
+        );
+    }
+
+    #[test]
+    fn nc_pad_explicit_round_then_pad() {
+        // 需要取整时显式转换仍可用（报错信息指引的路径必须真的走得通）
+        let r = Renderer::new();
+        let ctx = minijinja::context! { n => 1.7 };
+        assert_eq!(
+            r.render("O{{ n | round | nc_pad(4) }}", "r.j2", &ctx)
+                .unwrap(),
+            "O0002"
+        );
     }
 
     #[test]

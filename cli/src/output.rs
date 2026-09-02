@@ -40,8 +40,8 @@ impl CliError {
     /// 命令失败对应的进程退出码。
     ///
     /// 矩阵：`0` 成功；`1` 参数校验未通过；`2` 参数/用法错误（与 clap 一致）；
-    /// `3` IO 失败；`4` 配置错误；`5` 模板/机床未找到；`6` 渲染失败；
-    /// 其余分类兜底归 `1`。
+    /// `3` IO 失败；`4` 配置错误；`5` 模板/机床未找到；`6` 渲染/注册表失败；
+    /// `7` 功能尚未实现；未知分类兜底归 `1`。
     pub fn exit_code(&self) -> u8 {
         match self.kind {
             "validation" => 1,
@@ -49,7 +49,9 @@ impl CliError {
             "io" => 3,
             "config" => 4,
             "template_not_found" | "machine_not_found" => 5,
-            "render" => 6,
+            "render" | "pipeline" | "registry" | "template_duplicate" | "template_empty"
+            | "template_compile" => 6,
+            "not_implemented" => 7,
             _ => 1,
         }
     }

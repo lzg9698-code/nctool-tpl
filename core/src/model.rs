@@ -1,4 +1,4 @@
-//! 数据模型：参数、机床、刀具、零件与工序。
+//! 数据模型：参数规格与参数集、机床配置、渲染上下文构建。
 //!
 //! 所有类型均派生 `serde` 序列化，便于从 JSON/YAML 配置文件加载
 //! （CLI 场景）或持久化。
@@ -7,15 +7,29 @@ use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
-/// 参数值：支持数值 / 字符串 / 布尔三种类型。
+/// 渲染上下文值类型。
+///
+/// 取自 `nctool_tpl::Value`（即 `minijinja::Value` 的再导出）——本 crate
+/// **不直接依赖 minijinja**，避免与模板库解析到不同版本而产生两个不兼容的
+/// `Value` 类型。详见 [`nctool_tpl::Value`] 的说明。
+use nctool_tpl::Value;
+
+/// 参数值：支持数值 / 整数 / 字符串 / 布尔四种类型。
 ///
 /// G-code 参数绝大多数为数值（坐标、进给、转速），少量为字符串（刀具名、注释）
 /// 或布尔（开/关开关）。
+///
+/// **整数型（`Integer`）用于程序号、刀具号、刀长补偿号等天然为整数的参数**：
+/// 这类值若用 `Number` 承载，`nc_strip`/`nc_pad` 会因浮点表示输出 `T5.5` 这类
+/// 非法字址，或被 `trunc()` 静默截断（`prog=1.7` → `O0001` 且不报错）。
+/// 用独立类型承载可在校验层就拒绝非整数值。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "type", content = "value")]
 pub enum ParamValue {
     /// 数值参数（坐标、进给、转速等）
     Number(f64),
+    /// 整数参数（程序号、刀具号、补偿号等天然为整数的量）
+    Integer(i64),
     /// 字符串参数（刀具名、注释、文本类）
     String(String),
     /// 布尔参数（开关类）
@@ -27,6 +41,30 @@ impl ParamValue {
     pub fn as_number(&self) -> Option<f64> {
         match self {
             ParamValue::Number(v) => Some(*v),
+            _ => None,
+        }
+    }
+
+    /// 整数视图：`Integer` 返回其值；`Number` 为整值时也返回（如 `5.0` → `5`）。
+    ///
+    /// 非整值的 `Number`（如 `5.5`）返回 `None` —— 调用方可据此区分
+    /// "整数值" 与 "恰好写成浮点的整数"。
+    pub fn as_integer(&self) -> Option<i64> {
+        match self {
+            ParamValue::Integer(v) => Some(*v),
+            ParamValue::Number(v) if v.is_finite() && v.fract() == 0.0 => Some(*v as i64),
+            _ => None,
+        }
+    }
+
+    /// 数值视图（跨 Number / Integer）：用于 min/max 等区间比较。
+    ///
+    /// 非数值类型返回 `None`。`Integer` 转为 `f64`（i64 在 f64 的 53 位精度内
+    /// 可能丢精度，但 CNC 参数的量级远远不到，可接受）。
+    pub fn as_f64(&self) -> Option<f64> {
+        match self {
+            ParamValue::Number(v) => Some(*v),
+            ParamValue::Integer(v) => Some(*v as f64),
             _ => None,
         }
     }
@@ -54,6 +92,8 @@ impl ParamValue {
 pub enum ParamKind {
     /// 数值
     Number,
+    /// 整数（程序号、刀具号、补偿号等）
+    Integer,
     /// 字符串
     String,
     /// 布尔
@@ -62,19 +102,31 @@ pub enum ParamKind {
 
 impl ParamKind {
     /// 该类型是否与给定参数值匹配。
+    ///
+    /// 匹配规则有意保持宽松、但守住整数语义：
+    /// - `Number` 接受 `Number` 与 `Integer`（整数是数值的特例）
+    /// - `Integer` 接受 `Integer`，以及**整值**的 `Number`（`5.0` 通过，`5.5` 拒绝）
+    ///
+    /// 第二条是 `Integer` 的存在意义：程序号/刀具号若允许 `5.5`，会产出
+    /// `T5.5` 这类非法字址，或被 `nc_pad` 静默截断成 `O0001` 而不报错。
     pub fn matches(&self, value: &ParamValue) -> bool {
-        matches!(
-            (self, value),
-            (ParamKind::Number, ParamValue::Number(_))
-                | (ParamKind::String, ParamValue::String(_))
-                | (ParamKind::Bool, ParamValue::Bool(_))
-        )
+        match (self, value) {
+            (ParamKind::Number, ParamValue::Number(_)) => true,
+            (ParamKind::Number, ParamValue::Integer(_)) => true,
+            (ParamKind::Integer, ParamValue::Integer(_)) => true,
+            // 整值浮点数视为合法整数（CLI/JSON 常把 5 解析成 5.0）
+            (ParamKind::Integer, ParamValue::Number(v)) => v.is_finite() && v.fract() == 0.0,
+            (ParamKind::String, ParamValue::String(_)) => true,
+            (ParamKind::Bool, ParamValue::Bool(_)) => true,
+            _ => false,
+        }
     }
 
     /// 人类可读的类型名。
     pub fn label(&self) -> &'static str {
         match self {
             ParamKind::Number => "数值",
+            ParamKind::Integer => "整数",
             ParamKind::String => "字符串",
             ParamKind::Bool => "布尔",
         }
@@ -103,8 +155,107 @@ pub struct ParamSpec {
     /// 模板引用决定；两者可同时声明（`required=true + default` 意为"文档上
     /// 必选，但缺失时可用默认值兜底"）。
     pub default: Option<ParamValue>,
+    /// 数值下界（**含边界**）；仅对数值/整数参数生效，`None` 表示不限。
+    ///
+    /// CNC 关键约束（进给率 > 0、主轴转速 ≥ 0、切削深度 ≤ 0 等）在此表达；
+    /// 校验通过即保证参数落在工艺允许区间内。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub min: Option<f64>,
+    /// 数值上界（**含边界**）；仅对数值/整数参数生效，`None` 表示不限。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max: Option<f64>,
+    /// 是否要求取**整数值**（数值参数拒绝 `5.5` 这类带小数的值）。
+    ///
+    /// 用途：程序号、刀具号、刀长补偿号等天然为整数的参数。缺失此约束时，
+    /// `prog=1.7` 会被 `nc_pad` 静默截断为 `O0001`、`tool_num=5.5` 会输出
+    /// 非法字址 `T5.5`，两者都不报错 —— 这是本字段要堵住的问题。
+    ///
+    /// 与 [`ParamKind::Integer`] 的区别：本字段是**附加在现有类型上的约束**
+    /// （如 `Number` + `integer=true`），而 `ParamKind::Integer` 是**独立类型**。
+    /// 给新参数建模时优先用 `ParamKind::Integer`。
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub integer: bool,
+    /// 计量单位（如 `mm`、`mm/min`、`r/min`）。
+    ///
+    /// 仅用于文档展示与错误提示，**不做任何单位换算**（换算涉及模板内
+    /// `nc_fixed` 精度与机床单位制，需由上层显式处理）。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub unit: Option<String>,
     /// 用途说明（文档/错误提示用）
     pub description: String,
+}
+
+/// `bool` 的 serde 跳过判定（`skip_serializing_if` 需要 `&bool → bool` 的函数）。
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
+impl ParamSpec {
+    /// 构造最小规格（无约束、无默认值）。
+    pub fn new(name: impl Into<String>, kind: ParamKind, description: impl Into<String>) -> Self {
+        Self {
+            name: name.into(),
+            kind,
+            required: false,
+            default: None,
+            min: None,
+            max: None,
+            integer: false,
+            unit: None,
+            description: description.into(),
+        }
+    }
+
+    /// 设置数值下界（含）。
+    pub fn with_min(mut self, min: f64) -> Self {
+        self.min = Some(min);
+        self
+    }
+
+    /// 设置数值上界（含）。
+    pub fn with_max(mut self, max: f64) -> Self {
+        self.max = Some(max);
+        self
+    }
+
+    /// 设置取值区间（含两端），等价于 `with_min(min).with_max(max)`。
+    pub fn with_range(mut self, min: f64, max: f64) -> Self {
+        self.min = Some(min);
+        self.max = Some(max);
+        self
+    }
+
+    /// 要求取整数值。
+    pub fn require_integer(mut self) -> Self {
+        self.integer = true;
+        self
+    }
+
+    /// 设置计量单位（仅文档与错误提示用，不参与换算）。
+    pub fn with_unit(mut self, unit: impl Into<String>) -> Self {
+        self.unit = Some(unit.into());
+        self
+    }
+
+    /// 设置文档性必选标记。
+    pub fn required(mut self, required: bool) -> Self {
+        self.required = required;
+        self
+    }
+
+    /// 设置默认值。
+    pub fn with_default(mut self, default: ParamValue) -> Self {
+        self.default = Some(default);
+        self
+    }
+
+    /// 单位后缀（用于错误提示与帮助信息），如 ` (mm/min)`；无单位则为空串。
+    pub fn unit_suffix(&self) -> String {
+        match &self.unit {
+            Some(u) => format!(" {u}"),
+            None => String::new(),
+        }
+    }
 }
 
 /// 参数集：一组具名参数值。
@@ -117,11 +268,14 @@ pub struct ParameterSet {
 }
 
 /// 将 [`ParamValue`] 转为 minijinja 裸值（用于渲染上下文）。
-fn param_to_minijinja(v: &ParamValue) -> minijinja::Value {
+fn param_to_minijinja(v: &ParamValue) -> Value {
     match v {
-        ParamValue::Number(n) => minijinja::Value::from_serialize(n),
-        ParamValue::String(s) => minijinja::Value::from_serialize(s),
-        ParamValue::Bool(b) => minijinja::Value::from_serialize(b),
+        ParamValue::Number(n) => Value::from_serialize(n),
+        // 整数以 i64 裸值注入：`{{ tool_num }}` 输出 `5` 而非 `5.0`，
+        // 且能被 `nc_pad`/`nc_strip` 安全格式化。
+        ParamValue::Integer(n) => Value::from_serialize(n),
+        ParamValue::String(s) => Value::from_serialize(s),
+        ParamValue::Bool(b) => Value::from_serialize(b),
     }
 }
 
@@ -136,6 +290,14 @@ impl ParameterSet {
     /// 设置数值参数。
     pub fn set_number(&mut self, name: impl Into<String>, value: f64) -> &mut Self {
         self.values.insert(name.into(), ParamValue::Number(value));
+        self
+    }
+
+    /// 设置整数参数（程序号、刀具号、补偿号等）。
+    ///
+    /// 用于承载天然为整数的量，避免 `Number` 路径下的浮点格式化与静默截断。
+    pub fn set_integer(&mut self, name: impl Into<String>, value: i64) -> &mut Self {
+        self.values.insert(name.into(), ParamValue::Integer(value));
         self
     }
 
@@ -184,13 +346,13 @@ impl ParameterSet {
     /// 模板中通过变量名直接引用参数（如 `{{ x }}`）。数值/字符串/布尔均以
     /// **裸值**注入（数值→数字、字符串→字符串、布尔→布尔），而非 serde 的
     /// 带标签对象。机床配置等系统参数由调用方在渲染时单独合并。
-    pub fn to_minijinja_value(&self) -> minijinja::Value {
-        let map: std::collections::BTreeMap<&str, minijinja::Value> = self
+    pub fn to_minijinja_value(&self) -> Value {
+        let map: std::collections::BTreeMap<&str, Value> = self
             .values
             .iter()
             .map(|(k, v)| (k.as_str(), param_to_minijinja(v)))
             .collect();
-        minijinja::Value::from_serialize(&map)
+        Value::from_serialize(&map)
     }
 }
 
@@ -250,72 +412,22 @@ pub(crate) fn apply_spec_defaults(specs: &[ParamSpec], params: &ParameterSet) ->
 /// `machine` 对象包含 `config` 的全部键值（**字符串**，如 `{{ machine.rapid }}`）
 /// 以及元信息 `id` / `vendor` / `model`。若 `config` 中存在同名键，元信息优先。
 /// 注意 `config` 值均为字符串，模板中做数值比较需先转换（如 `| int`）。
-pub(crate) fn build_render_context(
-    params: &ParameterSet,
-    machine: &MachineConfig,
-) -> minijinja::Value {
-    let mut map: std::collections::BTreeMap<String, minijinja::Value> =
-        std::collections::BTreeMap::new();
+pub(crate) fn build_render_context(params: &ParameterSet, machine: &MachineConfig) -> Value {
+    let mut map: std::collections::BTreeMap<String, Value> = std::collections::BTreeMap::new();
     for (k, v) in &params.values {
         map.insert(k.clone(), param_to_minijinja(v));
     }
     // 注入 machine 对象（config 键值 + 元信息，模板通过 {{ machine.xxx }} 引用）
-    let mut machine_obj: std::collections::BTreeMap<&str, minijinja::Value> =
+    let mut machine_obj: std::collections::BTreeMap<&str, Value> =
         std::collections::BTreeMap::new();
     for (k, v) in &machine.config {
-        machine_obj.insert(k.as_str(), minijinja::Value::from(v.as_str()));
+        machine_obj.insert(k.as_str(), Value::from(v.as_str()));
     }
-    machine_obj.insert("id", minijinja::Value::from(machine.id.as_str()));
-    machine_obj.insert("vendor", minijinja::Value::from(machine.vendor.as_str()));
-    machine_obj.insert("model", minijinja::Value::from(machine.model.as_str()));
-    map.insert(
-        "machine".to_string(),
-        minijinja::Value::from_serialize(&machine_obj),
-    );
-    minijinja::Value::from_serialize(&map)
-}
-
-/// 刀具。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Tool {
-    /// 刀具号（T 指令）
-    pub number: u32,
-    /// 刀具名称（如 `D12_3F_LOT`）
-    pub name: String,
-    /// 直径（mm）
-    pub diameter: f64,
-    /// 备注
-    pub comment: String,
-}
-
-/// 工序：一次具体的 G-code 生成任务。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Operation {
-    /// 工序标识
-    pub id: String,
-    /// 工序名称
-    pub name: String,
-    /// 使用的模板名（模板注册表内）
-    pub template: String,
-    /// 工序参数
-    pub params: ParameterSet,
-    /// 工序使用的刀具
-    pub tools: Vec<Tool>,
-}
-
-/// 零件：一组工序的集合，代表一个待加工零件。
-#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
-pub struct Part {
-    /// 零件标识（如物料号）
-    pub id: String,
-    /// 零件名称
-    pub name: String,
-    /// 材料（如 `18CrNiMo7`）
-    pub material: String,
-    /// 零件级参数（可被子工序合并）
-    pub params: ParameterSet,
-    /// 工序列表
-    pub operations: Vec<Operation>,
+    machine_obj.insert("id", Value::from(machine.id.as_str()));
+    machine_obj.insert("vendor", Value::from(machine.vendor.as_str()));
+    machine_obj.insert("model", Value::from(machine.model.as_str()));
+    map.insert("machine".to_string(), Value::from_serialize(&machine_obj));
+    Value::from_serialize(&map)
 }
 
 #[cfg(test)]
