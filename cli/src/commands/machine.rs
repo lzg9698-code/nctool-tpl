@@ -52,11 +52,20 @@ fn show(ctx: &Ctx, args: &MachineShowArgs) -> Result<(), CliError> {
     for (k, v) in &m.config {
         text.push_str(&format!("    {:<24} {}\n", k, v));
     }
+    // schema 告警（A4）：未知键 / 非法值提示，不阻断命令成功
+    let warnings = nctool_core::machine::validate_config_keys(&m);
+    if !warnings.is_empty() {
+        text.push_str("  配置告警:\n");
+        for w in &warnings {
+            text.push_str(&format!("    ⚠ {w}\n"));
+        }
+    }
     let data = serde_json::json!({
         "id": m.id,
         "vendor": m.vendor,
         "model": m.model,
         "config": m.config,
+        "warnings": warnings,
     });
     ctx.style.print_ok(&text, data);
     Ok(())
