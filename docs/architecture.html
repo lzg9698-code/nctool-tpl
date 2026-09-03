@@ -1,0 +1,651 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>nctool 系统架构总览</title>
+<style>
+:root{
+  --bg:#f6f7f5; --surface:#ffffff; --line:#e3e3de; --line-soft:#eeeeea;
+  --ink:#25251f; --ink-2:#5f5e5a; --ink-3:#8a8983;
+  --blue-50:#e6f1fb; --blue-300:#85b7eb; --blue-600:#185fa5; --blue-800:#0c447c;
+  --teal-50:#e1f5ee; --teal-600:#0f6e56; --teal-800:#085041;
+  --amber-50:#faeeda; --amber-600:#854f0b; --amber-800:#633806;
+  --red-50:#fcebeb; --red-600:#a32d2d; --red-800:#791f1f;
+  --gray-50:#f1efe8; --gray-400:#b4b2a9; --gray-600:#5f5e5a;
+  --gray:#888780;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  font-size:14px; line-height:1.7;
+}
+.wrap{max-width:1040px; margin:0 auto; padding:0 24px 80px}
+header{padding:56px 0 32px; border-bottom:1px solid var(--line)}
+h1{font-size:30px; font-weight:500; margin:0 0 10px; letter-spacing:-.2px}
+.sub{color:var(--ink-2); font-size:14px; margin:0}
+.meta{color:var(--ink-3); font-size:13px; margin:14px 0 0}
+.metrics{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin:28px 0 0}
+.metric{background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:14px 16px}
+.metric .k{font-size:12px; color:var(--ink-3); margin:0}
+.metric .v{font-size:24px; font-weight:500; margin:2px 0 0; letter-spacing:-.3px}
+nav{margin:28px 0 0; display:flex; flex-wrap:wrap; gap:8px}
+nav a{
+  font-size:13px; color:var(--ink-2); text-decoration:none;
+  background:var(--surface); border:1px solid var(--line);
+  border-radius:999px; padding:5px 13px;
+}
+nav a:hover{border-color:var(--gray-400); color:var(--ink)}
+section{margin-top:52px}
+h2{font-size:20px; font-weight:500; margin:0 0 6px; letter-spacing:-.2px}
+h2 .n{color:var(--gray-400); font-weight:400; margin-right:8px}
+.lead{color:var(--ink-2); margin:0 0 22px; max-width:78ch}
+h3{font-size:15px; font-weight:500; margin:28px 0 10px}
+p{margin:0 0 14px; max-width:80ch}
+.card{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:22px 24px}
+.card + .card{margin-top:14px}
+table{width:100%; border-collapse:collapse; background:var(--surface);
+  border:1px solid var(--line); border-radius:12px; overflow:hidden; font-size:13px}
+th,td{text-align:left; padding:11px 14px; border-bottom:1px solid var(--line-soft); vertical-align:top}
+th{font-weight:500; color:var(--ink-2); background:#fbfbf9; font-size:12px; letter-spacing:.02em}
+tr:last-child td{border-bottom:none}
+code{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,monospace; font-size:12.5px;
+  background:var(--gray-50); padding:1px 5px; border-radius:4px}
+.grid2{display:grid; grid-template-columns:repeat(auto-fit,minmax(280px,1fr)); gap:14px}
+.mgrid{display:grid; grid-template-columns:repeat(auto-fit,minmax(210px,1fr)); gap:12px}
+.mod{background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:16px 18px}
+.mod .t{font-size:14px; font-weight:500; margin:0 0 3px}
+.mod .d{font-size:12.5px; color:var(--ink-2); margin:0}
+.dot{display:inline-block; width:8px; height:8px; border-radius:2px; margin-right:7px; vertical-align:1px}
+.dec{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:0; overflow:hidden}
+.dec .hd{display:flex; gap:12px; align-items:baseline; padding:16px 20px 12px; border-bottom:1px solid var(--line-soft)}
+.dec .id{font-size:12px; font-weight:500; color:var(--ink-3); letter-spacing:.04em}
+.dec .ti{font-size:14.5px; font-weight:500; margin:0}
+.dec .bd{padding:14px 20px 18px; font-size:13.5px; color:var(--ink-2)}
+.dec .bd p{margin:0; max-width:none}
+svg{display:block; width:100%; height:auto}
+.fig{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:20px 18px 14px}
+.cap{font-size:12.5px; color:var(--ink-3); text-align:center; margin:8px 0 0}
+ul{margin:0; padding-left:20px; color:var(--ink-2)}
+li{margin:0 0 6px}
+.tag{display:inline-block; font-size:11.5px; padding:2px 8px; border-radius:5px; margin-right:6px}
+.tag.e{background:var(--red-50); color:var(--red-800)}
+.tag.w{background:var(--amber-50); color:var(--amber-800)}
+.tag.p{background:var(--gray-50); color:var(--ink-2)}
+footer{margin-top:60px; padding-top:22px; border-top:1px solid var(--line); color:var(--ink-3); font-size:12.5px}
+@media (max-width:640px){ .wrap{padding:0 16px 60px} h1{font-size:24px} }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>nctool 系统架构总览</h1>
+  <p class="sub">面向数控加工的 G-code 模板工具链 · 三层 crate 架构 · 渲染前可发现错误</p>
+  <p class="meta">生成于 2026-09-03 · 对应 <code>docs/ARCHITECTURE.md</code> · workspace v0.3.1 / v0.2.0 / v0.2.0</p>
+
+  <div class="metrics">
+    <div class="metric"><p class="k">crate 数量</p><p class="v">3</p></div>
+    <div class="metric"><p class="k">测试通过</p><p class="v">272</p></div>
+    <div class="metric"><p class="k">内置模板</p><p class="v">5</p></div>
+    <div class="metric"><p class="k">机床预设</p><p class="v">3</p></div>
+    <div class="metric"><p class="k">依赖方向</p><p class="v">单向</p></div>
+  </div>
+
+  <nav>
+    <a href="#s1">1 分层架构</a>
+    <a href="#s2">2 职责矩阵</a>
+    <a href="#s3">3 核心模块</a>
+    <a href="#s4">4 生成管线数据流</a>
+    <a href="#s5">5 模板解析层数据流</a>
+    <a href="#s6">6 参数校验数据流</a>
+    <a href="#s7">7 设计决策</a>
+    <a href="#s8">8 错误模型</a>
+    <a href="#s9">9 扩展点</a>
+  </nav>
+</header>
+
+<section id="s1">
+  <h2><span class="n">01</span>分层架构与依赖方向</h2>
+  <p class="lead">依赖严格单向向下：<code>cli → core → tpl → minijinja</code>。不存在反向依赖，也不存在跨层依赖。
+  所有真实业务逻辑都在 <code>nctool-core</code>，CLI 与未来的 Web UI 只是两个输入/展示面，不复制业务逻辑。</p>
+  <div class="fig">
+    <svg viewBox="0 0 680 500" role="img" aria-label="nctool 三层架构与依赖方向">
+      <defs>
+        <marker id="ar" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </marker>
+      </defs>
+
+      <rect x="40" y="40" width="600" height="104" rx="16" fill="#e6f1fb" stroke="#185fa5" stroke-width="0.5"/>
+      <text x="60" y="62" font-size="14" font-weight="500" fill="#0c447c" dominant-baseline="central">nctool-cli　v0.2.0</text>
+      <text x="60" y="80" font-size="12" fill="#185fa5" dominant-baseline="central">binary `nctool` · 命令解析 · 配置层叠 · 结果渲染</text>
+      <rect x="60" y="94" width="128" height="28" rx="6" fill="#ffffff" stroke="#185fa5" stroke-width="0.5"/>
+      <text x="124" y="108" font-size="13" fill="#0c447c" text-anchor="middle" dominant-baseline="central">cli.rs 命令树</text>
+      <rect x="204" y="94" width="128" height="28" rx="6" fill="#ffffff" stroke="#185fa5" stroke-width="0.5"/>
+      <text x="268" y="108" font-size="13" fill="#0c447c" text-anchor="middle" dominant-baseline="central">config.rs 层叠</text>
+      <rect x="348" y="94" width="128" height="28" rx="6" fill="#ffffff" stroke="#185fa5" stroke-width="0.5"/>
+      <text x="412" y="108" font-size="13" fill="#0c447c" text-anchor="middle" dominant-baseline="central">context.rs 装配</text>
+      <rect x="492" y="94" width="128" height="28" rx="6" fill="#ffffff" stroke="#185fa5" stroke-width="0.5"/>
+      <text x="556" y="108" font-size="13" fill="#0c447c" text-anchor="middle" dominant-baseline="central">output.rs 统一出口</text>
+
+      <path d="M340 144 V 162" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar)"/>
+      <text x="352" y="155" font-size="11" fill="#888780" dominant-baseline="central">依赖</text>
+
+      <rect x="40" y="164" width="600" height="114" rx="16" fill="#e1f5ee" stroke="#0f6e56" stroke-width="0.5"/>
+      <text x="60" y="186" font-size="14" font-weight="500" fill="#085041" dominant-baseline="central">nctool-core　v0.2.0</text>
+      <text x="60" y="204" font-size="12" fill="#0f6e56" dominant-baseline="central">数据模型 · 参数校验 · 模板注册表 · 机床预设 · 生成管线</text>
+      <rect x="60" y="218" width="102" height="40" rx="6" fill="#ffffff" stroke="#0f6e56" stroke-width="0.5"/>
+      <text x="111" y="232" font-size="13" fill="#085041" text-anchor="middle" dominant-baseline="central">model</text>
+      <text x="111" y="248" font-size="11" fill="#0f6e56" text-anchor="middle" dominant-baseline="central">参数 / 机床模型</text>
+      <rect x="174" y="218" width="102" height="40" rx="6" fill="#ffffff" stroke="#0f6e56" stroke-width="0.5"/>
+      <text x="225" y="232" font-size="13" fill="#085041" text-anchor="middle" dominant-baseline="central">validate</text>
+      <text x="225" y="248" font-size="11" fill="#0f6e56" text-anchor="middle" dominant-baseline="central">渲染前校验引擎</text>
+      <rect x="288" y="218" width="102" height="40" rx="6" fill="#ffffff" stroke="#0f6e56" stroke-width="0.5"/>
+      <text x="339" y="232" font-size="13" fill="#085041" text-anchor="middle" dominant-baseline="central">registry</text>
+      <text x="339" y="248" font-size="11" fill="#0f6e56" text-anchor="middle" dominant-baseline="central">模板注册表</text>
+      <rect x="402" y="218" width="102" height="40" rx="6" fill="#ffffff" stroke="#0f6e56" stroke-width="0.5"/>
+      <text x="453" y="232" font-size="13" fill="#085041" text-anchor="middle" dominant-baseline="central">machine</text>
+      <text x="453" y="248" font-size="11" fill="#0f6e56" text-anchor="middle" dominant-baseline="central">机床预设</text>
+      <rect x="516" y="218" width="102" height="40" rx="6" fill="#ffffff" stroke="#0f6e56" stroke-width="0.5"/>
+      <text x="567" y="232" font-size="13" fill="#085041" text-anchor="middle" dominant-baseline="central">pipeline</text>
+      <text x="567" y="248" font-size="11" fill="#0f6e56" text-anchor="middle" dominant-baseline="central">生成管线</text>
+
+      <path d="M340 278 V 296" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar)"/>
+      <text x="352" y="289" font-size="11" fill="#888780" dominant-baseline="central">依赖</text>
+
+      <rect x="40" y="298" width="600" height="114" rx="16" fill="#faeeda" stroke="#854f0b" stroke-width="0.5"/>
+      <text x="60" y="320" font-size="14" font-weight="500" fill="#633806" dominant-baseline="central">nctool-tpl　v0.3.1</text>
+      <text x="60" y="338" font-size="12" fill="#854f0b" dominant-baseline="central">Jinja2 解析 · 变量提取 · NC 数值过滤器 · 渲染</text>
+      <rect x="60" y="352" width="128" height="40" rx="6" fill="#ffffff" stroke="#854f0b" stroke-width="0.5"/>
+      <text x="124" y="366" font-size="13" fill="#633806" text-anchor="middle" dominant-baseline="central">extract</text>
+      <text x="124" y="382" font-size="11" fill="#854f0b" text-anchor="middle" dominant-baseline="central">AST 遍历提取</text>
+      <rect x="204" y="352" width="128" height="40" rx="6" fill="#ffffff" stroke="#854f0b" stroke-width="0.5"/>
+      <text x="268" y="366" font-size="13" fill="#633806" text-anchor="middle" dominant-baseline="central">renderer</text>
+      <text x="268" y="382" font-size="11" fill="#854f0b" text-anchor="middle" dominant-baseline="central">严格 / 宽松渲染</text>
+      <rect x="348" y="352" width="128" height="40" rx="6" fill="#ffffff" stroke="#854f0b" stroke-width="0.5"/>
+      <text x="412" y="366" font-size="13" fill="#633806" text-anchor="middle" dominant-baseline="central">filters</text>
+      <text x="412" y="382" font-size="11" fill="#854f0b" text-anchor="middle" dominant-baseline="central">nc_fixed / pad / strip</text>
+      <rect x="492" y="352" width="128" height="40" rx="6" fill="#ffffff" stroke="#854f0b" stroke-width="0.5"/>
+      <text x="556" y="366" font-size="13" fill="#633806" text-anchor="middle" dominant-baseline="central">error</text>
+      <text x="556" y="382" font-size="11" fill="#854f0b" text-anchor="middle" dominant-baseline="central">行列定位</text>
+
+      <path d="M340 412 V 430" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar)"/>
+      <text x="352" y="423" font-size="11" fill="#888780" dominant-baseline="central">依赖</text>
+
+      <rect x="170" y="432" width="340" height="48" rx="8" fill="#f1efe8" stroke="#5f5e5a" stroke-width="0.5"/>
+      <text x="340" y="450" font-size="13" fill="#444441" text-anchor="middle" dominant-baseline="central">minijinja　~2.24</text>
+      <text x="340" y="468" font-size="11" fill="#5f5e5a" text-anchor="middle" dominant-baseline="central">unstable_machinery / loop_controls / debug</text>
+    </svg>
+    <p class="cap">图 1　三层架构与核心模块</p>
+  </div>
+</section>
+
+<section id="s2">
+  <h2><span class="n">02</span>Crate 职责矩阵</h2>
+  <p class="lead">每一层的"对外承诺"与"明确不负责"一样重要 —— 边界清晰是这套架构能长期演进的前提。</p>
+  <table>
+    <thead><tr><th style="width:16%">Crate</th><th style="width:18%">定位</th><th style="width:33%">对外承诺</th><th>明确不负责</th></tr></thead>
+    <tbody>
+      <tr><td><code>nctool-tpl</code></td><td>通用模板引擎封装</td><td>Jinja2 解析、变量提取、NC 数值过滤器、渲染</td><td>不懂 G-code 语义，不做参数校验</td></tr>
+      <tr><td><code>nctool-core</code></td><td>G-code 领域层</td><td>参数模型、校验引擎、模板注册表、机床适配、生成管线</td><td>不感知命令行，不感知终端输出</td></tr>
+      <tr><td><code>nctool-cli</code></td><td>命令行交付面</td><td>命令解析、配置层叠、结果渲染、退出码</td><td>不含任何校验 / 渲染逻辑</td></tr>
+    </tbody>
+  </table>
+
+  <h3>源码规模分布</h3>
+  <table>
+    <thead><tr><th style="width:16%">Crate</th><th style="width:24%">模块</th><th style="width:10%">行数</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>nctool-tpl</code></td><td><code>extract.rs</code></td><td>592</td><td>变量提取核心：AST 遍历 + 可选 / 必选判定</td></tr>
+      <tr><td></td><td><code>error.rs</code></td><td>294</td><td>结构化模板错误 + 行列定位</td></tr>
+      <tr><td></td><td><code>renderer.rs</code> / <code>filters.rs</code></td><td>306</td><td>Environment 封装 / NC 数值格式化</td></tr>
+      <tr><td><code>nctool-core</code></td><td><code>pipeline.rs</code></td><td>998</td><td>生成管线 + 后处理</td></tr>
+      <tr><td></td><td><code>registry.rs</code></td><td>843</td><td>模板注册表 + 5 个内置模板</td></tr>
+      <tr><td></td><td><code>validate.rs</code></td><td>800</td><td>参数校验引擎</td></tr>
+      <tr><td></td><td><code>model.rs</code> / <code>machine.rs</code></td><td>695</td><td>数据模型 / 机床预设</td></tr>
+      <tr><td><code>nctool-cli</code></td><td><code>cli.rs</code> / <code>args.rs</code></td><td>639</td><td>clap 命令树 / 参数类型推断</td></tr>
+      <tr><td></td><td><code>config.rs</code> / <code>context.rs</code> / <code>output.rs</code></td><td>615</td><td>配置层叠 / 上下文装配 / 统一输出</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="s3">
+  <h2><span class="n">03</span>核心模块</h2>
+  <p class="lead">八个模块撑起全部能力：模板层负责"读懂模板"，领域层负责"判断对错"，管线层负责"产出正确的代码"。</p>
+
+  <h3>nctool-tpl　模板解析层</h3>
+  <div class="mgrid">
+    <div class="mod"><p class="t"><span class="dot" style="background:#854f0b"></span>extract</p><p class="d">AST 遍历，提取全部引用 / 未声明变量 / 模板引用闭包，并判定可选与必选</p></div>
+    <div class="mod"><p class="t"><span class="dot" style="background:#854f0b"></span>renderer</p><p class="d">minijinja Environment 封装，默认严格模式，宽松为显式 opt-in</p></div>
+    <div class="mod"><p class="t"><span class="dot" style="background:#854f0b"></span>filters</p><p class="d">nc_fixed / nc_strip / nc_pad + 13 个数学过滤器，全部做有限性校验</p></div>
+    <div class="mod"><p class="t"><span class="dot" style="background:#854f0b"></span>error</p><p class="d">6 个错误变体，从引擎详情反解变量名 / 过滤器名，带行列定位</p></div>
+  </div>
+
+  <h3>nctool-core　G-code 领域层</h3>
+  <div class="mgrid">
+    <div class="mod"><p class="t"><span class="dot" style="background:#0f6e56"></span>model</p><p class="d">ParamValue / ParamSpec / ParameterSet / MachineConfig + 上下文构建</p></div>
+    <div class="mod"><p class="t"><span class="dot" style="background:#0f6e56"></span>validate</p><p class="d">渲染前校验引擎，9 类结构化 IssueKind，支持按类别程序化决策</p></div>
+    <div class="mod"><p class="t"><span class="dot" style="background:#0f6e56"></span>registry</p><p class="d">模板单一权威来源，支持内置 / 文件 / 内存三来源，穿透 include 校验</p></div>
+    <div class="mod"><p class="t"><span class="dot" style="background:#0f6e56"></span>machine</p><p class="d">generic / wfl_m65 / index_ms40 预设，一套模板适配多机床</p></div>
+    <div class="mod"><p class="t"><span class="dot" style="background:#0f6e56"></span>pipeline</p><p class="d">GCodeGenerator 端到端生成 + 后处理（行号 / 注释 / 空行 / ASCII）</p></div>
+  </div>
+
+  <h3>内置模板库</h3>
+  <table>
+    <thead><tr><th style="width:22%">模板名</th><th style="width:12%">分类</th><th style="width:30%">必选参数</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td><code>program_header</code></td><td>通用</td><td><code>prog</code></td><td>纸带起始符 + 程序号 + 注释头 + 单位 / 坐标系初始化</td></tr>
+      <tr><td><code>program_footer</code></td><td>通用</td><td>—</td><td>主轴冷却关闭 + 取消循环 + 程序结束</td></tr>
+      <tr><td><code>tool_change</code></td><td>通用</td><td><code>tool_num</code>、<code>spindle_speed</code></td><td>换刀 + 刀长补偿 + 启动主轴与冷却</td></tr>
+      <tr><td><code>safe_move</code></td><td>通用</td><td><code>x</code>、<code>y</code></td><td>抬刀到安全高度 + 定位（<code>safe_z</code> 默认 100）</td></tr>
+      <tr><td><code>drill_cycle</code></td><td>钻孔</td><td><code>x</code>、<code>y</code>、<code>depth</code>、<code>feed</code></td><td>G81 标准钻孔循环（<code>r_plane</code> 默认 5）</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="s4">
+  <h2><span class="n">04</span>G-code 生成管线数据流</h2>
+  <p class="lead">四类输入汇聚到六个阶段，三条错误出口分别对应模板缺失、参数非法、渲染失败。
+  校验（②③）前置到渲染（⑤）之前，是整个架构的主线。</p>
+  <div class="fig">
+    <svg viewBox="0 0 680 492" role="img" aria-label="G-code 生成管线数据流">
+      <defs>
+        <marker id="ar2" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </marker>
+      </defs>
+
+      <rect x="40" y="40" width="110" height="52" rx="8" fill="#f1efe8" stroke="#5f5e5a" stroke-width="0.5"/>
+      <text x="95" y="66" font-size="12" fill="#444441" text-anchor="middle" dominant-baseline="central">模板名</text>
+      <path d="M150 66 H 166" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar2)"/>
+
+      <rect x="40" y="116" width="110" height="52" rx="8" fill="#f1efe8" stroke="#5f5e5a" stroke-width="0.5"/>
+      <text x="95" y="142" font-size="12" fill="#444441" text-anchor="middle" dominant-baseline="central">参数集</text>
+      <path d="M150 142 H 166" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar2)"/>
+
+      <rect x="40" y="268" width="110" height="52" rx="8" fill="#f1efe8" stroke="#5f5e5a" stroke-width="0.5"/>
+      <text x="95" y="294" font-size="12" fill="#444441" text-anchor="middle" dominant-baseline="central">机床配置</text>
+      <path d="M150 294 H 166" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar2)"/>
+
+      <rect x="40" y="420" width="110" height="52" rx="8" fill="#f1efe8" stroke="#5f5e5a" stroke-width="0.5"/>
+      <text x="95" y="446" font-size="12" fill="#444441" text-anchor="middle" dominant-baseline="central">生成选项</text>
+      <path d="M150 446 H 166" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar2)"/>
+
+      <rect x="170" y="40" width="280" height="52" rx="8" fill="#e6f1fb" stroke="#185fa5" stroke-width="0.5"/>
+      <text x="310" y="58" font-size="14" font-weight="500" fill="#0c447c" text-anchor="middle" dominant-baseline="central">① 模板定位</text>
+      <text x="310" y="76" font-size="12" fill="#185fa5" text-anchor="middle" dominant-baseline="central">registry.get → TemplateEntry + 规格</text>
+
+      <rect x="170" y="116" width="280" height="52" rx="8" fill="#e6f1fb" stroke="#185fa5" stroke-width="0.5"/>
+      <text x="310" y="134" font-size="14" font-weight="500" fill="#0c447c" text-anchor="middle" dominant-baseline="central">② 参数校验</text>
+      <text x="310" y="152" font-size="12" fill="#185fa5" text-anchor="middle" dominant-baseline="central">未声明变量 × 规格 × 参数集</text>
+
+      <rect x="170" y="192" width="280" height="52" rx="8" fill="#e6f1fb" stroke="#185fa5" stroke-width="0.5"/>
+      <text x="310" y="210" font-size="14" font-weight="500" fill="#0c447c" text-anchor="middle" dominant-baseline="central">③ 结果判定</text>
+      <text x="310" y="228" font-size="12" fill="#185fa5" text-anchor="middle" dominant-baseline="central">has_errors() → 阻断 / 放行</text>
+
+      <rect x="170" y="268" width="280" height="52" rx="8" fill="#e6f1fb" stroke="#185fa5" stroke-width="0.5"/>
+      <text x="310" y="286" font-size="14" font-weight="500" fill="#0c447c" text-anchor="middle" dominant-baseline="central">④ 上下文构建</text>
+      <text x="310" y="304" font-size="12" fill="#185fa5" text-anchor="middle" dominant-baseline="central">规格默认值兜底 + machine 注入</text>
+
+      <rect x="170" y="344" width="280" height="52" rx="8" fill="#e6f1fb" stroke="#185fa5" stroke-width="0.5"/>
+      <text x="310" y="362" font-size="14" font-weight="500" fill="#0c447c" text-anchor="middle" dominant-baseline="central">⑤ 模板渲染</text>
+      <text x="310" y="380" font-size="12" fill="#185fa5" text-anchor="middle" dominant-baseline="central">minijinja 严格模式 → 原始文本</text>
+
+      <rect x="170" y="420" width="280" height="52" rx="8" fill="#e6f1fb" stroke="#185fa5" stroke-width="0.5"/>
+      <text x="310" y="438" font-size="14" font-weight="500" fill="#0c447c" text-anchor="middle" dominant-baseline="central">⑥ 后处理</text>
+      <text x="310" y="456" font-size="12" fill="#185fa5" text-anchor="middle" dominant-baseline="central">行号 / 头部注释 / 空行 / ASCII</text>
+
+      <path d="M310 92 V 114" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar2)"/>
+      <path d="M310 168 V 190" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar2)"/>
+      <path d="M310 244 V 266" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar2)"/>
+      <path d="M310 320 V 342" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar2)"/>
+      <path d="M310 396 V 418" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar2)"/>
+
+      <path d="M450 66 H 486" fill="none" stroke="#a32d2d" stroke-width="1.5" marker-end="url(#ar2)"/>
+      <rect x="490" y="50" width="150" height="32" rx="8" fill="#fcebeb" stroke="#a32d2d" stroke-width="0.5"/>
+      <text x="565" y="59" font-size="12" fill="#791f1f" text-anchor="middle" dominant-baseline="central">模板不存在</text>
+      <text x="565" y="73" font-size="11" fill="#a32d2d" text-anchor="middle" dominant-baseline="central">TemplateNotFound</text>
+
+      <path d="M450 218 H 486" fill="none" stroke="#a32d2d" stroke-width="1.5" marker-end="url(#ar2)"/>
+      <rect x="490" y="202" width="150" height="32" rx="8" fill="#fcebeb" stroke="#a32d2d" stroke-width="0.5"/>
+      <text x="565" y="211" font-size="12" fill="#791f1f" text-anchor="middle" dominant-baseline="central">校验未通过</text>
+      <text x="565" y="225" font-size="11" fill="#a32d2d" text-anchor="middle" dominant-baseline="central">Validation(report)</text>
+
+      <path d="M450 370 H 486" fill="none" stroke="#a32d2d" stroke-width="1.5" marker-end="url(#ar2)"/>
+      <rect x="490" y="354" width="150" height="32" rx="8" fill="#fcebeb" stroke="#a32d2d" stroke-width="0.5"/>
+      <text x="565" y="363" font-size="12" fill="#791f1f" text-anchor="middle" dominant-baseline="central">渲染失败</text>
+      <text x="565" y="377" font-size="11" fill="#a32d2d" text-anchor="middle" dominant-baseline="central">Render(TplError)</text>
+    </svg>
+    <p class="cap">图 2　G-code 生成管线数据流与错误出口</p>
+  </div>
+
+  <h3>一次 <code>nctool render</code> 的完整调用链</h3>
+  <div class="card">
+    <table style="border:none;background:transparent">
+      <tbody>
+        <tr><td style="border:none;padding:3px 0;width:38%"><code>main.rs::main</code></td><td style="border:none;padding:3px 0">进程入口，统一错误输出与退出码</td></tr>
+        <tr><td style="border:none;padding:3px 0"><code>context::Ctx::from_global</code></td><td style="border:none;padding:3px 0">读取全局 + 项目配置层叠，损坏 TOML 降级为警告</td></tr>
+        <tr><td style="border:none;padding:3px 0"><code>commands::render::run</code></td><td style="border:none;padding:3px 0">装配注册表、参数集、机床配置</td></tr>
+        <tr><td style="border:none;padding:3px 0"><code>registry::validate</code></td><td style="border:none;padding:3px 0">渲染前校验，穿透 include 闭包</td></tr>
+        <tr><td style="border:none;padding:3px 0"><code>pipeline::GCodeGenerator::generate</code></td><td style="border:none;padding:3px 0">定位 → 校验 → 默认值兜底 → 构建上下文 → 渲染 → 后处理</td></tr>
+        <tr><td style="border:none;padding:3px 0"><code>output::OutputStyle::print_ok</code></td><td style="border:none;padding:3px 0">text 或 JSON 双通道输出</td></tr>
+      </tbody>
+    </table>
+  </div>
+</section>
+
+<section id="s5">
+  <h2><span class="n">05</span>模板解析层数据流</h2>
+  <p class="lead">一份模板源码裂变成两条路：一条经 AST 扇出为三个提取器，产物汇入校验层；
+  另一路交给 Renderer 配合过滤器集渲染，产物进入管线后处理。</p>
+  <div class="fig">
+    <svg viewBox="0 0 680 436" role="img" aria-label="nctool-tpl 模板解析层数据流">
+      <defs>
+        <marker id="ar3" viewBox="0 0 10 10" refX="8" refY="5" markerWidth="6" markerHeight="6" orient="auto-start-reverse">
+          <path d="M2 1L8 5L2 9" fill="none" stroke="context-stroke" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+        </marker>
+      </defs>
+
+      <rect x="230" y="40" width="220" height="44" rx="8" fill="#f1efe8" stroke="#5f5e5a" stroke-width="0.5"/>
+      <text x="340" y="62" font-size="13" fill="#444441" text-anchor="middle" dominant-baseline="central">Jinja2 模板源码</text>
+
+      <path d="M340 84 V 96 H 180 V 110" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar3)"/>
+      <path d="M340 84 V 96 H 500 V 110" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar3)"/>
+
+      <rect x="40" y="112" width="280" height="56" rx="8" fill="#faeeda" stroke="#854f0b" stroke-width="0.5"/>
+      <text x="180" y="132" font-size="14" font-weight="500" fill="#633806" text-anchor="middle" dominant-baseline="central">parse() → Ast</text>
+      <text x="180" y="150" font-size="12" fill="#854f0b" text-anchor="middle" dominant-baseline="central">语句树 · 失败时携带行列定位</text>
+
+      <rect x="360" y="112" width="280" height="56" rx="8" fill="#faeeda" stroke="#854f0b" stroke-width="0.5"/>
+      <text x="500" y="132" font-size="14" font-weight="500" fill="#633806" text-anchor="middle" dominant-baseline="central">Renderer</text>
+      <text x="500" y="150" font-size="12" fill="#854f0b" text-anchor="middle" dominant-baseline="central">严格 / 宽松 · include 编译缓存</text>
+
+      <path d="M180 168 V 182 H 130 V 192" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar3)"/>
+      <path d="M180 168 V 182 H 340 V 192" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar3)"/>
+      <path d="M180 168 V 182 H 550 V 192" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar3)"/>
+      <path d="M500 168 V 192" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar3)"/>
+
+      <rect x="40" y="196" width="180" height="56" rx="8" fill="#e1f5ee" stroke="#0f6e56" stroke-width="0.5"/>
+      <text x="130" y="216" font-size="12" fill="#085041" text-anchor="middle" dominant-baseline="central">extract_variables</text>
+      <text x="130" y="234" font-size="11" fill="#0f6e56" text-anchor="middle" dominant-baseline="central">全部引用（含 set/for）</text>
+
+      <rect x="250" y="196" width="180" height="56" rx="8" fill="#e1f5ee" stroke="#0f6e56" stroke-width="0.5"/>
+      <text x="340" y="216" font-size="12" fill="#085041" text-anchor="middle" dominant-baseline="central">extract_undeclared</text>
+      <text x="340" y="234" font-size="11" fill="#0f6e56" text-anchor="middle" dominant-baseline="central">外部必填 · 可选 / 必选</text>
+
+      <rect x="460" y="196" width="180" height="56" rx="8" fill="#e1f5ee" stroke="#0f6e56" stroke-width="0.5"/>
+      <text x="550" y="216" font-size="12" fill="#085041" text-anchor="middle" dominant-baseline="central">extract_template_refs</text>
+      <text x="550" y="234" font-size="11" fill="#0f6e56" text-anchor="middle" dominant-baseline="central">include / extends 闭包</text>
+
+      <rect x="360" y="196" width="280" height="56" rx="8" fill="#faeeda" stroke="#854f0b" stroke-width="0.5"/>
+      <text x="500" y="216" font-size="14" font-weight="500" fill="#633806" text-anchor="middle" dominant-baseline="central">过滤器集</text>
+      <text x="500" y="234" font-size="12" fill="#854f0b" text-anchor="middle" dominant-baseline="central">nc_fixed / nc_strip / nc_pad + 数学</text>
+
+      <path d="M130 252 V 272" fill="none" stroke="#888780" stroke-width="1.5"/>
+      <path d="M340 252 V 272" fill="none" stroke="#888780" stroke-width="1.5"/>
+      <path d="M550 252 V 272" fill="none" stroke="#888780" stroke-width="1.5"/>
+      <path d="M130 272 H 550" fill="none" stroke="#888780" stroke-width="1.5"/>
+      <path d="M180 272 V 362" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar3)"/>
+      <path d="M500 252 V 362" fill="none" stroke="#888780" stroke-width="1.5" marker-end="url(#ar3)"/>
+
+      <rect x="40" y="364" width="280" height="52" rx="8" fill="#f1efe8" stroke="#5f5e5a" stroke-width="0.5"/>
+      <text x="180" y="382" font-size="13" fill="#444441" text-anchor="middle" dominant-baseline="central">→ nctool-core 校验层</text>
+      <text x="180" y="400" font-size="11" fill="#5f5e5a" text-anchor="middle" dominant-baseline="central">未声明变量 + 模板引用闭包</text>
+
+      <rect x="360" y="364" width="280" height="52" rx="8" fill="#f1efe8" stroke="#5f5e5a" stroke-width="0.5"/>
+      <text x="500" y="382" font-size="13" fill="#444441" text-anchor="middle" dominant-baseline="central">→ 管线后处理</text>
+      <text x="500" y="400" font-size="11" fill="#5f5e5a" text-anchor="middle" dominant-baseline="central">渲染产物（原始文本）</text>
+    </svg>
+    <p class="cap">图 3　模板解析层数据流</p>
+  </div>
+
+  <h3>可选 / 必选判定规则（最容易写错的地方）</h3>
+  <table>
+    <thead><tr><th style="width:34%">模板写法</th><th style="width:14%">判定</th><th>原因</th></tr></thead>
+    <tbody>
+      <tr><td><code>{{ x }}</code></td><td><span class="tag e">必选</span></td><td>裸引用，缺失即渲染失败</td></tr>
+      <tr><td><code>{{ x | default(0.15) }}</code></td><td><span class="tag w">可选</span></td><td>兜底上下文，缺失仍可渲染</td></tr>
+      <tr><td><code>{% if x is defined %}</code></td><td><span class="tag w">可选</span></td><td>同上</td></tr>
+      <tr><td><code>{{ x | nc_fixed(3) }}</code></td><td><span class="tag e">必选</span></td><td>过滤器需要具体值求值，无法以空串替代</td></tr>
+      <tr><td><code>{{ (a+b) | default(1) }}</code></td><td><span class="tag e">必选</span></td><td><b>兜底不向下传播</b>：子表达式先求值，undefined 参与运算即报错</td></tr>
+      <tr><td><code>{{ a.b | default(1) }}</code></td><td><span class="tag e">必选</span></td><td>同上，取属性先于 default 求值</td></tr>
+    </tbody>
+  </table>
+  <p style="margin-top:14px;color:var(--ink-2);font-size:13.5px">
+  若此处误判为可选，上层校验放行后严格模式渲染依然会失败 —— 只是把一个渲染期崩溃推迟成崩溃。
+  </p>
+</section>
+
+<section id="s6">
+  <h2><span class="n">06</span>参数校验数据流</h2>
+  <p class="lead">输入三元组 —— 模板引用的变量 × 参数规格 × 用户参数集 —— 输出一份结构化的校验报告。
+  同一个报告在严格模式下决定"是否阻断"，在宽松模式下决定"降级哪些、保留哪些"。</p>
+
+  <div class="grid2">
+    <div class="card">
+      <h3 style="margin-top:0">输入</h3>
+      <ul>
+        <li><b>未声明变量</b>　来自 <code>extract_undeclared</code>，携带可选 / 必选标记</li>
+        <li><b>模板引用闭包</b>　<code>include</code> / <code>extends</code> 递归并入，防环</li>
+        <li><b>参数规格</b>　registry 提供：类型 / 区间 / 整数约束 / 默认值</li>
+        <li><b>参数集</b>　CLI、JSON 文件或 API 传入</li>
+        <li><b>系统注入变量</b>　默认 <code>machine</code>，视为已提供</li>
+      </ul>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">检查项（按执行顺序）</h3>
+      <ul>
+        <li><b>规格默认值自洽性</b>　default 自己违反约束时报错（模板作者的错误）</li>
+        <li><b>有限性</b>　NaN / Inf 拒绝生成</li>
+        <li><b>类型匹配</b>　<code>ParamKind::matches</code></li>
+        <li><b>取值区间</b>　<code>min</code> / <code>max</code>，含边界</li>
+        <li><b>整数约束</b>　规格标记 integer 但值带小数</li>
+        <li><b>冗余参数</b>　提供了模板未引用的参数（警告级）</li>
+      </ul>
+    </div>
+  </div>
+
+  <h3>IssueKind 九类结构化类别</h3>
+  <div class="card">
+    <p style="margin-bottom:10px">
+      <span class="tag e">Error</span>
+      <code>Missing</code> · <code>TypeMismatch</code> · <code>NonFinite</code> ·
+      <code>OutOfRange</code> · <code>NotInteger</code> · <code>ShadowedSystemVar</code> · <code>ParseError</code>
+    </p>
+    <p style="margin-bottom:10px">
+      <span class="tag w">Warning</span>
+      <code>Unused</code>（冗余参数）
+    </p>
+    <p style="margin-bottom:0">
+      <span class="tag p">Other</span>
+      未分类兜底
+    </p>
+  </div>
+  <p style="margin-top:14px;color:var(--ink-2);font-size:13.5px">
+  结构化类别的存在意义：调用方按<b>类别</b>而非消息文本做程序化决策。宽松模式要拦截 NaN/Inf，
+  正确写法是 <code>report.has_kind(IssueKind::NonFinite)</code>，而不是
+  <code>message.contains("NaN")</code> —— 后者脆弱且易失效。
+  </p>
+</section>
+
+<section id="s7">
+  <h2><span class="n">07</span>关键设计决策</h2>
+  <p class="lead">每一条都是踩过坑之后的选择。写清"为什么"，比写清"是什么"更重要。</p>
+
+  <div class="dec">
+    <div class="hd"><span class="id">D1</span><p class="ti">minijinja::Value 单点再导出</p></div>
+    <div class="bd"><p><code>nctool-tpl</code> 是 workspace 里唯一声明 minijinja 依赖的 crate，并再导出其 <code>Value</code>；
+    <code>nctool-core</code> 不直接依赖。原因：渲染上下文是公共签名的一部分，一旦两边解析到不同版本，
+    两个 <code>Value</code> 就是不同的类型，拼不到一起。单点持有把"版本漂移导致类型不匹配"从可能变成不可能。</p></div>
+  </div>
+
+  <div class="dec">
+    <div class="hd"><span class="id">D2</span><p class="ti">严格模式为默认，宽松为显式 opt-in</p></div>
+    <div class="bd"><p><code>Renderer::new()</code> 默认 <code>UndefinedBehavior::Strict</code>，模板引用缺失变量直接失败。
+    宁可让不完整的模板报错，也不能静默输出一段残缺的 G-code。</p></div>
+  </div>
+
+  <div class="dec">
+    <div class="hd"><span class="id">D3</span><p class="ti">校验前置于渲染</p></div>
+    <div class="bd"><p>整个架构的主线。参数缺失、类型不符、越界、NaN/Inf 全部在渲染前拦截 ——
+    因为 G-code 是发给机床的指令，写错一个坐标就是撞刀。</p></div>
+  </div>
+
+  <div class="dec">
+    <div class="hd"><span class="id">D4</span><p class="ti">必选性由"模板实际引用"决定，而非规格声明</p></div>
+    <div class="bd"><p><code>ParamSpec::required</code> 只是文档性声明。实际必选性由模板引用 + 是否有 default 兜底决定，
+    因此 <code>required</code> 与 <code>default</code> 无互斥约束，可同时声明（"文档上必选，但缺失时可用默认值兜底"）。</p></div>
+  </div>
+
+  <div class="dec">
+    <div class="hd"><span class="id">D5</span><p class="ti">兜底不向下传播</p></div>
+    <div class="bd"><p><code>default</code> 只兜底直接裸变量操作数。<code>{{ (a+b) | default(1) }}</code> 里的
+    <code>a</code>/<code>b</code> 仍记必选 —— minijinja 先求值子表达式，undefined 参与运算即报错，default 来不及兜底。</p></div>
+  </div>
+
+  <div class="dec">
+    <div class="hd"><span class="id">D6</span><p class="ti">Integer 作为独立参数类型</p></div>
+    <div class="bd"><p>程序号、刀具号、刀长补偿号天然为整数。若用 Number 承载：<code>tool_num=5.5</code> 输出非法字址
+    <code>T5.5</code>；<code>prog=1.7</code> 被 <code>nc_pad</code> 静默截断成 <code>O0001</code> 且不报错。
+    两者都不报错，但都会让机床做错事。整值浮点数视为合法整数（<code>5.0</code> 通过，<code>5.5</code> 拒绝）。</p></div>
+  </div>
+
+  <div class="dec">
+    <div class="hd"><span class="id">D7</span><p class="ti">IssueKind 结构化类别，禁止按消息文本决策</p></div>
+    <div class="bd"><p>见第 6 节。宽松模式拦截 NaN/Inf 靠 <code>has_kind(NonFinite)</code>，不靠文本匹配。</p></div>
+  </div>
+
+  <div class="dec">
+    <div class="hd"><span class="id">D8</span><p class="ti">宽松模式仍硬失败 NaN/Inf</p></div>
+    <div class="bd"><p>宽松模式不是"跳过校验"：它跑完整校验，再把除 <code>NonFinite</code> 外的 Error 降级为 Warning。
+    早期实现直接跳过 validate，导致 <code>X{{ x }}</code> 能吐出 <code>XNaN</code>。
+    参数缺失可以留空，但非法坐标会让机床走到错误位置 —— 宽松模式放行的是"参数可缺省"，不是"参数值非法"。</p></div>
+  </div>
+
+  <div class="dec">
+    <div class="hd"><span class="id">D9</span><p class="ti">include / extends 穿透校验 + 防环</p></div>
+    <div class="bd"><p>被引用且已注册的模板，其必选参数同样参与检查，避免组合模板的参数缺失只能在渲染阶段才暴露。
+    同名变量必选性取"或"，环引用由 <code>visited</code> 集合防护。</p></div>
+  </div>
+
+  <div class="dec">
+    <div class="hd"><span class="id">D10</span><p class="ti">后处理的所有尺寸参数都夹紧上界</p></div>
+    <div class="bd"><p><code>line_number_digits</code> 是用户可编辑的字符串。若无上界，配置一个 <code>1000000000</code>
+    会让每一行都去分配 GB 级缓冲 —— 而 Rust 分配失败是进程 abort，<b>不可捕获</b>。上界取 32（而非对齐 nc_pad 的 1024），
+    因为行号前缀作用于每一行，总分配量是 <code>行数 × 位宽</code>。同理 step=0 归一化为 1，递增用 checked_add 防溢出。</p></div>
+  </div>
+
+  <div class="dec">
+    <div class="hd"><span class="id">D11</span><p class="ti">输出格式语义分离：Gcode vs Text</p></div>
+    <div class="bd"><p><code>Text</code> 仅渲染，不 trim、不编号、不清空行、不做 ASCII 清洗，保留原始字节；
+    <code>Gcode</code> 才应用全部后处理。同一套引擎既能产出可上机的程序，也能用于任意文本生成。</p></div>
+  </div>
+
+  <div class="dec">
+    <div class="hd"><span class="id">D12</span><p class="ti">CLI 不复制业务逻辑</p></div>
+    <div class="bd"><p><code>render</code> 与 <code>generate</code> 是同一实现的两个入口，上下文构建、规格默认值兜底、
+    宽松渲染全部收编到 core 管线。集成测试的 golden 输出验证两者逐字节一致，这就是回归防线。</p></div>
+  </div>
+
+  <div class="dec">
+    <div class="hd"><span class="id">D13</span><p class="ti">配置损坏降级为警告而非错误</p></div>
+    <div class="bd"><p>损坏的 TOML 降级为空配置 + warning 提示，不阻断命令。这样只读命令仍能用内置模板 / 机床，
+    用户也不会误以为配置已生效。只有确定是用户可修复的语法错误才降级；文件权限等 IO 错误仍然返回错误。</p></div>
+  </div>
+
+  <div class="dec">
+    <div class="hd"><span class="id">D14</span><p class="ti">CLI 参数类型推断的两个反直觉规则</p></div>
+    <div class="bd"><p><code>--param x=007</code> 推断为<b>字符串</b>（数值化会静默丢前导零，<code>T007</code> → <code>T7</code>）；
+    <code>--param x=NaN</code> 推断为<b>字符串</b>（非有限数不判为数值，避免文本被误判成数值传入上下文）。
+    需要精确控制时用类型后缀 <code>k:s=v</code> / <code>k:n=v</code> / <code>k:b=v</code>。</p></div>
+  </div>
+</section>
+
+<section id="s8">
+  <h2><span class="n">08</span>错误模型与退出码</h2>
+  <p class="lead">三层错误类型各自 <code>#[non_exhaustive]</code> 并保留底层 <code>source()</code>；
+  退出码矩阵让脚本与 CI 能精确分支，而不是只看"非零即失败"。</p>
+
+  <div class="grid2">
+    <div>
+      <h3 style="margin-top:0">三层错误类型</h3>
+      <table>
+        <thead><tr><th style="width:30%">层</th><th style="width:36%">类型</th><th>特点</th></tr></thead>
+        <tbody>
+          <tr><td>模板层</td><td><code>TplError</code></td><td>6 变体，带模板名与行列定位</td></tr>
+          <tr><td>领域层</td><td><code>RegistryError</code><br><code>PipelineError</code></td><td>保留底层 source</td></tr>
+          <tr><td>CLI 层</td><td><code>CliError</code></td><td>kind 分类 + 决定退出码</td></tr>
+        </tbody>
+      </table>
+    </div>
+    <div>
+      <h3 style="margin-top:0">退出码矩阵</h3>
+      <table>
+        <thead><tr><th style="width:16%">码</th><th style="width:42%">含义</th><th>kind</th></tr></thead>
+        <tbody>
+          <tr><td><code>0</code></td><td>成功</td><td>—</td></tr>
+          <tr><td><code>1</code></td><td>参数校验未通过</td><td><code>validation</code></td></tr>
+          <tr><td><code>2</code></td><td>参数 / 用法错误</td><td><code>args</code></td></tr>
+          <tr><td><code>3</code></td><td>IO 失败</td><td><code>io</code></td></tr>
+          <tr><td><code>4</code></td><td>配置错误</td><td><code>config</code></td></tr>
+          <tr><td><code>5</code></td><td>模板 / 机床未找到</td><td><code>template_not_found</code><br><code>machine_not_found</code></td></tr>
+          <tr><td><code>6</code></td><td>渲染 / 注册表失败</td><td><code>render</code> 等 6 类</td></tr>
+          <tr><td><code>7</code></td><td>功能尚未实现</td><td><code>not_implemented</code></td></tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+</section>
+
+<section id="s9">
+  <h2><span class="n">09</span>扩展点</h2>
+  <table>
+    <thead><tr><th style="width:32%">想做什么</th><th>改哪里</th></tr></thead>
+    <tbody>
+      <tr><td>新增内置模板</td><td><code>core/src/registry.rs</code> 的 <code>builtin_templates()</code></td></tr>
+      <tr><td>新增用户模板</td><td>模板目录放 <code>*.j2</code>（模板名为完整文件名），或 <code>add_memory()</code> / <code>add_file()</code></td></tr>
+      <tr><td>新增机床</td><td><code>core/src/machine.rs</code> 加 <code>MachinePreset</code> 变体，或配置文件 <code>[machine.&lt;id&gt;]</code> 表</td></tr>
+      <tr><td>新增过滤器</td><td><code>src/renderer.rs</code> 的 <code>Renderer::new()</code> 中 <code>env.add_filter(...)</code></td></tr>
+      <tr><td>新增命令</td><td><code>cli/src/cli.rs</code> 加枚举变体 + <code>cli/src/commands/</code> 加实现 + <code>commands/mod.rs</code> 分发</td></tr>
+      <tr><td>新增校验规则</td><td><code>core/src/validate.rs</code> 的 <code>check_vars()</code> + <code>IssueKind</code> 新变体</td></tr>
+      <tr><td>新增系统注入变量</td><td><code>TemplateRegistry::set_system_vars()</code></td></tr>
+      <tr><td>接 Web UI</td><td><code>ui/index.html</code> 已定义 API 契约 <code>{ ok, data?, error? }</code>；服务端实现后替换 <code>commands/ui.rs</code> 占位（阶段 2）</td></tr>
+      <tr><td>零件级批量生成</td><td><code>commands/part.rs</code> 占位（阶段 4）</td></tr>
+    </tbody>
+  </table>
+
+  <h3>质量基座</h3>
+  <table>
+    <thead><tr><th style="width:26%">项</th><th style="width:38%">位置</th><th>数量</th></tr></thead>
+    <tbody>
+      <tr><td>单元测试</td><td><code>src/lib.rs</code> 等</td><td>206</td></tr>
+      <tr><td>集成测试</td><td><code>tests/</code>、<code>core/tests/</code>、<code>cli/tests/</code></td><td>65</td></tr>
+      <tr><td>文档测试</td><td><code>src/lib.rs</code> doctest</td><td>1</td></tr>
+      <tr><td>基准测试</td><td><code>benches/bench.rs</code>（criterion）</td><td>—</td></tr>
+      <tr><td>Golden 文件</td><td><code>tests/golden/*.nc</code></td><td>4</td></tr>
+      <tr><td>CI</td><td><code>.github/</code></td><td>fmt / clippy / test / doc / audit</td></tr>
+    </tbody>
+  </table>
+
+  <h3>约束与已知边界</h3>
+  <div class="card">
+    <ul style="margin:0">
+      <li><b>minijinja 版本锁定 <code>~2.24.0</code></b> —— 依赖 <code>unstable_machinery</code>（不稳定 AST API）与 <code>debug</code> feature，minor 升级可能破坏编译</li>
+      <li><b>过滤器只保护自己产生的 NaN/Inf</b> —— 裸 <code>{{ x }}</code> 与内建运算产生的非法值由 core 校验层拦截</li>
+      <li><b>宽松模式下经过滤器引用的未定义变量仍会报错</b> —— 过滤器需要具体值求值</li>
+      <li><b>机床预设值仅供开发测试</b> —— 投产前必须按机床手册核对 G/M 代码、轴配置与参数上限</li>
+      <li><b>模板内容视为可信输入</b> —— 路径加载器防逃逸，但不防恶意模板逻辑</li>
+      <li><b>v0.x API 仍可能调整</b> —— 建议在 <code>Cargo.toml</code> 中锁定 minor 版本</li>
+    </ul>
+  </div>
+</section>
+
+<footer>
+  nctool 系统架构总览 · 由 WorkBuddy AI 依据仓库源码生成 · 详见 <code>docs/ARCHITECTURE.md</code>
+</footer>
+
+</div>
+</body>
+</html>

@@ -6,6 +6,9 @@ NCtool 模板解析核心：基于 [minijinja](https://github.com/mitsuhiko/mini
 - 对标 Python `jinja2.meta`：能从模板中提取「引用的全部变量」与「需要外部上下文提供的未声明变量」
 - 内置一组数学过滤器（`f64` 标准库实现），供 G-code 计算使用
 
+> 本仓库是 workspace，含 `nctool-tpl`（本包）/ `nctool-core` / `nctool-cli` 三个 crate。
+> 想了解整体架构、模块职责与数据流，请看 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+
 ## 功能
 
 | API | 说明 |
@@ -210,6 +213,17 @@ cargo fmt --check
 
 - **解析错误列号**：`TplError::Parse.col` 取自 minijinja 错误携带的字节范围（需启用 `debug` feature）换算而来，指向**解析器停止处**的 token，是对错误位置的最佳近似（多数场景精确，个别场景如"未闭合块"只精确到行）。无法取得字节范围时回退为 `col = 1`。
 - **可选 / 必选判定边界**：只把 `default`/`d` 过滤器与 `defined`/`undefined` 测试的**直接裸变量操作数**记为可选，兜底**不向下传播**到子树（`(a+b) | default(1)`、`a.b | default(1)`、`a.b is defined` 中的变量均记为必选）；`defined` 保护块**内部**的引用仍记为必选（保守策略，宁多勿漏）；`default(参数)` 的默认值表达式里的变量仍记为必选（它必须存在才能求值默认值）。
+
+## 相关文档
+
+| 文档 | 内容 |
+| --- | --- |
+| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | **系统架构与设计说明**：三层 crate 架构、核心模块职责、数据流、错误模型、关键设计决策、扩展点。改动架构时请同步更新 |
+| [docs/ROADMAP.md](docs/ROADMAP.md) | **开发路线与执行跟踪**：阶段划分、任务清单、交付物、排期、里程碑、风险登记、MVP 裁剪策略 |
+| [docs/DEV_PLAN_CLI_UI.md](docs/DEV_PLAN_CLI_UI.md) | CLI + Web UI 的设计细节（命令面 / API 契约 / 技术决策）。**其 §7 阶段计划已被 ROADMAP 取代** |
+| [CHANGELOG.md](CHANGELOG.md) | 版本演进记录 |
+| [core/README.md](core/README.md) | `nctool-core` 独立说明（数据模型 / 校验 / 注册表 / 生成管线） |
+| [ui/index.html](ui/index.html) | Web UI 单文件前端设计与后端 API 契约 |
 
 ## License
 

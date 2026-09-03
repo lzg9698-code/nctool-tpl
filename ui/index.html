@@ -1,0 +1,2115 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>nctool · NC 模板工作台</title>
+<!--
+  ═══════════════════════════════════════════════════════════════════
+  nctool Web UI  — 单文件前端设计（演示 + 可对接后端）
+
+  目标：为本项目（nctool-tpl / nctool-core / nctool-cli）提供本地运行的
+        可视化参数表单 + 实时 G-code 预览，见 docs/DEV_PLAN_CLI_UI.md §5/§6。
+
+  设计要点
+    · 零外部运行时依赖（无框架 / 无 CDN / 无字体库），单文件可直接双击打开，
+      也可经 include_str! 内嵌进 binary 由 `nctool ui` 提供。
+    · 演示模式（默认）：内置模板库 + 迷你 Jinja 渲染器 + 客户端校验/后处理，
+      离线即可完整体验「选模板 → 填参数 → 实时预览 → 校验 → 下载」全链路。
+    · 服务模式：切换 API.mode='server' 并配置 base 后，全部请求转发到
+      nctool 的 HTTP API（§6 契约：{ ok, data?, error? }），前端零改动。
+    · 视觉：工业数控风格，暗色为默认（机床 HMI 观感），支持亮/暗主题切换、
+      响应式（桌面三栏 / 移动端堆叠）、G-code 轻量语法高亮。
+
+  页面结构
+    header          顶栏：标识 / 数据源徽标 / 机床切换 / 主题切换 / 帮助
+    aside#sidebar   模板库：搜索 + 分类过滤 + 模板列表
+    main            工作台：模板工具栏 + 左侧参数表单 / 右侧实时预览与校验
+    modals          源码编辑 / 预设管理 / 批量生成 / 自定义机床 / 关于
+    footer          状态栏：数据源 / 模板数 / 渲染耗时 / 状态
+
+  API 契约（对接后端时保持）：
+    GET  /api/templates?category=
+    GET  /api/templates/{name}
+    POST /api/inspect
+    POST /api/validate
+    POST /api/render
+    POST /api/part/generate
+  ═══════════════════════════════════════════════════════════════════
+-->
+<style>
+/* ══════════════ 设计令牌（CSS 变量）：暗色为默认 ══════════════ */
+:root, [data-theme="dark"] {
+  --bg:            #0b0f14;
+  --bg-panel:      #12171e;
+  --bg-panel-2:    #161d26;
+  --bg-hover:      #1c2530;
+  --bg-active:     #223042;
+  --border:        #222c38;
+  --border-strong: #2d3a49;
+  --text:          #d7dfe8;
+  --text-dim:      #8594a3;
+  --text-faint:    #55606c;
+  --accent:        #e8a33d;      /* 主强调色（琥珀，机床 HMI 观感） */
+  --accent-2:      #4aa3df;      /* 次强调色（钢蓝） */
+  --ok:            #3fb68b;
+  --warn:          #e0a33d;
+  --err:           #e0654f;
+  --info:          #4aa3df;
+  /* G-code 高亮 */
+  --gc-line:  #5c6b7a;
+  --gc-prog:  #e8a33d;
+  --gc-g:     #4aa3df;
+  --gc-m:     #e8a33d;
+  --gc-tsf:   #5ac8a3;
+  --gc-xyz:   #d98a4a;
+  --gc-cmt:   #6d7f8f;
+  --gc-num:   #9aa7b5;
+  --shadow:   0 10px 30px rgba(0,0,0,.35);
+  --radius:   10px;
+  --mono: "JetBrains Mono", Consolas, "Cascadia Mono", Menlo, monospace;
+  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+}
+[data-theme="light"] {
+  --bg:            #f2f5f8;
+  --bg-panel:      #ffffff;
+  --bg-panel-2:    #f6f9fb;
+  --bg-hover:      #eaf0f5;
+  --bg-active:     #dde8f1;
+  --border:        #dde4ea;
+  --border-strong: #c6d1da;
+  --text:          #1b2530;
+  --text-dim:      #5b6b7a;
+  --text-faint:    #93a1ad;
+  --accent:        #b9791d;
+  --accent-2:      #2f7fc1;
+  --ok:            #219a72;
+  --warn:          #b9791d;
+  --err:           #c84d3a;
+  --info:          #2f7fc1;
+  --gc-line:  #9aa7b5;
+  --gc-prog:  #a86a12;
+  --gc-g:     #1c6fb4;
+  --gc-m:     #a86a12;
+  --gc-tsf:   #1e8f6d;
+  --gc-xyz:   #b05f23;
+  --gc-cmt:   #7a8a99;
+  --gc-num:   #4a5a6a;
+  --shadow:   0 10px 30px rgba(30,50,70,.12);
+}
+
+* { box-sizing: border-box; margin: 0; padding: 0; }
+html, body { height: 100%; }
+body {
+  font-family: var(--sans);
+  background: var(--bg);
+  color: var(--text);
+  font-size: 14px;
+  line-height: 1.55;
+  display: flex; flex-direction: column;
+  transition: background .25s ease, color .25s ease;
+  overflow: hidden;
+}
+::-webkit-scrollbar { width: 10px; height: 10px; }
+::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; }
+::-webkit-scrollbar-track { background: transparent; }
+
+/* ══════════════ 顶栏 ══════════════ */
+header {
+  display: flex; align-items: center; gap: 14px;
+  padding: 10px 16px;
+  background: var(--bg-panel);
+  border-bottom: 1px solid var(--border);
+  flex: 0 0 auto;
+  z-index: 20;
+}
+.brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
+.brand .logo {
+  width: 34px; height: 34px; border-radius: 8px; flex: 0 0 auto;
+  background: linear-gradient(135deg, var(--accent), #c77b1d);
+  display: flex; align-items: center; justify-content: center;
+  color: #10151c; box-shadow: var(--shadow);
+}
+.brand .logo svg { width: 22px; height: 22px; }
+.brand h1 { font-size: 17px; letter-spacing: .5px; white-space: nowrap; }
+.brand .sub { font-size: 11px; color: var(--text-faint); margin-top: -2px; white-space: nowrap; }
+.header-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
+
+.mode-badge {
+  font-size: 11px; padding: 3px 10px; border-radius: 999px;
+  border: 1px solid var(--border-strong);
+  color: var(--text-dim); background: var(--bg-panel-2);
+  display: flex; align-items: center; gap: 6px; white-space: nowrap;
+}
+.mode-badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
+.mode-badge.demo .dot { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
+.mode-badge.server .dot { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+
+/* 选择器 / 按钮通用 */
+select, .btn, .chip {
+  font-family: var(--sans); font-size: 13px; color: var(--text);
+  background: var(--bg-panel-2); border: 1px solid var(--border-strong);
+  border-radius: 8px; padding: 6px 10px; cursor: pointer;
+  transition: border-color .15s, background .15s, transform .06s;
+  outline: none;
+}
+select:hover, .btn:hover, .chip:hover { border-color: var(--accent); }
+.btn:active { transform: translateY(1px); }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: #14100a; font-weight: 600; }
+.btn.primary:hover { filter: brightness(1.07); }
+.btn.ghost { background: transparent; }
+.btn.icon { display: inline-flex; align-items: center; gap: 6px; }
+.btn svg { width: 14px; height: 14px; }
+
+/* ══════════════ 主布局 ══════════════ */
+.layout { flex: 1 1 auto; display: flex; min-height: 0; }
+
+/* ── 侧栏：模板库 ── */
+aside {
+  width: 272px; flex: 0 0 auto;
+  background: var(--bg-panel);
+  border-right: 1px solid var(--border);
+  display: flex; flex-direction: column;
+  min-height: 0;
+}
+.sidebar-head { padding: 12px 12px 6px; }
+.search-box { position: relative; }
+.search-box input {
+  width: 100%; padding: 8px 30px 8px 12px;
+  background: var(--bg-panel-2); border: 1px solid var(--border-strong);
+  border-radius: 8px; color: var(--text); font-size: 13px; outline: none;
+  transition: border-color .15s;
+}
+.search-box input:focus { border-color: var(--accent); }
+.search-box svg { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); width: 15px; height: 15px; color: var(--text-faint); }
+.cats { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px 4px; }
+.chip { font-size: 12px; padding: 4px 10px; border-radius: 999px; border-color: var(--border); color: var(--text-dim); }
+.chip.active { background: var(--bg-active); border-color: var(--accent); color: var(--accent); font-weight: 600; }
+.chip .n { opacity: .6; font-size: 11px; margin-left: 4px; }
+
+.tpl-list { flex: 1 1 auto; overflow-y: auto; padding: 6px 8px 12px; }
+.tpl-item {
+  padding: 9px 10px; border-radius: 8px; cursor: pointer;
+  border: 1px solid transparent; margin-bottom: 3px;
+  transition: background .12s, border-color .12s;
+}
+.tpl-item:hover { background: var(--bg-hover); }
+.tpl-item.active { background: var(--bg-active); border-color: var(--accent); }
+.tpl-item .row1 { display: flex; align-items: center; gap: 8px; }
+.tpl-item .name { font-weight: 600; font-family: var(--mono); font-size: 12.5px; }
+.tpl-item .badge {
+  font-size: 10px; padding: 1px 7px; border-radius: 999px;
+  border: 1px solid var(--border-strong); color: var(--text-faint); margin-left: auto;
+}
+.tpl-item .badge.builtin { color: var(--accent-2); border-color: var(--accent-2); }
+.tpl-item .badge.demo { color: var(--ok); border-color: var(--ok); }
+.tpl-item .desc { font-size: 11.5px; color: var(--text-dim); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+.tpl-item .meta { font-size: 10.5px; color: var(--text-faint); margin-top: 4px; display: flex; gap: 10px; }
+
+/* ── 主工作区 ── */
+main { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
+.toolbar {
+  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
+  padding: 10px 16px; background: var(--bg-panel); border-bottom: 1px solid var(--border);
+}
+.toolbar .crumb { font-size: 12px; color: var(--text-faint); font-family: var(--mono); }
+.toolbar .crumb b { color: var(--text-dim); font-weight: 600; }
+.toolbar .tpl-title { font-size: 15px; font-weight: 700; font-family: var(--mono); }
+.toolbar .tpl-desc { font-size: 12px; color: var(--text-dim); }
+.toolbar .spacer { flex: 1 1 auto; }
+.toolbar .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.workspace {
+  flex: 1 1 auto; display: grid; grid-template-columns: minmax(340px, 44%) 1fr;
+  gap: 14px; padding: 14px 16px; min-height: 0; overflow: hidden;
+}
+.panel {
+  background: var(--bg-panel); border: 1px solid var(--border);
+  border-radius: var(--radius); display: flex; flex-direction: column;
+  min-height: 0; overflow: hidden;
+}
+.panel-head {
+  display: flex; align-items: center; gap: 8px;
+  padding: 10px 14px; border-bottom: 1px solid var(--border);
+  font-size: 12.5px; font-weight: 700; letter-spacing: .4px;
+  color: var(--text-dim); text-transform: uppercase; flex: 0 0 auto;
+}
+.panel-head .hint { margin-left: auto; font-weight: 400; text-transform: none; font-size: 11px; color: var(--text-faint); }
+.panel-body { flex: 1 1 auto; overflow-y: auto; padding: 12px 14px; }
+
+/* ── 参数表单 ── */
+.form-group { margin-bottom: 16px; }
+.form-group-title {
+  font-size: 12px; font-weight: 700; color: var(--accent);
+  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
+}
+.form-group-title::after { content: ""; flex: 1; height: 1px; background: var(--border); }
+.param-field {
+  border: 1px solid var(--border); border-radius: 8px;
+  padding: 8px 10px; margin-bottom: 8px; background: var(--bg-panel-2);
+  transition: border-color .15s, box-shadow .15s;
+}
+.param-field.req { border-left: 3px solid var(--err); }
+.param-field.opt { border-left: 3px solid var(--border-strong); }
+.param-field.error { border-color: var(--err); box-shadow: 0 0 0 3px rgba(224,101,79,.15); }
+.param-field.focus { border-color: var(--accent); }
+.param-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
+.param-top label { font-weight: 600; font-family: var(--mono); font-size: 13px; }
+.param-top .req-tag {
+  font-size: 10px; color: var(--err); border: 1px solid var(--err);
+  border-radius: 4px; padding: 0 5px; line-height: 16px;
+}
+.param-top .opt-tag { font-size: 10px; color: var(--text-faint); border: 1px solid var(--border-strong); border-radius: 4px; padding: 0 5px; line-height: 16px; }
+.param-top .unit { font-size: 11px; color: var(--text-faint); }
+.param-top .range { font-size: 10.5px; color: var(--text-faint); margin-left: auto; font-family: var(--mono); }
+.param-desc { font-size: 11.5px; color: var(--text-dim); margin-bottom: 6px; }
+.param-input-wrap { display: flex; align-items: center; gap: 8px; }
+.param-input-wrap input[type="number"], .param-input-wrap input[type="text"] {
+  flex: 1; padding: 7px 10px; background: var(--bg);
+  border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text);
+  font-family: var(--mono); font-size: 13px; outline: none; transition: border-color .15s;
+}
+.param-input-wrap input:focus { border-color: var(--accent); }
+.param-input-wrap .suffix { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
+
+/* 布尔开关 */
+.switch { position: relative; width: 42px; height: 24px; flex: 0 0 auto; cursor: pointer; }
+.switch input { opacity: 0; width: 0; height: 0; }
+.switch .slider {
+  position: absolute; inset: 0; background: var(--border-strong);
+  border-radius: 999px; transition: background .2s;
+}
+.switch .slider::before {
+  content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px;
+  background: #fff; border-radius: 50%; transition: transform .2s;
+}
+.switch input:checked + .slider { background: var(--accent); }
+.switch input:checked + .slider::before { transform: translateX(18px); }
+.switch-row { display: flex; align-items: center; gap: 8px; }
+.switch-row .lbl { font-size: 12px; color: var(--text-dim); }
+
+/* 生成选项 */
+.opts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; }
+.opt-item { display: flex; align-items: center; gap: 8px; font-size: 12.5px; cursor: pointer; }
+.opt-item input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; }
+.opt-item .sub { color: var(--text-faint); font-size: 11px; }
+.opt-inline { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-dim); }
+.opt-inline input { width: 60px; padding: 4px 6px; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 5px; color: var(--text); font-family: var(--mono); }
+.seg { display: flex; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
+.seg button { flex: 1; padding: 6px 10px; background: var(--bg-panel-2); border: none; color: var(--text-dim); font-size: 12px; cursor: pointer; }
+.seg button.active { background: var(--accent); color: #14100a; font-weight: 600; }
+
+/* ── 预览区 ── */
+.preview-wrap { display: flex; flex-direction: column; min-height: 0; flex: 1; }
+.preview-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
+.preview-toolbar .stat { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
+.preview-toolbar .stat b { color: var(--text-dim); }
+.preview-toolbar .spacer { flex: 1; }
+.tabs { display: flex; gap: 2px; }
+.tab {
+  padding: 5px 14px; font-size: 12px; color: var(--text-dim); cursor: pointer;
+  border: 1px solid transparent; border-radius: 7px 7px 0 0; background: transparent;
+}
+.tab.active { background: var(--bg-panel-2); border-color: var(--border); border-bottom-color: transparent; color: var(--accent); font-weight: 600; }
+.preview-body { position: relative; flex: 1 1 auto; min-height: 0; }
+.preview-body .tabpage { display: none; position: absolute; inset: 0; overflow: auto; }
+.preview-body .tabpage.active { display: block; }
+.gcode-view {
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.7;
+  padding: 14px 16px; white-space: pre; color: var(--text);
+}
+.gcode-view .ln { color: var(--gc-line); user-select: none; }
+.gcode-view .prog { color: var(--gc-prog); font-weight: 600; }
+.gcode-view .g { color: var(--gc-g); font-weight: 600; }
+.gcode-view .m { color: var(--gc-m); font-weight: 600; }
+.gcode-view .tsf { color: var(--gc-tsf); }
+.gcode-view .xyz { color: var(--gc-xyz); }
+.gcode-view .num { color: var(--gc-num); }
+.gcode-view .cmt { color: var(--gc-cmt); font-style: italic; }
+.gcode-empty { color: var(--text-faint); text-align: center; padding-top: 60px; font-size: 13px; }
+.gcode-empty svg { width: 42px; height: 42px; opacity: .35; margin-bottom: 10px; }
+
+/* 渲染扫描动画 */
+.preview-body.rendering .gcode-view { animation: scanFade .35s ease; }
+@keyframes scanFade {
+  0% { opacity: .25; }
+  100% { opacity: 1; }
+}
+
+/* 源码视图 */
+.src-view { font-family: var(--mono); font-size: 12px; line-height: 1.6; padding: 12px 14px; white-space: pre; color: var(--text); }
+.src-view .tg { color: var(--accent-2); }      /* {{ }} {% %} */
+.src-view .tgc { color: var(--text-faint); }   /* {# #} */
+.src-view .cmt { color: var(--gc-cmt); font-style: italic; }
+
+/* 校验面板 */
+.validation { border-top: 1px solid var(--border); flex: 0 0 auto; max-height: 40%; display: flex; flex-direction: column; }
+.validation .v-head {
+  display: flex; align-items: center; gap: 10px; padding: 8px 14px; font-size: 12px;
+  border-bottom: 1px solid var(--border); color: var(--text-dim); flex: 0 0 auto;
+}
+.validation .v-head .sum { margin-left: auto; font-family: var(--mono); }
+.validation .v-body { overflow-y: auto; flex: 1 1 auto; padding: 6px 10px; }
+.v-item { display: flex; gap: 8px; padding: 5px 6px; border-radius: 6px; font-size: 12.5px; align-items: baseline; cursor: pointer; }
+.v-item:hover { background: var(--bg-hover); }
+.v-item .lv { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; transform: translateY(-1px); }
+.v-item.error .lv { background: var(--err); box-shadow: 0 0 5px var(--err); }
+.v-item.warn .lv { background: var(--warn); }
+.v-item.info .lv { background: var(--info); }
+.v-item.error { color: var(--err); }
+.v-item.warn { color: var(--warn); }
+.v-item.info { color: var(--info); }
+.v-item .v-param { font-family: var(--mono); font-size: 11.5px; opacity: .8; }
+.v-item .v-msg { flex: 1; }
+.v-empty { color: var(--ok); font-size: 12.5px; padding: 8px; display: flex; align-items: center; gap: 8px; }
+.v-empty svg { width: 15px; height: 15px; }
+
+/* ── 状态栏 ── */
+footer {
+  flex: 0 0 auto; display: flex; align-items: center; gap: 18px;
+  padding: 6px 16px; background: var(--bg-panel); border-top: 1px solid var(--border);
+  font-size: 11.5px; color: var(--text-faint); font-family: var(--mono);
+}
+footer .st { display: flex; align-items: center; gap: 6px; }
+footer .st .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
+footer .st.ok .dot { background: var(--ok); box-shadow: 0 0 5px var(--ok); }
+footer .st.err .dot { background: var(--err); box-shadow: 0 0 5px var(--err); }
+footer .st.rendering .dot { background: var(--accent); animation: pulse 1s infinite; }
+@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
+footer .right { margin-left: auto; display: flex; gap: 18px; }
+
+/* ── 弹窗 ── */
+.modal-mask {
+  position: fixed; inset: 0; background: rgba(5,8,12,.6); backdrop-filter: blur(3px);
+  display: none; align-items: center; justify-content: center; z-index: 100;
+  padding: 20px;
+}
+.modal-mask.open { display: flex; animation: fadeIn .18s ease; }
+@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.modal {
+  background: var(--bg-panel); border: 1px solid var(--border-strong);
+  border-radius: 14px; box-shadow: var(--shadow); width: 640px; max-width: 100%;
+  max-height: 86vh; display: flex; flex-direction: column;
+  animation: modalIn .2s cubic-bezier(.2,.8,.3,1.1);
+}
+@keyframes modalIn { from { transform: translateY(14px) scale(.97); opacity: 0; } to { transform: none; opacity: 1; } }
+.modal-head { display: flex; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+.modal-head h3 { font-size: 15px; }
+.modal-head .close { margin-left: auto; background: none; border: none; color: var(--text-dim); font-size: 20px; cursor: pointer; line-height: 1; }
+.modal-body { padding: 16px 18px; overflow-y: auto; flex: 1 1 auto; }
+.modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border); }
+.modal textarea {
+  width: 100%; min-height: 260px; background: var(--bg); color: var(--text);
+  border: 1px solid var(--border-strong); border-radius: 8px; padding: 10px 12px;
+  font-family: var(--mono); font-size: 12.5px; line-height: 1.6; resize: vertical; outline: none;
+}
+.modal textarea:focus { border-color: var(--accent); }
+.modal .field { margin-bottom: 12px; }
+.modal .field label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 5px; font-weight: 600; }
+.modal .field input[type="text"] {
+  width: 100%; padding: 7px 10px; background: var(--bg); border: 1px solid var(--border-strong);
+  border-radius: 6px; color: var(--text); font-size: 13px; outline: none;
+}
+.modal .field input:focus { border-color: var(--accent); }
+.modal .tip { font-size: 11.5px; color: var(--text-faint); margin-top: 6px; line-height: 1.6; }
+.modal .tip code { font-family: var(--mono); background: var(--bg); padding: 1px 5px; border-radius: 4px; color: var(--accent-2); }
+
+/* 预设列表 */
+.preset-list { list-style: none; }
+.preset-list li {
+  display: flex; align-items: center; gap: 10px; padding: 9px 10px;
+  border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px;
+}
+.preset-list li .p-name { font-weight: 600; font-size: 13px; }
+.preset-list li .p-meta { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
+.preset-list li .spacer { flex: 1; }
+.preset-list li .btn { padding: 3px 9px; font-size: 12px; }
+
+/* 批量结果 */
+.batch-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
+.batch-tabs .tab2 {
+  padding: 4px 12px; font-size: 12px; border-radius: 999px; cursor: pointer;
+  border: 1px solid var(--border-strong); color: var(--text-dim);
+}
+.batch-tabs .tab2.active { background: var(--accent); color: #14100a; border-color: var(--accent); font-weight: 600; }
+
+/* Toast */
+#toast-wrap { position: fixed; bottom: 44px; left: 50%; transform: translateX(-50%); z-index: 200; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
+.toast {
+  background: var(--bg-panel-2); color: var(--text); border: 1px solid var(--border-strong);
+  padding: 9px 18px; border-radius: 999px; font-size: 13px; box-shadow: var(--shadow);
+  animation: toastIn .25s ease; display: flex; align-items: center; gap: 8px;
+}
+.toast.ok { border-color: var(--ok); }
+.toast.err { border-color: var(--err); color: var(--err); }
+.toast.warn { border-color: var(--warn); }
+.toast.out { animation: toastOut .3s ease forwards; }
+@keyframes toastIn { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
+@keyframes toastOut { to { transform: translateY(12px); opacity: 0; } }
+
+/* 空状态 / 帮助 */
+.about-kv { display: grid; grid-template-columns: 150px 1fr; gap: 6px 12px; font-size: 12.5px; }
+.about-kv dt { color: var(--text-dim); font-weight: 600; }
+.about-kv dd { color: var(--text); }
+.about-kv code { font-family: var(--mono); background: var(--bg); padding: 1px 5px; border-radius: 4px; color: var(--accent-2); font-size: 11.5px; }
+
+/* ── 响应式 ── */
+@media (max-width: 1180px) {
+  .workspace { grid-template-columns: 1fr; overflow-y: auto; }
+  .workspace > .panel { min-height: 420px; }
+  .preview-body { min-height: 420px; }
+}
+@media (max-width: 700px) {
+  body { overflow: auto; }
+  aside { width: 100%; max-height: 300px; border-right: none; border-bottom: 1px solid var(--border); }
+  .layout { flex-direction: column; }
+  header { flex-wrap: wrap; }
+  .brand .sub { display: none; }
+  .toolbar .tpl-desc { width: 100%; }
+  .opts { grid-template-columns: 1fr; }
+  .header-right .mode-badge { display: none; }
+}
+</style>
+</head>
+<body>
+
+<header>
+  <div class="brand">
+    <div class="logo" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+        <circle cx="12" cy="12" r="9"/>
+        <path d="M12 3v4M12 17v4M3 12h4M17 12h4"/>
+        <circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/>
+      </svg>
+    </div>
+    <div>
+      <h1>nctool</h1>
+      <div class="sub">NC 模板工作台 · G-code 生成</div>
+    </div>
+  </div>
+  <div class="header-right">
+    <span id="modeBadge" class="mode-badge demo"><span class="dot"></span><span id="modeText">演示模式</span></span>
+    <label class="opt-inline" title="生成目标机床">
+      <span>机床</span>
+      <select id="machineSel" style="min-width:130px"></select>
+    </label>
+    <button class="btn icon" id="themeBtn" title="切换亮/暗主题">
+      <svg id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>
+      </svg>
+    </button>
+    <button class="btn icon ghost" id="helpBtn" title="关于本 UI">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.6 2.2c-.8.4-1.1 1-1.1 1.8"/><path d="M12 17h.01"/>
+      </svg>
+    </button>
+  </div>
+</header>
+
+<div class="layout">
+  <!-- 侧栏：模板库 -->
+  <aside id="sidebar">
+    <div class="sidebar-head">
+      <div class="search-box">
+        <input id="searchInput" type="text" placeholder="搜索模板名 / 描述…" autocomplete="off">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg>
+      </div>
+      <div class="cats" id="catBar"></div>
+    </div>
+    <div class="tpl-list" id="tplList"></div>
+  </aside>
+
+  <!-- 主工作区 -->
+  <main>
+    <div class="toolbar">
+      <div class="crumb" id="crumb">未选择模板</div>
+      <div class="spacer"></div>
+      <div class="actions">
+        <button class="btn ghost" id="srcBtn" title="查看 / 编辑模板源码">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M13 5l-2 14"/></svg>源码
+        </button>
+        <button class="btn ghost" id="savePresetBtn" title="将当前参数保存为命名预设">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>预设
+        </button>
+        <button class="btn ghost" id="batchBtn" title="零件级批量生成">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="4" rx="1"/><rect x="3" y="10" width="18" height="4" rx="1"/><rect x="3" y="16" width="18" height="4" rx="1"/></svg>批量
+        </button>
+        <button class="btn ghost" id="copyBtn" title="复制 G-code 到剪贴板">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>复制
+        </button>
+        <button class="btn primary" id="downloadBtn" title="下载 .nc 文件">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>下载 .nc
+        </button>
+      </div>
+    </div>
+
+    <div class="workspace">
+      <!-- 左：参数表单 -->
+      <section class="panel">
+        <div class="panel-head">
+          <span id="panelTitle">参数</span>
+          <span class="hint" id="paramHint"></span>
+        </div>
+        <div class="panel-body" id="formBody">
+          <div class="gcode-empty" style="padding-top:80px">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="9"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg>
+            <div>在左侧选择一个模板开始</div>
+          </div>
+        </div>
+      </section>
+
+      <!-- 右：预览 + 校验 -->
+      <section class="panel preview-wrap">
+        <div class="panel-head">
+          <span>实时预览</span>
+          <span class="hint" id="previewHint"></span>
+        </div>
+        <div class="preview-toolbar">
+          <div class="tabs" id="previewTabs">
+            <button class="tab active" data-tab="gcode">G-code</button>
+            <button class="tab" data-tab="src">模板源码</button>
+            <button class="tab" data-tab="validate">校验</button>
+          </div>
+          <div class="spacer"></div>
+          <span class="stat" id="statChars"></span>
+          <span class="stat" id="statTime"></span>
+        </div>
+        <div class="preview-body" id="previewBody">
+          <div class="tabpage active" id="page-gcode">
+            <div class="gcode-empty" style="padding-top:70px">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 17l6-6 4 4 6-8"/></svg>
+              <div>生成的 G-code 将显示在这里</div>
+            </div>
+          </div>
+          <div class="tabpage" id="page-src"><pre class="src-view" id="srcView"></pre></div>
+          <div class="tabpage" id="page-validate">
+            <div class="v-empty">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
+              <span>校验通过，无问题</span>
+            </div>
+          </div>
+        </div>
+      </section>
+    </div>
+  </main>
+</div>
+
+<footer>
+  <span class="st" id="statusBar"><span class="dot"></span><span>就绪</span></span>
+  <span class="st" id="apiMode"><span>数据源：演示数据（本地渲染）</span></span>
+  <span class="right">
+    <span id="tplCount"></span>
+    <span id="verText"></span>
+  </span>
+</footer>
+
+<!-- ═══════════ 弹窗 ═══════════ -->
+<!-- 源码编辑 -->
+<div class="modal-mask" id="modalSrc">
+  <div class="modal">
+    <div class="modal-head"><h3>模板源码</h3><button class="close" data-close="modalSrc">×</button></div>
+    <div class="modal-body">
+      <div class="field">
+        <label>模板名（只读）</label>
+        <input type="text" id="srcName" readonly>
+      </div>
+      <div class="field">
+        <label>Jinja2 源码（演示模式下可直接编辑并保存到内存，重启后还原）</label>
+        <textarea id="srcArea" spellcheck="false"></textarea>
+      </div>
+      <div class="tip">支持 <code>{% set %}</code> <code>{% for %}</code> <code>{% if %}</code> <code>{% include %}</code>、
+        过滤器 <code>nc_fixed</code> <code>nc_strip</code> <code>nc_pad</code> <code>default</code> <code>round</code> <code>int</code> 等，
+        以及 <code>machine.xxx</code> 机床变量。保存后立即重渲染。</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" data-close="modalSrc">取消</button>
+      <button class="btn primary" id="srcSaveBtn">保存并应用</button>
+    </div>
+  </div>
+</div>
+
+<!-- 预设管理 -->
+<div class="modal-mask" id="modalPreset">
+  <div class="modal">
+    <div class="modal-head"><h3>参数预设</h3><button class="close" data-close="modalPreset">×</button></div>
+    <div class="modal-body">
+      <div class="field" style="display:flex;gap:8px">
+        <input type="text" id="presetName" placeholder="新预设名称，如「钻孔 D10 × 3 深」" style="flex:1">
+        <button class="btn primary" id="presetSaveBtn">保存当前</button>
+      </div>
+      <div class="field"><label>已保存预设（本地存储）</label>
+        <ul class="preset-list" id="presetList"></ul>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn ghost" data-close="modalPreset">关闭</button></div>
+  </div>
+</div>
+
+<!-- 批量生成 -->
+<div class="modal-mask" id="modalBatch">
+  <div class="modal" style="width:760px">
+    <div class="modal-head"><h3>零件级批量生成</h3><button class="close" data-close="modalBatch">×</button></div>
+    <div class="modal-body">
+      <div class="field">
+        <label>零件 JSON（多工序一次生成；每道工序：模板名 + 参数 + 可选机床）</label>
+        <textarea id="batchArea" spellcheck="false"></textarea>
+      </div>
+      <div class="tip">示例格式见右下方「填入示例」。任一工序校验失败整批拒绝并定位。<br>
+        <code>{ "name": "齿轮轴", "ops": [ { "template": "drill_cycle", "params": { ... } }, ... ] }</code></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn ghost" id="batchExampleBtn">填入示例</button>
+        <button class="btn primary" id="batchRunBtn">生成</button>
+        <div class="spacer"></div>
+        <button class="btn ghost" id="batchDownloadAllBtn" style="display:none">下载全部 .nc</button>
+      </div>
+      <div class="field" id="batchResult" style="margin-top:12px;display:none">
+        <label>生成结果</label>
+        <div class="batch-tabs" id="batchTabs"></div>
+        <pre class="src-view" id="batchOut" style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:8px"></pre>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn ghost" data-close="modalBatch">关闭</button></div>
+  </div>
+</div>
+
+<!-- 关于 -->
+<div class="modal-mask" id="modalAbout">
+  <div class="modal">
+    <div class="modal-head"><h3>关于 nctool Web UI</h3><button class="close" data-close="modalAbout">×</button></div>
+    <div class="modal-body">
+      <dl class="about-kv">
+        <dt>定位</dt><dd>本地运行的模板参数表单 + 实时 G-code 预览（<code>docs/DEV_PLAN_CLI_UI.md</code> §5/§6）</dd>
+        <dt>形态</dt><dd>单文件 <code>index.html</code>，零外部依赖；可经 <code>include_str!</code> 内嵌进 binary</dd>
+        <dt>演示模式</dt><dd>内置模板库 + 迷你 Jinja 渲染器 + 客户端校验/后处理，离线完整可用</dd>
+        <dt>服务模式</dt><dd>将 JS 中 <code>API.mode</code> 改为 <code>'server'</code> 并设置 <code>base</code>，
+          全部请求转至 <code>nctool ui</code> 的 HTTP 接口（<code>{ ok, data?, error? }</code>）</dd>
+        <dt>功能覆盖</dt><dd>模板浏览/搜索/分类 · 参数表单自动生成（必选高亮）· 实时预览 · 校验分级 ·
+          生成选项（行号/头部/ASCII/空行/宽松）· 复制/下载 · 机床切换 · 参数预设 · 批量生成 · 主题切换</dd>
+        <dt>渲染口径</dt><dd>与 <code>nctool-core</code> 管线一致：校验 → 规格默认值兜底 → <code>machine</code> 注入 → 后处理</dd>
+      </dl>
+    </div>
+    <div class="modal-foot"><button class="btn primary" data-close="modalAbout">知道了</button></div>
+  </div>
+</div>
+
+<div id="toast-wrap"></div>
+
+<script>
+"use strict";
+/* ═══════════════════════════════════════════════════════════════
+   1. 数据：内置模板库 + 机床预设
+   （内置 5 个与 core/src/registry.rs 逐字节一致；其余为演示模板，展示各分类能力）
+   ═══════════════════════════════════════════════════════════════ */
+const TEMPLATES = [
+  // ── 内置（来自 core/src/registry.rs）──
+  { name:"program_header", category:"通用", builtin:true,
+    desc:"程序头：纸带起始符 + 程序号 + 注释头 + 单位/坐标系/取消态初始化",
+    source:
+      "%\n" +
+      "{{ machine.program_prefix | default('O') }}{{ prog | nc_pad(machine.program_digits | default(4) | int) }}\n" +
+      "( {{ part_name | default('') }} )\n" +
+      "( {{ op_name | default('') }} )\n" +
+      "{{ 'G20' if machine.units | default('metric') == 'imperial' else 'G21' }} ({{ machine.units | default('metric') }})\n" +
+      "G90 G17 (绝对坐标 / XY 平面)\n" +
+      "G40 G49 G80 (取消刀补 / 刀长补偿 / 固定循环)\n" +
+      "{{ machine.coordinate_system }}\n" +
+      "{{ machine.feed_mode }}\n" +
+      "M5\nM9\n",
+    params:[
+      { name:"prog", kind:"Integer", required:true, min:1, max:9999, unit:"号", desc:"程序号（前导零填充 4 位）" },
+      { name:"part_name", kind:"String", required:false, default:"", desc:"零件名称（注释）" },
+      { name:"op_name", kind:"String", required:false, default:"", desc:"工序名称（注释）" },
+    ]},
+  { name:"program_footer", category:"通用", builtin:true,
+    desc:"程序尾：主轴/冷却关闭 + 取消循环 + 程序结束 + 纸带结束符",
+    source:
+      "M5\nM9\n" +
+      "G80 (取消固定循环)\n" +
+      "{{ machine.program_end }}\n" +
+      "%\n",
+    params:[]},
+  { name:"tool_change", category:"通用", builtin:true,
+    desc:"换刀：主轴停止 + 换刀 + 刀长补偿 + 启动主轴与冷却",
+    source:
+      "M5\nM9\n" +
+      "{{ machine.tool_change }} T{{ tool_num | nc_strip }}\n" +
+      "G40 (取消刀补)\n" +
+      "G43 H{{ tool_num | nc_strip }} (刀长补偿)\n" +
+      "{{ machine.spindle_on }} S{{ spindle_speed | nc_strip }} (主轴正转)\n" +
+      "{{ machine.coolant_on }} (冷却开)\n",
+    params:[
+      { name:"tool_num", kind:"Integer", required:true, min:1, max:999, unit:"号", desc:"刀具号" },
+      { name:"spindle_speed", kind:"Integer", required:true, min:1, max:6000, unit:"r/min", desc:"主轴转速（S 值，正整数）" },
+    ]},
+  { name:"safe_move", category:"通用", builtin:true,
+    desc:"安全移动：抬刀到安全高度 + 定位",
+    source:
+      "{{ machine.rapid }} G90 Z{{ safe_z | default(100) | nc_fixed(3) }}\n" +
+      "{{ machine.rapid }} X{{ x | nc_fixed(3) }} Y{{ y | nc_fixed(3) }}\n",
+    params:[
+      { name:"x", kind:"Number", required:true, desc:"目标 X 坐标" },
+      { name:"y", kind:"Number", required:true, desc:"目标 Y 坐标" },
+      { name:"safe_z", kind:"Number", required:false, default:100, min:0, unit:"mm", desc:"安全高度 Z" },
+    ]},
+  { name:"drill_cycle", category:"钻孔", builtin:true,
+    desc:"钻孔循环：G81 标准钻孔",
+    source:
+      "{{ machine.rapid }} X{{ x | nc_fixed(3) }} Y{{ y | nc_fixed(3) }}\n" +
+      "G98 G81 R{{ r_plane | nc_fixed(3) }} Z{{ depth | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "G80 (取消循环)\n",
+    params:[
+      { name:"x", kind:"Number", required:true, unit:"mm", desc:"孔 X 坐标" },
+      { name:"y", kind:"Number", required:true, unit:"mm", desc:"孔 Y 坐标" },
+      { name:"r_plane", kind:"Number", required:false, default:5, min:0, unit:"mm", desc:"R 平面（安全高度）" },
+      { name:"depth", kind:"Number", required:true, max:0, unit:"mm", desc:"钻孔深度（负值）" },
+      { name:"feed", kind:"Number", required:true, min:0.001, unit:"mm/min", desc:"进给速度" },
+    ]},
+  // ── 演示模板（展示各分类与进阶语法）──
+  { name:"face_mill", category:"铣削", builtin:false,
+    desc:"端面铣削 · 面驱动热前加工示例（for 循环 + set 局部变量）",
+    source:
+      "( 端面铣削 - 面驱动热前加工 )\n" +
+      "{{ machine.rapid }} X{{ x0 | nc_fixed(3) }} Y{{ y0 | nc_fixed(3) }}\n" +
+      "{{ machine.spindle_on }} S{{ spindle_speed | nc_strip }} (主轴正转)\n" +
+      "{{ machine.coolant_on }} (冷却开)\n" +
+      "{% set step = cutter_d * 0.8 %}\n" +
+      "{{ machine.linear }} Z{{ depth | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "{% for i in range(passes) %}\n" +
+      "{{ machine.linear }} X{{ (x0 + i * step) | nc_fixed(3) }} Y{{ y0 | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "{% endfor %}\n" +
+      "{{ machine.spindle_off }}\n{{ machine.coolant_off }}\n",
+    params:[
+      { name:"tool_num", kind:"Integer", required:true, min:1, max:999, unit:"号", desc:"刀具号" },
+      { name:"spindle_speed", kind:"Integer", required:true, min:1, max:6000, unit:"r/min", desc:"主轴转速" },
+      { name:"x0", kind:"Number", required:true, unit:"mm", desc:"起点 X" },
+      { name:"y0", kind:"Number", required:true, unit:"mm", desc:"起点 Y" },
+      { name:"depth", kind:"Number", required:true, max:0, unit:"mm", desc:"铣削深度（负值）" },
+      { name:"feed", kind:"Number", required:true, min:0.001, unit:"mm/min", desc:"进给速度" },
+      { name:"cutter_d", kind:"Number", required:true, min:1, unit:"mm", desc:"刀具直径（决定行距 = 0.8×D）" },
+      { name:"passes", kind:"Integer", required:false, default:3, min:1, desc:"走刀次数" },
+    ]},
+  { name:"keyway_mill", category:"铣削", builtin:false,
+    desc:"键槽铣削示例（分层下刀 + 往复）",
+    source:
+      "( 键槽铣削 )\n" +
+      "{{ machine.rapid }} X{{ start_x | nc_fixed(3) }} Y{{ start_y | nc_fixed(3) }}\n" +
+      "{{ machine.spindle_on }} S{{ spindle_speed | nc_strip }}\n{{ machine.coolant_on }}\n" +
+      "{% for i in range(n_passes) %}\n" +
+      "{{ machine.linear }} Z{{ (key_depth * (i + 1) / n_passes) | nc_fixed(3) }} F{{ plunge_feed | nc_fixed(3) }}\n" +
+      "{{ machine.linear }} X{{ (start_x + key_length) | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "{{ machine.linear }} X{{ start_x | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "{% endfor %}\n" +
+      "{{ machine.rapid }} Z{{ safe_z | default(100) | nc_fixed(3) }}\n" +
+      "{{ machine.spindle_off }}\n{{ machine.coolant_off }}\n",
+    params:[
+      { name:"tool_num", kind:"Integer", required:true, min:1, max:999, unit:"号", desc:"键槽铣刀号" },
+      { name:"spindle_speed", kind:"Integer", required:true, min:1, max:6000, unit:"r/min", desc:"主轴转速" },
+      { name:"start_x", kind:"Number", required:true, unit:"mm", desc:"槽起点 X" },
+      { name:"start_y", kind:"Number", required:true, unit:"mm", desc:"槽起点 Y" },
+      { name:"key_length", kind:"Number", required:true, min:0.1, unit:"mm", desc:"槽长" },
+      { name:"key_depth", kind:"Number", required:true, max:0, unit:"mm", desc:"槽深（负值）" },
+      { name:"plunge_feed", kind:"Number", required:true, min:0.001, unit:"mm/min", desc:"下刀进给" },
+      { name:"feed", kind:"Number", required:true, min:0.001, unit:"mm/min", desc:"走刀进给" },
+      { name:"n_passes", kind:"Integer", required:false, default:2, min:1, desc:"分层次数" },
+      { name:"safe_z", kind:"Number", required:false, default:100, min:0, unit:"mm", desc:"安全高度" },
+    ]},
+  { name:"turn_rough", category:"车削", builtin:false,
+    desc:"外圆车削粗加工示例（循环分层）",
+    source:
+      "( 车削粗加工 - 外圆 )\n" +
+      "{{ machine.rapid }} X{{ (diameter / 2) | nc_fixed(3) }} Z{{ start_z | nc_fixed(3) }}\n" +
+      "{{ machine.spindle_on }} S{{ spindle_speed | nc_strip }} (主轴正转)\n{{ machine.coolant_on }}\n" +
+      "{% for i in range(passes) %}\n" +
+      "{% set cut = diameter / 2 - (i + 1) * depth_per_pass %}\n" +
+      "{{ machine.linear }} X{{ cut | nc_fixed(3) }} Z{{ (start_z + length) | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "{{ machine.linear }} X{{ cut | nc_fixed(3) }} Z{{ start_z | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "{% endfor %}\n" +
+      "{{ machine.rapid }} X{{ (diameter / 2 + 2) | nc_fixed(3) }} Z{{ safe_z | default(100) | nc_fixed(3) }}\n" +
+      "{{ machine.spindle_off }}\n{{ machine.coolant_off }}\n",
+    params:[
+      { name:"diameter", kind:"Number", required:true, min:1, unit:"mm", desc:"毛坯直径" },
+      { name:"length", kind:"Number", required:true, min:0.1, unit:"mm", desc:"加工长度" },
+      { name:"start_z", kind:"Number", required:true, unit:"mm", desc:"起刀 Z" },
+      { name:"depth_per_pass", kind:"Number", required:true, min:0.001, unit:"mm", desc:"每刀切深" },
+      { name:"passes", kind:"Integer", required:false, default:3, min:1, desc:"走刀次数" },
+      { name:"spindle_speed", kind:"Integer", required:true, min:1, max:6000, unit:"r/min", desc:"主轴转速" },
+      { name:"feed", kind:"Number", required:true, min:0.001, unit:"mm/min", desc:"进给速度" },
+      { name:"safe_z", kind:"Number", required:false, default:100, min:0, unit:"mm", desc:"退刀安全高度" },
+    ]},
+  { name:"drill_multi", category:"钻孔", builtin:false,
+    desc:"多孔阵列钻孔示例（循环内 set 计算孔位）",
+    source:
+      "( 多孔阵列钻孔 )\n" +
+      "{% for i in range(n_holes) %}\n" +
+      "{% set px = x0 + i * pitch_x %}\n" +
+      "{% set py = y0 + i * pitch_y %}\n" +
+      "{{ machine.rapid }} X{{ px | nc_fixed(3) }} Y{{ py | nc_fixed(3) }}\n" +
+      "G98 G81 R{{ r_plane | default(5) | nc_fixed(3) }} Z{{ depth | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "{% endfor %}\n" +
+      "G80 (取消循环)\n",
+    params:[
+      { name:"x0", kind:"Number", required:true, unit:"mm", desc:"首孔 X" },
+      { name:"y0", kind:"Number", required:true, unit:"mm", desc:"首孔 Y" },
+      { name:"pitch_x", kind:"Number", required:true, unit:"mm", desc:"X 方向孔距" },
+      { name:"pitch_y", kind:"Number", required:true, unit:"mm", desc:"Y 方向孔距" },
+      { name:"n_holes", kind:"Integer", required:true, min:1, max:999, desc:"孔数" },
+      { name:"depth", kind:"Number", required:true, max:0, unit:"mm", desc:"钻孔深度（负值）" },
+      { name:"feed", kind:"Number", required:true, min:0.001, unit:"mm/min", desc:"进给速度" },
+      { name:"r_plane", kind:"Number", required:false, default:5, min:0, unit:"mm", desc:"R 平面（安全高度）" },
+    ]},
+  { name:"wfl_face_drive", category:"机床", builtin:false,
+    desc:"面驱动热前加工 · WFL M65 特定（按机床类型分支）",
+    source:
+      "( 面驱动热前加工 - 车铣复合 )\n" +
+      "{{ machine.rapid }} X{{ x | nc_fixed(3) }} Z{{ z | nc_fixed(3) }}\n" +
+      "{% if machine.machine_type == 'mill_turn_multitask' %}\n" +
+      "( 车铣复合：C 轴锁紧 + 主轴定向 )\n" +
+      "{{ machine.spindle_on }} S{{ spindle_speed | nc_strip }} (C 轴定向)\n" +
+      "{% else %}\n" +
+      "{{ machine.spindle_on }} S{{ spindle_speed | nc_strip }}\n" +
+      "{% endif %}\n" +
+      "{{ machine.coolant_on }}\n" +
+      "{{ machine.linear }} X{{ x | nc_fixed(3) }} Z{{ z | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "{{ machine.spindle_off }}\n{{ machine.coolant_off }}\n",
+    params:[
+      { name:"tool_num", kind:"Integer", required:true, min:1, max:999, unit:"号", desc:"面驱动刀具号" },
+      { name:"spindle_speed", kind:"Integer", required:true, min:1, max:6000, unit:"r/min", desc:"主轴转速" },
+      { name:"x", kind:"Number", required:true, unit:"mm", desc:"定位 X" },
+      { name:"z", kind:"Number", required:true, unit:"mm", desc:"定位 Z" },
+      { name:"feed", kind:"Number", required:true, min:0.001, unit:"mm/min", desc:"进给速度" },
+    ]},
+  { name:"demo_program", category:"通用", builtin:false,
+    desc:"程序装配示例：header + 换刀 + 安全移动 + 钻孔 + footer（include 闭包）",
+    source:
+      "{% include \"program_header\" %}\n" +
+      "{% include \"tool_change\" %}\n" +
+      "{% include \"safe_move\" %}\n" +
+      "{% include \"drill_cycle\" %}\n" +
+      "{% include \"program_footer\" %}\n",
+    params:[
+      { name:"prog", kind:"Integer", required:true, min:1, max:9999, unit:"号", desc:"程序号" },
+      { name:"part_name", kind:"String", required:false, default:"", desc:"零件名称（注释）" },
+      { name:"op_name", kind:"String", required:false, default:"", desc:"工序名称（注释）" },
+      { name:"tool_num", kind:"Integer", required:true, min:1, max:999, unit:"号", desc:"刀具号" },
+      { name:"spindle_speed", kind:"Integer", required:true, min:1, max:6000, unit:"r/min", desc:"主轴转速" },
+      { name:"x", kind:"Number", required:true, unit:"mm", desc:"孔 X 坐标" },
+      { name:"y", kind:"Number", required:true, unit:"mm", desc:"孔 Y 坐标" },
+      { name:"safe_z", kind:"Number", required:false, default:100, min:0, unit:"mm", desc:"安全高度" },
+      { name:"r_plane", kind:"Number", required:false, default:5, min:0, unit:"mm", desc:"R 平面" },
+      { name:"depth", kind:"Number", required:true, max:0, unit:"mm", desc:"钻孔深度（负值）" },
+      { name:"feed", kind:"Number", required:true, min:0.001, unit:"mm/min", desc:"进给速度" },
+    ]},
+];
+
+/* 机床预设：与 core/src/machine.rs 一致 */
+const BASE_CONFIG = {
+  program_prefix:"O", program_digits:"4", line_number_prefix:"N", line_number_digits:"4",
+  coordinate_system:"G54", units:"metric", feed_mode:"G94", rapid:"G0", linear:"G1",
+  clockwise_arc:"G2", ccw_arc:"G3", spindle_on:"M3", spindle_off:"M5",
+  coolant_on:"M8", coolant_off:"M9", program_end:"M30", tool_change:"M6",
+  max_spindle_rpm:"6000", machine_type:"generic",
+};
+const MACHINE_PRESETS = {
+  generic:   { id:"generic",   vendor:"Generic", model:"CNC", config:{...BASE_CONFIG} },
+  wfl_m65:   { id:"wfl_m65",   vendor:"WFL", model:"M65",
+    config:{...BASE_CONFIG, max_spindle_rpm:"3500", machine_type:"mill_turn_multitask",
+      axes:"X Z C (turning) / X Y Z B C (milling)"} },
+  index_ms40:{ id:"index_ms40",vendor:"INDEX", model:"MS40",
+    config:{...BASE_CONFIG, max_spindle_rpm:"5000", machine_type:"mill_turn_twin_spindle",
+      axes:"X1 Z1 C1 / X2 Z2 C2 / Y B"} },
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   2. 迷你 Jinja 渲染器（演示模式；严格模式语义近似 minijinja）
+   ═══════════════════════════════════════════════════════════════ */
+const UNDEF = Symbol("undefined");
+const isUndef = v => v === UNDEF || v === undefined;
+const truthy = v => !isUndef(v) && !!v;
+
+/* —— 表达式词法 —— */
+function tokenizeExpr(src) {
+  const toks = []; let i = 0;
+  const ws = /\s/;
+  const numRe = /^[0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?/;
+  while (i < src.length) {
+    const c = src[i];
+    if (ws.test(c)) { i++; continue; }
+    if (c === "'" || c === '"') {
+      let j = i + 1, s = "";
+      while (j < src.length && src[j] !== c) {
+        if (src[j] === "\\" && j + 1 < src.length) { s += src[j + 1]; j += 2; }
+        else { s += src[j]; j++; }
+      }
+      toks.push({ t: "str", v: s }); i = j + 1; continue;
+    }
+    const rest = src.slice(i);
+    const num = numRe.exec(rest);
+    if (num && num[0].length > 0 && (/[0-9]/.test(c) || (c === "." && /[0-9]/.test(rest[1] || "")))) {
+      toks.push({ t: "num", v: parseFloat(num[0]) }); i += num[0].length; continue;
+    }
+    if (/[A-Za-z_]/.test(c)) {
+      let j = i; while (j < src.length && /[A-Za-z0-9_]/.test(src[j])) j++;
+      toks.push({ t: "id", v: src.slice(i, j) }); i = j; continue;
+    }
+    const two = src.slice(i, i + 2);
+    if (["==", "!=", "<=", ">="].includes(two)) { toks.push({ t: "op", v: two }); i += 2; continue; }
+    if ("+-*/%|(),.[]:".includes(c) || c === "<" || c === ">") { toks.push({ t: "op", v: c }); i++; continue; }
+    i++;
+  }
+  toks.push({ t: "eof" });
+  return toks;
+}
+
+/* —— 表达式解析（递归下降）—— */
+class ExprParser {
+  constructor(src) { this.toks = tokenizeExpr(src); this.p = 0; }
+  peek() { return this.toks[this.p]; }
+  next() { return this.toks[this.p++]; }
+  expectOp(op) { const t = this.next(); if (t.t === "op" && t.v === op) return; throw new Error(`表达式语法错误：期望 ${op}`); }
+  parse() { return this.parseTernary(); }
+  parseTernary() {
+    const v = this.parseOr();
+    const t = this.peek();
+    if (t.t === "id" && t.v === "if") {
+      this.next();
+      const c = this.parseOr();
+      const e2 = this.next();
+      if (!(e2.t === "id" && e2.v === "else")) throw new Error("三元表达式缺少 else");
+      const e = this.parseTernary();
+      return { k: "tern", v, c, e };
+    }
+    return v;
+  }
+  parseOr() {
+    let l = this.parseAnd();
+    while (this.peek().t === "id" && this.peek().v === "or") { this.next(); const r = this.parseAnd(); l = { k: "bin", op: "or", l, r }; }
+    return l;
+  }
+  parseAnd() {
+    let l = this.parseNot();
+    while (this.peek().t === "id" && this.peek().v === "and") { this.next(); const r = this.parseNot(); l = { k: "bin", op: "and", l, r }; }
+    return l;
+  }
+  parseNot() {
+    if (this.peek().t === "id" && this.peek().v === "not") { this.next(); return { k: "un", op: "not", e: this.parseNot() }; }
+    return this.parseCmp();
+  }
+  parseCmp() {
+    let l = this.parseAdd();
+    for (;;) {
+      const t = this.peek();
+      if (t.t === "op" && ["==", "!=", "<", ">", "<=", ">="].includes(t.v)) {
+        this.next(); const r = this.parseAdd(); l = { k: "bin", op: t.v, l, r };
+      } else if (t.t === "id" && t.v === "is") {
+        this.next();
+        let neg = false;
+        if (this.peek().t === "id" && this.peek().v === "not") { neg = true; this.next(); }
+        const tn = this.next();
+        if (!(tn.t === "id" && (tn.v === "defined" || tn.v === "undefined"))) throw new Error("is 测试仅支持 defined/undefined");
+        l = { k: "test", e: l, name: tn.v, not: neg };
+      } else break;
+    }
+    return l;
+  }
+  parseAdd() {
+    let l = this.parseMul();
+    for (;;) { const t = this.peek(); if (t.t === "op" && (t.v === "+" || t.v === "-")) { this.next(); const r = this.parseMul(); l = { k: "bin", op: t.v, l, r }; } else break; }
+    return l;
+  }
+  parseMul() {
+    let l = this.parseUnary();
+    for (;;) { const t = this.peek(); if (t.t === "op" && (t.v === "*" || t.v === "/" || t.v === "%")) { this.next(); const r = this.parseUnary(); l = { k: "bin", op: t.v, l, r }; } else break; }
+    return l;
+  }
+  parseUnary() {
+    const t = this.peek();
+    if (t.t === "op" && t.v === "-") { this.next(); return { k: "un", op: "-", e: this.parseUnary() }; }
+    return this.parsePostfix();
+  }
+  parsePostfix() {
+    let e = this.parsePrimary();
+    for (;;) {
+      const t = this.peek();
+      if (t.t === "op" && t.v === ".") {
+        this.next(); const name = this.next();
+        if (name.t !== "id") throw new Error("属性名应为标识符");
+        e = { k: "attr", obj: e, name: name.v };
+      } else break;
+    }
+    while (this.peek().t === "op" && this.peek().v === "|") {
+      this.next(); const name = this.next();
+      if (name.t !== "id") throw new Error("过滤器名应为标识符");
+      let args = [];
+      if (this.peek().t === "op" && this.peek().v === "(") {
+        this.next();
+        if (!(this.peek().t === "op" && this.peek().v === ")")) {
+          args.push(this.parseExpr());
+          while (this.peek().t === "op" && this.peek().v === ",") { this.next(); args.push(this.parseExpr()); }
+        }
+        this.expectOp(")");
+      }
+      e = { k: "filter", e, name: name.v, args };
+    }
+    return e;
+  }
+  parsePrimary() {
+    const t = this.next();
+    if (t.t === "num") return { k: "num", v: t.v };
+    if (t.t === "str") return { k: "str", v: t.v };
+    if (t.t === "id") {
+      if (t.v === "true") return { k: "bool", v: true };
+      if (t.v === "false") return { k: "bool", v: false };
+      if (t.v === "none" || t.v === "null") return { k: "none" };
+      if (this.peek().t === "op" && this.peek().v === "(") {
+        this.next(); const args = [];
+        if (!(this.peek().t === "op" && this.peek().v === ")")) {
+          args.push(this.parseExpr());
+          while (this.peek().t === "op" && this.peek().v === ",") { this.next(); args.push(this.parseExpr()); }
+        }
+        this.expectOp(")");
+        return { k: "call", name: t.v, args };
+      }
+      return { k: "ident", v: t.v };
+    }
+    if (t.t === "op" && t.v === "(") { const e = this.parseExpr(); this.expectOp(")"); return e; }
+    if (t.t === "op" && t.v === "[") {
+      const items = [];
+      if (!(this.peek().t === "op" && this.peek().v === "]")) {
+        items.push(this.parseExpr());
+        while (this.peek().t === "op" && this.peek().v === ",") { this.next(); items.push(this.parseExpr()); }
+      }
+      this.expectOp("]");
+      return { k: "list", items };
+    }
+    throw new Error(`无法解析表达式: ${t.v || t.t}`);
+  }
+  parseExpr() { return this.parseTernary(); }
+}
+
+/* —— 过滤器 —— */
+function applyFilter(name, val, args) {
+  if (isUndef(val) && name !== "default" && name !== "d") return UNDEF;
+  const num = () => { const n = Number(val); if (!isFinite(n)) throw new Error(`过滤器 ${name}: 非有限数`); return n; };
+  switch (name) {
+    case "nc_fixed": { const n = num(), w = Number(args[0] ?? 3); return n.toFixed(w); }
+    case "nc_strip": { let s = num().toFixed(10).replace(/\.?0+$/, ""); if (s === "" || s === "-") s = "0"; return s; }
+    case "nc_pad": { const n = num(), w = Number(args[0] ?? 4); if (!Number.isInteger(n)) throw new Error("nc_pad: 需要整数值"); return String(Math.trunc(n)).padStart(w, "0"); }
+    case "default": case "d": return isUndef(val) ? args[0] : val;
+    case "int": return Math.trunc(num());
+    case "float": return num();
+    case "round": { const f = Math.pow(10, Number(args[0] ?? 0)); return Math.round(num() * f) / f; }
+    case "abs": return Math.abs(num());
+    case "lower": return String(val).toLowerCase();
+    case "upper": return String(val).toUpperCase();
+    case "trim": return String(val).trim();
+    case "length": return String(val).length;
+    case "sqrt": return Math.sqrt(num());
+    case "sin": return Math.sin(num());
+    case "cos": return Math.cos(num());
+    case "tan": return Math.tan(num());
+    case "floor": return Math.floor(num());
+    case "ceil": return Math.ceil(num());
+    case "pow": return Math.pow(num(), Number(args[0] ?? 1));
+    default: throw new Error(`未知过滤器: ${name}`);
+  }
+}
+function callFn(name, args) {
+  if (name === "range") { const n = Math.trunc(Number(args[0] ?? 0)); const a = []; for (let i = 0; i < n; i++) a.push(i); return a; }
+  throw new Error(`未知函数: ${name}`);
+}
+
+/* —— 表达式求值 —— */
+function evExpr(node, env) {
+  switch (node.k) {
+    case "num": case "str": case "bool": case "none": return node.v;
+    case "ident": {
+      if (node.v === "loop") return env.loop ?? UNDEF;
+      for (let i = env.scopes.length - 1; i >= 0; i--) if (node.v in env.scopes[i]) return env.scopes[i][node.v];
+      return UNDEF;
+    }
+    case "attr": {
+      const o = evExpr(node.obj, env);
+      if (isUndef(o) || o === null) return UNDEF;
+      if (typeof o === "object") return o[node.name] ?? UNDEF;
+      return UNDEF;
+    }
+    case "call": return callFn(node.name, node.args.map(a => evExpr(a, env)));
+    case "list": return node.items.map(i => evExpr(i, env));
+    case "un": {
+      if (node.op === "not") return !truthy(evExpr(node.e, env));
+      if (node.op === "-") { const v = evExpr(node.e, env); if (isUndef(v)) return UNDEF; if (typeof v !== "number") throw new Error("一元负号需要数值"); return -v; }
+      return UNDEF;
+    }
+    case "bin": {
+      if (node.op === "and") { const l = evExpr(node.l, env); return truthy(l) ? evExpr(node.r, env) : l; }
+      if (node.op === "or") { const l = evExpr(node.l, env); return truthy(l) ? l : evExpr(node.r, env); }
+      const l = evExpr(node.l, env), r = evExpr(node.r, env);
+      if (isUndef(l) || isUndef(r)) return UNDEF;
+      switch (node.op) {
+        case "+": if (typeof l === "number" && typeof r === "number") return l + r; return String(l) + String(r);
+        case "-": return l - r; case "*": return l * r; case "/": return l / r; case "%": return l % r;
+        case "==": return l === r; case "!=": return l !== r;
+        case "<": return l < r; case ">": return l > r; case "<=": return l <= r; case ">=": return l >= r;
+      }
+      return UNDEF;
+    }
+    case "test": {
+      const v = evExpr(node.e, env);
+      let res = node.name === "defined" ? !isUndef(v) : isUndef(v);
+      if (node.not) res = !res;
+      return res;
+    }
+    case "tern": { const c = evExpr(node.c, env); return truthy(c) ? evExpr(node.v, env) : evExpr(node.e, env); }
+    case "filter": {
+      const val = evExpr(node.e, env);
+      return applyFilter(node.name, val, node.args.map(a => evExpr(a, env)));
+    }
+  }
+  return UNDEF;
+}
+
+/* —— 模板分词 → 块树 —— */
+function tokenizeTemplate(src) {
+  const segs = []; let i = 0, text = "";
+  const pushText = () => { if (text !== "") { segs.push({ k: "text", v: text }); text = ""; } };
+  while (i < src.length) {
+    const openVar = src.indexOf("{{", i);
+    const openBlk = src.indexOf("{%", i);
+    const openCmt = src.indexOf("{#", i);
+    let next = Infinity, type = null;
+    if (openVar !== -1 && openVar < next) { next = openVar; type = "var"; }
+    if (openBlk !== -1 && openBlk < next) { next = openBlk; type = "blk"; }
+    if (openCmt !== -1 && openCmt < next) { next = openCmt; type = "cmt"; }
+    if (type === null) { text += src.slice(i); break; }
+    text += src.slice(i, next); i = next;
+    if (type === "var") {
+      const end = src.indexOf("}}", i + 2);
+      if (end === -1) { text += src.slice(i); break; }
+      pushText();
+      let expr = src.slice(i + 2, end), trimL = false, trimR = false;
+      if (expr.startsWith("-")) { trimL = true; expr = expr.slice(1); }
+      if (expr.endsWith("-")) { trimR = true; expr = expr.slice(0, -1); }
+      segs.push({ k: "var", expr: expr.trim(), trimL, trimR });
+      i = end + 2;
+    } else if (type === "blk") {
+      const end = src.indexOf("%}", i + 2);
+      if (end === -1) { text += src.slice(i); break; }
+      pushText();
+      let inner = src.slice(i + 2, end), trimL = false, trimR = false;
+      if (inner.startsWith("-")) { trimL = true; inner = inner.slice(1); }
+      if (inner.endsWith("-")) { trimR = true; inner = inner.slice(0, -1); }
+      const body = inner.trim();
+      const mSet = /^set\s+([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/.exec(body);
+      const mFor = /^for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+(.*)$/.exec(body);
+      const mInc = /^include\s+["'](.*?)["']$/.exec(body);
+      if (/^set\s/.test(body) && mSet) segs.push({ k: "set", name: mSet[1], expr: mSet[2].trim(), trimL, trimR });
+      else if (/^include\s/.test(body) && mInc) segs.push({ k: "include", name: mInc[1], trimL, trimR });
+      else if (/^if\s/.test(body)) segs.push({ k: "branch", tag: "if", expr: body.slice(2).trim(), trimL, trimR });
+      else if (/^elif\s/.test(body)) segs.push({ k: "branch", tag: "elif", expr: body.slice(4).trim(), trimL, trimR });
+      else if (body === "else") segs.push({ k: "branch", tag: "else", expr: "", trimL, trimR });
+      else if (body === "endif") segs.push({ k: "end", tag: "endif", trimL, trimR });
+      else if (/^for\s/.test(body) && mFor) segs.push({ k: "for", name: mFor[1], expr: mFor[2].trim(), trimL, trimR });
+      else if (body === "endfor") segs.push({ k: "end", tag: "endfor", trimL, trimR });
+      else throw new Error(`不支持的控制块: {% ${body} %}`);
+      i = end + 2;
+    } else {
+      const end = src.indexOf("#}", i + 2);
+      if (end === -1) { text += src.slice(i); break; }
+      pushText(); i = end + 2;
+    }
+  }
+  pushText();
+  /* 空白控制 */
+  for (let idx = 0; idx < segs.length; idx++) {
+    const s = segs[idx];
+    if (s.trimL && segs[idx + 1] && segs[idx + 1].k === "text") segs[idx + 1].v = segs[idx + 1].v.replace(/^\s+/, "");
+    if (s.trimR && segs[idx - 1] && segs[idx - 1].k === "text") segs[idx - 1].v = segs[idx - 1].v.replace(/\s+$/, "");
+  }
+  /* 构建嵌套块树 */
+  const root = [], stack = [root];
+  for (const s of segs) {
+    if (s.k === "branch") {
+      if (s.tag === "if" || s.tag === "elif") {
+        const cur = stack[stack.length - 1];
+        const node = { k: "if", branches: [{ cond: s.expr, body: [] }], elseBody: null };
+        cur.push(node); stack.push(node.branches[0].body);
+      } else if (s.tag === "elif") {
+        stack.pop();
+        const cur = stack[stack.length - 1], ifNode = cur[cur.length - 1];
+        ifNode.branches.push({ cond: s.expr, body: [] }); stack.push(ifNode.branches[ifNode.branches.length - 1].body);
+      } else { /* else */
+        stack.pop();
+        const cur = stack[stack.length - 1], ifNode = cur[cur.length - 1];
+        ifNode.elseBody = []; stack.push(ifNode.elseBody);
+      }
+    } else if (s.k === "end") {
+      stack.pop();
+    } else if (s.k === "for") {
+      const cur = stack[stack.length - 1];
+      const node = { k: "for", name: s.name, expr: s.expr, body: [] };
+      cur.push(node); stack.push(node.body);
+    } else {
+      stack[stack.length - 1].push(s);
+    }
+  }
+  return root;
+}
+
+function formatValue(v) {
+  if (v === true) return "True";
+  if (v === false) return "False";
+  if (v === null || isUndef(v)) return "";
+  return String(v);
+}
+
+function renderBody(nodes, env, emit) {
+  for (const s of nodes) {
+    if (s.k === "text") { emit(s.v); }
+    else if (s.k === "var") {
+      const v = evExpr(new ExprParser(s.expr).parse(), env);
+      if (!isUndef(v)) emit(formatValue(v));
+    } else if (s.k === "set") {
+      const v = evExpr(new ExprParser(s.expr).parse(), env);
+      env.scopes[env.scopes.length - 1][s.name] = v;
+    } else if (s.k === "include") {
+      const t = env.registry[s.name];
+      if (!t) throw new Error(`模板不存在: ${s.name}`);
+      renderBody(tokenizeTemplate(t.source), env, emit);
+    } else if (s.k === "if") {
+      let taken = false;
+      for (const b of s.branches) {
+        const v = evExpr(new ExprParser(b.cond).parse(), env);
+        if (truthy(v)) { renderBody(b.body, env, emit); taken = true; break; }
+      }
+      if (!taken && s.elseBody) renderBody(s.elseBody, env, emit);
+    } else if (s.k === "for") {
+      const arr = evExpr(new ExprParser(s.expr).parse(), env);
+      if (Array.isArray(arr)) {
+        let idx0 = 0;
+        for (const item of arr) {
+          env.scopes.push({ [s.name]: item, loop: { index: idx0 + 1, index0: idx0, length: arr.length } });
+          renderBody(s.body, env, emit);
+          env.scopes.pop();
+          idx0++;
+        }
+      }
+    }
+  }
+}
+
+/* 渲染入口：返回 { text, error? } */
+function renderTemplateSource(tplName, source, params, machine, registry) {
+  const tpl = registry[tplName];
+  if (!tpl && source === undefined) return { error: `模板不存在: ${tplName}` };
+  try {
+    const src = source !== undefined ? source : tpl.source;
+    const env = { scopes: [{ ...params, machine }], loop: UNDEF, registry };
+    let out = "";
+    renderBody(tokenizeTemplate(src), env, c => { out += c; });
+    return { text: out };
+  } catch (e) {
+    return { error: e.message || String(e) };
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   3. 校验 + 后处理（客户端镜像 nctool-core 管线口径）
+   ═══════════════════════════════════════════════════════════════ */
+function validateTemplate(tpl, params) {
+  const issues = [];
+  for (const spec of tpl.params) {
+    const val = params[spec.name];
+    const has = val !== undefined && val !== "";
+    if (!has) {
+      const required = spec.required && spec.default === undefined;
+      if (required) issues.push({ level: "error", kind: "missing", param: spec.name, msg: `必选参数缺失：${spec.name}${spec.unit ? `（${spec.unit}）` : ""}` });
+      continue;
+    }
+    if (spec.kind === "Number" || spec.kind === "Integer") {
+      const n = Number(val);
+      if (val === "" || !isFinite(n)) issues.push({ level: "error", kind: "nonfinite", param: spec.name, msg: `参数 ${spec.name} 非有限数` });
+      else {
+        if (spec.kind === "Integer" && !Number.isInteger(n)) issues.push({ level: "error", kind: "type", param: spec.name, msg: `参数 ${spec.name} 需要整数` });
+        if (spec.min !== undefined && n < spec.min) issues.push({ level: "error", kind: "range", param: spec.name, msg: `${spec.name} 需 ≥ ${spec.min}${spec.unit || ""}` });
+        if (spec.max !== undefined && n > spec.max) issues.push({ level: "error", kind: "range", param: spec.name, msg: `${spec.name} 需 ≤ ${spec.max}${spec.unit || ""}` });
+      }
+    } else if (spec.kind === "Bool" && typeof val !== "boolean") {
+      issues.push({ level: "error", kind: "type", param: spec.name, msg: `${spec.name} 需要布尔值` });
+    }
+  }
+  return issues;
+}
+
+function postprocess(rendered, templateName, opts, machine) {
+  let out = "";
+  if (opts.addHeader) {
+    let h = `( ================================== )\n( nctool generated G-code )\n( template: ${templateName} )\n( ================================== )\n`;
+    if (opts.ascii) h = h.replace(/[^\x00-\x7F]/g, "?");
+    out += h;
+  }
+  if (opts.format === "text") { out += rendered; return out; }
+  const linePrefix = machine.config.line_number_prefix || "N";
+  let lineDigits = parseInt(machine.config.line_number_digits || "4", 10) || 4;
+  lineDigits = Math.max(1, Math.min(32, lineDigits));
+  const progPrefix = machine.config.program_prefix || "O";
+  const step = Math.max(1, opts.lineStep || 10);
+  let lineNo = 0;
+  /* 与 Rust 管线 `rendered.lines()` 语义一致：结尾换行不产生额外空行 */
+  const lines = rendered.endsWith("\n") ? rendered.slice(0, -1).split("\n") : rendered.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed === "") {
+      if (opts.stripBlank) continue;
+      out += "\n"; continue;
+    }
+    let content = trimmed;
+    if (opts.ascii) content = content.replace(/[^\x00-\x7F]/g, "?");
+    if (opts.lineNumbers) {
+      const isProg = trimmed.startsWith(progPrefix) || (progPrefix === "O" && trimmed.startsWith("o"));
+      const hasN = trimmed.startsWith(linePrefix) || (linePrefix === "N" && trimmed.startsWith("n"));
+      if (!isProg && !hasN) {
+        const next = lineNo + step;
+        if (next <= (opts.maxLine || 9999)) { lineNo = next; out += `${linePrefix}${String(lineNo).padStart(lineDigits, "0")} `; }
+      }
+    }
+    out += content + "\n";
+  }
+  return out;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   4. API 抽象层（§6 契约）：demo 本地执行 / server 转发
+   ═══════════════════════════════════════════════════════════════ */
+const API = {
+  mode: "demo",            // "demo" | "server"
+  base: "http://127.0.0.1:8787",
+  get registry() { return API_REGISTRY; },
+  get machines() { return API_MACHINES; },
+
+  async request(path, method, body) {
+    if (this.mode === "server") {
+      try {
+        const r = await fetch(this.base + path, {
+          method,
+          headers: { "Content-Type": "application/json" },
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        return await r.json();
+      } catch (e) {
+        return { ok: false, error: { kind: "io", message: "无法连接服务：" + e.message } };
+      }
+    }
+    return this.mock(path, method, body);
+  },
+
+  /* —— demo 模式本地执行 —— */
+  mock(path, method, body) {
+    if (path === "/api/templates") {
+      const cat = (body && body.category) || "";
+      return { ok: true, data: { templates: TEMPLATES.filter(t => !cat || t.category === cat) } };
+    }
+    if (path === "/api/templates/" + (body && body.name)) {
+      const t = TEMPLATES.find(x => x.name === body.name);
+      if (!t) return { ok: false, error: { kind: "notfound", message: `模板不存在: ${body.name}` } };
+      return { ok: true, data: { template: t } };
+    }
+    if (path === "/api/machines") return { ok: true, data: { machines: Object.values(MACHINE_PRESETS) } };
+    if (path === "/api/validate") {
+      const t = TEMPLATES.find(x => x.name === body.template);
+      if (!t) return { ok: false, error: { kind: "notfound", message: `模板不存在: ${body.template}` } };
+      return { ok: true, data: { report: buildReport(t, body.params || {}, body) } };
+    }
+    if (path === "/api/render") return this.doRender(body);
+    if (path === "/api/inspect") {
+      const issues = [];
+      try { tokenizeTemplate(body.source || ""); } catch (e) { issues.push({ level: "error", kind: "parse", msg: "模板语法错误：" + e.message }); }
+      return { ok: true, data: { issues } };
+    }
+    if (path === "/api/part/generate") return this.doPart(body);
+    return { ok: false, error: { kind: "notfound", message: `未知接口: ${path}` } };
+  },
+
+  /* 渲染：校验 → 兜底 → machine 注入 → 渲染 → 后处理 */
+  doRender(body) {
+    const t = TEMPLATES.find(x => x.name === body.template);
+    if (!t) return { ok: false, error: { kind: "notfound", message: `模板不存在: ${body.template}` } };
+    const params = body.params || {};
+    const machine = resolveMachine(body.machine || "generic");
+    const opts = normalizeOpts(body.options || {});
+    const report = buildReport(t, params, body);
+    const hasErrors = report.issues.some(i => i.level === "error");
+    if (hasErrors && !opts.lenient) {
+      return { ok: true, data: { blocked: true, report, output: "", machine } };
+    }
+    /* 宽松模式：非 NaN/Inf 降级为警告；此处表单不会产生 NaN */
+    const effective = { ...params };
+    /* 规格默认值兜底（与 nctool-core 管线一致：用户值 > 规格默认值 > 模板内联 default） */
+    for (const spec of t.params) {
+      if (spec.default !== undefined && (effective[spec.name] === undefined || effective[spec.name] === "")) {
+        effective[spec.name] = spec.default;
+      }
+    }
+    const effectiveIssues = opts.lenient ? report.issues.map(i => ({ ...i, level: i.level === "error" ? "warn" : i.level })) : report.issues;
+    const res = renderTemplateSource(t.name, undefined, effective, machine.config, API_REGISTRY);
+    if (res.error) {
+      return { ok: true, data: { blocked: true, report: { issues: [{ level: "error", kind: "render", msg: "渲染失败：" + res.error }] }, output: "", machine } };
+    }
+    const output = postprocess(res.text, t.name, opts, machine);
+    return { ok: true, data: { blocked: false, report: { issues: effectiveIssues }, output, machine } };
+  },
+
+  /* 零件级批量生成 */
+  doPart(body) {
+    const part = body.part || {};
+    const ops = part.ops || [];
+    const results = [];
+    for (let i = 0; i < ops.length; i++) {
+      const op = ops[i];
+      const t = TEMPLATES.find(x => x.name === op.template);
+      if (!t) { results.push({ index: i, name: op.template || `工序${i + 1}`, error: `模板不存在: ${op.template}` }); continue; }
+      const machine = resolveMachine(op.machine || "generic");
+      const opts = normalizeOpts(op.options || {});
+      const report = buildReport(t, op.params || {}, op);
+      if (report.issues.some(x => x.level === "error") && !opts.lenient) {
+        results.push({ index: i, name: op.template, error: "校验失败：" + report.issues.map(x => x.msg).join("；") });
+        continue;
+      }
+      /* 规格默认值兜底 */
+      const effective = { ...(op.params || {}) };
+      for (const spec of t.params) {
+        if (spec.default !== undefined && (effective[spec.name] === undefined || effective[spec.name] === "")) {
+          effective[spec.name] = spec.default;
+        }
+      }
+      const res = renderTemplateSource(t.name, undefined, effective, machine.config, API_REGISTRY);
+      if (res.error) { results.push({ index: i, name: op.template, error: res.error }); continue; }
+      results.push({ index: i, name: op.template, output: postprocess(res.text, t.name, opts, machine) });
+    }
+    return { ok: true, data: { results } };
+  },
+
+  async listTemplates() { return this.request("/api/templates", "GET", {}); },
+  async getTemplate(name) { return this.request("/api/templates/" + name, "GET", { name }); },
+  async listMachines() { return this.request("/api/machines", "GET", {}); },
+  async validate(template, params, body) { return this.request("/api/validate", "POST", { template, params, ...body }); },
+  async render(template, params, machine, options) { return this.request("/api/render", "POST", { template, params, machine, options }); },
+  async partGenerate(part) { return this.request("/api/part/generate", "POST", { part }); },
+};
+
+/* 运行时注册表（内存模板库，可被源码编辑覆盖） */
+const API_REGISTRY = {};
+TEMPLATES.forEach(t => { API_REGISTRY[t.name] = { source: t.source }; });
+const API_MACHINES = { ...MACHINE_PRESETS };
+
+function resolveMachine(id) {
+  const custom = loadCustomMachine();
+  if (id === "custom" && custom) return custom;
+  return MACHINE_PRESETS[id] || MACHINE_PRESETS.generic;
+}
+function normalizeOpts(o) {
+  return {
+    format: o.format || "gcode",
+    lineNumbers: !!o.lineNumbers,
+    lineStep: Number(o.lineStep) || 10,
+    maxLine: Number(o.maxLine) || 9999,
+    addHeader: !!o.addHeader,
+    stripBlank: !!o.stripBlank,
+    ascii: !!o.ascii,
+    lenient: !!o.lenient,
+  };
+}
+function buildReport(t, params, body) {
+  const issues = validateTemplate(t, params);
+  /* 规格默认值兜底提示：可选参数未填写且无值 → info 提示将使用默认值 */
+  for (const spec of t.params) {
+    if (!spec.required && spec.default !== undefined && (params[spec.name] === undefined || params[spec.name] === "")) {
+      issues.push({ level: "info", kind: "default", param: spec.name, msg: `${spec.name} 未填写，将使用默认值 ${spec.default}` });
+    }
+  }
+  return { issues };
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   5. UI 状态
+   ═══════════════════════════════════════════════════════════════ */
+const state = {
+  templates: TEMPLATES,
+  cat: "全部",
+  query: "",
+  selected: null,          // 当前模板名
+  params: {},              // 当前参数值（表单）
+  options: { lineNumbers:false, lineStep:10, addHeader:false, stripBlank:false, ascii:false, lenient:false, format:"gcode" },
+  machine: "generic",
+  lastOutput: "",
+  lastReport: { issues: [] },
+  renderSeq: 0,
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   6. 渲染函数
+   ═══════════════════════════════════════════════════════════════ */
+const $ = id => document.getElementById(id);
+const CATS = ["全部", "通用", "铣削", "车削", "钻孔", "机床"];
+
+function esc(s) {
+  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+
+/* —— 侧栏 —— */
+function renderSidebar() {
+  /* 分类栏 */
+  const counts = {};
+  CATS.forEach(c => { counts[c] = c === "全部" ? state.templates.length : state.templates.filter(t => t.category === c).length; });
+  $("catBar").innerHTML = CATS.map(c =>
+    `<button class="chip ${state.cat === c ? "active" : ""}" data-cat="${c}">${c}<span class="n">${counts[c]}</span></button>`
+  ).join("");
+  /* 模板列表 */
+  const q = state.query.toLowerCase();
+  const list = state.templates.filter(t =>
+    (state.cat === "全部" || t.category === state.cat) &&
+    (!q || t.name.toLowerCase().includes(q) || t.desc.toLowerCase().includes(q))
+  );
+  $("tplList").innerHTML = list.length ? list.map(t => {
+    const reqN = t.params.filter(p => p.required && p.default === undefined).length;
+    const optN = t.params.length - reqN;
+    return `<div class="tpl-item ${state.selected === t.name ? "active" : ""}" data-tpl="${t.name}">
+      <div class="row1"><span class="name">${t.name}</span>
+        <span class="badge ${t.builtin ? "builtin" : "demo"}">${t.builtin ? "内置" : "示例"}</span></div>
+      <div class="desc">${esc(t.desc)}</div>
+      <div class="meta"><span>${t.category}</span><span>必选 ${reqN}</span><span>可选 ${optN}</span></div>
+    </div>`;
+  }).join("") : `<div class="gcode-empty" style="padding:30px 10px">无匹配模板</div>`;
+  $("tplCount").textContent = `模板 ${state.templates.length} 个`;
+}
+
+/* —— 参数表单 —— */
+function renderForm() {
+  const t = state.templates.find(x => x.name === state.selected);
+  if (!t) { $("formBody").innerHTML = `<div class="gcode-empty" style="padding-top:80px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="9"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg><div>在左侧选择一个模板开始</div></div>`; return; }
+  const req = t.params.filter(p => p.required && p.default === undefined);
+  const opt = t.params.filter(p => !(p.required && p.default === undefined));
+  $("paramHint").textContent = `必选 ${req.length} · 可选 ${opt.length}`;
+  let html = "";
+  if (req.length) {
+    html += `<div class="form-group"><div class="form-group-title">必选参数</div>${req.map(s => fieldHtml(t, s)).join("")}</div>`;
+  }
+  if (opt.length) {
+    html += `<div class="form-group"><div class="form-group-title">可选参数（缺失时用默认值兜底）</div>${opt.map(s => fieldHtml(t, s)).join("")}</div>`;
+  }
+  html += `<div class="form-group"><div class="form-group-title">生成选项</div>${optionsHtml()}</div>`;
+  $("formBody").innerHTML = html;
+  /* 事件绑定 */
+  $("formBody").querySelectorAll("input[data-param]").forEach(inp => {
+    inp.addEventListener("input", () => { collectParams(t); });
+    inp.addEventListener("change", () => { collectParams(t); });
+  });
+  $("formBody").querySelectorAll("input[type=checkbox][data-opt]").forEach(inp => {
+    inp.addEventListener("change", () => { state.options[inp.dataset.opt] = inp.checked; scheduleRender(); });
+  });
+  $("formBody").querySelectorAll("input[data-opt-num]").forEach(inp => {
+    inp.addEventListener("input", () => { state.options[inp.dataset.optNum] = inp.value; scheduleRender(); });
+  });
+  $("formBody").querySelectorAll("button[data-seg]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.options[btn.dataset.seg] = btn.dataset.val;
+      renderForm();
+      scheduleRender();
+    });
+  });
+}
+
+function fieldHtml(t, s) {
+  const cur = state.params[s.name];
+  const has = cur !== undefined && cur !== "";
+  let input = "";
+  const range = [s.min, s.max].filter(x => x !== undefined).map(x => `${x}`).join(" ~ ");
+  if (s.kind === "Bool") {
+    input = `<label class="switch"><input type="checkbox" data-param="${s.name}" ${cur ? "checked" : ""}><span class="slider"></span></label>`;
+  } else if (s.kind === "Number" || s.kind === "Integer") {
+    input = `<input type="number" data-param="${s.name}" step="${s.kind === "Integer" ? "1" : "any"}"
+      placeholder="${s.default !== undefined ? s.default : "—"}" value="${has ? cur : ""}">
+      ${s.unit ? `<span class="suffix">${s.unit}</span>` : ""}`;
+  } else {
+    input = `<input type="text" data-param="${s.name}" placeholder="${s.default !== undefined ? s.default : ""}" value="${has ? esc(cur) : ""}">`;
+  }
+  const req = s.required && s.default === undefined;
+  return `<div class="param-field ${req ? "req" : "opt"}" id="field-${s.name}">
+    <div class="param-top">
+      <label>${s.name}</label>
+      ${req ? `<span class="req-tag">必选</span>` : `<span class="opt-tag">可选</span>`}
+      ${range ? `<span class="range">${range}</span>` : ""}
+    </div>
+    ${s.desc ? `<div class="param-desc">${esc(s.desc)}</div>` : ""}
+    <div class="param-input-wrap">${input}</div>
+  </div>`;
+}
+
+function optionsHtml() {
+  const o = state.options;
+  const chk = (key, label, sub) =>
+    `<label class="opt-item"><input type="checkbox" data-opt="${key}" ${o[key] ? "checked" : ""}><span>${label}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</label>`;
+  return `
+    <div class="opts">
+      ${chk("lineNumbers", "行号", "N0010 N0020…")}
+      <label class="opt-inline">步进<input type="number" data-opt-num="lineStep" value="${o.lineStep}" min="1"></label>
+      ${chk("addHeader", "头部注释", "nctool generated")}
+      ${chk("stripBlank", "删除空行", "")}
+      ${chk("ascii", "ASCII 清洗", "非 ASCII → ?")}
+    </div>
+    <div style="margin-top:10px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:12px;color:var(--text-dim)">渲染模式</span>
+      <div class="seg" data-seg-group="lenient">
+        <button type="button" data-seg="lenient" data-val="false" class="${!o.lenient ? "active" : ""}">严格</button>
+        <button type="button" data-seg="lenient" data-val="true" class="${o.lenient ? "active" : ""}">宽松</button>
+      </div>
+      <span style="font-size:11px;color:var(--text-faint)">${o.lenient ? "缺失参数留空，校验问题降级为提示" : "缺失必选参数阻止生成"}</span>
+    </div>`;
+}
+
+/* 收集表单参数 → state.params → 渲染 */
+function collectParams(t) {
+  const p = {};
+  t.params.forEach(s => {
+    const inp = $("formBody").querySelector(`input[data-param="${s.name}"]`);
+    if (!inp) return;
+    if (s.kind === "Bool") { p[s.name] = inp.checked; return; }
+    if (inp.value.trim() === "") { p[s.name] = undefined; return; }
+    if (s.kind === "Number" || s.kind === "Integer") p[s.name] = Number(inp.value);
+    else p[s.name] = inp.value;
+  });
+  state.params = p;
+  scheduleRender();
+}
+
+/* —— 预览 + 校验 —— */
+let renderTimer = null;
+function scheduleRender() {
+  clearTimeout(renderTimer);
+  renderTimer = setTimeout(() => doRender(), 300);
+}
+async function doRender() {
+  const t = state.templates.find(x => x.name === state.selected);
+  if (!t) return;
+  const seq = ++state.renderSeq;
+  $("statusBar").className = "st rendering";
+  $("statusBar").querySelector("span:last-child").textContent = "渲染中…";
+  const t0 = performance.now();
+  const res = await API.render(t.name, state.params, state.machine, state.options);
+  if (seq !== state.renderSeq) return;
+  const ms = (performance.now() - t0).toFixed(1);
+  $("statusBar").className = "st " + (res.ok && !res.data.blocked ? "ok" : "err");
+  $("statusBar").querySelector("span:last-child").textContent =
+    res.ok ? (res.data.blocked ? "校验未通过" : "就绪") : "渲染失败";
+  if (res.ok) {
+    const d = res.data;
+    state.lastOutput = d.output || "";
+    state.lastReport = d.report || { issues: [] };
+    renderGcode(d.blocked);
+    renderValidation();
+    $("statChars").textContent = state.lastOutput ? `${state.lastOutput.length} 字符 · ${state.lastOutput.split("\n").length} 行` : "";
+    $("statTime").textContent = `渲染 ${ms} ms`;
+  } else {
+    state.lastOutput = "";
+    state.lastReport = { issues: [{ level: "error", kind: "api", msg: res.error && res.error.message }] };
+    renderGcode(true);
+    renderValidation();
+  }
+}
+
+function renderGcode(blocked) {
+  const page = $("page-gcode");
+  const body = $("previewBody");
+  body.classList.remove("rendering");
+  void body.offsetWidth; /* 重启动画 */
+  body.classList.add("rendering");
+  if (blocked || !state.lastOutput) {
+    const hasErr = state.lastReport.issues.some(i => i.level === "error");
+    page.innerHTML = `<div class="gcode-empty" style="padding-top:70px">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+        <circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
+      <div>${hasErr ? "校验未通过，修正参数后将实时显示 G-code" : "生成的 G-code 将显示在这里"}</div></div>`;
+    return;
+  }
+  page.innerHTML = `<pre class="gcode-view">${highlightGcode(state.lastOutput)}</pre>`;
+}
+
+/* G-code 轻量高亮 */
+function highlightGcode(text) {
+  const lines = text.split("\n");
+  return lines.map(line => {
+    let html = "";
+    const re = /(\([^)]*\))|(;.*$)|([NOGMFTSHD])(\d+(?:\.\d+)?)|([XYZABCUVW])(\s*-?\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)|([A-Za-z_]+)|(\s+)|([^\s]+)/g;
+    let m, last = 0;
+    while ((m = re.exec(line)) !== null) {
+      if (m.index > last) html += esc(line.slice(last, m.index));
+      if (m[1]) html += `<span class="cmt">${esc(m[1])}</span>`;
+      else if (m[2]) html += `<span class="cmt">${esc(m[2])}</span>`;
+      else if (m[3]) {
+        const cls = m[3] === "N" ? "ln" : m[3] === "O" ? "prog" : m[3] === "G" ? "g" : m[3] === "M" ? "m" : "tsf";
+        html += `<span class="${cls}">${m[3]}${esc(m[4])}</span>`;
+      }
+      else if (m[5]) html += `<span class="xyz">${m[5]}${esc(m[6])}</span>`;
+      else if (m[7]) html += `<span class="num">${esc(m[7])}</span>`;
+      else if (m[8]) html += esc(m[8]);
+      else if (m[9]) html += esc(m[9]);
+      else if (m[10]) html += esc(m[10]);
+      last = m.index + m[0].length;
+    }
+    if (last < line.length) html += esc(line.slice(last));
+    return html;
+  }).join("\n");
+}
+
+/* 校验面板 */
+function renderValidation() {
+  const r = state.lastReport;
+  const errN = r.issues.filter(i => i.level === "error").length;
+  const warnN = r.issues.filter(i => i.level === "warn").length;
+  const infoN = r.issues.filter(i => i.level === "info").length;
+  const page = $("page-validate");
+  const pageTab = document.querySelector(".tab[data-tab='validate']");
+  pageTab.innerHTML = `校验${errN + warnN + infoN ? ` · ${errN}${warnN ? "/" + warnN : ""}` : ""}`;
+  pageTab.style.color = errN ? "var(--err)" : warnN ? "var(--warn)" : "";
+  if (!r.issues.length) {
+    page.innerHTML = `<div class="v-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg><span>校验通过，无问题</span></div>`;
+    return;
+  }
+  page.innerHTML = r.issues.map((i, idx) => {
+    const param = i.param ? `<span class="v-param">${esc(i.param)}</span>` : "";
+    return `<div class="v-item ${i.level}" data-idx="${idx}">
+      <span class="lv"></span>${param}<span class="v-msg">${esc(i.msg)}</span></div>`;
+  }).join("");
+  page.querySelectorAll(".v-item").forEach(el => {
+    el.addEventListener("click", () => {
+      const p = r.issues[+el.dataset.idx].param;
+      if (!p) return;
+      const f = $("field-" + p);
+      if (f) { f.scrollIntoView({ behavior: "smooth", block: "center" }); f.classList.add("focus"); setTimeout(() => f.classList.remove("focus"), 1200); }
+      switchTab("gcode");
+    });
+  });
+}
+
+/* 源码视图 */
+function renderSource() {
+  const t = state.templates.find(x => x.name === state.selected);
+  if (!t) return;
+  $("srcView").innerHTML = highlightSource(API_REGISTRY[t.name] ? API_REGISTRY[t.name].source : t.source);
+}
+function highlightSource(src) {
+  return esc(src)
+    .replace(/\{\{[\s\S]*?\}\}/g, m => `<span class="tg">${m}</span>`)
+    .replace(/\{%[\s\S]*?%\}/g, m => `<span class="tg">${m}</span>`)
+    .replace(/\{#[\s\S]*?#\}/g, m => `<span class="tgc">${m}</span>`);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   7. 交互事件
+   ═══════════════════════════════════════════════════════════════ */
+function selectTemplate(name, opts) {
+  state.selected = name;
+  state.params = {};
+  const t = state.templates.find(x => x.name === name);
+  if (!t) return;
+  /* 默认值预填 */
+  t.params.forEach(s => {
+    if (s.kind === "Bool") state.params[s.name] = !!s.default;
+    else if (s.default !== undefined) state.params[s.name] = s.default;
+    else state.params[s.name] = undefined;
+  });
+  $("crumb").innerHTML = `模板 / <b>${t.category}</b> / <span style="color:var(--accent)">${t.name}</span>`;
+  $("panelTitle").textContent = t.name + " · 参数";
+  const reqN = t.params.filter(p => p.required && p.default === undefined).length;
+  renderSidebar();
+  renderForm();
+  renderSource();
+  /* 预览默认清空 */
+  state.lastOutput = "";
+  state.lastReport = { issues: [] };
+  renderGcode(false);
+  renderValidation();
+  $("statChars").textContent = "";
+  $("statTime").textContent = "";
+  switchTab("gcode");
+  doRender();
+}
+
+function switchTab(name) {
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".tabpage").forEach(p => p.classList.toggle("active", p.id === "page-" + name));
+}
+
+/* 主题 */
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  localStorage.setItem("nctool.theme", t);
+}
+function toggleTheme() {
+  setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+}
+
+/* 机床选择 */
+function renderMachineSel() {
+  const custom = loadCustomMachine();
+  const sel = $("machineSel");
+  sel.innerHTML = Object.values(MACHINE_PRESETS).map(m =>
+    `<option value="${m.id}">${m.vendor} ${m.model} (${m.id})</option>`
+  ).join("") + (custom ? `<option value="custom">自定义 ${custom.model}</option>` : "");
+  sel.value = state.machine;
+}
+
+/* Toast */
+function toast(msg, type) {
+  const w = $("toast-wrap");
+  const el = document.createElement("div");
+  el.className = "toast " + (type || "ok");
+  el.textContent = msg;
+  w.appendChild(el);
+  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 350); }, 2200);
+}
+
+/* 复制 / 下载 */
+function copyGcode() {
+  if (!state.lastOutput) { toast("没有可复制的 G-code", "warn"); return; }
+  navigator.clipboard.writeText(state.lastOutput).then(() => toast("已复制到剪贴板")).catch(() => toast("复制失败", "err"));
+}
+function downloadGcode() {
+  if (!state.lastOutput) { toast("没有可下载的 G-code", "warn"); return; }
+  const blob = new Blob([state.lastOutput], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = (state.selected || "nctool") + ".nc";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast("已下载 .nc 文件");
+}
+
+/* 预设（localStorage） */
+function loadPresets() { try { return JSON.parse(localStorage.getItem("nctool.presets") || "{}"); } catch { return {}; } }
+function savePresets(p) { localStorage.setItem("nctool.presets", JSON.stringify(p)); }
+function renderPresetList() {
+  const p = loadPresets();
+  const ul = $("presetList");
+  const keys = Object.keys(p);
+  if (!keys.length) { ul.innerHTML = `<li style="border:none;color:var(--text-faint);justify-content:center">暂无预设</li>`; return; }
+  ul.innerHTML = keys.map(k => {
+    const v = p[k];
+    return `<li><span class="p-name">${esc(k)}</span>
+      <span class="p-meta">${esc(v.template)} · ${Object.keys(v.params || {}).length} 参数</span>
+      <span class="spacer"></span>
+      <button class="btn" data-load="${esc(k)}">载入</button>
+      <button class="btn" data-del="${esc(k)}">删除</button></li>`;
+  }).join("");
+  ul.querySelectorAll("[data-load]").forEach(b => b.addEventListener("click", () => loadPreset(b.dataset.load)));
+  ul.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", () => {
+    const p2 = loadPresets(); delete p2[b.dataset.del]; savePresets(p2); renderPresetList(); toast("预设已删除");
+  }));
+}
+function loadPreset(name) {
+  const p = loadPresets()[name];
+  if (!p) return;
+  selectTemplate(p.template);
+  state.params = { ...(p.params || {}) };
+  renderForm();
+  doRender();
+  closeModal("modalPreset");
+  toast(`已载入预设「${name}」`);
+}
+
+/* 自定义机床 */
+function loadCustomMachine() {
+  try { const j = JSON.parse(localStorage.getItem("nctool.customMachine") || "null"); return j; } catch { return null; }
+}
+
+/* 批量 */
+const BATCH_EXAMPLE = JSON.stringify({
+  name: "齿轮轴-示例",
+  ops: [
+    { template: "program_header", params: { prog: 1001, part_name: "GEAR SHAFT", op_name: "OP10" } },
+    { template: "tool_change", params: { tool_num: 5, spindle_speed: 3000 } },
+    { template: "drill_cycle", params: { x: 21, y: 15, depth: -10, feed: 100 } },
+    { template: "drill_cycle", params: { x: 41, y: 15, depth: -10, feed: 100 } },
+    { template: "program_footer", params: {} },
+  ],
+}, null, 2);
+let batchResults = [];
+function runBatch() {
+  let part;
+  try { part = JSON.parse($("batchArea").value); }
+  catch (e) { toast("零件 JSON 解析失败：" + e.message, "err"); return; }
+  if (!part.ops || !part.ops.length) { toast("零件需包含 ops 数组", "err"); return; }
+  const res = API.mock("/api/part/generate", "POST", { part });
+  batchResults = res.data.results;
+  const hasErr = batchResults.some(r => r.error);
+  $("batchResult").style.display = "block";
+  const tabs = $("batchTabs");
+  tabs.innerHTML = batchResults.map((r, i) => `<button class="tab2 ${i === 0 ? "active" : ""}" data-bi="${i}">${esc(r.name)}${r.error ? " ⚠" : ""}</button>`).join("");
+  showBatch(0);
+  $("batchDownloadAllBtn").style.display = batchResults.some(r => r.output) ? "" : "none";
+  tabs.querySelectorAll(".tab2").forEach(b => b.addEventListener("click", () => showBatch(+b.dataset.bi)));
+  toast(hasErr ? "批量完成，部分工序有误（见 ⚠）" : "批量生成完成", hasErr ? "warn" : "ok");
+}
+function showBatch(i) {
+  document.querySelectorAll(".batch-tabs .tab2").forEach((b, idx) => b.classList.toggle("active", idx === i));
+  const r = batchResults[i];
+  $("batchOut").textContent = r.error ? `✗ ${r.error}` : r.output;
+  $("batchOut").innerHTML = r.error ? `<span style="color:var(--err)">✗ ${esc(r.error)}</span>` : highlightGcode(r.output);
+}
+function downloadAll() {
+  let all = "";
+  batchResults.forEach(r => { if (r.output) { all += `( ${r.name} )\n` + r.output + "\n"; } });
+  const blob = new Blob([all], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "nctool_batch.nc";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/* 弹窗通用 */
+function openModal(id) { $(id).classList.add("open"); }
+function closeModal(id) { $(id).classList.remove("open"); }
+
+/* ═══════════════════════════════════════════════════════════════
+   8. 初始化与事件绑定
+   ═══════════════════════════════════════════════════════════════ */
+function init() {
+  /* 主题 */
+  const saved = localStorage.getItem("nctool.theme");
+  if (saved) setTheme(saved);
+
+  /* 机床 */
+  renderMachineSel();
+  $("machineSel").addEventListener("change", e => { state.machine = e.target.value; doRender(); });
+
+  /* 侧栏 */
+  renderSidebar();
+  $("catBar").addEventListener("click", e => {
+    const chip = e.target.closest(".chip"); if (!chip) return;
+    state.cat = chip.dataset.cat; renderSidebar();
+  });
+  $("searchInput").addEventListener("input", e => { state.query = e.target.value; renderSidebar(); });
+  $("tplList").addEventListener("click", e => {
+    const item = e.target.closest(".tpl-item"); if (!item) return;
+    selectTemplate(item.dataset.tpl);
+  });
+
+  /* 顶栏 */
+  $("themeBtn").addEventListener("click", toggleTheme);
+  $("helpBtn").addEventListener("click", () => openModal("modalAbout"));
+
+  /* 工具栏 */
+  $("srcBtn").addEventListener("click", () => {
+    const t = state.templates.find(x => x.name === state.selected);
+    if (!t) return;
+    $("srcName").value = t.name;
+    $("srcArea").value = API_REGISTRY[t.name] ? API_REGISTRY[t.name].source : t.source;
+    openModal("modalSrc");
+  });
+  $("srcSaveBtn").addEventListener("click", () => {
+    const name = $("srcName").value;
+    API_REGISTRY[name] = { source: $("srcArea").value };
+    renderSource();
+    closeModal("modalSrc");
+    doRender();
+    toast("模板已更新（演示内存）");
+  });
+  $("copyBtn").addEventListener("click", copyGcode);
+  $("downloadBtn").addEventListener("click", downloadGcode);
+  $("savePresetBtn").addEventListener("click", () => {
+    if (!state.selected) { toast("请先选择模板", "warn"); return; }
+    openModal("modalPreset"); renderPresetList(); $("presetName").value = "";
+    $("presetName").focus();
+  });
+  $("presetSaveBtn").addEventListener("click", () => {
+    const name = $("presetName").value.trim();
+    if (!name) { toast("请输入预设名称", "warn"); return; }
+    const p = loadPresets();
+    p[name] = { template: state.selected, params: { ...state.params } };
+    savePresets(p); renderPresetList(); toast("预设已保存");
+  });
+  $("batchBtn").addEventListener("click", () => { $("batchArea").value = BATCH_EXAMPLE; $("batchResult").style.display = "none"; openModal("modalBatch"); });
+  $("batchExampleBtn").addEventListener("click", () => { $("batchArea").value = BATCH_EXAMPLE; });
+  $("batchRunBtn").addEventListener("click", runBatch);
+  $("batchDownloadAllBtn").addEventListener("click", downloadAll);
+
+  /* 预览标签 */
+  $("previewTabs").addEventListener("click", e => {
+    const b = e.target.closest(".tab"); if (!b) return;
+    switchTab(b.dataset.tab);
+  });
+
+  /* 弹窗关闭 */
+  document.querySelectorAll("[data-close]").forEach(b =>
+    b.addEventListener("click", () => closeModal(b.dataset.close)));
+  document.querySelectorAll(".modal-mask").forEach(m =>
+    m.addEventListener("click", e => { if (e.target === m) closeModal(m.id); }));
+
+  /* 自定义机床：双击机床选择器打开 JSON 编辑 */
+  const customMachineBtn = document.createElement("button");
+  customMachineBtn.className = "btn ghost";
+  customMachineBtn.id = "customMachineBtn";
+  customMachineBtn.title = "编辑自定义机床配置（JSON）";
+  customMachineBtn.textContent = "自定义…";
+  $("machineSel").parentElement.appendChild(customMachineBtn);
+  customMachineBtn.addEventListener("click", () => {
+    const cur = loadCustomMachine() || { id: "custom", vendor: "Custom", model: "CNC", config: { ...BASE_CONFIG } };
+    $("customArea").value = JSON.stringify(cur, null, 2);
+    openModal("modalCustomMachine");
+  });
+
+  /* 默认选中第一个模板 */
+  selectTemplate(TEMPLATES[0].name);
+  $("verText").textContent = "nctool UI · 单文件前端设计";
+  $("modeText").textContent = API.mode === "demo" ? "演示模式" : "服务模式";
+  $("modeBadge").className = "mode-badge " + API.mode;
+}
+
+init();
+</script>
+
+<!-- 自定义机床弹窗（脚本末尾动态使用，独立于此便于阅读） -->
+<div class="modal-mask" id="modalCustomMachine">
+  <div class="modal">
+    <div class="modal-head"><h3>自定义机床配置</h3><button class="close" data-close="modalCustomMachine">×</button></div>
+    <div class="modal-body">
+      <div class="field"><label>MachineConfig JSON（id / vendor / model / config）</label>
+        <textarea id="customArea" spellcheck="false" style="min-height:300px"></textarea>
+      </div>
+      <div class="tip">config 键值均为字符串，模板通过 <code>{{ machine.xxx }}</code> 引用；
+        保存后在下拉框选择「自定义」即可生效（localStorage 持久化）。</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" id="customResetBtn">恢复内置</button>
+      <span class="spacer"></span>
+      <button class="btn ghost" data-close="modalCustomMachine">取消</button>
+      <button class="btn primary" id="customSaveBtn">保存</button>
+    </div>
+  </div>
+</div>
+
+<script>
+"use strict";
+/* 自定义机床：保存 / 恢复（独立小块，避免与主脚本耦合） */
+(function () {
+  const $ = id => document.getElementById(id);
+  $("customSaveBtn").addEventListener("click", () => {
+    try {
+      const cfg = JSON.parse($("customArea").value);
+      if (!cfg.id || !cfg.config) throw new Error("缺少 id 或 config");
+      localStorage.setItem("nctool.customMachine", JSON.stringify(cfg));
+      closeCustom();
+      location.reload();
+    } catch (e) { alert("JSON 无效：" + e.message); }
+  });
+  $("customResetBtn").addEventListener("click", () => {
+    localStorage.removeItem("nctool.customMachine");
+    closeCustom();
+    location.reload();
+  });
+  function closeCustom() { document.getElementById("modalCustomMachine").classList.remove("open"); }
+})();
+</script>
+</body>
+</html>
