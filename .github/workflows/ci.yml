@@ -60,6 +60,11 @@ jobs:
 
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
+        with:
+          # llvm-tools-preview 是 cargo-llvm-cov 生成插桩覆盖率数据的必需组件，
+          # 缺失时 llvm-cov 直接失败（taiki-e/install-action 只装 cargo-llvm-cov
+          # 二进制本身，不含该组件）
+          components: llvm-tools-preview
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
