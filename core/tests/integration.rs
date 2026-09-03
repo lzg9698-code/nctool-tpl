@@ -103,7 +103,8 @@ fn golden_cases() -> Vec<(&'static str, String, MachinePreset, ParameterSet)> {
         ));
 
         let mut ps = ParameterSet::new();
-        ps.set_integer("tool_num", 5).set_integer("spindle_speed", 3000);
+        ps.set_integer("tool_num", 5)
+            .set_integer("spindle_speed", 3000);
         cases.push(("tool_change", format!("tool_change_{id}"), preset, ps));
 
         let mut ps = ParameterSet::new();
@@ -139,7 +140,10 @@ fn builtin_templates_match_golden_matrix() {
             "golden 用例 {template} 校验应通过: {}",
             report.summary()
         );
-        assert_golden(&format!("{stem}.report.txt"), &format!("{}\n", report.summary()));
+        assert_golden(
+            &format!("{stem}.report.txt"),
+            &format!("{}\n", report.summary()),
+        );
     }
 }
 
@@ -155,10 +159,7 @@ fn golden_matrix_covers_all_builtin_templates() {
         .map(|e| e.name.clone())
         .collect();
     assert_eq!(builtin.len(), 5, "内置模板数不应漂移: {builtin:?}");
-    let mut covered: Vec<String> = golden_cases()
-        .iter()
-        .map(|(t, ..)| t.to_string())
-        .collect();
+    let mut covered: Vec<String> = golden_cases().iter().map(|(t, ..)| t.to_string()).collect();
     covered.sort();
     covered.dedup();
     assert_eq!(covered, builtin, "golden 矩阵未覆盖全部内置模板");

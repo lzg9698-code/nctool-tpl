@@ -582,10 +582,8 @@ fn builtin_templates() -> Vec<(
                     ParamKind::Number,
                     false,
                     Some(ParamValue::Number(5.0)),
-                    "R 平面（安全高度）",
+                    "R 平面（安全高度，应高于工件表面）",
                 )
-                .with_min(0.0)
-                .with_unit("mm")
                 .with_min(0.0)
                 .with_unit("mm"),
                 crate::validate::spec("depth", ParamKind::Number, true, None, "钻孔深度")

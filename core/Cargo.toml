@@ -1,6 +1,6 @@
 [package]
 name = "nctool-core"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.82"
 description = "NCtool 核心库：数据模型 + 参数校验 + 模板注册表 + G-code 生成管线"
@@ -13,7 +13,7 @@ repository = "https://github.com/lzg9698-code/nctool-tpl"
 [dependencies]
 # nctool-tpl：模板解析 + 变量提取（可选/必选）+ 渲染（含 NC 数值格式化过滤器）
 #   path 依赖必须同时声明 version，否则 cargo publish 到 crates.io 会失败
-nctool-tpl = { path = "..", version = "0.3.1" }
+nctool-tpl = { path = "..", version = "0.3.2" }
 # serde：数据模型（参数集/机床配置等）的序列化，供 CLI / 配置文件使用
 serde = { version = "1", features = ["derive"] }
 

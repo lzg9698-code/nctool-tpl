@@ -15,9 +15,10 @@ jobs:
     name: Test / Lint / Doc / Audit (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
     strategy:
-      # Windows 覆盖路径分隔符/配置目录等平台特有行为（开发环境即 Windows）
+      # Windows 覆盖路径分隔符/配置目录等平台特有行为（开发环境即 Windows）；
+      # macOS 按 ROADMAP B4.1 补充，覆盖 XDG_CONFIG_HOME 配置路径与 Unix 行尾
       matrix:
-        os: [ubuntu-latest, windows-latest]
+        os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - name: Checkout
         uses: actions/checkout@v4

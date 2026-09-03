@@ -8,6 +8,12 @@ NCtool 模板解析核心：基于 [minijinja](https://github.com/mitsuhiko/mini
 
 > 本仓库是 workspace，含 `nctool-tpl`（本包）/ `nctool-core` / `nctool-cli` 三个 crate。
 > 想了解整体架构、模块职责与数据流，请看 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
+>
+> ⚠️ **定位与风险声明（必读）**：本项目定位为**模板开发工具**，内置模板与机床预设
+> 输出尚未经真实工艺评审与机床空运行验证。G/M 代码错误可能导致撞刀、刀具或设备
+> 损坏——**投产前必须由熟悉目标机床的工艺人员逐行核对，并在机床上空运行确认**
+> （详见 [docs/PROCESS_CHECKLIST.md](docs/PROCESS_CHECKLIST.md) 的核对清单与
+> 【阶段 A】发现项 F1–F5）。机床预设默认值仅供开发测试。
 
 ## 功能
 
@@ -220,6 +226,7 @@ cargo fmt --check
 | --- | --- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | **系统架构与设计说明**：三层 crate 架构、核心模块职责、数据流、错误模型、关键设计决策、扩展点。改动架构时请同步更新 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | **开发路线与执行跟踪**：阶段划分、任务清单、交付物、排期、里程碑、风险登记、MVP 裁剪策略 |
+| [docs/PROCESS_CHECKLIST.md](docs/PROCESS_CHECKLIST.md) | **工艺核对清单**（阶段 A1）：内置模板 × 机床预设逐行核对结论、发现项 F1–F5、外部工艺评审待办 |
 | [docs/DEV_PLAN_CLI_UI.md](docs/DEV_PLAN_CLI_UI.md) | CLI + Web UI 的设计细节（命令面 / API 契约 / 技术决策）。**其 §7 阶段计划已被 ROADMAP 取代** |
 | [CHANGELOG.md](CHANGELOG.md) | 版本演进记录 |
 | [core/README.md](core/README.md) | `nctool-core` 独立说明（数据模型 / 校验 / 注册表 / 生成管线） |

@@ -1,6 +1,6 @@
 [package]
 name = "nctool-cli"
-version = "0.2.0"
+version = "0.2.1"
 edition = "2021"
 rust-version = "1.82"
 description = "nctool 命令行工具：模板浏览 / 变量提取 / 参数校验 / G-code 生成"
@@ -10,8 +10,8 @@ keywords = ["gcode", "nc", "cli", "template", "jinja2"]
 categories = ["command-line-utilities", "template-engine"]
 
 [dependencies]
-nctool-core = { path = "../core", version = "0.2.0" }
-nctool-tpl = { path = "..", version = "0.3.1" }
+nctool-core = { path = "../core", version = "0.2.1" }
+nctool-tpl = { path = "..", version = "0.3.2" }
 clap = { version = "4", features = ["derive"] }
 clap_complete = "4"
 serde = { version = "1", features = ["derive"] }

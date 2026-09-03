@@ -4,7 +4,7 @@ resolver = "2"
 
 [package]
 name = "nctool-tpl"
-version = "0.3.1"
+version = "0.3.2"
 edition = "2021"
 rust-version = "1.82"
 description = "NCtool 模板解析核心：Jinja2 模板解析 + 变量提取（可选/必选区分）+ 渲染（基于 minijinja）"

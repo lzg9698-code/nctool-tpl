@@ -10,13 +10,13 @@
 
 | 项 | 结论 |
 | --- | --- |
-| **当前位置** | 阶段 0/1 已完成：三层 crate 齐备、CLI 全功能可用、272 项测试全绿 |
-| **最大缺口** | 不是功能，是**工艺正确性未被真实验证** + **代码债务未收口**（`ui/` 未纳入版本控制、CHANGELOG 未发版段积压） |
+| **当前位置** | 阶段 A 基本完成（2026-09-03）：golden 15 组 / 工艺核对清单（自动核对版，Q2=否 走降级预案）/ MachineConfig schema / API 冻结；279 项测试全绿 |
+| **最大缺口** | ① **发版未固化**（0.3.2/0.2.1/0.2.1 已就绪，`CARGO_REGISTRY_TOKEN` 未配置 → 待手动 publish） ② 外部工艺评审/空运行不可行（Q2=否，已于 README 显著声明） |
 | **路线** | 6 个阶段：A 需求与设计收口 → B 基础架构稳固 → C UI 服务联通 → D 完整交互闭环 → E 联调测试 → F 上线与迭代 |
 | **工期** | 26–40 人日。1 人全职 + AI 辅助约 **6–8 周**；兼职（每周 2 天）约 **15–20 周** |
 | **MVP** | **CLI 本身就是 MVP**。若时间砍半：只做 A + B + F 发版，UI 整体推迟 |
-| **绝不能砍** | ① 工艺正确性评审 ② 三机床 golden 基线 ③ 发版与安装验证 |
-| **最高风险** | 工艺正确性未验证（G-code 错 = 撞刀 = 设备损失），必须外部评审 + 空运行验证 |
+| **绝不能砍** | ① 工艺正确性（外部评审无条件时=文档显著声明） ② 三机床 golden 基线 ③ 发版与安装验证 |
+| **最高风险** | 工艺正确性未真实验证（G-code 错 = 撞刀 = 设备损失）；当前经 README 显著声明 + 清单 F1–F5 提示，外部评审/空运行待条件具备 |
 
 ---
 
@@ -33,8 +33,9 @@
 **能力清单（已可用）**：模板浏览、变量提取、参数校验、G-code 生成、机床配置、配置层叠、
 shell 补全、退出码矩阵、`--format json` 机器可读输出、`--lenient` 宽松渲染。
 
-**质量现状（2026-09-03 实测）**：272 项测试全绿（单元 206 / 集成 65 / 文档测试 1）。
-CI 五道门（fmt / clippy / test / doc / audit）+ ubuntu & windows-latest 双平台矩阵。
+**质量现状（2026-09-03 实测）**：279 项测试全绿（阶段 A 收尾后——tpl 104+18+1 /
+core 84+10 / cli 23+39）。
+CI 五道门（fmt / clippy / test / doc / audit）+ ubuntu & windows-latest & macos-latest 三平台矩阵。
 
 ### 1.2 未完成与债务（必须先看这里）
 
@@ -62,6 +63,10 @@ CLI 已经能完成「模板 → 参数 → G-code」全流程，功能面是完
 
 > ⚠️ **以下 10 项在启动阶段 B 之前需要确认或明确默认。** 未确认项按「默认假设」执行，
 > 但假设错误会导致排期失真，请尽量逐条对齐。
+>
+> ✅ **已确认（2026-09-03，记入阶段 A5 纪要）**：Q2 = **否**（无工艺评审资源，
+> 走 §7.5 降级预案：README 显著声明 + 定位下调为模板开发工具）；Q1/Q3–Q11 按
+> 默认假设执行（Q11：token 未配置 → B2 手动 publish）。
 
 | # | 待确认项 | 默认假设（未确认时按此执行） | 影响的阶段 |
 | --- | --- | --- | --- |
@@ -571,35 +576,43 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 
 ### 阶段 A — 需求与设计收口（P0）
 
-- [ ] **A0** 对齐 §2 的 Q1–Q11，记录结论
-- [ ] **A1** 工艺正确性评审
-  - [ ] `program_header` 逐行核对（含 `program_prefix` 拼接、单位联动）
-  - [ ] `program_footer` 逐行核对
-  - [ ] `tool_change` 逐行核对（含 M3 主轴启动、刀具号整数输出）
-  - [ ] `safe_move` 逐行核对
-  - [ ] `drill_cycle` 逐行核对（含无 G1 前缀的模态组考量）
-  - [ ] 3 个机床预设键值按手册核对
-  - [ ] 产出《工艺核对清单》
-- [ ] **A2** golden 基线扩充到 15 组（5 模板 × 3 机床）
-- [ ] **A3** 冻结 1.0 API 契约，写入 CHANGELOG
-- [ ] **A4** 定义 MachineConfig 键名 schema + registry 层未知键告警
-- [ ] **A5** 需求确认纪要归档
+> 实际进展（2026-09-03）：A1 完成**自动核对版**（Q2=否 → 按降级预案，外部评审转入
+> PROCESS_CHECKLIST §8 待办）；A2/A3/A4 完成；A5 结论见 §2 表格上方注记。
+
+- [x] **A0** 对齐 §2 的 Q1–Q11，记录结论（Q2=否，其余按默认假设）
+- [x] **A1** 工艺正确性评审（**自动核对版** → `docs/PROCESS_CHECKLIST.md`）
+  - [x] `program_header` 逐行核对（含 `program_prefix` 拼接、单位联动）
+  - [x] `program_footer` 逐行核对
+  - [x] `tool_change` 逐行核对（含 M3 主轴启动、刀具号整数输出）
+  - [x] `safe_move` 逐行核对
+  - [x] `drill_cycle` 逐行核对（含无 G1 前缀的模态组考量）
+  - [ ] 3 个机床预设键值**按手册**核对（无手册资源 → 声明"仅供开发测试"，待外部评审）
+  - [x] 产出《工艺核对清单》（F1–F5 发现项：0 个 P0 错误）
+- [x] **A2** golden 基线扩充到 15 组（5 模板 × 3 机床，输出 + 校验报告）
+- [x] **A3** 冻结 1.0 API 契约，写入 CHANGELOG `[未发布]` 节
+- [x] **A4** 定义 MachineConfig 键名 schema（`KNOWN_CONFIG_KEYS`）+ 未知键/非法值告警
+- [x] **A5** 需求确认纪要（本表 §2 注记）
 
 ### 阶段 B — 基础架构稳固（P0）
 
-- [ ] **B1.1** ⚡ 提交 `ui/` 目录（**最高优先，24h 内**）
-- [ ] **B1.2** 提交 `docs/ARCHITECTURE.md`、`docs/architecture.html`、`README.md`
-- [ ] **B1.3** `git status` 确认干净
-- [ ] **B2.1** CHANGELOG `[未发布]` 拆解到三个 crate
-- [ ] **B2.2** 发布 tpl 0.3.2 / core 0.2.1 / cli 0.2.1
-- [ ] **B2.3** 验证 crates.io 版本号
-- [ ] **B3.1** 引入 HTTP 库（tiny_http），`cargo audit` 零告警
-- [ ] **B3.2** 最小可启停空服务（`/health`，仅回环）
-- [ ] **B4.1** CI 加 macOS 矩阵
-- [ ] **B4.2** CI 加 golden 基线变更保护
-- [ ] **B4.3** 确认 `cargo audit` 已在 CI 门内
-- [ ] **B5.1** 架构文档提交为基线
-- [ ] **B5.2** 修正 `DEV_PLAN_CLI_UI.md` 过期数据 + 标注被本文档取代
+> 实际进展（2026-09-03）：B1 完成（f7cf2bd）；B2 完成版本拆分，**发布待手动
+> `cargo publish`**（token 未配置，Q11）；B3 属阶段 C；B4.1/B4.3 完成，B4.2
+> （golden 保护）记入 Backlog——`NCTOOL_UPDATE_GOLDEN` 建议写成 CI 门禁的
+> 前置人工步骤。
+
+- [x] **B1.1** ⚡ 提交 `ui/` 目录（完成 2026-09-03，f7cf2bd）
+- [x] **B1.2** 提交 `docs/ARCHITECTURE.md`、`docs/architecture.html`、`README.md`
+- [x] **B1.3** `git status` 确认干净
+- [x] **B2.1** CHANGELOG `[未发布]` 拆解到三个 crate（tpl 0.3.2 / core 0.2.1 / cli 0.2.1）
+- [ ] **B2.2** 发布 tpl 0.3.2 / core 0.2.1 / cli 0.2.1（**待手动 publish**：cargo publish -p nctool-tpl → -p nctool-core → -p nctool-cli；tag `nctool-tpl-v0.3.2` 等）
+- [ ] **B2.3** 验证 crates.io 版本号（依赖 B2.2）
+- [ ] **B3.1** 引入 HTTP 库（tiny_http），`cargo audit` 零告警（阶段 C）
+- [ ] **B3.2** 最小可启停空服务（`/health`，仅回环）（阶段 C）
+- [x] **B4.1** CI 加 macOS 矩阵（macos-latest）
+- [ ] **B4.2** CI 加 golden 基线变更保护（Backlog：NCTOOL_UPDATE_GOLDEN 人工步骤化）
+- [x] **B4.3** 确认 `cargo audit` 已在 CI 门内（ci.yml security audit step）
+- [x] **B5.1** 架构文档提交为基线（f7cf2bd）
+- [x] **B5.2** 修正 `DEV_PLAN_CLI_UI.md` 过期数据 + 标注被本文档取代（f7cf2bd）
 
 ### 阶段 C — UI 服务与前端联通（P1，可推迟）
 
