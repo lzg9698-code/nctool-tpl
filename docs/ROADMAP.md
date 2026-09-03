@@ -10,8 +10,8 @@
 
 | 项 | 结论 |
 | --- | --- |
-| **当前位置** | 阶段 A 基本完成（2026-09-03）：golden 15 组 / 工艺核对清单（自动核对版，Q2=否 走降级预案）/ MachineConfig schema / API 冻结；279 项测试全绿 |
-| **最大缺口** | ① **发版未固化**（0.3.2/0.2.1/0.2.1 已就绪，`CARGO_REGISTRY_TOKEN` 未配置 → 待手动 publish） ② 外部工艺评审/空运行不可行（Q2=否，已于 README 显著声明） |
+| **当前位置** | 阶段 A 完成 + 阶段 B 发版已固化（2026-09-03）：golden 15 组 / 工艺核对清单（自动核对版，Q2=否 走降级预案）/ MachineConfig schema / API 冻结 / 三 crate 已发布 crates.io（**nctool-cli 首次上线**）；279 项测试全绿 |
+| **最大缺口** | ① 外部工艺评审/空运行不可行（Q2=否，已于 README 显著声明，转入 PROCESS_CHECKLIST §8 待办） ② 阶段 C–F（Web UI 全链路）尚未启动 |
 | **路线** | 6 个阶段：A 需求与设计收口 → B 基础架构稳固 → C UI 服务联通 → D 完整交互闭环 → E 联调测试 → F 上线与迭代 |
 | **工期** | 26–40 人日。1 人全职 + AI 辅助约 **6–8 周**；兼职（每周 2 天）约 **15–20 周** |
 | **MVP** | **CLI 本身就是 MVP**。若时间砍半：只做 A + B + F 发版，UI 整体推迟 |
@@ -41,9 +41,9 @@ CI 五道门（fmt / clippy / test / doc / audit）+ ubuntu & windows-latest & m
 
 | # | 问题 | 影响 | 处置 |
 | --- | --- | --- | --- |
-| D1 | **`ui/` 整个目录未被 git 跟踪** | 2115 行前端工作随时可能丢失 | 阶段 B 立即提交 |
-| D2 | **CHANGELOG `[未发布]` 段积压** P1×3 / P2×10 / P3 改进 | 已完成的修复（含退出码矩阵、路径安全、配置路径平台化）尚未发版，用户拿不到 | 阶段 B 发版固化 |
-| D3 | `docs/ARCHITECTURE.md`、`docs/architecture.html`、`README.md` 改动未提交 | 架构基线不在版本控制内 | 阶段 B 一并提交 |
+| D1 | ~~`ui/` 整个目录未被 git 跟踪~~ | ~~2115 行前端工作随时可能丢失~~ | ✅ 已完成 2026-09-03（f7cf2bd） |
+| D2 | ~~CHANGELOG `[未发布]` 段积压 P1×3 / P2×10 / P3~~ | ~~已完成的修复尚未发版，用户拿不到~~ | ✅ 已完成 2026-09-03（手动 publish，三个 crate 均上线） |
+| D3 | ~~架构文档与 README 改动未提交~~ | ~~架构基线不在版本控制内~~ | ✅ 已完成 2026-09-03（f7cf2bd） |
 | D4 | **`nctool ui` / `nctool part` 是占位命令**，返回 `not_implemented` | 规划中的能力未落地 | 阶段 C / Backlog |
 | D5 | **前端处于「演示模式」**，用自研迷你 Jinja 渲染器，**与 minijinja 语义可能不一致** | 切到真实后端后用户看到的结果可能变化 | 阶段 C 必须切换并核对差异 |
 | D6 | **内置模板未经工艺评审**，机床预设值文档明确标注「仅供开发测试」 | 投产即风险 | 阶段 A 最高优先级 |
@@ -595,17 +595,21 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 
 ### 阶段 B — 基础架构稳固（P0）
 
-> 实际进展（2026-09-03）：B1 完成（f7cf2bd）；B2 完成版本拆分，**发布待手动
-> `cargo publish`**（token 未配置，Q11）；B3 属阶段 C；B4.1/B4.3 完成，B4.2
-> （golden 保护）记入 Backlog——`NCTOOL_UPDATE_GOLDEN` 建议写成 CI 门禁的
-> 前置人工步骤。
+> 实际进展（2026-09-03 更新）：**B1–B2 全部完成**——三 crate 已手动 publish 至
+> crates.io（tpl 0.3.2 / core 0.2.1 / cli 0.2.1，其中 **nctool-cli 为首次上线**），
+> tag `nctool-tpl-v0.3.2` / `nctool-core-v0.2.1` / `nctool-cli-v0.2.1` 已推送。
+> Q11 的 `CARGO_REGISTRY_TOKEN` 仍未配置，故走手动发布而非 CI 自动发布。
+> B3 属阶段 C；B4.1/B4.3 完成，B4.2（golden 保护）记入 Backlog——
+> `NCTOOL_UPDATE_GOLDEN` 建议写成 CI 门禁的前置人工步骤。
+> 附带修复：CI `coverage` job 自 22a056e 引入起持续失败（缺 `llvm-tools-preview`
+> 组件，quality 三平台矩阵始终全绿故长期未被察觉），已修复（4088f26）。
 
 - [x] **B1.1** ⚡ 提交 `ui/` 目录（完成 2026-09-03，f7cf2bd）
 - [x] **B1.2** 提交 `docs/ARCHITECTURE.md`、`docs/architecture.html`、`README.md`
 - [x] **B1.3** `git status` 确认干净
 - [x] **B2.1** CHANGELOG `[未发布]` 拆解到三个 crate（tpl 0.3.2 / core 0.2.1 / cli 0.2.1）
-- [ ] **B2.2** 发布 tpl 0.3.2 / core 0.2.1 / cli 0.2.1（**待手动 publish**：cargo publish -p nctool-tpl → -p nctool-core → -p nctool-cli；tag `nctool-tpl-v0.3.2` 等）
-- [ ] **B2.3** 验证 crates.io 版本号（依赖 B2.2）
+- [x] **B2.2** 发布 tpl 0.3.2 / core 0.2.1 / cli 0.2.1（完成 2026-09-03：手动 `cargo publish -p nctool-tpl → -p nctool-core → -p nctool-cli`；tag 已推送）
+- [x] **B2.3** 验证 crates.io 版本号（完成 2026-09-03：API 实测三 crate 的 `max_version` 分别为 0.3.2 / 0.2.1 / 0.2.1）
 - [ ] **B3.1** 引入 HTTP 库（tiny_http），`cargo audit` 零告警（阶段 C）
 - [ ] **B3.2** 最小可启停空服务（`/health`，仅回环）（阶段 C）
 - [x] **B4.1** CI 加 macOS 矩阵（macos-latest）
