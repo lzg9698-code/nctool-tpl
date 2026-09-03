@@ -7,12 +7,26 @@ use nctool_core::pipeline::{GCodeGenerator, GenerationOptions, PipelineError};
 use nctool_core::registry::{TemplateCategory, TemplateRegistry};
 use nctool_core::{ParamKind, ParamValue, ParameterSet};
 
-fn assert_golden(name: &str, actual: &str) {
-    let path = Path::new(env!("CARGO_MANIFEST_DIR"))
+/// golden 文件路径（workspace 根 `tests/golden/`，与 CLI golden 同目录）。
+fn golden_path(name: &str) -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
         .join("..")
         .join("tests")
         .join("golden")
-        .join(name);
+        .join(name)
+}
+
+/// 断言输出与 golden 文件一致；设置环境变量 `NCTOOL_UPDATE_GOLDEN=1` 时重新
+/// 写入 golden 文件（**仅用于人工确认后的基线刷新，切勿在 CI 更新**）。
+fn assert_golden(name: &str, actual: &str) {
+    if std::env::var_os("NCTOOL_UPDATE_GOLDEN").is_some() {
+        let path = golden_path(name);
+        std::fs::create_dir_all(path.parent().expect("golden 路径应有父目录"))
+            .expect("创建 golden 目录失败");
+        std::fs::write(&path, actual).expect("写入 golden 文件失败");
+        return;
+    }
+    let path = golden_path(name);
     let expected = std::fs::read_to_string(&path)
         .unwrap_or_else(|err| panic!("读取 golden 文件失败 {}: {err}", path.display()));
     assert_eq!(actual, expected, "golden 不匹配: {}", path.display());
@@ -61,70 +75,93 @@ fn builtin_program_header_with_wfl_machine() {
     // 字节输出误当作 WFL 专属适配已经生效。
     assert_eq!(wfl.vendor, "WFL");
     assert!(out.contains("O0042"));
+}
 
-    let mut golden_params = ParameterSet::new();
-    golden_params
-        .set_integer("prog", 1)
-        .set_string("part_name", "DEMO");
-    assert_golden(
-        "program_header_generic.nc",
-        &g.generate(
-            "program_header",
-            &golden_params,
-            &MachinePreset::Generic.config(),
-            &GenerationOptions::default(),
-        )
-        .unwrap(),
-    );
+/// golden 基线矩阵：5 内置模板 × 3 机床预设 = 15 组。
+///
+/// 每组返回：模板名、文件茎名（`<模板>_<机床id>`）、机床预设、参数集。
+/// 参数集与机床无关（模板引用的都是加工参数 + machine 系统变量）。
+fn golden_cases() -> Vec<(&'static str, String, MachinePreset, ParameterSet)> {
+    let presets = [
+        MachinePreset::Generic,
+        MachinePreset::WflM65,
+        MachinePreset::IndexMs40,
+    ];
+    let mut cases = Vec::new();
+    for preset in presets {
+        let id = preset.id();
+
+        let mut ps = ParameterSet::new();
+        ps.set_integer("prog", 1).set_string("part_name", "DEMO");
+        cases.push(("program_header", format!("program_header_{id}"), preset, ps));
+
+        cases.push((
+            "program_footer",
+            format!("program_footer_{id}"),
+            preset,
+            ParameterSet::new(),
+        ));
+
+        let mut ps = ParameterSet::new();
+        ps.set_integer("tool_num", 5).set_integer("spindle_speed", 3000);
+        cases.push(("tool_change", format!("tool_change_{id}"), preset, ps));
+
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", 10.0).set_number("y", 20.0);
+        cases.push(("safe_move", format!("safe_move_{id}"), preset, ps));
+
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", 21.0)
+            .set_number("y", 15.0)
+            .set_number("depth", -10.0)
+            .set_number("feed", 100.0);
+        cases.push(("drill_cycle", format!("drill_cycle_{id}"), preset, ps));
+    }
+    cases
 }
 
 #[test]
-fn builtin_templates_match_golden_files() {
+fn builtin_templates_match_golden_matrix() {
+    // 15 组基线：每组固化渲染输出（.nc）与校验报告（.report.txt）。
+    // 这是唯一回归防线：任何改动导致输出/校验漂移都会在此失败。
     let g = GCodeGenerator::new();
-    let machine = MachinePreset::Generic.config();
+    for (template, stem, preset, params) in golden_cases() {
+        let machine = preset.config();
+        let out = g
+            .generate(template, &params, &machine, &GenerationOptions::default())
+            .unwrap();
+        assert_golden(&format!("{stem}.nc"), &out);
 
-    assert_golden(
-        "program_footer_generic.nc",
-        &g.generate(
-            "program_footer",
-            &ParameterSet::new(),
-            &machine,
-            &GenerationOptions::default(),
-        )
-        .unwrap(),
-    );
+        // 校验报告同样冻结：预期所有组合都"校验通过：无问题"
+        let report = g.registry().validate(template, &params).unwrap();
+        assert!(
+            report.is_ok(),
+            "golden 用例 {template} 校验应通过: {}",
+            report.summary()
+        );
+        assert_golden(&format!("{stem}.report.txt"), &format!("{}\n", report.summary()));
+    }
+}
 
-    let mut tool_params = ParameterSet::new();
-    tool_params
-        .set_integer("tool_num", 5)
-        .set_integer("spindle_speed", 3000);
-    assert_golden(
-        "tool_change_generic.nc",
-        &g.generate(
-            "tool_change",
-            &tool_params,
-            &machine,
-            &GenerationOptions::default(),
-        )
-        .unwrap(),
-    );
-
-    let mut drill_params = ParameterSet::new();
-    drill_params
-        .set_number("x", 21.0)
-        .set_number("y", 15.0)
-        .set_number("depth", -10.0)
-        .set_number("feed", 100.0);
-    assert_golden(
-        "drill_cycle_generic.nc",
-        &g.generate(
-            "drill_cycle",
-            &drill_params,
-            &machine,
-            &GenerationOptions::default(),
-        )
-        .unwrap(),
-    );
+#[test]
+fn golden_matrix_covers_all_builtin_templates() {
+    // 防漏项：矩阵必须覆盖全部 5 个内置模板 × 全部 3 个预设
+    let g = GCodeGenerator::new();
+    let builtin: Vec<String> = g
+        .registry()
+        .list(None)
+        .iter()
+        .filter(|e| matches!(&e.source, nctool_core::registry::TemplateSource::Builtin))
+        .map(|e| e.name.clone())
+        .collect();
+    assert_eq!(builtin.len(), 5, "内置模板数不应漂移: {builtin:?}");
+    let mut covered: Vec<String> = golden_cases()
+        .iter()
+        .map(|(t, ..)| t.to_string())
+        .collect();
+    covered.sort();
+    covered.dedup();
+    assert_eq!(covered, builtin, "golden 矩阵未覆盖全部内置模板");
 }
 
 #[test]
