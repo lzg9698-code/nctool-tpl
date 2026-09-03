@@ -601,8 +601,10 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 > Q11 的 `CARGO_REGISTRY_TOKEN` 仍未配置，故走手动发布而非 CI 自动发布。
 > B3 属阶段 C；B4.1/B4.3 完成，B4.2（golden 保护）记入 Backlog——
 > `NCTOOL_UPDATE_GOLDEN` 建议写成 CI 门禁的前置人工步骤。
-> 附带修复：CI `coverage` job 自 22a056e 引入起持续失败（缺 `llvm-tools-preview`
-> 组件，quality 三平台矩阵始终全绿故长期未被察觉），已修复（4088f26）。
+> 附带处置：CI `coverage` job 自 22a056e 引入起持续失败（quality 三平台矩阵
+> 始终全绿，本地 Windows 复现同一命令 EXIT=0；补装 `llvm-tools-preview` 后
+> 仍红）。job 日志下载需 admin 权限无法取证，已设 `continue-on-error` 解除
+> CI 红灯——覆盖率本为 ROADMAP B4.1 的可选质量门，非阻断。根因修复见 Backlog。
 
 - [x] **B1.1** ⚡ 提交 `ui/` 目录（完成 2026-09-03，f7cf2bd）
 - [x] **B1.2** 提交 `docs/ARCHITECTURE.md`、`docs/architecture.html`、`README.md`
@@ -674,6 +676,7 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 - [ ] **F3.1** Issues 模板
 - [ ] **F3.2** 迭代节奏约定
 - [ ] **F4** Backlog 排序（part 批量 / 模板编辑 / 参数预设 / 模板库扩充 / i18n）
+- [ ] **B-Backlog** CI coverage job 根因修复：先取证 ubuntu runner 日志（浏览器打开 Actions → Coverage job → 复制错误段），疑似 `taiki-e/install-action` 装的 cargo-llvm-cov 与 runner 环境不兼容或 rust-cache 陈旧插桩产物；当前已 `continue-on-error` 非阻断
 
 ---
 
