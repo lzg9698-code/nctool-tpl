@@ -65,18 +65,23 @@ impl Ctx {
                     format!("模板目录不存在: {}", dir.display()),
                 ));
             }
-            let entries = std::fs::read_dir(dir)?;
+            let root = std::fs::canonicalize(dir).map_err(|e| {
+                CliError::new("io", format!("解析模板目录失败 {}: {e}", dir.display()))
+            })?;
+            let entries = std::fs::read_dir(&root)?;
             for entry in entries {
                 let path = entry?.path();
-                if !path.is_file() {
-                    continue;
-                }
                 let is_j2 = path
                     .extension()
                     .is_some_and(|e| e.eq_ignore_ascii_case("j2"));
-                if !is_j2 {
+                if !is_j2 || !path.is_file() {
                     continue;
                 }
+                // 跟随符号链接读取前，确认真实目标仍在模板根目录内。
+                let canonical = match std::fs::canonicalize(&path) {
+                    Ok(p) if p.starts_with(&root) && p.is_file() => p,
+                    _ => continue,
+                };
                 let name = path
                     .file_name()
                     .map(|n| n.to_string_lossy().to_string())
@@ -87,8 +92,8 @@ impl Ctx {
                 gen.registry_mut().add_file(
                     name,
                     TemplateCategory::General,
-                    format!("文件模板: {}", path.display()),
-                    &path,
+                    format!("文件模板: {}", canonical.display()),
+                    &canonical,
                     vec![],
                 )?;
             }
@@ -120,7 +125,9 @@ impl Ctx {
         ))
     }
 
-    /// 模板目录中是否存在指定文件模板（用于 `templates show` 等命令按路径定位）。
+    /// 模板目录中是否存在指定文件模板（仅供 CLI 命令按路径定位）。
+    ///
+    /// HTTP 服务不得调用此方法；它只允许访问注册表中的逻辑模板名。
     pub fn find_template_file(&self, name_or_path: &str) -> Option<PathBuf> {
         let p = PathBuf::from(name_or_path);
         if p.is_file() {

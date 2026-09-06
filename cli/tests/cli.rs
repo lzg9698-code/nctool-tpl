@@ -4,7 +4,10 @@
 //! （golden 测试，与 nctool-core 管线输出逐字节一致）、JSON 输出、
 //! 机床/配置/模板脚手架命令。
 
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::PathBuf;
+use std::time::Duration;
 
 use assert_cmd::Command;
 use predicates::prelude::*;
@@ -626,13 +629,213 @@ fn completion_ignores_broken_project_config() {
 }
 
 #[test]
-fn ui_reports_not_implemented() {
+fn ui_rejects_non_loopback_host() {
     nctool()
-        .args(["ui"])
+        .args(["ui", "--host", "0.0.0.0", "--port", "0"])
         .assert()
         .failure()
-        .code(7)
-        .stderr(predicate::str::contains("尚未实现"));
+        .stderr(predicate::str::contains("仅允许绑定回环地址"));
+}
+
+fn reserve_port() -> u16 {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    port
+}
+
+fn wait_for_ui(port: u16) -> std::process::Child {
+    let port_arg = port.to_string();
+    let mut child = std::process::Command::new(
+        std::env::var_os("CARGO_BIN_EXE_nctool").expect("应设置 nctool 二进制路径"),
+    )
+    .args(["ui", "--port", &port_arg])
+    .spawn()
+    .expect("应能启动 UI 服务");
+    for _ in 0..50 {
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        if let Ok(response) = http_request(port, "GET", "/health", "") {
+            if response_text(&response).starts_with("HTTP/1.1 200") {
+                return child;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    let _ = child.kill();
+    let _ = child.wait();
+    panic!("UI 服务未在超时时间内就绪");
+}
+
+fn http_request(port: u16, method: &str, path: &str, body: &str) -> std::io::Result<Vec<u8>> {
+    let mut stream = TcpStream::connect_timeout(
+        &format!("127.0.0.1:{port}").parse().unwrap(),
+        Duration::from_millis(300),
+    )?;
+    stream.set_read_timeout(Some(Duration::from_millis(500)))?;
+    let request = format!(
+        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        body.len()
+    );
+    stream.write_all(request.as_bytes())?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response)?;
+    Ok(response)
+}
+
+fn response_text(response: &[u8]) -> String {
+    String::from_utf8_lossy(response).into_owned()
+}
+
+#[test]
+fn ui_http_contracts_and_frontend_mode() {
+    let port = reserve_port();
+    let mut child = wait_for_ui(port);
+
+    let page = response_text(&http_request(port, "GET", "/", "").unwrap());
+    assert!(page.starts_with("HTTP/1.1 200"));
+    assert!(page.contains("mode: \"server\""));
+    assert!(page.contains("window.location.origin"));
+
+    let templates = response_text(&http_request(port, "GET", "/api/templates", "").unwrap());
+    assert!(templates.starts_with("HTTP/1.1 200"));
+    assert!(templates.contains("drill_cycle"));
+
+    let detail =
+        response_text(&http_request(port, "GET", "/api/templates/drill_cycle", "").unwrap());
+    assert!(detail.starts_with("HTTP/1.1 200"));
+    assert!(detail.contains("source"));
+    assert!(detail.contains("params"));
+
+    let params = r#"{"template":"drill_cycle","params":{"x":21,"y":15,"depth":-10,"feed":100}}"#;
+    let validate = response_text(&http_request(port, "POST", "/api/validate", params).unwrap());
+    assert!(validate.starts_with("HTTP/1.1 200"));
+    assert!(validate.contains("\"ok\":true"));
+
+    let render = response_text(&http_request(port, "POST", "/api/render", params).unwrap());
+    assert!(render.starts_with("HTTP/1.1 200"));
+    assert!(render.contains("X21.000"));
+
+    let traversal =
+        response_text(&http_request(port, "GET", "/api/templates/../Cargo.toml", "").unwrap());
+    assert!(traversal.starts_with("HTTP/1.1 404"));
+    assert!(!traversal.contains("[workspace]"));
+
+    let invalid_category =
+        response_text(&http_request(port, "GET", "/api/templates?category=unknown", "").unwrap());
+    assert!(invalid_category.starts_with("HTTP/1.1 400"));
+
+    let unknown_machine = r#"{"template":"drill_cycle","machine":"missing"}"#;
+    let machine_response =
+        response_text(&http_request(port, "POST", "/api/render", unknown_machine).unwrap());
+    assert!(machine_response.starts_with("HTTP/1.1 404"));
+
+    let oversized = "x".repeat(1024 * 1024 + 1);
+    let oversized_response =
+        response_text(&http_request(port, "POST", "/api/inspect", &oversized).unwrap());
+    assert!(oversized_response.starts_with("HTTP/1.1 413"));
+    assert!(oversized_response.contains("payload_too_large"));
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+#[test]
+fn ui_loads_directory_template_and_custom_machine() {
+    let dir = tmp_dir("ui_config");
+    let templates = dir.join("templates");
+    std::fs::create_dir_all(&templates).unwrap();
+    std::fs::write(
+        templates.join("custom.j2"),
+        "G1 X{{ x }} ({{ machine.vendor }})",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("nctool.toml"),
+        "template_dir = \"templates\"\n[machine.custom]\nid = \"custom\"\nvendor = \"Acme\"\nmodel = \"Demo\"\n[machine.custom.config]\nmax_spindle_rpm = \"1234\"\n",
+    )
+    .unwrap();
+
+    let port = reserve_port();
+    let port_arg = port.to_string();
+    let mut child = std::process::Command::new(
+        std::env::var_os("CARGO_BIN_EXE_nctool").expect("应设置 nctool 二进制路径"),
+    )
+    .current_dir(&dir)
+    .args(["ui", "--port", &port_arg])
+    .spawn()
+    .expect("应能启动配置 UI 服务");
+    for _ in 0..50 {
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        if let Ok(response) = http_request(port, "GET", "/health", "") {
+            if response_text(&response).starts_with("HTTP/1.1 200") {
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+
+    let templates_json = response_text(&http_request(port, "GET", "/api/templates", "").unwrap());
+    assert!(templates_json.contains("custom.j2"));
+    let machines_json = response_text(&http_request(port, "GET", "/api/machines", "").unwrap());
+    assert!(machines_json.contains("Acme"));
+    let render_body = r#"{"template":"custom.j2","params":{"x":42},"machine":"custom"}"#;
+    let rendered = response_text(&http_request(port, "POST", "/api/render", render_body).unwrap());
+    assert!(rendered.starts_with("HTTP/1.1 200"));
+    assert!(rendered.contains("X42"));
+    assert!(rendered.contains("Acme"));
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn ui_serves_health_and_exits_when_killed() {
+    // 端口由操作系统分配，避免依赖默认端口或并行测试环境。
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+
+    let port_arg = port.to_string();
+    let mut child = std::process::Command::new(
+        std::env::var_os("CARGO_BIN_EXE_nctool").expect("应设置 nctool 二进制路径"),
+    )
+    .args(["ui", "--port", &port_arg])
+    .spawn()
+    .expect("应能启动 UI 服务");
+    let mut healthy = false;
+    for _ in 0..50 {
+        if child.try_wait().unwrap().is_some() {
+            break;
+        }
+        if let Ok(mut stream) = TcpStream::connect_timeout(
+            &format!("127.0.0.1:{port}").parse().unwrap(),
+            Duration::from_millis(100),
+        ) {
+            stream
+                .set_read_timeout(Some(Duration::from_millis(100)))
+                .unwrap();
+            stream
+                .write_all(b"GET /health HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            let mut response = String::new();
+            let _ = stream.read_to_string(&mut response);
+            if response.starts_with("HTTP/1.1 200") {
+                healthy = true;
+                break;
+            }
+        }
+        std::thread::sleep(Duration::from_millis(20));
+    }
+    if child.try_wait().unwrap().is_none() {
+        child.kill().unwrap();
+    }
+    child.wait().unwrap();
+    assert!(healthy, "UI 服务应响应 GET /health");
 }
 
 #[test]

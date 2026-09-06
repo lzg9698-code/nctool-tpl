@@ -93,12 +93,20 @@ pub fn load_params_file(path: &Path) -> Result<ParameterSet, CliError> {
             format!("参数文件不是合法 JSON {}: {e}", path.display()),
         )
     })?;
-    let obj = value.as_object().ok_or_else(|| {
-        CliError::new(
-            "args",
-            format!("参数文件应为 JSON 对象（键值对），得到: {}", path.display()),
-        )
-    })?;
+    parameter_set_from_json(&value).map_err(|e| {
+        if e.kind == "args" {
+            CliError::new("args", format!("{}: {}", e.message, path.display()))
+        } else {
+            e
+        }
+    })
+}
+
+/// 从 JSON 对象构造参数集，供 CLI 参数文件和 Web API 共用。
+pub fn parameter_set_from_json(value: &serde_json::Value) -> Result<ParameterSet, CliError> {
+    let obj = value
+        .as_object()
+        .ok_or_else(|| CliError::new("args", "参数应为 JSON 对象（键值对）"))?;
     let mut set = ParameterSet::new();
     for (k, v) in obj {
         match v {
@@ -106,8 +114,6 @@ pub fn load_params_file(path: &Path) -> Result<ParameterSet, CliError> {
                 let f = n
                     .as_f64()
                     .ok_or_else(|| CliError::new("args", format!("参数 {k} 数值无法解析为 f64")))?;
-                // 与 --param 推断路径对齐：非有限数拒绝进入参数集
-                // （JSON 字面量 1e999 会被解析为 f64::INFINITY）
                 if !f.is_finite() {
                     return Err(CliError::new(
                         "args",

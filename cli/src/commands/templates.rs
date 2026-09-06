@@ -51,21 +51,18 @@ fn list(ctx: &Ctx, args: &TemplatesListArgs) -> Result<(), CliError> {
 
 /// 解析模板源码与参数规格：`show` / `inspect` 共用。
 ///
+/// 模板解析结果：名称、源码、参数规格（文件模板无规格）和系统变量。
+type ResolvedSource = (
+    String,
+    String,
+    Option<Vec<nctool_core::ParamSpec>>,
+    Vec<String>,
+);
+
 /// 返回 `(模板名, 源码, 参数规格, 系统变量)`；文件模板无规格 → `None`。
 /// 优先级与 `render`/`validate` 一致：**已注册模板名（内置/目录）→ 文件路径**，
 /// 保证"查看的源码"与"实际渲染的源码"是同一份。
-pub fn resolve_source(
-    ctx: &Ctx,
-    name_or_path: &str,
-) -> Result<
-    (
-        String,
-        String,
-        Option<Vec<nctool_core::ParamSpec>>,
-        Vec<String>,
-    ),
-    CliError,
-> {
+pub fn resolve_source(ctx: &Ctx, name_or_path: &str) -> Result<ResolvedSource, CliError> {
     // 1) 已注册模板（内置 / 目录）
     let gen = ctx.build_registry()?;
     if let Some(entry) = gen.registry().get(name_or_path) {

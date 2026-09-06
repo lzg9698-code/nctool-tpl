@@ -1,0 +1,75 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="docx-page-size" content="A4">
+<title>nctool 模型交接文档</title>
+<style>
+  body { margin: 0; color: #1f2937; background: #ffffff; }
+  h1 { font-family: SimHei, "Microsoft YaHei", sans-serif; font-size: 20pt; color: #163a5f; text-align: center; margin: 0 0 8pt 0; }
+  h2 { font-family: SimHei, "Microsoft YaHei", sans-serif; font-size: 14pt; color: #163a5f; margin: 18pt 0 8pt 0; border-bottom: 1pt solid #9ebbd5; padding-bottom: 4pt; }
+  p { font-family: SimSun, "Microsoft YaHei", sans-serif; font-size: 12pt; line-height: 1.6; margin: 6pt 0; }
+  li { font-family: SimSun, "Microsoft YaHei", sans-serif; font-size: 12pt; line-height: 1.5; margin: 4pt 0; }
+  td { font-family: SimSun, "Microsoft YaHei", sans-serif; font-size: 10.5pt; line-height: 1.4; padding: 6pt; vertical-align: top; }
+  .meta { font-family: SimSun, "Microsoft YaHei", sans-serif; font-size: 10.5pt; color: #4b5563; text-align: center; margin: 0 0 16pt 0; }
+  .note { font-family: SimSun, "Microsoft YaHei", sans-serif; font-size: 10.5pt; color: #4b5563; background: #eef5fb; padding: 8pt; border-left: 3pt solid #4f81bd; }
+  .head { background: #dceaf7; font-family: SimHei, "Microsoft YaHei", sans-serif; font-size: 10.5pt; color: #163a5f; }
+  table { border-collapse: collapse; width: 100%; margin: 6pt 0 10pt 0; }
+  table, td { border: 0.5pt solid #b9c8d6; }
+</style>
+</head>
+<body>
+  <h1>nctool 模型交接文档</h1>
+  <p class="meta">交接时间：2026-09-05 ｜ 工作目录：D:\Desktop\nctool\rustjinja</p>
+
+  <h2>一、当前结论</h2>
+  <p>项目的 CLI 主链路已可用：模板解析、参数校验、G-code 生成、机床预设和 golden 回归均具备基础。当前正在开发 Web UI 服务；后端骨架与部分接口已实现，但尚不应作为“安全可用的真实 Web UI”合入或发布。</p>
+  <p class="note">项目仍定位为“模板开发工具”。内置模板与机床预设尚未完成真实工艺评审及机床空运行，禁止将其表述为可直接投产。</p>
+
+  <h2>二、工作区与验证状态</h2>
+  <table>
+    <tr><td class="head" style="width:28%">项目</td><td class="head">状态</td></tr>
+    <tr><td>Git 工作区</td><td>存在未提交 Web UI 增量：新增 <code>cli/src/server.rs</code>，并修改 CLI 接线、测试、依赖锁文件等；另有 <code>docs/PROJECT_STATUS.md</code>。</td></tr>
+    <tr><td>测试</td><td><code>cargo test --workspace</code> 已通过，共 288 项。</td></tr>
+    <tr><td>格式化</td><td><code>cargo fmt --all -- --check</code> 已通过。</td></tr>
+    <tr><td>Clippy</td><td>严格模式尚失败 4 项：<code>server.rs</code> 两项小问题，及既有的 Default 可派生、复杂返回类型问题。</td></tr>
+  </table>
+
+  <h2>三、必须优先处理的问题（P0）</h2>
+  <ol>
+    <li><b>本地文件读取风险：</b>HTTP 模板详情、inspect、validate、render 当前可复用 CLI 的文件路径解析，可能通过绝对路径、<code>..</code> 或编码路径读取模板目录外文本。HTTP 必须只接受已注册模板 ID。</li>
+    <li><b>前端未接真实服务：</b><code>ui/index.html</code> 固定 <code>API.mode = "demo"</code>，使用静态模板、机床和浏览器内渲染器；浏览器结果不保证等于 Core/CLI。</li>
+    <li><b>API 契约不一致：</b>后端校验问题使用 <code>warning/message</code>，前端使用 <code>warn/msg</code>；切服务模式后警告统计与文案会失效。</li>
+    <li><b>监听边界：</b>非回环 <code>--host</code> 目前仅告警仍会启动。建议本轮直接拒绝非回环监听，远程访问留待 token/鉴权方案。</li>
+  </ol>
+
+  <h2>四、建议实施顺序</h2>
+  <ol>
+    <li>在 <code>server.rs</code> 建立 HTTP 专用的“仅注册表模板 ID”解析入口，禁止调用 <code>find_template_file</code> 和 CLI 的路径回退；同时校验目录模板符号链接不逃出根目录。</li>
+    <li>将 UI host 收紧为 <code>IpAddr/SocketAddr</code>，仅允许回环；先成功绑定，再执行 <code>--open</code>；修复 IPv6 URL 方括号格式。</li>
+    <li>用 serde 强类型 DTO 固化请求、响应、生成选项和校验报告；非法字段/类型返回 400，不允许静默回退默认值。</li>
+    <li>前端切至 <code>window.location.origin</code> 的同源 server 模式，真实加载模板/机床/详情，并只使用服务端 render 输出。</li>
+    <li>补充路由与真实 HTTP 测试：路径攻击、模板列表/详情、validate、render、错误码、413 和输出与 CLI 逐字节一致性。</li>
+    <li>修复 Clippy 后运行 fmt、workspace test、Clippy、doc 和 audit；最后同步 PROJECT_STATUS 与 ROADMAP。</li>
+  </ol>
+
+  <h2>五、关键资料与入口</h2>
+  <table>
+    <tr><td class="head" style="width:38%">文件</td><td class="head">用途</td></tr>
+    <tr><td><code>CODE_REVIEW_AND_DEV_PLAN.md</code></td><td>本轮完整审查结论、问题证据与分阶段计划。</td></tr>
+    <tr><td><code>docs/PROJECT_STATUS.md</code></td><td>项目现状快照；其中部分接口状态需在本轮安全收口后更新。</td></tr>
+    <tr><td><code>docs/ROADMAP.md</code></td><td>阶段 A–F 的权威路线图与验收条件。</td></tr>
+    <tr><td><code>cli/src/server.rs</code></td><td>当前 Web UI 路由、HTTP 服务、DTO 与测试的核心文件。</td></tr>
+    <tr><td><code>ui/index.html</code></td><td>单文件前端；目前为演示模式，需要完成真实 API 接线。</td></tr>
+    <tr><td><code>.workbuddy-ai/memory/2026-09-05.md</code></td><td>本日的项目工作记录与关键验证结果。</td></tr>
+  </table>
+
+  <h2>六、交接注意事项</h2>
+  <ul>
+    <li>不要为修复 HTTP 路径风险而删除 CLI 的“直接渲染本地模板文件”能力；应在 HTTP 和 CLI 之间分离解析策略。</li>
+    <li>常驻 UI 服务测试必须保留随机端口、就绪超时以及 <code>kill/wait</code> 清理，避免 CI 挂起。</li>
+    <li>前端规模已接近单文件维护阈值；在功能继续扩展前优先抽取可测试的 API 适配与状态转换逻辑。</li>
+    <li>完成一个里程碑后立即更新路线图、状态文档与测试计数，避免文档再次落后实现。</li>
+  </ul>
+</body>
+</html>

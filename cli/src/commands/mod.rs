@@ -17,11 +17,12 @@ use crate::output::CliError;
 impl Command {
     /// 执行当前子命令。
     pub fn run(&self, g: &GlobalArgs) -> Result<(), CliError> {
-        // 与配置无关的命令先行分发：completion/ui/part 不读配置文件，
-        // 避免 CWD 存在损坏的 nctool.toml 时连补全生成也被拦下
+        // 与配置无关的命令先行分发：completion/part 不读配置文件，
+        // 避免 CWD 存在损坏的 nctool.toml 时连补全生成也被拦下。
+        // ui 需要配置层叠（模板目录 / 自定义机床），走正常分支——
+        // 配置损坏时 config::load 已降级为空配置 + 警告，不会阻断启动
         match self {
             Command::Completion(a) => return completion::run(a),
-            Command::Ui(a) => return ui::run(a),
             Command::Part(a) => return part::run(a),
             _ => {}
         }
@@ -33,8 +34,9 @@ impl Command {
             Command::Render(a) | Command::Generate(a) => render::run(&ctx, a),
             Command::Machine(a) => machine::run(&ctx, a),
             Command::Config(a) => config_cmd::run(&ctx, a),
+            Command::Ui(a) => ui::run(&ctx, a),
             // 已在上方无配置分发（此臂仅满足穷尽性）
-            Command::Ui(_) | Command::Part(_) | Command::Completion(_) => unreachable!(),
+            Command::Part(_) | Command::Completion(_) => unreachable!(),
         }
     }
 }

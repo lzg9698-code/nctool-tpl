@@ -12,6 +12,7 @@ mod commands;
 mod config;
 mod context;
 mod output;
+mod server;
 
 use std::process::ExitCode;
 

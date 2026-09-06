@@ -5,18 +5,13 @@ use std::path::PathBuf;
 use clap::{Args, Parser, Subcommand, ValueEnum};
 
 /// 全局输出风格（CLI 自身的结果展示，与生成选项的 Gcode/Text 无关）。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum, Default)]
 pub enum FormatArg {
     /// 人类可读文本
+    #[default]
     Text,
     /// 机器可读 JSON
     Json,
-}
-
-impl Default for FormatArg {
-    fn default() -> Self {
-        FormatArg::Text
-    }
 }
 
 /// 全局公共选项（可在任意子命令后使用）。
@@ -74,7 +69,7 @@ pub enum Command {
     Machine(MachineArgs),
     /// 配置管理：初始化示例配置 / 查看生效配置
     Config(ConfigArgs),
-    /// 启动本地 Web UI（规划于阶段 2）
+    /// 启动本地 Web UI（模板浏览 + 只读 API，阶段 C）
     Ui(UiArgs),
     /// 零件级批量生成（规划于阶段 4）
     Part(PartArgs),

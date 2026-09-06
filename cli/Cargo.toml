@@ -17,6 +17,9 @@ clap_complete = "4"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 toml = "0.8"
+# tiny_http：本地 Web UI 服务（阶段 C，ROADMAP Q10 选型——轻量、传递依赖少；
+# API 端点超过 8 个再考虑迁移 axum）。仅绑定回环地址，本地开发工具定位
+tiny_http = "0.12"
 
 [dev-dependencies]
 assert_cmd = "2"

@@ -380,7 +380,7 @@ impl TemplateRegistry {
         for entry in self.entries.values() {
             renderer.add_template(&entry.name, &entry.source_text)?;
         }
-        renderer.render_template(name, &context)
+        renderer.render_template(name, context)
     }
 
     /// 访问底层渲染器（高级用法：配置过滤器等）。

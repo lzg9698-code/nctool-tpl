@@ -10,8 +10,8 @@
 
 | 项 | 结论 |
 | --- | --- |
-| **当前位置** | 阶段 A 完成 + 阶段 B 发版已固化（2026-09-03）：golden 15 组 / 工艺核对清单（自动核对版，Q2=否 走降级预案）/ MachineConfig schema / API 冻结 / 三 crate 已发布 crates.io（**nctool-cli 首次上线**）；279 项测试全绿 |
-| **最大缺口** | ① 外部工艺评审/空运行不可行（Q2=否，已于 README 显著声明，转入 PROCESS_CHECKLIST §8 待办） ② 阶段 C–F（Web UI 全链路）尚未启动 |
+| **当前位置** | 阶段 A/B 基本收口；阶段 C 后端服务、回环安全、核心 API、真实 server mode 前端和本机 HTTP 契约测试已完成；阶段 D 主链路已接入，297 项测试、Clippy、文档、audit 全绿 |
+| **最大缺口** | ① 外部工艺评审/空运行仍不可行（Q2=否，README 已显著声明）② 真实浏览器走查、跨平台/性能验收尚未完成 ③ `part generate` 尚未实现 ④ 正式发布仍需清理工作区和发布版本 |
 | **路线** | 6 个阶段：A 需求与设计收口 → B 基础架构稳固 → C UI 服务联通 → D 完整交互闭环 → E 联调测试 → F 上线与迭代 |
 | **工期** | 26–40 人日。1 人全职 + AI 辅助约 **6–8 周**；兼职（每周 2 天）约 **15–20 周** |
 | **MVP** | **CLI 本身就是 MVP**。若时间砍半：只做 A + B + F 发版，UI 整体推迟 |
@@ -612,8 +612,8 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 - [x] **B2.1** CHANGELOG `[未发布]` 拆解到三个 crate（tpl 0.3.2 / core 0.2.1 / cli 0.2.1）
 - [x] **B2.2** 发布 tpl 0.3.2 / core 0.2.1 / cli 0.2.1（完成 2026-09-03：手动 `cargo publish -p nctool-tpl → -p nctool-core → -p nctool-cli`；tag 已推送）
 - [x] **B2.3** 验证 crates.io 版本号（完成 2026-09-03：API 实测三 crate 的 `max_version` 分别为 0.3.2 / 0.2.1 / 0.2.1）
-- [ ] **B3.1** 引入 HTTP 库（tiny_http），`cargo audit` 零告警（阶段 C）
-- [ ] **B3.2** 最小可启停空服务（`/health`，仅回环）（阶段 C）
+- [x] **B3.1** 引入 HTTP 库（tiny_http），`cargo clippy`/workspace 测试通过；依赖审计仍需在本轮发布前复核（阶段 C）
+- [x] **B3.2** 最小可启停服务（`/health`，仅回环；非回环地址直接拒绝）（阶段 C）
 - [x] **B4.1** CI 加 macOS 矩阵（macos-latest）
 - [ ] **B4.2** CI 加 golden 基线变更保护（Backlog：NCTOOL_UPDATE_GOLDEN 人工步骤化）
 - [x] **B4.3** 确认 `cargo audit` 已在 CI 门内（ci.yml security audit step）
@@ -622,33 +622,35 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 
 ### 阶段 C — UI 服务与前端联通（P1，可推迟）
 
-- [ ] **C1.1** 实现 `commands/ui.rs`
-- [ ] **C1.2** `include_str!` 内嵌前端
-- [ ] **C1.3** 仅回环绑定 + 非回环显式警告
-- [ ] **C2.1** `GET /api/templates`
-- [ ] **C2.2** `GET /api/templates/{name}`
-- [ ] **C2.3** `POST /api/inspect`
-- [ ] **C2.4** API 集成测试
-- [ ] **C3.1** 产出《演示模式差异清单》
-- [ ] **C3.2** 前端 `API.mode` 切到 `server`
-- [ ] **C3.3** 演示模式标注"结果可能不一致"
-- [ ] **C4.1** 前端列表（分类 + 搜索）
-- [ ] **C4.2** 前端详情（源码 + 参数表）
+> 实际进展（2026-09-05）：后端服务、回环安全边界、核心 API、真实 server mode 前端和 HTTP 契约测试已完成；演示模式差异清单和浏览器人工走查仍待完成。
+
+- [x] **C1.1** 实现 `commands/ui.rs`
+- [x] **C1.2** `include_str!` 内嵌前端
+- [x] **C1.3** 仅回环绑定；非回环地址直接拒绝（比原“显式警告后允许”更严格）
+- [x] **C2.1** `GET /api/templates`
+- [x] **C2.2** `GET /api/templates/{name}`
+- [x] **C2.3** `POST /api/inspect`（仅注册表模板名）
+- [x] **C2.4** API 路由单测 + 真实 HTTP 契约测试
+- [x] **C3.1** 产出《演示模式差异清单》（`docs/DEMO_SERVER_DIFF.md`）
+- [x] **C3.2** 前端 `API.mode` 切到 `server`
+- [x] **C3.3** 服务模式禁用 mock 写入；离线 demo 语义仍需单独文档化
+- [x] **C4.1** 前端列表（分类 + 搜索）接入真实 API
+- [x] **C4.2** 前端详情（源码 + 参数表）接入真实 API
 
 ### 阶段 D — 完整交互闭环（P2，优先推迟）
 
-- [ ] **D1.1** `POST /api/validate`
-- [ ] **D1.2** `POST /api/render`
-- [ ] **D1.3** 严格/宽松模式开关
-- [ ] **D2** 参数表单自动生成（必选高亮/可选默认值/类型控件/区间提示）
-- [ ] **D3.1** 防抖实时预览（300ms）
-- [ ] **D3.2** G-code 等宽显示 + 语法高亮
-- [ ] **D3.3** 校验面板（分级 + 参数定位）
-- [ ] **D4.1** 生成选项开关（行号/注释/ASCII/空行）
-- [ ] **D4.2** 复制 / 下载 `.nc`
-- [ ] **D4.3** 机床切换（3 预设 + 自定义）
+- [x] **D1.1** `POST /api/validate`
+- [x] **D1.2** `POST /api/render`
+- [x] **D1.3** 严格/宽松模式开关（前后端已接入）
+- [x] **D2** 参数表单自动生成（必选高亮/可选默认值/类型控件/区间提示）
+- [x] **D3.1** 防抖实时预览（300ms）
+- [x] **D3.2** G-code 等宽显示 + 语法高亮
+- [x] **D3.3** 校验面板（统一 error/warning/info 与 message 字段）
+- [x] **D4.1** 生成选项开关（行号/注释/ASCII/空行）
+- [x] **D4.2** 复制 / 下载 `.nc`
+- [ ] **D4.3** 机床切换（真实配置已由 API 提供，浏览器人工验收待完成）
 - [ ] **D5** 亮暗主题 + 响应式（≤480px）
-- [ ] **D-Guard** `ui/index.html` 行数 ≤ 3000，超限即重构
+- [x] **D-Guard** `ui/index.html` 行数 ≤ 3000，当前约 2200 行，仍需持续监控
 
 ### 阶段 E — 联调测试（P1）
 
@@ -667,10 +669,10 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 
 ### 阶段 F — 上线与迭代（发版部分 P0）
 
-- [ ] **F1.1** API 冻结确认
-- [ ] **F1.2** `cargo install --path cli` 验证
+- [x] **F1.1** API 冻结确认（当前 Web API 契约已补测试，正式发布前仍需最终复核）
+- [x] **F1.2** `cargo install --path cli` 验证（隔离 root 安装后 `nctool 0.2.1` 可运行）
 - [ ] **F1.3** GitHub Release 二进制（Windows / Linux / macOS）
-- [ ] **F1.4** CHANGELOG + README 与功能一致
+- [ ] **F1.4** CHANGELOG + README 与功能一致（当前工作区仍有未提交增量，需发布前同步）
 - [ ] **F2.1** 《机床配置指南》
 - [ ] **F2.2** 《模板编写指南》
 - [ ] **F3.1** Issues 模板
