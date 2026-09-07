@@ -193,8 +193,10 @@ fn new(ctx: &Ctx, args: &TemplatesNewArgs) -> Result<(), CliError> {
     };
     let path = dir.join(file_name);
     if path.exists() {
+        // 归 `template_duplicate`（退出码 6）而非 `io`：这是业务冲突（重名），
+        // 不是 IO 失败；与 RegistryError::Duplicate 的分类保持一致。
         return Err(CliError::new(
-            "io",
+            "template_duplicate",
             format!("模板已存在，不覆盖: {}", path.display()),
         ));
     }

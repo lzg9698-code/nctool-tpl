@@ -157,6 +157,31 @@ MachineConfig 键名 schema、API 冻结清单明确。
 
 ## [未发布]
 
+### Added（阶段 D5 — Web UI 响应式）
+
+- **移动端断点（≤480px）**：`ui/index.html` 新增 `@media (max-width: 480px)`，
+  覆盖输入框 16px 字号（规避 iOS Safari 聚焦自动放大）、触摸目标 ≥38px、顶栏压缩、
+  侧栏限高 220px（保证预览区不被压没）、参数行换行、预览工具条换行、
+  选项卡横向滚动、关于/帮助键值列表单列。亮/暗主题为既有能力，本次仅补响应式
+
+### Added（阶段 E1.1 — CLI E2E 契约测试）
+
+- 新增 `cli/tests/cli_e2e.rs`：44 用例覆盖全部 **10** 个顶层子命令
+  （`templates` / `inspect` / `validate` / `render` / `generate` / `machine` /
+  `config` / `ui` / `part` / `completion`）的正常与异常路径，逐条断言退出码 0–7。
+  `ui` 为阻塞服务，仅覆盖启动前的回环守卫以免测试挂起。
+  该文件是**契约测试**：退出码或错误分类的任何变更都必须在此同步
+- 退出码矩阵以表形式固化在测试文件头注释中，与 `CliError::exit_code` 一一对应
+
+### Changed（阶段 E1.1 — 退出码契约修正）
+
+- **`templates new` 重名：退出码 3 → 6**。错误分类由 `io` 改为 `template_duplicate`。
+  重名是业务冲突而非 IO 失败，且与 `RegistryError::Duplicate` 的分类保持一致
+  （`template_duplicate` 此前在退出码矩阵中已定义却无使用点，属死分支）。
+  ⚠️ 破坏性变更：脚本若依赖旧码 3，需改为 6
+- **`completion` 新增 `powershell` / `pwsh` 别名**：clap 的 kebab-case 默认名为
+  `power-shell`，不符合用户习惯；三种写法现等价（仅新增，不移除原值）
+
 ### Changed（阶段 A3 — 1.0 API 冻结清单）
 
 **自 `nctool-tpl 0.3.2` / `nctool-core 0.2.1` 起，以下公共 API 面在 1.0.0 前不再

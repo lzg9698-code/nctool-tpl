@@ -316,6 +316,9 @@ pub enum ShellArg {
     Bash,
     Zsh,
     Fish,
+    /// clap 的 kebab-case 默认名是 `power-shell`，但用户习惯写 `powershell` / `pwsh`，
+    /// 故补两个别名，三种写法等价。
+    #[value(alias = "powershell", alias = "pwsh")]
     PowerShell,
     Elvish,
 }
