@@ -53,7 +53,7 @@ println!("{out}");
 [5] 渲染模板
     │
     ▼
-[6] 后处理：行号 / 头部注释 / 空行清理
+[6] 后处理：行号 / 头部注释 / 空行清理 / ASCII 清洗
     │
     ▼
 G-code 输出
@@ -76,5 +76,27 @@ cargo run -p nctool-core --example pipeline_demo
 ## 测试
 
 ```bash
-cargo test -p nctool-core   # 63 单元 + 8 集成（workspace 总计 245）
+cargo test -p nctool-core   # 84 单元 + 11 集成 + 3 大程序（workspace 总计 344）
 ```
+
+- **集成测试**（`tests/integration.rs`）：内置模板 × 机床预设的 golden 基线矩阵
+  （5 模板 × 3 预设 = 15 组，渲染输出与校验报告均冻结）。比较前统一换行符为 LF，
+  断言不受平台 / git 检出配置影响；`NCTOOL_UPDATE_GOLDEN=1` 可刷新基线
+  （**仅人工确认后使用，切勿在 CI 更新**）。
+- **大程序测试**（`tests/large_program.rs`）：行号上限截断、恶意位宽夹紧、`step=0` 兜底；
+  另两条 `#[ignore]` 为万行级实测，需 release 运行：
+
+```bash
+cargo test --release -p nctool-core --test large_program -- --ignored --nocapture
+# 10000 行带行号 1.77 ms / 203 KB；line_number_digits=1e9 → 231 KB / 1.81 ms（夹紧到 32 位）
+```
+
+## 性能
+
+```bash
+cargo bench -p nctool-core --bench pipeline
+# 端到端 generate 9.54 µs；3000 行后处理：386.89 µs（纯）/ 438.10 µs（带行号）/ 516.04 µs（ASCII 清洗）
+```
+
+行号前缀每行约 17 ns。行号位宽取自机床配置 `line_number_digits`，**已夹紧到 32 位上限**——
+若缺失上界，一个天文数字配置就会让每行去分配超大缓冲，而 Rust 的分配失败是进程 abort、不可捕获。

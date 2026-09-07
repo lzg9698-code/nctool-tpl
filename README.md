@@ -73,6 +73,22 @@ r.render("X{{ x }}", "t.j2", &minijinja::context!{})?;  // Ok("X")
 | `extract_undeclared` | 1.97 µs | — |
 | `render` | 5.32 µs | 48 MiB/s |
 
+生成管线侧（`nctool-core`，`cargo bench -p nctool-core --bench pipeline`）：
+
+| 操作 | 耗时（中位数） | 吞吐 |
+| --- | --- | --- |
+| 端到端 `generate`（drill_cycle） | 9.54 µs | — |
+| 后处理 3000 行（仅清空行） | 386.89 µs | 142 MiB/s |
+| 后处理 3000 行 + 行号 | 438.10 µs | 126 MiB/s |
+| 后处理 3000 行 + ASCII 清洗 | 516.04 µs | — |
+
+行号前缀每行约 17 ns，规模增大时可据此外推。
+
+**万行级实测**（`cargo test --release -p nctool-core --test large_program -- --ignored`）：
+10000 行带行号 **1.77 ms / 203 KB**。行号位宽取自机床配置且已夹紧到 32 位上限——
+即便把 `line_number_digits` 配成 `1000000000`，输出也只到 **231 KB / 1.81 ms**，
+不会出现内存放大（位宽若缺失上界，Rust 的分配失败是进程 abort，不可捕获）。
+
 测试环境：release 构建（LTO + strip + codegen-units=1）。重复渲染相同模板时，建议用 `add_template` + `render_template`（minijinja 会缓存编译结果），避免每次重新编译。
 
 ## 错误类型
@@ -146,6 +162,8 @@ assert_eq!(out, "G1 X21.0 F0.15");
 ```bash
 # 浏览内置模板
 nctool templates list
+nctool templates show drill_cycle        # 查看源码与参数表
+nctool templates new my_op               # 在当前 templates/ 下新建骨架
 
 # 提取模板必选/可选参数（含行列定位）
 nctool inspect drill_cycle
@@ -157,19 +175,43 @@ nctool validate drill_cycle --param x=21 --param y=15 --param depth=-10 --param 
 nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100 \
     --line-numbers --header --out demo.nc
 
+# `generate` 与 `render` 同签名，是后处理全开时的规范入口（默认输出逐字节一致）
+nctool generate drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100
+
 # 参数文件（JSON）批量输入；显式 --param 覆盖文件值
 nctool render my_op.j2 --params-file params.json
 
 # 机床配置查看 / 配置初始化 / shell 补全
 nctool machine show wfl_m65
 nctool config init
-nctool completion bash
+nctool completion bash          # 另支持 zsh / fish / elvish 及 Windows 系 shell
 
-# 机器可读输出（--format json）
+# 启动本地 Web UI（模板浏览 + 只读 API；仅绑定回环地址）
+nctool ui --host 127.0.0.1 --port 8787
+
+# 机器可读输出（--format json）：成功 {"ok":true,"data":...}，失败 {"ok":false,"error":{...}}
 nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100 --format json
 ```
 
 运行方式：开发 `cargo run -p nctool-cli -- <命令>`；安装 `cargo install --path cli` 后直接使用 `nctool`。
+
+### 退出码
+
+`nctool` 用退出码传递失败类型，便于脚本判分支：
+
+| 码 | 含义 | 典型触发 |
+| --- | --- | --- |
+| 0 | 成功 | — |
+| 1 | 参数校验未通过 | 缺失必选参数、类型不匹配 |
+| 2 | 参数/用法错误（与 clap 一致） | 未知子命令、`templates new ../x`（含路径分隔符）、`ui --host 0.0.0.0` |
+| 3 | IO 失败 | `--params-file` 指向不存在的文件 |
+| 4 | 配置错误 | `config init` 时 `nctool.toml` 已存在 |
+| 5 | 模板/机床未找到 | `inspect nope`、`machine show nope` |
+| 6 | 渲染/注册表失败 | `templates new` 重名（重名是业务冲突，非 IO） |
+| 7 | 功能尚未实现 | `part generate`（规划于阶段 4） |
+
+该矩阵是稳定的对外契约，由 `cli/tests/cli_e2e.rs` 的 44 个 E2E 用例逐条断言
+（覆盖全部 10 个子命令 × 正常/异常路径）；变更退出码必须同步更新该测试与 CHANGELOG。
 
 ## 可选 / 必选判定规则
 
@@ -226,6 +268,7 @@ cargo fmt --check
 | --- | --- |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | **系统架构与设计说明**：三层 crate 架构、核心模块职责、数据流、错误模型、关键设计决策、扩展点。改动架构时请同步更新 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | **开发路线与执行跟踪**：阶段划分、任务清单、交付物、排期、里程碑、风险登记、MVP 裁剪策略 |
+| [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) | **当前状态快照**：各阶段完成情况与测试计数 |
 | [docs/PROCESS_CHECKLIST.md](docs/PROCESS_CHECKLIST.md) | **工艺核对清单**（阶段 A1）：内置模板 × 机床预设逐行核对结论、发现项 F1–F5、外部工艺评审待办 |
 | [docs/DEV_PLAN_CLI_UI.md](docs/DEV_PLAN_CLI_UI.md) | CLI + Web UI 的设计细节（命令面 / API 契约 / 技术决策）。**其 §7 阶段计划已被 ROADMAP 取代** |
 | [CHANGELOG.md](CHANGELOG.md) | 版本演进记录 |

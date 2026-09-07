@@ -672,7 +672,7 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 - [x] **F1.1** API 冻结确认（当前 Web API 契约已补测试，正式发布前仍需最终复核）
 - [x] **F1.2** `cargo install --path cli` 验证（隔离 root 安装后 `nctool 0.2.1` 可运行）
 - [ ] **F1.3** GitHub Release 二进制（Windows / Linux / macOS）
-- [ ] **F1.4** CHANGELOG + README 与功能一致（当前工作区仍有未提交增量，需发布前同步）
+- [x] **F1.4** CHANGELOG + README 与功能一致（README 补 `generate` / `ui` 子命令、**退出码矩阵**、管线后处理性能基线与万行实测；`core/README.md` 补 ASCII 清洗、golden 与性能测试说明、修正过时的测试计数 63+8 → 84+11+3）
 - [ ] **F2.1** 《机床配置指南》
 - [ ] **F2.2** 《模板编写指南》
 - [ ] **F3.1** Issues 模板
