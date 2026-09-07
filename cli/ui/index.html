@@ -470,6 +470,59 @@ footer .right { margin-left: auto; display: flex; gap: 18px; }
   .opts { grid-template-columns: 1fr; }
   .header-right .mode-badge { display: none; }
 }
+
+/* ── 移动端（≤480px）：可读可点，控件不遮挡预览 ── */
+@media (max-width: 480px) {
+  /* 1) 输入框字号 ≥16px，否则 iOS Safari 聚焦时会自动放大整页 */
+  input[type="text"], input[type="number"], input[type="search"], select, textarea { font-size: 16px; }
+  .opt-inline input { width: 76px; }
+
+  /* 2) 触摸目标高度 ≥40px，降低误触 */
+  .btn, select, .chip { min-height: 40px; }
+  .btn { padding: 8px 12px; }
+  .tab { min-height: 38px; padding: 8px 12px; }
+  .seg button { min-height: 38px; }
+  .switch-row, .opt-item { min-height: 38px; }
+
+  /* 3) 顶栏压缩，只留品牌与必要操作 */
+  header { padding: 8px 10px; gap: 8px; }
+  .brand h1 { font-size: 15px; }
+  .brand .logo svg { width: 20px; height: 20px; }
+  .header-right { gap: 6px; }
+
+  /* 4) 侧栏限高，保证下方预览不被压没 */
+  aside { max-height: 220px; }
+  .tpl-list { padding: 4px 6px 8px; }
+  .tpl-item .desc { -webkit-line-clamp: 1; }
+
+  /* 5) 工作区单列、收紧留白：控件与预览纵向排布，互不遮挡 */
+  .workspace { padding: 10px; gap: 10px; }
+  .workspace > .panel { min-height: 360px; }
+  .panel-body { padding: 10px 11px; }
+  .toolbar { padding: 8px 10px; gap: 8px; }
+  .toolbar .actions { width: 100%; }
+  .toolbar .actions .btn { flex: 1 1 auto; justify-content: center; }
+
+  /* 6) 参数行允许换行：单位/范围不再把标签挤出屏幕 */
+  .param-top { flex-wrap: wrap; }
+  .param-top .range { margin-left: 0; width: 100%; }
+  .param-input-wrap { flex-wrap: wrap; }
+  .param-input-wrap input[type="number"],
+  .param-input-wrap input[type="text"] { min-width: 0; flex: 1 1 120px; }
+
+  /* 7) 预览工具条换行；代码区缩小字号以容纳等宽显示 */
+  .preview-toolbar { flex-wrap: wrap; padding: 7px 10px; gap: 6px; }
+  .preview-toolbar .spacer { display: none; }
+  .gcode-view { font-size: 11.5px; padding: 10px 12px; }
+
+  /* 8) 选项卡横向滚动，不挤压变形 */
+  .tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+  .tab { white-space: nowrap; }
+
+  /* 9) 键值型信息（关于/帮助）改单列 */
+  .about-kv { grid-template-columns: 1fr; gap: 2px 0; }
+  .about-kv dd { margin: 0 0 6px; }
+}
 </style>
 </head>
 <body>
