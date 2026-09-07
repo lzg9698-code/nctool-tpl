@@ -16,20 +16,63 @@ fn golden_path(name: &str) -> std::path::PathBuf {
         .join(name)
 }
 
+/// 把 CRLF / 孤立 CR 统一折算成 LF。
+///
+/// golden 基线在仓库中恒为 LF（见根 `.gitattributes` 的 `* text=auto eol=lf`），
+/// 但检出配置异常、手工编辑，或 `NCTOOL_UPDATE_GOLDEN=1` 在 Windows 下刷新，
+/// 都可能把 CRLF 写进基线。比较前统一口径，让 golden 断言与平台、git 配置无关
+/// （ROADMAP E2.4）。
+fn normalize_newlines(s: &str) -> String {
+    s.replace("\r\n", "\n").replace('\r', "\n")
+}
+
 /// 断言输出与 golden 文件一致；设置环境变量 `NCTOOL_UPDATE_GOLDEN=1` 时重新
 /// 写入 golden 文件（**仅用于人工确认后的基线刷新，切勿在 CI 更新**）。
+///
+/// 比较与刷新两侧都过 [`normalize_newlines`]，保证基线永远是 LF。
 fn assert_golden(name: &str, actual: &str) {
+    let actual = normalize_newlines(actual);
+    let path = golden_path(name);
     if std::env::var_os("NCTOOL_UPDATE_GOLDEN").is_some() {
-        let path = golden_path(name);
         std::fs::create_dir_all(path.parent().expect("golden 路径应有父目录"))
             .expect("创建 golden 目录失败");
-        std::fs::write(&path, actual).expect("写入 golden 文件失败");
+        // 刷新时同样落 LF，避免把平台行尾固化进仓库
+        std::fs::write(&path, actual.as_bytes()).expect("写入 golden 文件失败");
         return;
     }
-    let path = golden_path(name);
     let expected = std::fs::read_to_string(&path)
         .unwrap_or_else(|err| panic!("读取 golden 文件失败 {}: {err}", path.display()));
+    let expected = normalize_newlines(&expected);
     assert_eq!(actual, expected, "golden 不匹配: {}", path.display());
+}
+
+/// golden 基线不得含 CRLF/CR（ROADMAP E2.4 / B4.2）。
+///
+/// 归一化让比较本身不受行尾影响，但基线文件仍应保持纯 LF：否则 diff 噪声、
+/// 跨平台检出不一致等问题会卷土重来。此用例在文件落盘层面把住关口。
+#[test]
+fn golden_files_are_lf_only() {
+    let dir = Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("tests")
+        .join("golden");
+    let mut checked = 0;
+    for entry in std::fs::read_dir(&dir).expect("读取 golden 目录失败") {
+        let path = entry.expect("遍历 golden 目录失败").path();
+        if !path.is_file() {
+            continue;
+        }
+        let bytes = std::fs::read(&path).unwrap_or_else(|e| panic!("读取 {path:?} 失败: {e}"));
+        assert!(
+            !bytes.contains(&b'\r'),
+            "golden 基线必须纯 LF，发现 CR: {path:?}（请用 LF 重新保存，或设 .gitattributes 后重新检出）"
+        );
+        checked += 1;
+    }
+    assert!(
+        checked >= 30,
+        "golden 目录应有 30 个文件，实际 {checked} 个"
+    );
 }
 
 #[test]

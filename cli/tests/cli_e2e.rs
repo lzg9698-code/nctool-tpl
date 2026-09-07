@@ -168,7 +168,10 @@ fn unknown_subcommand_exits_2() {
 #[test]
 fn json_errors_use_structured_envelope() {
     // text 通道的错误在人读 stderr；json 通道必须输出 ok:false 的结构化错误对象
-    let r = run_in(repo_root().as_path(), &["--format", "json", "inspect", "nope"]);
+    let r = run_in(
+        repo_root().as_path(),
+        &["--format", "json", "inspect", "nope"],
+    );
     assert_eq!(r.code, 5);
     let v: serde_json::Value = serde_json::from_str(&r.stdout).expect("stdout 应是合法 JSON");
     assert_eq!(v["ok"], serde_json::json!(false));
@@ -177,7 +180,10 @@ fn json_errors_use_structured_envelope() {
 
 #[test]
 fn json_success_uses_ok_true() {
-    let r = run_in(repo_root().as_path(), &["--format", "json", "machine", "list"]);
+    let r = run_in(
+        repo_root().as_path(),
+        &["--format", "json", "machine", "list"],
+    );
     assert_eq!(r.code, 0);
     let v: serde_json::Value = serde_json::from_str(&r.stdout).expect("stdout 应是合法 JSON");
     assert_eq!(v["ok"], serde_json::json!(true), "成功响应 ok 应为 true");
@@ -215,7 +221,10 @@ fn templates_lists_builtin_templates() {
 
 #[test]
 fn templates_list_filters_by_category() {
-    let r = run_in(repo_root().as_path(), &["templates", "list", "--category", "drilling"]);
+    let r = run_in(
+        repo_root().as_path(),
+        &["templates", "list", "--category", "drilling"],
+    );
     assert_eq!(r.code, 0);
     r.stdout_contains(&["drill_cycle"]);
     r.stdout_not_contains(&["program_header", "tool_change"]);
@@ -223,7 +232,10 @@ fn templates_list_filters_by_category() {
 
 #[test]
 fn templates_show_prints_source_and_params() {
-    let r = run_in(repo_root().as_path(), &["templates", "show", "program_header"]);
+    let r = run_in(
+        repo_root().as_path(),
+        &["templates", "show", "program_header"],
+    );
     assert_eq!(r.code, 0);
     r.stdout_contains(&["program_header", "prog"]);
 }
@@ -250,7 +262,10 @@ fn templates_new_duplicate_exits_6() {
     let dir = temp_dir("new_dup");
     assert_eq!(run_in(&dir, &["templates", "new", "demo"]).code, 0);
     let r = run_in(&dir, &["templates", "new", "demo"]);
-    assert_eq!(r.code, 6, "重名属业务冲突，归 template_duplicate(6) 而非 io(3)");
+    assert_eq!(
+        r.code, 6,
+        "重名属业务冲突，归 template_duplicate(6) 而非 io(3)"
+    );
     r.stderr_contains(&["模板已存在"]);
 }
 
@@ -341,7 +356,10 @@ fn validate_type_mismatch_exits_1() {
 
 #[test]
 fn validate_json_reports_issue_count() {
-    let r = run_in(repo_root().as_path(), &["--format", "json", "validate", "drill_cycle"]);
+    let r = run_in(
+        repo_root().as_path(),
+        &["--format", "json", "validate", "drill_cycle"],
+    );
     assert_eq!(r.code, 1);
     let v: serde_json::Value = serde_json::from_str(&r.stdout).expect("stdout 应是合法 JSON");
     assert_eq!(v["ok"], serde_json::json!(false));
@@ -422,7 +440,14 @@ fn render_unknown_machine_exits_5() {
     // 全局 --machine 会被延迟到真正需要机床配置时才校验
     let r = run_in(
         repo_root().as_path(),
-        &["--machine", "nope", "render", "program_header", "--param", "prog=1001"],
+        &[
+            "--machine",
+            "nope",
+            "render",
+            "program_header",
+            "--param",
+            "prog=1001",
+        ],
     );
     assert_eq!(r.code, 5);
     r.stderr_contains(&["未知机床"]);
@@ -432,7 +457,14 @@ fn render_unknown_machine_exits_5() {
 fn render_with_named_machine_succeeds() {
     let r = run_in(
         repo_root().as_path(),
-        &["--machine", "wfl_m65", "render", "program_header", "--param", "prog=1001"],
+        &[
+            "--machine",
+            "wfl_m65",
+            "render",
+            "program_header",
+            "--param",
+            "prog=1001",
+        ],
     );
     assert_eq!(r.code, 0);
 }
@@ -462,7 +494,10 @@ fn generate_matches_render_byte_for_byte() {
     let b = run_in(root.as_path(), &g_args);
     assert_eq!(a.code, 0);
     assert_eq!(b.code, 0);
-    assert_eq!(a.stdout, b.stdout, "generate 与 render 默认输出应逐字节一致");
+    assert_eq!(
+        a.stdout, b.stdout,
+        "generate 与 render 默认输出应逐字节一致"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -509,7 +544,10 @@ fn config_init_writes_sample_toml() {
     let f = dir.join("nctool.toml");
     assert!(f.exists(), "应在 {f:?} 生成示例配置");
     let body = std::fs::read_to_string(&f).unwrap();
-    assert!(body.contains("default_machine"), "示例配置应含 default_machine:\n{body}");
+    assert!(
+        body.contains("default_machine"),
+        "示例配置应含 default_machine:\n{body}"
+    );
 }
 
 #[test]
@@ -528,14 +566,20 @@ fn config_init_refuses_overwrite_exits_4() {
 #[test]
 fn ui_rejects_non_loopback_bind() {
     // 关键安全守卫：非回环地址必须在启动监听前就被拒绝（E3.2）
-    let r = run_in(repo_root().as_path(), &["ui", "--host", "0.0.0.0", "--port", "0"]);
+    let r = run_in(
+        repo_root().as_path(),
+        &["ui", "--host", "0.0.0.0", "--port", "0"],
+    );
     assert_eq!(r.code, 2, "非回环绑定应被 args(2) 拒绝");
     r.stderr_contains(&["回环"]);
 }
 
 #[test]
 fn ui_rejects_non_ip_host() {
-    let r = run_in(repo_root().as_path(), &["ui", "--host", "localhost", "--port", "0"]);
+    let r = run_in(
+        repo_root().as_path(),
+        &["ui", "--host", "localhost", "--port", "0"],
+    );
     assert_eq!(r.code, 2);
 }
 
@@ -552,7 +596,10 @@ fn part_generate_exits_7_not_implemented() {
 
 #[test]
 fn part_generate_json_keeps_kind() {
-    let (r, _dir) = run_isolated("part_json", &["--format", "json", "part", "generate", "x.json"]);
+    let (r, _dir) = run_isolated(
+        "part_json",
+        &["--format", "json", "part", "generate", "x.json"],
+    );
     assert_eq!(r.code, 7);
     let v: serde_json::Value = serde_json::from_str(&r.stdout).expect("stdout 应是合法 JSON");
     assert_eq!(v["error"]["kind"], serde_json::json!("not_implemented"));

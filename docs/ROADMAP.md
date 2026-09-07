@@ -656,15 +656,15 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 
 - [x] **E1.1** CLI E2E 清单（9 命令 × 正常/异常 × 退出码）—— `cli/tests/cli_e2e.rs`，44 用例覆盖全部 **10** 个子命令（ROADMAP 记 9，`generate` 为后加的规范入口）与 0–7 全档退出码；`ui` 为阻塞服务，仅覆盖启动前的回环守卫以免挂起
 - [ ] **E1.2** UI E2E 清单（若 D 已完成）
-- [ ] **E2.1** Windows 验证
-- [ ] **E2.2** Linux 验证
-- [ ] **E2.3** macOS 验证
-- [ ] **E2.4** golden 比较统一换行符
+- [x] **E2.1** Windows 验证（开发环境即 Windows：全量 344 项测试 + 44 项 CLI E2E 全通过；路径分隔符 `\`、CRLF 检出均正常）
+- [ ] **E2.2** Linux 验证（**由 CI 三平台矩阵承担**：`.github/workflows/ci.yml` 的 `quality` job 跑 ubuntu/windows/macos-latest，含 fmt/clippy/test/doc/audit）
+- [ ] **E2.3** macOS 验证（同上，CI 矩阵覆盖；XDG 配置路径与 Unix 行尾待首次 CI 绿灯后确认）
+- [x] **E2.4** golden 比较统一换行符（`core/tests/integration.rs` 的 `assert_golden` 比较与 `NCTOOL_UPDATE_GOLDEN` 刷新两侧均过 `normalize_newlines`，基线恒为 LF；新增 `golden_files_are_lf_only` 在落盘层把住关口）
 - [x] **E3.1** 模板目录路径守卫复核（**已由 E1.1 自动化覆盖**：`../escape` / `a/b` / `..\escape` 三种穿越写法均被 `args(2)` 拒绝；UI 侧暂无"保存模板"写 API，无需复核）
 - [x] **E3.2** 服务器回环绑定复核（**已由 E1.1 自动化覆盖**：`0.0.0.0` / `localhost` 在监听前即被 `args(2)` 拒绝；另有 `server.rs` 单测覆盖 `::1` 放行与 IPv6 URL 方括号）
-- [ ] **E3.3** `cargo audit` 零告警
-- [ ] **E4.1** criterion 性能基线更新
-- [ ] **E4.2** 万行级程序生成实测
+- [x] **E3.3** `cargo audit` 零告警（0.22.2，1239 条公告 / 109 个依赖，退出码 0）
+- [x] **E4.1** criterion 性能基线更新（新增 `core/benches/pipeline.rs`，补齐原缺的**后处理**基线：端到端 `generate_drill_cycle` 9.54 µs；3000 行后处理 plain 386.89 µs / 带行号 438.10 µs / ASCII 清洗 516.04 µs）
+- [x] **E4.2** 万行级程序生成实测（新增 `core/tests/large_program.rs`：10000 行带行号 1.77 ms / 203 KB；恶意位宽 `line_number_digits=1e9` 被夹到 32，输出 231 KB / 1.81 ms，**无内存放大**）
 - [ ] **E5** 真实零件/工序场景走查
 
 ### 阶段 F — 上线与迭代（发版部分 P0）

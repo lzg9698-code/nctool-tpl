@@ -20,4 +20,10 @@ serde = { version = "1", features = ["derive"] }
 [dev-dependencies]
 # 集成测试中的 JSON 序列化往返验证
 serde_json = "1"
+# criterion：管线性能基线（解析/提取/渲染在根 crate，后处理与端到端在此）
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "pipeline"
+harness = false
 

@@ -471,6 +471,7 @@ dependencies = [
 name = "nctool-core"
 version = "0.2.1"
 dependencies = [
+ "criterion",
  "nctool-tpl",
  "serde",
  "serde_json",

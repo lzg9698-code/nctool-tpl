@@ -182,6 +182,20 @@ MachineConfig 键名 schema、API 冻结清单明确。
 - **`completion` 新增 `powershell` / `pwsh` 别名**：clap 的 kebab-case 默认名为
   `power-shell`，不符合用户习惯；三种写法现等价（仅新增，不移除原值）
 
+### Added（阶段 E2.4 / E4）
+
+- **golden 换行符归一化（E2.4）**：`core/tests/integration.rs` 的 `assert_golden`
+  在比较与 `NCTOOL_UPDATE_GOLDEN=1` 刷新两侧均过 `normalize_newlines`，
+  golden 基线恒为 LF，断言不再受平台 / git 检出配置影响。
+  新增 `golden_files_are_lf_only` 用例在落盘层把住关口（B4.2 基线保护）
+- **万行级实测（E4.2）**：新增 `core/tests/large_program.rs`，覆盖
+  行号上限截断、恶意位宽夹紧、`step=0` 兜底，以及两条 `#[ignore]` 的万行实测
+  （`cargo test --release -- --ignored --nocapture`）。
+  实测：10000 行带行号 **1.77 ms / 203 KB**；`line_number_digits=1e9`
+  被夹到 32，输出 **231 KB / 1.81 ms**，无内存放大
+- **后处理性能基线（E4.1）**：新增 `core/benches/pipeline.rs`，补齐原基准缺失的
+  后处理项（`cargo bench -p nctool-core --bench pipeline`）
+
 ### Changed（阶段 A3 — 1.0 API 冻结清单）
 
 **自 `nctool-tpl 0.3.2` / `nctool-core 0.2.1` 起，以下公共 API 面在 1.0.0 前不再
