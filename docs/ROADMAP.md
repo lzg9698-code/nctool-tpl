@@ -677,7 +677,7 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 - [x] **E3.3** `cargo audit` 零告警（0.22.2，1239 条公告 / 109 个依赖，退出码 0）
 - [x] **E4.1** criterion 性能基线更新（新增 `core/benches/pipeline.rs`，补齐原缺的**后处理**基线：端到端 `generate_drill_cycle` 9.54 µs；3000 行后处理 plain 386.89 µs / 带行号 438.10 µs / ASCII 清洗 516.04 µs）
 - [x] **E4.2** 万行级程序生成实测（新增 `core/tests/large_program.rs`：10000 行带行号 1.77 ms / 203 KB；恶意位宽 `line_number_digits=1e9` 被夹到 32，输出 231 KB / 1.81 ms，**无内存放大**）
-- [ ] **E5** 真实零件/工序场景走查
+- [x] **E5** 真实零件/工序场景走查（新增 `docs/REAL_PART_WALKTHROUGH.md` + `examples/multi_op_demo.sh`：用 5 个内置模板拼装简化法兰盘「端面 + 4 孔 + 切断」，分别在 `generic` / `wfl_m65` 下渲染对比；暴露**行号跨工序不续编、错误不聚合、参数无继承**三处局限，全部登记到 Backlog F4 #2 `nctool part generate` 设计的输入）
 
 ### 阶段 F — 上线与迭代（发版部分 P0）
 

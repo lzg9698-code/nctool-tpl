@@ -272,6 +272,7 @@ cargo fmt --check
 | [docs/TEMPLATE_WRITING_GUIDE.md](docs/TEMPLATE_WRITING_GUIDE.md) | **《模板编写指南》**：NC/数学过滤器、必选/可选判定、引用机床配置、多模板 include/extends、validate/render 校验分层、反模式与发布前清单 |
 | [docs/RELEASE.md](docs/RELEASE.md) | **迭代节奏约定**：版本号策略、发布节奏、提交流程、兼容性窗口、决策机制、Backlog 加权打分 |
 | [docs/UI_ACCEPTANCE_CHECKLIST.md](docs/UI_ACCEPTANCE_CHECKLIST.md) | **Web UI 手工验收清单**（37 项可勾选）：端到端全链路 / 移动端 ≤480px / 校验定位 / 前后端逐字节一致 / 机床切换 / 主题 |
+| [docs/REAL_PART_WALKTHROUGH.md](docs/REAL_PART_WALKTHROUGH.md) | **真实零件场景走查**（E5）：简化法兰盘的「端面+4 孔+切断」多工序演示与多机床对比，暴露行号续编/错误聚合/参数继承的局限 |
 | [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) | **当前状态快照**：各阶段完成情况与测试计数 |
 | [docs/PROCESS_CHECKLIST.md](docs/PROCESS_CHECKLIST.md) | **工艺核对清单**（阶段 A1）：内置模板 × 机床预设逐行核对结论、发现项 F1–F5、外部工艺评审待办 |
 | [docs/DEV_PLAN_CLI_UI.md](docs/DEV_PLAN_CLI_UI.md) | CLI + Web UI 的设计细节（命令面 / API 契约 / 技术决策）。**其 §7 阶段计划已被 ROADMAP 取代** |
