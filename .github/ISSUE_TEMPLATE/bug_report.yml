@@ -1,0 +1,97 @@
+name: Bug 报告
+description: 报告 nctool 的缺陷（渲染/校验/CLI/UI/配置）
+title: "[Bug]: "
+labels: ["bug"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        ## 提交前请先确认
+
+        - [ ] 已用**最新版**（`nctool --version`）复现
+        - [ ] 已在本仓库搜索过同类 issue
+        - [ ] 若问题与**生成的 G-code 是否正确**有关，请先读
+              [docs/PROCESS_CHECKLIST.md](../../docs/PROCESS_CHECKLIST.md)——
+              内置模板与机床预设未经真实工艺评审，**投产前必须由熟悉目标机床的
+              工艺人员逐行核对**。本 issue 只用于工具本身的缺陷。
+
+  - type: input
+    id: version
+    attributes:
+      label: nctool 版本
+      description: 运行 `nctool --version` 的输出
+      placeholder: "nctool 0.2.1"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: 问题出在哪个部分
+      options:
+        - 模板渲染（输出不符合预期）
+        - 参数校验（该报错没报 / 误报）
+        - CLI 命令/退出码
+        - Web UI（`nctool ui`）
+        - 机床配置（nctool.toml / machine 预设）
+        - 模板加载（include / 路径 / 注册表）
+        - 其他
+    validations:
+      required: true
+
+  - type: input
+    id: os
+    attributes:
+      label: 操作系统
+      placeholder: "Windows 11 / Ubuntu 24.04 / macOS 15"
+    validations:
+      required: true
+
+  - type: textarea
+    id: repro
+    attributes:
+      label: 复现命令
+      description: 可直接复制粘贴运行的完整命令（含 `--param` 或 `--params-file`）
+      render: bash
+      placeholder: |
+        nctool render drill_cycle --param x=21 --param y=15 \
+            --param r_plane=5 --param depth=-10 --param feed=100
+    validations:
+      required: true
+
+  - type: textarea
+    id: template
+    attributes:
+      label: 相关模板源码
+      description: 若是自定义模板，请贴出最小可复现的模板内容（可用 ```jinja 代码块）
+      render: jinja
+    validations:
+      required: false
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: 期望输出
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: 实际输出
+      description: 请完整粘贴，含错误行与退出码（`echo $?` / `echo %ERRORLEVEL%`）
+      render: text
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: 附加日志 / 校验报告
+      description: 若有 `nctool validate` 的报告、`--format json` 的响应或浏览器控制台输出，请附上
+      render: text
+    validations:
+      required: false

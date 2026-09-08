@@ -1,0 +1,72 @@
+name: 功能提案
+description: 提案新功能 / 改进（CLI / Web UI / 模板系统 / 机床配置）
+title: "[Feature]: "
+labels: ["enhancement"]
+assignees: []
+
+body:
+  - type: markdown
+    attributes:
+      value: |
+        在提交前，请先确认：
+        - [ ] 已在 [ROADMAP](../../docs/ROADMAP.md) 的 Backlog / 各阶段清单中搜索
+        - [ ] 与[已有 issue 列表](https://github.com/lzg9698-code/nctool-tpl/issues)无重复
+
+  - type: textarea
+    id: motivation
+    attributes:
+      label: 动机 / 场景
+      description: 想解决什么问题？什么场景下用？举一个具体例子。
+      placeholder: |
+        例：当前 nctool render 只能输出一个文件，希望支持一次渲染多个
+        工序并按 `O0001/O0002/...` 编号，输出到不同文件（part 级批量生成）。
+    validations:
+      required: true
+
+  - type: textarea
+    id: proposal
+    attributes:
+      label: 提案
+      description: 描述你期望的 API / UI / 行为（可附 ASCII mock 或最小示例）
+      placeholder: |
+        ```bash
+        nctool part generate part.json --out out/
+        # part.json:
+        # { "ops": [
+        #   { "template": "program_header", "params": {"prog": 1} },
+        #   { "template": "drill_cycle",    "params": {"x":10,...} },
+        #   { "template": "program_footer" }
+        # ] }
+        ```
+    validations:
+      required: true
+
+  - type: textarea
+    id: alternatives
+    attributes:
+      label: 替代方案 / 取舍
+      description: 考虑过哪些其他做法？各自的优劣？为什么提案的这个更好？
+    validations:
+      required: false
+
+  - type: dropdown
+    id: scope
+    attributes:
+      label: 影响面
+      options:
+        - 仅 CLI 表面
+        - 仅 Web UI
+        - 核心库（nctool-tpl / nctool-core）
+        - 配置 / 模板格式
+        - 跨多端
+    validations:
+      required: true
+
+  - type: textarea
+    id: break
+    attributes:
+      label: 是否破坏兼容
+      description: 是否会改变退出码 / JSON 响应 / nctool.toml 格式 / G-code 输出？
+        若是，请说明迁移路径
+    validations:
+      required: false
