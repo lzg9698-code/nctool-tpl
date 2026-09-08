@@ -196,6 +196,39 @@ MachineConfig 键名 schema、API 冻结清单明确。
 - **后处理性能基线（E4.1）**：新增 `core/benches/pipeline.rs`，补齐原基准缺失的
   后处理项（`cargo bench -p nctool-core --bench pipeline`）
 
+### Added（阶段 F 阶段发版准备）
+
+- **F1.4 文档同步**：`README.md` 补 `generate` / `ui` 子命令示例 + **退出码矩阵表**
+  （0–7 全档 + 典型触发）；补管线后处理性能基线与万行实测；
+  `core/README.md` 补 ASCII 清洗、修正过时的测试计数 63+8 → 84+11+3
+- **F2.1《机床配置指南》**：`docs/MACHINE_CONFIG_GUIDE.md`——`MachineConfig` 模型、
+  3 套内建预设（`generic` / `wfl_m65` / `index_ms40`）、`KNOWN_CONFIG_KEYS` 完整清单
+  （6 组分类）、`nctool.toml` 自定义、加载顺序、关键约束（`line_number_digits`
+  夹紧到 32 的内存安全理由、`Choice` 键合法性、未知键告警等）
+- **F2.2《模板编写指南》**：`docs/TEMPLATE_WRITING_GUIDE.md`——必选/可选启发式、
+  NC/数学过滤器、机床配置引用、多模板 include/extends、validate/render 校验分层、
+  调试技巧、反模式表（`(x/2) | default` 兜不住、`a.b | default` 同理、模板里手写
+  `N0010` 双重编号等）、发布前 checklist
+- **F3.1 Issues 模板**：`.github/ISSUE_TEMPLATE/` 三件套——`bug_report.yml` 七段
+  （版本/组件/OS/复现命令/模板源码/期望/实际/logs）、`feature_request.yml` 五段
+  （动机/提案/替代/影响面/兼容）、`config.yml` 关闭空 issue + 文档/讨论/工艺安全
+  三组 contact_links（工艺问题导向 `PROCESS_CHECKLIST` 而非泛用 issue）
+- **F3.2 迭代节奏约定**：`docs/RELEASE.md`——版本号策略（0.x 可破坏 / 1.0+ 严格 semver）、
+  发布节奏（按需，CI/audit 必须 0 告警）、提交流程（commit 自包含、message 含动机）、
+  兼容性窗口（弃用保留 1 minor）、决策与争议（轻量共识 / 7 天讨论期）、
+  Backlog 加权打分法（影响×3 + 投入产出×2 + 风险×2 + 依赖×1）
+- **F4 Backlog 排序**：ROADMAP 按上述加权法对 5 个候选打分：
+  内置模板库扩充 37 / 零件级批量生成 34 / 参数预设 34 / 浏览器内模板编辑 21 /
+  i18n 20。明确为「初始基线」，外部反馈后重打分
+
+### Changed（阶段 UI 体验修正）
+
+- **ASCII 清洗复选框副标题歧义修复（用户报告）**：原副标题
+  `非 ASCII → ?` 读起来像功能说明而非后果警告，用户勾上后看到
+  中文被替换为 `?` 误以为显示 bug。改为 `开启后非 ASCII → ?`，
+  并在预览工具栏加红字提示 `⚠ ASCII 模式：非 ASCII 已替换为 ?`，
+  下次再触发时一眼能看出原因。详见 `ui/index.html` → `cli/ui/index.html`
+
 ### Changed（阶段 A3 — 1.0 API 冻结清单）
 
 **自 `nctool-tpl 0.3.2` / `nctool-core 0.2.1` 起，以下公共 API 面在 1.0.0 前不再
