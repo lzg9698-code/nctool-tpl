@@ -674,6 +674,7 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 - [ ] **F1.3** GitHub Release 二进制（Windows / Linux / macOS）
 - [x] **F1.4** CHANGELOG + README 与功能一致（README 补 `generate` / `ui` 子命令、**退出码矩阵**、管线后处理性能基线与万行实测；`core/README.md` 补 ASCII 清洗、golden 与性能测试说明、修正过时的测试计数 63+8 → 84+11+3）
 - [x] **F2.1** 《机床配置指南》（新增 `docs/MACHINE_CONFIG_GUIDE.md`：配置键完整清单、内建预设、nctool.toml 自定义、加载顺序、关键约束——`line_number_digits` 夹紧到 32 的内存安全理由、`Choice` 键合法性、未知键告警、CLI `--line-number-step=0` 兜底）
+- [x] **F2.2** 《模板编写指南》（新增 `docs/TEMPLATE_WRITING_GUIDE.md`：NC 数值格式化过滤器、数学过滤器、必选/可选判定、机床配置引用、多模板 include/extends、validate/render 两层校验、调试技巧、反模式与边界、发布前清单）
 - [ ] **F2.2** 《模板编写指南》
 - [ ] **F3.1** Issues 模板
 - [ ] **F3.2** 迭代节奏约定

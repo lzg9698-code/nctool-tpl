@@ -269,6 +269,7 @@ cargo fmt --check
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | **系统架构与设计说明**：三层 crate 架构、核心模块职责、数据流、错误模型、关键设计决策、扩展点。改动架构时请同步更新 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | **开发路线与执行跟踪**：阶段划分、任务清单、交付物、排期、里程碑、风险登记、MVP 裁剪策略 |
 | [docs/MACHINE_CONFIG_GUIDE.md](docs/MACHINE_CONFIG_GUIDE.md) | **《机床配置指南》**：配置键清单、内建预设、nctool.toml 自定义、加载顺序、`line_number_digits` 夹紧到 32 的内存安全理由、未知键告警等 |
+| [docs/TEMPLATE_WRITING_GUIDE.md](docs/TEMPLATE_WRITING_GUIDE.md) | **《模板编写指南》**：NC/数学过滤器、必选/可选判定、引用机床配置、多模板 include/extends、validate/render 校验分层、反模式与发布前清单 |
 | [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) | **当前状态快照**：各阶段完成情况与测试计数 |
 | [docs/PROCESS_CHECKLIST.md](docs/PROCESS_CHECKLIST.md) | **工艺核对清单**（阶段 A1）：内置模板 × 机床预设逐行核对结论、发现项 F1–F5、外部工艺评审待办 |
 | [docs/DEV_PLAN_CLI_UI.md](docs/DEV_PLAN_CLI_UI.md) | CLI + Web UI 的设计细节（命令面 / API 契约 / 技术决策）。**其 §7 阶段计划已被 ROADMAP 取代** |
