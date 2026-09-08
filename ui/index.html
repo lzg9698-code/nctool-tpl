@@ -305,6 +305,8 @@ main { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; min-
 .preview-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
 .preview-toolbar .stat { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
 .preview-toolbar .stat b { color: var(--text-dim); }
+/* ASCII 模式提示：勾上 ASCII 清洗时显示，避免用户把中文被替换为 ? 当成显示 bug */
+.preview-toolbar .stat.ascii-on { color: #ff8866; font-weight: 600; }
 .preview-toolbar .spacer { flex: 1; }
 .tabs { display: flex; gap: 2px; }
 .tab {
@@ -625,6 +627,7 @@ footer .right { margin-left: auto; display: flex; gap: 18px; }
             <button class="tab" data-tab="validate">校验</button>
           </div>
           <div class="spacer"></div>
+          <span class="stat" id="statAscii"></span>
           <span class="stat" id="statChars"></span>
           <span class="stat" id="statTime"></span>
         </div>
@@ -1713,7 +1716,7 @@ function optionsHtml() {
       <label class="opt-inline">步进<input type="number" data-opt-num="lineStep" value="${o.lineStep}" min="1"></label>
       ${chk("addHeader", "头部注释", "nctool generated")}
       ${chk("stripBlank", "删除空行", "")}
-      ${chk("ascii", "ASCII 清洗", "非 ASCII → ?")}
+      ${chk("ascii", "ASCII 清洗", "开启后非 ASCII → ?")}
     </div>
     <div style="margin-top:10px;display:flex;align-items:center;gap:10px">
       <span style="font-size:12px;color:var(--text-dim)">渲染模式</span>
@@ -1767,6 +1770,10 @@ async function doRender() {
     renderValidation();
     $("statChars").textContent = state.lastOutput ? `${state.lastOutput.length} 字符 · ${state.lastOutput.split("\n").length} 行` : "";
     $("statTime").textContent = `渲染 ${ms} ms`;
+    /* ASCII 模式提示：勾上时显式提醒，避免中文被替换为 ? 被误当成显示 bug */
+    const ascii = !!(state.options && state.options.ascii);
+    $("statAscii").textContent = ascii ? "⚠ ASCII 模式：非 ASCII 已替换为 ?" : "";
+    $("statAscii").className = "stat" + (ascii ? " ascii-on" : "");
   } else {
     state.lastOutput = "";
     state.lastReport = { issues: [{ level: "error", kind: "api", message: res.error && res.error.message }] };
@@ -1896,6 +1903,8 @@ async function selectTemplate(name, opts) {
   renderValidation();
   $("statChars").textContent = "";
   $("statTime").textContent = "";
+  $("statAscii").textContent = "";
+  $("statAscii").className = "stat";
   switchTab("gcode");
   doRender();
 }
