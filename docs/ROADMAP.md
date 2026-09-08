@@ -667,7 +667,7 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 ### 阶段 E — 联调测试（P1）
 
 - [x] **E1.1** CLI E2E 清单（9 命令 × 正常/异常 × 退出码）—— `cli/tests/cli_e2e.rs`，44 用例覆盖全部 **10** 个子命令（ROADMAP 记 9，`generate` 为后加的规范入口）与 0–7 全档退出码；`ui` 为阻塞服务，仅覆盖启动前的回环守卫以免挂起
-- [ ] **E1.2** UI E2E 清单（若 D 已完成）
+- [x] **E1.2** UI E2E 清单（若 D 已完成）—— `docs/UI_ACCEPTANCE_CHECKLIST.md`：37 项可勾选手工验收（端到端全链路 8 / 移动端 ≤480px 11 / 校验定位 5 / 前后端逐字节一致 5 / 机床切换 4 / 主题 2 / 已知 UX 2）。CLI 端由 E1.1 守护，本清单专攻人工浏览器端到端那一层；D4.3「机床切换浏览器人工验收」的步骤见 §5
 - [x] **E2.1** Windows 验证（开发环境即 Windows：全量 344 项测试 + 44 项 CLI E2E 全通过；路径分隔符 `\`、CRLF 检出均正常）
 - [ ] **E2.2** Linux 验证（**由 CI 三平台矩阵承担**：`.github/workflows/ci.yml` 的 `quality` job 跑 ubuntu/windows/macos-latest，含 fmt/clippy/test/doc/audit）
 - [ ] **E2.3** macOS 验证（同上，CI 矩阵覆盖；XDG 配置路径与 Unix 行尾待首次 CI 绿灯后确认）
