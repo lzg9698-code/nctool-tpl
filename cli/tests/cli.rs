@@ -535,7 +535,10 @@ fn machine_show_unknown_errors() {
 #[test]
 fn machine_show_custom_unknown_key_warns() {
     // A4：自定义机床配置的未知键应给出告警（模板拼错键名的最早发现点）。
-    // 注入 APPDATA 指向临时目录：全局配置路径 = %APPDATA%\nctool\config.toml
+    // 注入配置目录指向临时目录：
+    //   Windows: %APPDATA%\nctool\config.toml
+    //   Unix:    $XDG_CONFIG_HOME/nctool/config.toml
+    // 两者都指向 dir/nctool/config.toml，跨平台一致。
     let dir = tmp_dir("mkeywarn");
     let cfg_dir = dir.join("nctool");
     std::fs::create_dir_all(&cfg_dir).unwrap();
@@ -553,6 +556,7 @@ config.axes = "X Y Z"
     .unwrap();
     nctool()
         .env("APPDATA", &dir)
+        .env("XDG_CONFIG_HOME", &dir)
         .env("HOME", &dir)
         .env("USERPROFILE", &dir)
         .args(["machine", "show", "my_custom"])
