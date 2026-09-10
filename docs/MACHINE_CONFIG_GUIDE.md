@@ -112,6 +112,12 @@ coolant_on = "M8"
 # 任何 KNOWN_CONFIG_KEYS 之外的键会被 `validate_config_keys` 告警
 ```
 
+> **重要**：自定义机床需提供模板引用的**全部** `machine.xxx` 键。模板对
+> `{{ machine.coordinate_system }}` 等键是裸引用（无 `default` 兜底），
+> 配置缺失该键时，严格模式渲染会直接失败（`未定义变量`）——这是防御行为，
+> 宁可明确报错也不静默生成错误的 G/M 码。建议以 `generic` 预设（`nctool
+> machine show generic`）为基线复制后按需覆盖，避免遗漏。
+
 引用方式：CLI 用 `--machine hero_x9`，Web UI 在机床下拉里选。
 
 **初始化示例配置**（不覆盖已有文件）：

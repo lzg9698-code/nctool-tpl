@@ -10,6 +10,51 @@
 
 ---
 
+## [Unreleased]
+
+### Added
+
+- **`facing` 面铣模板**（Backlog「内置模板库扩充」首项）：矩形区域 zigzag 往复行切，
+  参数 `x0/y0/length/width/depth/feed`（必选）+ `stepover/safe_z/plunge_feed`（可选，
+  `stepover` 默认 10、`plunge_feed` 缺省取切削进给）；行数 = ceil(width/stepover)，
+  步进与切削分块（非同块斜线），三机床 golden 基线 + 工艺核对清单 §6 同步（18 组
+  基线，原 15 组）
+- **`.github/workflows/release.yml` 三平台二进制 job**（F1.3）：tag 推送时构建
+  Windows / Linux / macOS（arm64）release 二进制并上传为 GitHub Release assets
+  （文件名带 target 后缀，`x86_64-pc-windows-msvc` / `x86_64-unknown-linux-gnu` /
+  `aarch64-apple-darwin`）；crates.io publish 流程保持不变
+
+### Fixed
+
+- **参数规格必选/默认值解析**（server 模式）：API 返回 `default: null`（必选参数）
+  与带标签默认值 `{type,value}`（可选参数），前端此前用 `p.default === undefined`
+  判断，导致必选参数被误判为可选（表单显示「必选 0」）、默认值对象被直填入输入框
+  （`[object Object]`）。新增 `paramDefault()` 统一取值，必选判定/默认预填/
+  placeholder/侧栏统计全部走该函数（`ui/index.html` 与 `cli/ui/index.html` 字节一致）
+- **数据源文本**：server 模式下页脚不再停留在静态「演示数据（本地渲染）」，
+  成功/失败分别显示「数据源：服务端 API」/「（加载失败）」
+- **移动端输入框字号**：`@media (max-width: 480px)` 的 16px 规则被更高特异性的
+  `.param-input-wrap input[type=...]` 13px 规则覆盖，iOS Safari 聚焦时仍会放大整页；
+  在媒体查询内追加同特异性后定义规则，实测 375px 视口输入框渲染 16px
+
+### 验收
+
+- **Web UI 人工验收 37/37 通过**（`docs/UI_ACCEPTANCE_CHECKLIST.md`，E1.2 + D4.3）：
+  §1 全链路 8/8、§2 移动端 11/11（375px iframe 模拟视口）、§3 校验定位 5/5、
+  §4 前后端逐字节一致 5/5、§5 机床切换 4/4（含自定义机床 hero_x9）、§6 主题 2/2、
+  §7 已知 UX 2/2。清单按实测修订 4 处与实现不符的描述（D-01-01 参数口径、
+  D-03-03 类型不匹配 UI 层不可达、D-03-05 校验内联于 `/api/render`、
+  D4.3-04 CLI 与 UI 读同一层叠配置）
+
+### 文档
+
+- `docs/MACHINE_CONFIG_GUIDE.md`：明确自定义机床须提供模板引用的全部 `machine.xxx`
+  键（缺失键严格模式渲染失败，属防御行为），并建议以 generic 为基线复制
+- `docs/PROCESS_CHECKLIST.md`：新增 §6 facing 工艺核对（含 golden 输出逐行说明），
+  原 §7/§8/§9 顺延
+
+---
+
 ## [nctool-tpl 0.3.2] - 2026-09-03
 
 "第三轮彻底代码审查修复"（核心/CLI 配套改动见 [nctool-core 0.2.1] / [nctool-cli 0.2.1]）。

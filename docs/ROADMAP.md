@@ -461,7 +461,7 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 
 | 排序 | Backlog 项 | 加权分 | 关键依据 |
 | --- | --- | --- | --- |
-| 1 | 内置模板库扩充 | 37 | 投入产出/风险分都高（5+5），纯模板工作；成熟套路 1–2 人日/模板 |
+| 1 | 内置模板库扩充 | 37 | 投入产出/风险分都高（5+5），纯模板工作；成熟套路 1–2 人日/模板。✅ `facing` 面铣已完成（2026-09-10，含 golden 基线 + 工艺核对清单 §6）；剩余：键槽铣、外圆车削、攻丝 |
 | 2 | 零件级批量生成 | 34 | 核心场景（影响 5）但工程量大（投入产出 4）；与现有管线正交 |
 | 2 | 参数集命名预设 | 34 | 高频小痛点，前端 localStorage 即可落地（风险 5） |
 | 4 | 浏览器内模板编辑 | 21 | 需新增写 API、路径穿越/并发覆盖风险较高（风险 2） |
@@ -660,14 +660,14 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 - [x] **D3.3** 校验面板（统一 error/warning/info 与 message 字段）
 - [x] **D4.1** 生成选项开关（行号/注释/ASCII/空行）
 - [x] **D4.2** 复制 / 下载 `.nc`
-- [ ] **D4.3** 机床切换（真实配置已由 API 提供，浏览器人工验收待完成）
+- [x] **D4.3** 机床切换（真实配置已由 API 提供，浏览器人工验收完成：`generic`/`wfl_m65`/`index_ms40` 切换 + 自定义机床 `hero_x9`（P 前缀/5 位行号/5 位程序号）经 `nctool.toml` 注册后走查通过）
 - [x] **D5** 亮暗主题 + 响应式（≤480px）—— 亮/暗主题此前已实现；≤480px 断点已补齐（16px 输入字号、≥38px 触摸目标、侧栏限高、参数行换行、选项卡横滚）。**浏览器人工验收待完成**
 - [x] **D-Guard** `ui/index.html` 行数 ≤ 3000，当前 2201 行，仍需持续监控
 
 ### 阶段 E — 联调测试（P1）
 
 - [x] **E1.1** CLI E2E 清单（9 命令 × 正常/异常 × 退出码）—— `cli/tests/cli_e2e.rs`，44 用例覆盖全部 **10** 个子命令（ROADMAP 记 9，`generate` 为后加的规范入口）与 0–7 全档退出码；`ui` 为阻塞服务，仅覆盖启动前的回环守卫以免挂起
-- [x] **E1.2** UI E2E 清单（若 D 已完成）—— `docs/UI_ACCEPTANCE_CHECKLIST.md`：37 项可勾选手工验收（端到端全链路 8 / 移动端 ≤480px 11 / 校验定位 5 / 前后端逐字节一致 5 / 机床切换 4 / 主题 2 / 已知 UX 2）。CLI 端由 E1.1 守护，本清单专攻人工浏览器端到端那一层；D4.3「机床切换浏览器人工验收」的步骤见 §5
+- [x] **E1.2** UI E2E 清单（若 D 已完成）—— `docs/UI_ACCEPTANCE_CHECKLIST.md`：37 项可勾选手工验收（端到端全链路 8 / 移动端 ≤480px 11 / 校验定位 5 / 前后端逐字节一致 5 / 机床切换 4 / 主题 2 / 已知 UX 2）。CLI 端由 E1.1 守护，本清单专攻人工浏览器端到端那一层；D4.3「机床切换浏览器人工验收」的步骤见 §5。✅ 2026-09-10 走查 37/37 通过，修复 3 个前端缺陷（详见 CHANGELOG [Unreleased]）
 - [x] **E2.1** Windows 验证（开发环境即 Windows：全量 344 项测试 + 44 项 CLI E2E 全通过；路径分隔符 `\`、CRLF 检出均正常）
 - [ ] **E2.2** Linux 验证（**由 CI 三平台矩阵承担**：`.github/workflows/ci.yml` 的 `quality` job 跑 ubuntu/windows/macos-latest，含 fmt/clippy/test/doc/audit）
 - [ ] **E2.3** macOS 验证（同上，CI 矩阵覆盖；XDG 配置路径与 Unix 行尾待首次 CI 绿灯后确认）
@@ -683,17 +683,13 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 
 - [x] **F1.1** API 冻结确认（当前 Web API 契约已补测试，正式发布前仍需最终复核）
 - [x] **F1.2** `cargo install --path cli` 验证（隔离 root 安装后 `nctool 0.2.1` 可运行）
-- [ ] **F1.3** GitHub Release 二进制（Windows / Linux / macOS）
+- [ ] **F1.3** GitHub Release 二进制（Windows / Linux / macOS）—— `.github/workflows/release.yml` 三平台二进制 job 已就绪（2026-09-10，文件名带 target 后缀），Windows release 构建与三 crate `cargo package` 已本地验证；**真实 Release 待 tag 推送触发 CI 后落地**
 - [x] **F1.4** CHANGELOG + README 与功能一致（README 补 `generate` / `ui` 子命令、**退出码矩阵**、管线后处理性能基线与万行实测；`core/README.md` 补 ASCII 清洗、golden 与性能测试说明、修正过时的测试计数 63+8 → 84+11+3）
 - [x] **F2.1** 《机床配置指南》（新增 `docs/MACHINE_CONFIG_GUIDE.md`：配置键完整清单、内建预设、nctool.toml 自定义、加载顺序、关键约束——`line_number_digits` 夹紧到 32 的内存安全理由、`Choice` 键合法性、未知键告警、CLI `--line-number-step=0` 兜底）
 - [x] **F2.2** 《模板编写指南》（新增 `docs/TEMPLATE_WRITING_GUIDE.md`：NC 数值格式化过滤器、数学过滤器、必选/可选判定、机床配置引用、多模板 include/extends、validate/render 两层校验、调试技巧、反模式与边界、发布前清单）
 - [x] **F3.1** Issues 模板（`.github/ISSUE_TEMPLATE/`：bug_report.yml 含版本/组件/OS/复现命令/模板源码/期望/实际/logs 七段必填或可选；feature_request.yml 含动机/提案/替代/影响面/兼容；config.yml 关闭空 issue、链到文档/讨论/工艺核对）
 - [x] **F3.2** 迭代节奏约定（新增 `docs/RELEASE.md`：版本号策略、发布节奏、提交流程、兼容性窗口、决策与争议、Backlog 加权打分法）
 - [x] **F4** Backlog 排序（见下表：内置模板库扩充 37 / 零件级批量生成 34 / 参数预设 34 / 浏览器内模板编辑 21 / i18n 20；初始基线，外部反馈后重打分）
-- [ ] **F2.2** 《模板编写指南》
-- [ ] **F3.1** Issues 模板
-- [ ] **F3.2** 迭代节奏约定
-- [ ] **F4** Backlog 排序（part 批量 / 模板编辑 / 参数预设 / 模板库扩充 / i18n）
 - [ ] **B-Backlog** CI coverage job 根因修复：先取证 ubuntu runner 日志（浏览器打开 Actions → Coverage job → 复制错误段），疑似 `taiki-e/install-action` 装的 cargo-llvm-cov 与 runner 环境不兼容或 rust-cache 陈旧插桩产物；当前已 `continue-on-error` 非阻断
 
 ---

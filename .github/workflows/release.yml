@@ -52,3 +52,58 @@ jobs:
       - name: Skip publish (cli, token missing)
         if: startsWith(github.ref_name, 'nctool-cli-') && env.CARGO_REGISTRY_TOKEN == ''
         run: echo "::notice::CARGO_REGISTRY_TOKEN 未配置，跳过发布。请配置仓库 Secret 后手动 publish，或重新推送 tag。"
+
+  # F1.3：三平台原生构建二进制并上传为 GitHub Release assets。
+  # 每个 target 在对应架构的 runner 上原生构建（无交叉编译工具链依赖）。
+  # macOS 仅发布 Apple Silicon（arm64）版；Intel 版按 ROADMAP R10 延后，
+  # 视用户反馈再补充（届时在 macos 上交叉编译 x86_64-apple-darwin）。
+  binaries:
+    name: Build binary assets (${{ matrix.target }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: ubuntu-latest
+            target: x86_64-unknown-linux-gnu
+          - os: windows-latest
+            target: x86_64-pc-windows-msvc
+          - os: macos-latest
+            target: aarch64-apple-darwin
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (stable, with target)
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ matrix.target }}
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+        with:
+          key: ${{ matrix.target }}
+
+      - name: Verify (cli tests on this platform)
+        run: cargo test -p nctool-cli
+
+      - name: Build release binary
+        run: cargo build -p nctool-cli --release --target ${{ matrix.target }}
+
+      # 不同 target 的二进制同名（nctool / nctool.exe），直接上传会互相覆盖；
+      # 统一加上 target 后缀再上传，用户下载即可区分平台。
+      - name: Rename binary with target suffix
+        shell: bash
+        run: |
+          dir="target/${{ matrix.target }}/release"
+          if [ "$RUNNER_OS" = "Windows" ]; then
+            mv "$dir/nctool.exe" "$dir/nctool-${{ matrix.target }}.exe"
+          else
+            mv "$dir/nctool" "$dir/nctool-${{ matrix.target }}"
+          fi
+
+      - name: Upload release assets
+        uses: softprops/action-gh-release@v2
+        with:
+          files: "target/${{ matrix.target }}/release/nctool-${{ matrix.target }}*"
+          token: ${{ secrets.GITHUB_TOKEN }}
