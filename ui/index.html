@@ -477,6 +477,9 @@ footer .right { margin-left: auto; display: flex; gap: 18px; }
 @media (max-width: 480px) {
   /* 1) 输入框字号 ≥16px，否则 iOS Safari 聚焦时会自动放大整页 */
   input[type="text"], input[type="number"], input[type="search"], select, textarea { font-size: 16px; }
+  /* 修正：.param-input-wrap input 的 13px 规则特异性 (0,2,1) 高于裸 input[type] (0,1,1)，
+     会覆盖上面的 16px；这里用同特异性 + 后定义胜出，确保移动端输入框真正 ≥16px */
+  .param-input-wrap input[type="number"], .param-input-wrap input[type="text"] { font-size: 16px; }
   .opt-inline input { width: 76px; }
 
   /* 2) 触摸目标高度 ≥40px，降低误触 */
@@ -1631,7 +1634,7 @@ function renderSidebar() {
   );
   $("tplList").innerHTML = list.length ? list.map(t => {
     const specs = t.params || [];
-    const reqN = specs.filter(p => p.required && p.default === undefined).length;
+    const reqN = specs.filter(p => p.required && paramDefault(p) === undefined).length;
     const optN = specs.length - reqN;
     return `<div class="tpl-item ${state.selected === t.name ? "active" : ""}" data-tpl="${t.name}">
       <div class="row1"><span class="name">${t.name}</span>
@@ -1644,12 +1647,25 @@ function renderSidebar() {
 }
 
 /* —— 参数表单 —— */
+/* 统一读取参数规格的有效默认值：
+   demo 模式 default 为裸值（null/undefined/数值/布尔/字符串）；
+   server 模式 API 返回带标签 ParamValue（{type,value}）或 null。
+   返回 undefined 表示“无有效默认值”——必选判定与默认值预填都以它为准
+   （此前用 `p.default === undefined` 判断，JSON 反序列化后 null !== undefined，
+   导致 required 参数被误判为可选、默认值对象被直填入输入框）。 */
+function paramDefault(s) {
+  const d = s.default;
+  if (d === undefined || d === null) return undefined;
+  if (typeof d === "object" && "value" in d) return d.value;
+  return d;
+}
+
 function renderForm() {
   const t = state.templateDetails[state.selected] || state.templates.find(x => x.name === state.selected);
   if (!t) { $("formBody").innerHTML = `<div class="gcode-empty" style="padding-top:80px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="9"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg><div>在左侧选择一个模板开始</div></div>`; return; }
   const specs = t.params || [];
-  const req = specs.filter(p => p.required && p.default === undefined);
-  const opt = specs.filter(p => !(p.required && p.default === undefined));
+  const req = specs.filter(p => p.required && paramDefault(p) === undefined);
+  const opt = specs.filter(p => !(p.required && paramDefault(p) === undefined));
   $("paramHint").textContent = `必选 ${req.length} · 可选 ${opt.length}`;
   let html = "";
   if (req.length) {
@@ -1689,12 +1705,12 @@ function fieldHtml(t, s) {
     input = `<label class="switch"><input type="checkbox" data-param="${s.name}" ${cur ? "checked" : ""}><span class="slider"></span></label>`;
   } else if (s.kind === "Number" || s.kind === "Integer") {
     input = `<input type="number" data-param="${s.name}" step="${s.kind === "Integer" ? "1" : "any"}"
-      placeholder="${s.default !== undefined ? s.default : "—"}" value="${has ? cur : ""}">
+      placeholder="${paramDefault(s) !== undefined ? paramDefault(s) : "—"}" value="${has ? cur : ""}">
       ${s.unit ? `<span class="suffix">${s.unit}</span>` : ""}`;
   } else {
-    input = `<input type="text" data-param="${s.name}" placeholder="${s.default !== undefined ? s.default : ""}" value="${has ? esc(cur) : ""}">`;
+    input = `<input type="text" data-param="${s.name}" placeholder="${paramDefault(s) !== undefined ? paramDefault(s) : ""}" value="${has ? esc(cur) : ""}">`;
   }
-  const req = s.required && s.default === undefined;
+  const req = s.required && paramDefault(s) === undefined;
   return `<div class="param-field ${req ? "req" : "opt"}" id="field-${s.name}">
     <div class="param-top">
       <label>${s.name}</label>
@@ -1884,10 +1900,11 @@ async function selectTemplate(name, opts) {
     state.templateDetails[name] = t;
     state.templates = state.templates.map(x => x.name === name ? t : x);
   }
-  /* 默认值预填 */
+  /* 默认值预填（server 模式默认值可能是带标签 ParamValue，统一经 paramDefault 取值） */
   (t.params || []).forEach(s => {
-    if (s.kind === "Bool") state.params[s.name] = !!s.default;
-    else if (s.default !== undefined) state.params[s.name] = s.default;
+    const def = paramDefault(s);
+    if (s.kind === "Bool") state.params[s.name] = !!def;
+    else if (def !== undefined) state.params[s.name] = def;
     else state.params[s.name] = undefined;
   });
   $("crumb").innerHTML = `模板 / <b>${t.category}</b> / <span style="color:var(--accent)">${t.name}</span>`;
@@ -2145,9 +2162,11 @@ function init() {
   if (API.mode === "server") {
     Promise.all([API.listTemplates(), API.listMachines()]).then(([tplRes, machineRes]) => {
       if (!tplRes.ok || !machineRes.ok) {
+        $("apiMode").innerHTML = `<span>数据源：服务端 API（加载失败）</span>`;
         toast((tplRes.error || machineRes.error || {}).message || "服务数据加载失败", "err");
         return;
       }
+      $("apiMode").innerHTML = `<span>数据源：服务端 API</span>`;
       state.templates = tplRes.data.templates || [];
       state.machines = machineRes.data.machines || [];
       renderMachineSel();
