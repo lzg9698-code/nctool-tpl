@@ -594,6 +594,71 @@ fn builtin_templates() -> Vec<(
                     .with_unit("mm/min"),
             ],
         ),
+        (
+            "facing",
+            TemplateCategory::Milling,
+            "面铣：矩形区域往复行切（zigzag）",
+            concat!(
+                "{{ machine.rapid }} G90 Z{{ safe_z | default(100) | nc_fixed(3) }}\n",
+                "{{ machine.rapid }} X{{ x0 | nc_fixed(3) }} Y{{ y0 | nc_fixed(3) }}\n",
+                // 下刀到切削深度：下刀进给缺省取切削进给（模态继承）
+                "{{ machine.linear }} G90 Z{{ depth | nc_fixed(3) }} F{{ plunge_feed | default(feed) | nc_fixed(3) }}\n",
+                // 行数 = ceil(width / stepover)（minijinja 的 round 不支持 method 参数，
+                // 用 int(x + 1 - 1e-6) 浮点技巧实现向上取整）；逐行往复：首行就位后直接
+                // X 切削，后续每行先 Y 步进（X 保持），再反向 X 切削（方向奇偶交替）。
+                // 空白控制使循环体恰好每行输出一个 G-code 块、无多余空行。
+                "{% for i in range(0, ((width / stepover + 0.999999) | int)) -%}\n",
+                "{% if i > 0 %}{{ machine.linear }} Y{{ (y0 + i * stepover) | nc_fixed(3) }}\n",
+                "{% endif %}{{ machine.linear }} X{{ ((x0 + length) if (i % 2 == 0) else x0) | nc_fixed(3) }}{% if i == 0 %} F{{ feed | nc_fixed(3) }}{% endif %}\n",
+                "{% endfor -%}\n",
+                "{{ machine.rapid }} Z{{ safe_z | default(100) | nc_fixed(3) }}\n",
+            ),
+            vec![
+                crate::validate::spec("x0", ParamKind::Number, true, None, "面铣起点 X 坐标")
+                    .with_unit("mm"),
+                crate::validate::spec("y0", ParamKind::Number, true, None, "面铣起点 Y 坐标")
+                    .with_unit("mm"),
+                crate::validate::spec("length", ParamKind::Number, true, None, "单行铣削长度（X 方向）")
+                    .with_range(0.001, 500.0)
+                    .with_unit("mm"),
+                crate::validate::spec("width", ParamKind::Number, true, None, "铣削宽度（Y 方向）")
+                    .with_range(0.001, 500.0)
+                    .with_unit("mm"),
+                crate::validate::spec("depth", ParamKind::Number, true, None, "切削深度（Z，负值向下）")
+                    .with_max(0.0)
+                    .with_unit("mm"),
+                crate::validate::spec("feed", ParamKind::Number, true, None, "切削进给（XY）")
+                    .with_min(0.001)
+                    .with_unit("mm/min"),
+                crate::validate::spec(
+                    "stepover",
+                    ParamKind::Number,
+                    false,
+                    Some(ParamValue::Number(10.0)),
+                    "行距（Y 方向每行间距）",
+                )
+                .with_min(0.5)
+                .with_unit("mm"),
+                crate::validate::spec(
+                    "safe_z",
+                    ParamKind::Number,
+                    false,
+                    Some(ParamValue::Number(100.0)),
+                    "安全高度 Z",
+                )
+                .with_min(0.0)
+                .with_unit("mm"),
+                crate::validate::spec(
+                    "plunge_feed",
+                    ParamKind::Number,
+                    false,
+                    None,
+                    "下刀进给（Z，缺省取切削进给）",
+                )
+                .with_min(0.001)
+                .with_unit("mm/min"),
+            ],
+        ),
     ]
 }
 
@@ -605,7 +670,7 @@ mod tests {
     #[test]
     fn registry_installs_builtins() {
         let r = TemplateRegistry::new();
-        assert!(r.len() >= 5);
+        assert!(r.len() >= 6);
         for name in [
             "program_header",
             "program_footer",
