@@ -219,6 +219,14 @@ fn validate_template_name(name: &str) -> Result<(), CliError> {
     if name == "." || name == ".." {
         return Err(CliError::new("args", format!("非法模板名: {name}")));
     }
+    // 显式拒绝反斜杠：Linux/macOS 上 \ 不是路径分隔符，Path::components()
+    // 不会拦截，但 Windows 上 \ 是分隔符；跨平台统一拒绝以避免路径遍历。
+    if name.contains('\\') {
+        return Err(CliError::new(
+            "args",
+            format!("模板名不能包含路径分隔符: {name}"),
+        ));
+    }
     let components = std::path::Path::new(name).components().count();
     if components != 1 {
         return Err(CliError::new(

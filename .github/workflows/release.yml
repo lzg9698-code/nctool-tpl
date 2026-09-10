@@ -7,6 +7,11 @@ on:
       - "nctool-core-v*"
       - "nctool-cli-v*"
 
+# softprops/action-gh-release 需要写 release 权限；GitHub 新仓库默认 GITHUB_TOKEN 只读，
+# 必须在此显式声明（同时需仓库 Settings → Actions → General 允许 workflow 提升权限）。
+permissions:
+  contents: write
+
 env:
   CARGO_TERM_COLOR: always
   # 未配置 secret 时为空字符串，publish 步骤按此跳过而非报错
