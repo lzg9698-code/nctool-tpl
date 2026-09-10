@@ -659,6 +659,52 @@ fn builtin_templates() -> Vec<(
                 .with_unit("mm/min"),
             ],
         ),
+        (
+            "slot_milling",
+            TemplateCategory::Milling,
+            "键槽铣：X 方向直槽一刀成型（下刀→切削→抬刀→返回）",
+            concat!(
+                "{{ machine.rapid }} G90 Z{{ safe_z | default(100) | nc_fixed(3) }}\n",
+                "{{ machine.rapid }} X{{ x0 | nc_fixed(3) }} Y{{ y0 | nc_fixed(3) }}\n",
+                "{{ machine.linear }} G90 Z{{ depth | nc_fixed(3) }} F{{ plunge_feed | default(feed) | nc_fixed(3) }}\n",
+                "{{ machine.linear }} X{{ (x0 + length) | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n",
+                "{{ machine.rapid }} Z{{ safe_z | default(100) | nc_fixed(3) }}\n",
+                "{{ machine.rapid }} X{{ x0 | nc_fixed(3) }} Y{{ y0 | nc_fixed(3) }}\n",
+            ),
+            vec![
+                crate::validate::spec("x0", ParamKind::Number, true, None, "槽起点 X 坐标")
+                    .with_unit("mm"),
+                crate::validate::spec("y0", ParamKind::Number, true, None, "槽起点 Y 坐标")
+                    .with_unit("mm"),
+                crate::validate::spec("length", ParamKind::Number, true, None, "槽长（X 方向）")
+                    .with_range(0.001, 500.0)
+                    .with_unit("mm"),
+                crate::validate::spec("depth", ParamKind::Number, true, None, "槽深（Z，负值向下）")
+                    .with_max(0.0)
+                    .with_unit("mm"),
+                crate::validate::spec("feed", ParamKind::Number, true, None, "切削进给（X）")
+                    .with_min(0.001)
+                    .with_unit("mm/min"),
+                crate::validate::spec(
+                    "safe_z",
+                    ParamKind::Number,
+                    false,
+                    Some(ParamValue::Number(100.0)),
+                    "安全高度 Z",
+                )
+                .with_min(0.0)
+                .with_unit("mm"),
+                crate::validate::spec(
+                    "plunge_feed",
+                    ParamKind::Number,
+                    false,
+                    None,
+                    "下刀进给（Z，缺省取切削进给）",
+                )
+                .with_min(0.001)
+                .with_unit("mm/min"),
+            ],
+        ),
     ]
 }
 
@@ -670,7 +716,7 @@ mod tests {
     #[test]
     fn registry_installs_builtins() {
         let r = TemplateRegistry::new();
-        assert!(r.len() >= 6);
+        assert!(r.len() >= 7);
         for name in [
             "program_header",
             "program_footer",

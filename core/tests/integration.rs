@@ -70,8 +70,8 @@ fn golden_files_are_lf_only() {
         checked += 1;
     }
     assert!(
-        checked >= 36,
-        "golden 目录应有 36 个文件，实际 {checked} 个"
+        checked >= 42,
+        "golden 目录应有 42 个文件，实际 {checked} 个"
     );
 }
 
@@ -169,13 +169,21 @@ fn golden_cases() -> Vec<(&'static str, String, MachinePreset, ParameterSet)> {
             .set_number("depth", -1.0)
             .set_number("feed", 200.0);
         cases.push(("facing", format!("facing_{id}"), preset, ps));
+
+        let mut ps = ParameterSet::new();
+        ps.set_number("x0", 0.0)
+            .set_number("y0", 0.0)
+            .set_number("length", 50.0)
+            .set_number("depth", -5.0)
+            .set_number("feed", 200.0);
+        cases.push(("slot_milling", format!("slot_milling_{id}"), preset, ps));
     }
     cases
 }
 
 #[test]
 fn builtin_templates_match_golden_matrix() {
-    // 18 组基线：每组固化渲染输出（.nc）与校验报告（.report.txt）。
+    // 21 组基线：每组固化渲染输出（.nc）与校验报告（.report.txt）。
     // 这是唯一回归防线：任何改动导致输出/校验漂移都会在此失败。
     let g = GCodeGenerator::new();
     for (template, stem, preset, params) in golden_cases() {
@@ -210,7 +218,7 @@ fn golden_matrix_covers_all_builtin_templates() {
         .filter(|e| matches!(&e.source, nctool_core::registry::TemplateSource::Builtin))
         .map(|e| e.name.clone())
         .collect();
-    assert_eq!(builtin.len(), 6, "内置模板数不应漂移: {builtin:?}");
+    assert_eq!(builtin.len(), 7, "内置模板数不应漂移: {builtin:?}");
     let mut covered: Vec<String> = golden_cases().iter().map(|(t, ..)| t.to_string()).collect();
     covered.sort();
     covered.dedup();
