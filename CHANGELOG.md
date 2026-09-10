@@ -10,7 +10,9 @@
 
 ---
 
-## [Unreleased]
+## [nctool-core 0.2.2] - 2026-09-10
+
+「facing 面铣模板 + Web UI 真实浏览器验收修复 + 三平台 Release 准备」（CLI 配套改动见 [nctool-cli 0.2.2]；`nctool-tpl` 本轮无改动，保持 0.3.2）
 
 ### Added
 

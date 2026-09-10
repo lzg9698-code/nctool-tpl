@@ -453,7 +453,7 @@ dependencies = [
 
 [[package]]
 name = "nctool-cli"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "assert_cmd",
  "clap",
@@ -469,7 +469,7 @@ dependencies = [
 
 [[package]]
 name = "nctool-core"
-version = "0.2.1"
+version = "0.2.2"
 dependencies = [
  "criterion",
  "nctool-tpl",
