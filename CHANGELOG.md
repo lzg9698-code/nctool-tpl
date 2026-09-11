@@ -10,6 +10,27 @@
 
 ---
 
+## [未发布]
+
+### Added
+
+- **README 安装章节**：新增环境要求（Rust 1.82+、三平台）与三种安装方式——GitHub Release
+  预编译二进制（含三平台产物名）、`cargo install --path cli --locked`、作为库引入
+  （`nctool-tpl` / `nctool-core`，另附 git 依赖写法）；新增安装验证步骤与顶部目录导航
+- **README 使用示例章节**：5 个端到端示例（内置模板浏览→查参→校验→生成、自定义模板文件、
+  参数文件 `--params-file` + `--format json` 脚本集成、目录模板与 `template_dir` 配置、
+  Web UI / 库调用），命令与输出均为 `nctool 0.2.2` 实测；补充「目录模板需显式指定
+  `--template-dir` 或配置、模板名含 `.j2` 后缀」这一易踩点
+- **贡献指南**：README 新增速览（前置阅读、环境搭建、与 CI 一致的质量门、改动同步要求、
+  提交与分支约定、问题反馈渠道），完整版见新增的 `docs/CONTRIBUTING.md`
+  （仓库结构、344 项测试分布矩阵、golden 刷新与复核流程、对外稳定契约、发版流程、
+  Reviewer 检查清单）；新增 `.github/PULL_REQUEST_TEMPLATE.md`（PR 描述含质量门 /
+  文档同步 / 工艺安全核对项）
+- **文档自检脚本**：`scripts/check_docs_links.py` —— 校验 Markdown 相对链接与 heading 锚点
+  是否存在（README、`docs/` 全部文档已通过检查）
+
+---
+
 ## [nctool-core 0.2.2] - 2026-09-10
 
 「facing 面铣模板 + Web UI 真实浏览器验收修复 + 三平台 Release 准备」（CLI 配套改动见 [nctool-cli 0.2.2]；`nctool-tpl` 本轮无改动，保持 0.3.2）
