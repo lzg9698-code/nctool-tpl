@@ -14,6 +14,326 @@
 
 ### Added
 
+- **`inspect` 展示参数规格**（`cli/src/commands/inspect.rs`）：规格（类型 / 候选值 /
+  区间 / 整数 / 条件必选 / 派生）在 `validate` / `render` 时是**真的会拦人**的，
+  此前却只能靠"触发一次报错"来发现。现在 `inspect` 直接列出来，并按
+  **必选 / 条件必选 / 派生 / 可选**四桶分组——规格引入后必选性不再只有两态，
+  混在两桶里会误导用户去填一个不该填的参数：
+  - 每行：`名字  行 L 列 C  类型  约束摘要  描述`；候选值超过 6 个折叠为 `…（共 N 项）`
+  - 末尾提示"未标注类型（`ParamKind::Any`）"的参数——这类参数不做类型检查，
+    写错要到渲染期才暴露
+  - JSON 输出的规格字段**复用 HTTP API 的 `spec_json`**，避免两处形状各自漂移
+
+- **`--param k=v` 按规格归一取值**（`cli/src/args.rs`）：argv 里没有类型信息，此前
+  只按"像不像数字"推断（`5010` → 数值）。字符串型参数若值恰好形如数字
+  （`U_CTB` 的 `1631`、`U_ID` 的 `[42]`）会被推断成数值 → 类型不匹配，用户只能改用
+  `--params-file` 传 JSON 字符串或加 `k:s=` 后缀。现在按规格归一，
+  规则是**先白名单、后类型**：候选值命中哪种解释就用哪种（`U_CTB` 的 `1631` 与
+  `"DECKEL"` 各命中一半），都没命中则按声明的类型（`String` 保持字符串）。
+  **显式后缀 `k:s=` / `k:n=` / `k:b=` 仍优先**——那是用户明确表达意图的通道。
+
+- **Web UI 参数表单消费规格**（`ui/index.html` + `cli/ui/index.html`）：
+  - **候选值参数渲染为下拉框**（此前是文本框，非法值要等校验才报错）
+  - **派生参数移出表单**，改为底部一行"由系统派生（无需填写）：tip_depth（…）"——
+    此前它以普通输入框出现，填了会被派生值覆盖
+  - **条件必选参数标注触发条件**（`条件必选：side = "Right" 时必填`）
+  - 表单取值按规格归一，规则与 CLI 的 `--param` 一致（前端 `coerceParamValue`）
+
+- **`ui/index.html` 与 `cli/ui/index.html` 一致性测试**（`cli/tests/cli.rs`）：
+  前者是 `file://` 演示版、后者被 `include_str!` 嵌进二进制（`nctool ui` 提供的那份），
+  是同一份页面的两份拷贝。手工同步迟早漂移，届时"改了页面却看不到变化"很难查——
+  加断言把漂移变成测试失败。
+
+- **派生参数 `derive`**（`core/src/derive.rs`）：把**查表型换算**从模板搬到规格，落实
+  「模板只做变量替换，计算在 Rust 侧完成」这条核心原则。首个用例是
+  `machines/index_g420/dg_cal_ir9.j2` 的 `tip_model → tip_depth`（12 项表，回退 29.61 = DM24）——
+  此前这张表写在模板里（`{% set tip_depth_map = {...} %}` + `map[k] | default(v)`，
+  为绕开 minijinja 的 map 无方法限制，即约定 R6），现在数据表**只此一份**（`variables.yaml`），
+  改表只改 YAML：
+  - 声明：`ParamSpec.derive: DeriveRule { from, table, fallback }`；YAML 侧与 `options` 一样
+    走稀疏覆盖（`ParamOverride.derive`），因此变量库与清单 `params` 都能声明
+  - **系统注入语义**：派生参数不要求调用方提供（与 `machine` 同类）；调用方提供了则
+    **派生值恒胜**并报 `ShadowedSystemVar` 警告（派生值必须与源参数一致——表里说
+    `DM24 → 29.61`、用户填 `10`，允许覆盖就等于允许"型号与深度对不上"的 G-code）
+  - **失败不静默**：源参数缺失/未命中表项且无 `fallback` → 新 `IssueKind::DeriveFailed`
+    （Error），**不取 0**（中心孔深度取 0 会让 `I_R9[80]` 顶紧位置算错）；且不再对同一
+    参数叠报"缺失"
+  - 求值时机：**校验前**（`check_vars`，两个校验入口共用）与**渲染前**（`pipeline` 两条路径），
+    口径一致；顺序为**先派生、再规格默认值兜底**（源参数可能靠默认值才存在）
+  - **派生值照常过类型/白名单/区间检查**——派生不是绕过校验的后门
+  - 表键比较走 `ParamValue::matches_option`（数值/整数跨变体按数值相等），
+    表键写 `8` 也能命中调用方传来的 `8.0`
+  - 源参数为列表类型时明确报错（`UnusableSource`），而不是静默落到 `fallback` 把
+    "传错类型"掩盖成"用了个看似合理的默认值"
+  - `PipelineError::Derive` 兜底渲染路径（校验阶段已拦截，正常不可达）
+
+- **变量库 `templates/variables.yaml`**（`core/src/variables.rs`）：**按变量名**生效的全局参数规格。
+  同一变量在多台机床/多个模板上含义一致时只写一次，不必在 12 个模板里重复声明 `U_Q` 的候选值。
+  内容从源项目 NCTool_V3 的 `configs/variable_repo.json`（62 个变量）导入：
+  - **三级优先级**：清单 `templates.yaml` 的 `params`（本模板覆盖）> `variables.yaml`（全局）
+    > 头部 `{# PARAMS: #}`（模板局部）。三者复用同一套稀疏覆盖机制（`ParamOverride` +
+    `merge_params`），"只写要改的字段"这一约定在三个层级完全一致
+  - **生效范围**：只对**模板确实引用了**的变量生效（头部声明的 + 源码里引用到的），
+    因此库里可以放心放全局变量——没被引用的不会注入规格，也不会触发
+    "规格声明了未引用参数"告警
+  - 支持 `variables:` 键与顶层列表两种写法；**同名重复定义直接报错**（静默覆盖会让
+    "改了定义却不生效"变成难查的问题）
+  - **三条刻意的不导入**（都为了不产出"跑得通但错误"的 G-code）：
+    ① **不导入默认值**——源库默认值是针对特定样件的预填值（`U_A = 141.25` 是那根轴的
+    长度），规格默认值会让**缺参静默通过**，用户少填一个零件尺寸就会拿到另一根轴的程序；
+    ② **不导入描述**——头部描述是写给这个模板的，源库描述以 YAML 注释保留；
+    ③ **`read_only` 变量只导入类型、不导入候选值**——源库的 `read_only` 意为"由机床设置/
+    派生计算决定"，其 `options` 是某次装夹的**取值快照**（`U_ANG: [20]`、`R1: [4000]`），
+    当作用户可选集会禁掉合法的换刀/换料调整；真正由用户选择的变量（键槽宽度系列、
+    槽宽系列、刀号、开口方向、顶尖型号）才导入 `options`
+  - 导入后 19 个 INDEX G420 模板**无需改动头部**即获得类型与白名单（头部只写
+    `name 必选 描述` 的形态由 `ParamKind::Any` 兜住）
+  - 混有字母与数字的刀具标识（`U_CTB: 1631 / DECKEL`、`U_RTB: CT1017 / 5010`）
+    用 `kind: any` + 混合候选项——数值与文本各自按值语义比较，使 CLI 的
+    `--param U_CTB=DECKEL` 与 `--param U_FT=5010`（推断为数值）都能命中
+
+- **`IssueKind::SpecInert`**：规格中存在**永不生效**的声明时报**警告**。两类成因：
+  ① 规格声明了模板未引用的参数（参数名拼错，或模板改名后头部/变量库/清单未同步）；
+  ② **约束与声明的类型不匹配**——`min`/`max`/`integer` 只对数值生效，
+  `check_value_constraints` 对非数值类型在 `as_f64()` 处提前返回，声明在
+  `String`/`Bool`/`List` 上时永不执行（`Any` 不算：它的值可能恰好是数值，约束按值生效）。
+  与 `Unused`（用户多传了参数，无副作用）**必须区分**——混用会让两者都失去意义
+
+- **`ParamKind::Any`**：表达"已声明但未标注类型"——不做类型检查，但 `options` /
+  `required_if` / `default` 照常生效。存在的意义是让"只知道有这个参数、还不知道类型"的
+  迁移模板也能参与白名单与条件必选；若强行猜类型会让合法输入被误拒，若不生成规格则连
+  白名单都声明不了。**这是过渡态**，类型应从图纸/源变量库补齐
+
+- **条件必选参数**（`ParamSpec::required_if` + `IssueKind::ConditionalSkipped`）：互斥分支参数
+  （同一时刻只有一个分支可达）在静态变量提取下会被判为"全部必选"。实测 `undercut_fs.j2`
+  只做右侧槽的用户被要求再填一个左侧专用 Z 值，历史规避手段是 `| default(0)`——而那会
+  **静默产出 `Z0`**。现在把"哪个分支用到哪个参数"显式声明出来：
+  - 判定：控制参数生效取值（用户提供值 > 规格 `default`）命中触发值 → 必选；
+    未命中 → 可缺失，并报**提示级** `ConditionalSkipped`（与 `Missing` 严格区分——
+    混用会让"缺参"统计虚高）
+  - 不可判定（控制参数未提供且无规格默认值）→ **保守判必选**：分支可能被走到，
+    宁可多要一个参数，也不能放过缺失
+  - 已知边界：控制参数若靠模板内联 `| default(...)` 兜底，取值无法静态求得，同样落到保守判必选
+
+- **`ParamValue` 反序列化接受裸标量**：手写 YAML 里 `options: ["闭口", 8, 12.5]`、
+  `values: ["Right"]` 才是自然写法，强制带标签（`{type, value}`）会把配置文件变成机器码。
+  两种形式混用亦可；**序列化恒为带标签形式**（无歧义），且标签统一为小写
+  （`{type: integer, value: 8}`，与 `ParamKind` 一致），读取时大小写不敏感以兼容历史载荷。
+  带标签形式仍做**类型自洽校验**：`{type: integer, value: 8.5}` 报错而不是静默截断成 `8`
+
+- **文件模板的参数规格外部化**（`core/src/manifest.rs` + `cli/src/context.rs`）：目录模板此前
+  **恒为空规格**（`vec![]`），于是 `validate` 对 `Z_START=abc` 这类错误直接放行
+  （实测"校验通过：无问题"），`min`/`max`/`integer`/`options`/`required_if` 对用户模板全部失效——
+  模板头部写着的参数表只是注释。现在两份来源合成规格：
+  - **模板头部 `{# PARAMS: #}`** 解析为 `ParamSpec`（`name`/类型/必选性/描述）。
+    兼容两种现存写法：`name 必选 描述` 与 `name type required 描述`，可混用；
+    必选标记接受 `必选`/`可选`/`条件必选`/`required`/`optional` 及**分支限定词**
+    `可选(ES)`/`必选(FS)`（限定词保留到描述里）。类型可省（记为 `ParamKind::Any`）。
+    参数表另用 200 行为界（`NAME`/`DESCRIPTION` 仍限前 10 行）——机床模板十余个参数，
+    收尾 `#}` 会落到第 10 行之后
+  - **清单 `templates.yaml` 的 `params` 稀疏覆盖层**：补头部表达不了的**约束**
+    （`min`/`max`/`integer`/`options`/`required_if`/`default`）。`ParamOverride`
+    字段全为 `Option`，因此能区分"没写"与"写成默认值"，只覆盖写了的字段；
+    拼错字段名直接报错（`deny_unknown_fields`）
+  - 参数表里**无法解析的行会告警**（`warning: <模板>: 第 N 行无法解析…`）而非静默跳过——
+    静默丢一行等于静默少一条参数约束
+
+- **`ParamKind::Any`**：表达"已声明但未标注类型"——不做类型检查，但 `options` /
+  `required_if` / `default` 照常生效。存在的意义是让"只知道有这个参数、还不知道类型"的
+  迁移模板也能参与白名单与条件必选；若强行猜类型会让合法输入被误拒，若不生成规格则连
+  白名单都声明不了。**这是过渡态**，类型应从图纸/源变量库补齐
+
+- **条件必选参数**（`ParamSpec::required_if` + `IssueKind::ConditionalSkipped`）：互斥分支参数
+  （同一时刻只有一个分支可达）在静态变量提取下会被判为"全部必选"。实测 `undercut_fs.j2`
+  只做右侧槽的用户被要求再填一个左侧专用 Z 值，历史规避手段是 `| default(0)`——而那会
+  **静默产出 `Z0`**。现在把"哪个分支用到哪个参数"显式声明出来：
+  - 判定：控制参数生效取值（用户提供值 > 规格 `default`）命中触发值 → 必选；
+    未命中 → 可缺失，并报**提示级** `ConditionalSkipped`（与 `Missing` 严格区分——
+    混用会让"缺参"统计虚高）
+  - 不可判定（控制参数未提供且无规格默认值）→ **保守判必选**：分支可能被走到，
+    宁可多要一个参数，也不能放过缺失
+  - 已知边界：控制参数若靠模板内联 `| default(...)` 兜底，取值无法静态求得，同样落到保守判必选
+
+- **`ParamValue` 反序列化接受裸标量**：手写 YAML 里 `options: ["闭口", 8, 12.5]`、
+  `values: ["Right"]` 才是自然写法，强制带标签（`{type, value}`）会把配置文件变成机器码。
+  两种形式混用亦可；**序列化恒为带标签形式**（无歧义），且标签统一为小写
+  （`{type: integer, value: 8}`，与 `ParamKind` 一致），读取时大小写不敏感以兼容历史载荷。
+  带标签形式仍做**类型自洽校验**：`{type: integer, value: 8.5}` 报错而不是静默截断成 `8`
+
+- **模板清单与移植模板**：`templates/templates.yaml`；`turning/undercut.j2`（ES/FS 越程槽，
+  完整版）、`turning/undercut_es.j2` / `undercut_fs.j2`（单分支精简版）、
+  `turning/_undercut_common.j2`（公共起始段片段）、`grooving/circlip_groove.j2`（卡簧槽）、
+  `machines/index_g420/dg_cal_ir9.j2`（INDEX G420 的 R 参数表初始化段）
+
+- **模板整合方案文档**：`docs/TEMPLATE_INTEGRATION_PLAN.md` —— 对源项目 NCTool_V3 的
+  结构与配置分析、模板四类分级（原子子程序 / 通用参数化 / 计算密集 / 机床专有）、
+  可复用资产逐项判定（直接移植 / 改写后移植 / 不可移植）、五阶段落地路线、风险表；
+  §4.4 记录实施中实测发现的三个能力缺口
+
+### Fixed
+
+- **规格默认值的类型从不校验**（`core/src/validate.rs`）：`check_value_constraints` 对非数值类型
+  在 `as_f64()` 处提前返回，因此 `Number` 规格配 `String` 默认值会一路静默通过，
+  直到渲染时把字符串塞进 `nc_fixed` 才炸——而 ARCHITECTURE 文档声称会查类型。
+  现在类型不符报 `TypeMismatch`（且不再叠区间/白名单噪声）
+
+- **渲染错误丢失根因**（`src/error.rs`）：嵌套 `{% include %}` 失败时只报外层包装
+  `渲染错误: could not render include: error in "turning/_undercut_common.j2" (in turning/undercut_fs.j2:24)`，
+  既不知错在子模板哪一行、也不知错的是什么——实测完全无法定位。现在沿
+  `std::error::Error::source()` 链把各层描述以 ` ← ` 追加，末段即根本原因
+
+- **无 `detail` 的渲染错误不可诊断**：minijinja 对部分运行期错误（如对字符串取负）不设 `detail`，
+  消息退化成 `invalid operation (in uz_dj_x.j2:83)`。现在 `detail` 为空且错误发生在所传源码
+  对应模板时，用 `range()` 取出**出错表达式片段**补进消息
+  （实测 `invalid operation (in …:83)（出错表达式：-U_A）`）
+
+- **`render` 的校验失败输出自相矛盾**（`cli/src/commands/render.rs`）：整份报告被塞进
+  `CliError::message`，而统一错误输出只给**首行**加 `error: ` 前缀——多行报告的首行会被
+  当成错误摘要，提示行排在最前时更会输出 `error: 提示 …`。现在报告走 **stderr**
+  （stdout 留给 G-code），错误行只给一句"参数校验未通过（详见上方报告）"
+
+- **`{# PARAMS: #}` 的第三种标记写法未被识别**：`undercut.j2` 用 `可选(ES)`/`可选(FS)`
+  标注分支专用参数，此前会为每行刷一条解析告警（且每次 CLI 调用都打印）。
+
+- **模板清单与目录递归**（`core/src/manifest.rs` + `cli/src/context.rs`）：模板元数据
+  （名称 / 描述 / 可见性 / 输出文件名与后缀 / 分类 / 机床 / 评审状态）从 Rust 源码外部化到
+  `templates/templates.yaml`，新增模板只需放文件 + 加清单条目，**不必改代码重编译**。
+  目录模板改为**递归发现**（`templates/` 下任意深度的 `*.j2`），以相对路径为模板名
+  （如 `turning/undercut.j2`），支持分类子目录与机床方案包。元数据按
+  **清单 > 模板头部注释（`{# NAME: #}` 等）> 文件名/目录名**三级回退解析。
+  安全性：跳过隐藏项（`.` 开头）、清单文件自身、符号链接逃逸路径（`canonicalize` 后
+  必须仍在模板根内）
+
+- **模板可见性与机床方案包过滤**：`templates list` 新增 `--all`（含隐藏模板，以 `·` 标记）
+  与 `--machine <id>`（仅暴露该机床的专用模板）。`visible: false` 用于「完整可用但不出现在
+  选择列表」的模板（功能模块、机床初始化段）；机床专用模板须声明 `machine`，未选中该机床时不可见。
+  JSON 输出补齐 `visible` / `output_filename` / `output_extension` / `machine` / `status` / `source`
+
+- **列表参数类型**（`ParamValue::List` + `ParamKind::List`）：批量工序模板（如遍历
+  `z_offsets` 的卡簧槽）需要列表入参，此前只有数值/字符串/布尔四种类型无法表达。
+  `--params-file` 的 JSON 数组递归解析（支持嵌套），`ParamKind::List` 只校验"是不是列表"、
+  不校验元素类型（元素约定由模板自身表达，避免静态声明与模板漂移）。对象类型仍被拒绝
+  （`ParamValue` 是扁平值模型），需要结构时建模为平行列表
+
+- **枚举参数与候选项白名单**（`ParamKind::Choice` + `ParamSpec.options` +
+  `IssueKind::NotInOptions`）：源项目变量库里的 `options` 白名单此前只能写在模板注释中，
+  非法工艺选项（`U_FX` 闭口/左开口/右开口、`U_Q` 0/8/10/12.5、`tip_model` B4/DM24）
+  会一路渲染成与图纸不符的 G-code。现在在校验阶段硬拦：
+  - `ParamSpec::options: Option<Vec<ParamValue>>` + `with_options()` builder，
+    `None`/空列表 = 不约束，**旧 YAML/JSON 规格无需改动**（`skip_serializing_if` 保证
+    未声明时不写出该字段）
+  - 白名单对**所有类型**生效而不只 `Choice`：`Number + options` 表达数值枚举，
+    `String + options` 表达文本枚举
+  - `ParamKind::Choice` 的**类型匹配有意放宽为"任意标量"**——真正的约束是白名单而非类型，
+    否则数值枚举（`0 / 8 / 10 / 12.5`）会先被类型检查挡掉、永远走不到白名单比较。
+    `List` 不在其列（列表不可能是扁平白名单的成员）
+  - 成员比较 `ParamValue::matches_option`：同变体同值；数值/整数**跨变体按数值相等**
+    （`Integer(8)` ≡ `Number(8.0)`，避免 CLI/JSON 把 `8` 解析成 `8.0` 造成假拒绝）；
+    文本 `"8"` 与数值 `8` 仍是**不同**候选项，不做隐式归一化
+  - 非法值报 `Error` 且**不降级、不替换为默认值或首个候选项**——静默改成默认值同样会产出
+    错误 G-code，违背"宁可渲染失败"的项目原则
+  - 白名单检查拆为独立的 `check_value_options()`，**排在区间/整数检查之前**：
+    `check_value_constraints()` 对非数值类型在 `as_f64()` 处提前返回，字符串枚举
+    （白名单的主要用途）若塞进去等于永不执行
+  - 规格默认值同样过白名单（写错的 `default` 会在渲染前被静默注入，用户提供的合法值反而
+    用不上）；类型不匹配时不再叠报白名单错误，避免同一参数刷出噪声
+  - `options_display()` 提供候选值的统一可读渲染，保证"报错里列出的候选值"与
+    "实际参与比较的候选值"是同一份数据
+  - HTTP API 的 `spec_json` 输出 `options` 字段，供前端渲染下拉选择
+
+- **角度制三角函数过滤器**：`sin_d` / `cos_d` / `tan_d` / `asin_d` / `acos_d` / `atan_d`
+  （`_d` = degrees）。裸 `sin`/`cos`/`tan` 保持**弧度制**（与 Rust 标准库一致）。
+  动机是「度/弧度静默错坐标」风险：`sin(30)` = -0.988（把 30° 当 30 弧度）而
+  `sin_d(30)` = 0.5，错误坐标会直接写进 G-code 导致撞刀。迁移 Python/Jinja2 模板时尤其危险
+  ——源项目常把 `math.sin(math.radians(x))` 暴露为 `sin`（度制），与本库的 `sin` 同名不同义
+
+- **`nc_signed(N)` 过滤器**：强制正号 + 固定小数位，`21.0` → `+21.000`、`-4.5` → `-4.500`、
+  `0.0` → `+0.000`。对应源项目 Jinja2 的 `fmt_coord`（`f"{v:+.3f}"`），用于**增量坐标/
+  旋转量**——部分控制器要求显式正号，省略号会被误判为绝对值。`-0.0` 归一到 `+0.000`
+  （控制器对负零处理不一致）。不要用它格式化直径/进给等本无符号语义的值
+
+- **`TemplateRegistry::extract_params(name)`**：提取模板的完整参数闭包（穿透
+  `{% include %}` / `{% extends %}`）并剔除系统注入变量（`machine`）。
+  此前该逻辑是私有方法、仅服务 `validate`，`inspect` 因此只能看到主模板自身的变量
+
+### Changed
+
+- **INDEX G420 机床方案包全部就位**：源项目 `templates/INDEX G420/` 的 **19 个模板**
+  （约 2800 行）全部移植到 `templates/machines/index_g420/`，文件名统一小写化，
+  并在 `templates.yaml` 中声明 `machine: index_g420` / `output_extension` / `status: unreviewed`。
+  含 6 个主程序（`.MPF`）、1 个 R 参数初始化、1 个键槽倒角、4 个精铣、7 个粗铣（`.SPF`）。
+  移植手法与验证见 `docs/TEMPLATE_INTEGRATION_PLAN.md` §5.5
+
+- **`inspect` 穿透 `{% include %}`**：原先只列主模板自身的变量，组合模板的参数表会**漏项**
+  （拆分越程槽后实测只显示 6 个参数，而实际需要 11 个），用户按表填参会直到渲染才报错。
+  现改用 `extract_params`，并在输出末尾提示引用了哪些片段、行列号指向片段文件自身
+- **`templates` 目录结构**：按类型分子目录（`general/` `milling/` `turning/` `grooving/`
+  `machines/<id>/`），`demo_gcode.j2` 移至 `turning/`
+- **文档同步**：`docs/TEMPLATE_WRITING_GUIDE.md` 过滤器章节重写（新增 §3.1 `nc_signed`
+  使用边界、§4「角度制 vs 弧度制」、§4.1「字典查表用下标不用 `.get()`」）；
+  README / 模板写作指南 / 机床配置指南中的示例模板路径同步为新结构
+
+### Fixed
+
+- **`{% set x = x | default(v) %}` 被判为「必选参数缺失」**（`src/extract.rs`）：
+  静态提取器把「模板局部变量的引用」也记进了必选集合，于是紧随其后的
+  `{{ x }}`（读的是上一行 set 出的局部量）把已判定的「可选」整体翻回「必选」。
+  源项目大量使用这一兜底惯用法，不修则机床模板无法渲染。现只有**外部参数引用**
+  参与必选判定；`{% set total = total + x %}` 这类 RHS 自引用仍正确判为必选
+  （`Stmt::Set` 的 RHS 先于目标声明求值）
+- **模板头部注释不认空白控制标记**（`core/src/manifest.rs`）：`{# NAME: xxx -#}`
+  的显示名会带上尾随 `-`（`templates list` 里肉眼可见）。现取值前剥离 `#}` 前的 `-`
+
+- **`turning/undercut.j2` 互斥分支参数报"必选缺失"**：静态变量提取器不看分支条件的
+  运行期取值，把 ES 与 FS 两个互斥分支引用的变量全部视为必选——用户只做 ES 型却被迫
+  填 4 个 FS 专用参数。解决方案为**拆分模板**（`undercut_es.j2` / `undercut_fs.j2`
+  各只含单一分支，公共段 `include` 抽取），完整版 `undercut.j2` 保留供批量场景。
+  验证：拆分版在 Right/Left 共 4 种组合下输出 G-code 与完整版**逐字节一致**。
+  未采用 `| default(0)` 兜底方案——那会静默产出 `Z0` 错误坐标，与本项目
+  「宁可渲染失败也不静默出错」的红线相悖
+- **`templates list` / `inspect` 的示例模板路径**：`demo_gcode.j2` 移动后
+  E2E 测试与文档中的旧路径一并更新
+
+### 新增的测试
+
+- 模板清单解析（两种 YAML 形式、默认值、未知字段拒绝、反斜杠规范化、头部注释提取、
+  三级回退优先级、目录→分类推断）16 项
+- 头部注释空白控制容忍 2 项（带 `-#}` / 不带 `-#}`）
+- 自赋值兜底的可选性 2 项（`{% set x = x|default(v) %}` 保持可选；
+  无兜底的 `{% set x = x + 1 %}` 仍为必选）
+- 角度制三角函数 4 项（含「度制与弧度制结果必须可区分」的撞刀回归守护）
+- `nc_signed` 5 项（正号/负号/零、负零归一、与 `nc_fixed` 仅差正号、NaN 拒绝、小数位上限）
+- `extract_params` 4 项（穿透 include、剔除系统变量、未找到报错、环引用不栈溢出）
+- 列表参数解析 2 项（数组→列表、嵌套数组的错误定位）
+- **Web UI v2 落地实现**（`ui/index.html` + `cli/ui/index.html`，两份字节一致）：按
+  [docs/UI_DESIGN_PROPOSAL.html](docs/UI_DESIGN_PROPOSAL.html) 重构界面 ——
+  结果区动作条（复制 / 下载并入结果区，紧邻其作用对象）、机床 chip 移入结果区头部并带
+  「已按 &lt;id&gt; 重新生成」反馈、参数区必填进度与分组、**字段级就地校验**、
+  可选参数折叠、模板卡挂载命名预设 chips、侧栏「最近使用」、长程序**工序索引**（≥40 行，
+  可点击跳转高亮）、结果区状态 pill（可点击跳到校验列表）、命令面板（⌘/Ctrl+K）、
+  ⌘/Ctrl+⏎ 立即生成、⌘/Ctrl+S 存为预设、&lt;768px「模板 / 参数 / 结果」分段视图、
+  模态改为右侧抽屉（保留上下文）。设计令牌补齐：亮色升级为对等主题、`--text-dim` /
+  `--text-faint` 提亮以达正文对比度 ≥ 4.5:1、字号/间距/圆角/动效统一
+- **`output/ui-v2-acceptance.py`**：无头 Chrome 验收套件（67 项断言），覆盖全链路、
+  就地校验、输出选项、工序索引、机床切换、主题、最近使用、命令面板、抽屉、分段视图
+- **`docs/UI_ACCEPTANCE_CHECKLIST.md` §10**：v2 走查记录（演示模式 67/67、服务模式 14/14、
+  D-04 逐字节一致 2/2）与新增验收项 N-01…N-12
+
+### Changed（Web UI v2）
+
+- **Web UI 模式自动判定**：`API.mode` 由硬编码 `"server"` 改为按协议判定 ——
+  `file://` 打开走演示模式（离线完整可用；此前双击本地文件会因 fetch 失败显示空列表），
+  `http(s)://` 走服务模式。`nctool ui` 的行为不变
+- **错误信息主次分层**：后端技术口径（如「必选参数缺失（模板引用且无默认值兜底…）（第 1 行第 24 列引用）」）
+  的主信息改为可照做的说法（「必填，未填写」），模板行列定位降为次级信息，
+  完整原文保留在 `title` 中 —— 信息不丢、主次分明
+- **localStorage 访问加保护**：`file://` 与隐私模式下持久化失败不再中断界面初始化
+- **E2E 契约断言同步**（`cli/tests/cli.rs::ui_http_contracts_and_frontend_mode`）：
+  原先断言页面含硬编码 `mode: "server"`，改为断言按协议判定的两条分支
+  （`location.protocol === "file:"` → `? "demo" : "server"`），语义等价且覆盖新行为
+
+### Added（文档与工程化）
+
 - **README 安装章节**：新增环境要求（Rust 1.82+、三平台）与三种安装方式——GitHub Release
   预编译二进制（含三平台产物名）、`cargo install --path cli --locked`、作为库引入
   （`nctool-tpl` / `nctool-core`，另附 git 依赖写法）；新增安装验证步骤与顶部目录导航
@@ -28,6 +348,72 @@
   文档同步 / 工艺安全核对项）
 - **文档自检脚本**：`scripts/check_docs_links.py` —— 校验 Markdown 相对链接与 heading 锚点
   是否存在（README、`docs/` 全部文档已通过检查）
+- **Web UI 设计方案 v2**（设计交付物，未改动任何代码）：`docs/UI_DESIGN_PROPOSAL.html` ——
+  基于现有 `ui/index.html` 通读的 9 项现状诊断、信息架构（模态降级为侧抽屉、机床 chip 移至结果区
+  头部、下载/复制并入结果区动作条）、设计系统（亮色对等主题与对比度修正、字号/间距/动效令牌）、
+  四档响应式断点、组件规格、状态矩阵与键盘映射、可访问性目标、37 项既有验收的保留映射
+  + 12 项新增验收建议、P0–P3 分阶段实施路径
+- **高保真可交互原型**：`output/ui-prototype-v2.html`（单文件零依赖，可直接双击打开）——
+  已实现就地校验、必填进度、预设回填、机床 chip 联动、工序索引跳转、命令面板 ⌘K、
+  亮/暗主题、移动端分段视图；配套 `output/proto-smoke-check.py`（无头 Chrome 冒烟测试，
+  51 项断言全过）与桌面/移动端截图
+
+---
+
+### 性能与质量门禁（架构评估 P0 项）
+
+架构评估（`docs/ARCHITECTURE_REVIEW.md`）标出的三项 P0 已修复。
+共同点是"同一份工作被反复重做"：注册表每次请求重建、模板每次校验重复解析、
+覆盖率门禁形同虚设。
+
+#### Performance
+
+- **模板注册表按目录指纹缓存**（`cli/src/context.rs`）：`build_registry` 此前
+  每个 HTTP 请求都执行一遍「canonicalize → 读 `templates.yaml` → 读
+  `variables.yaml` → 递归遍历目录 → `read_to_string` 全部模板 → 逐模板解析
+  `{# PARAMS: #}` 头部」，成本与模板数成正比。改为按
+  「模板目录 + 目录树最新 mtime」缓存并共享（`Rc`）。
+  **指纹不可省**：无条件长期缓存会让用户改完模板仍拿到旧注册表，
+  渲染出与图纸不符的 G-code——属于本项目零容忍的"静默产出错误程序"。
+  指纹取不到（IO 异常）时放弃缓存，宁可重算。
+  需要可变注册表的调用方走新增的 `build_registry_fresh`（`render` 注册临时
+  文件模板的路径），避免临时模板泄漏进共享缓存。
+
+- **模板静态分析只做一次**（`core/src/registry.rs`）：新增
+  `TemplateEntry::analysis()`，惰性缓存「未声明变量 + 模板引用」。
+  此前 `extract_params` 解析一次、`validate` 又解析一次（`validate_template`
+  内部还会再解析），`include` 闭包里的每个子模板同样重复解析。
+  现改为共用一份缓存，`Ast` 借用源码无法自引用存入条目，故缓存的是解析产物。
+  `collect_include_closure` 相应改为接收条目而非 AST。
+  配套：`TplError` 加 `Clone`（缓存失败态需要留存带行列定位的原始错误）。
+
+- **宽松渲染器惰性构建**（`core/src/registry.rs`）：`render_template_lenient`
+  此前**每次调用**都新建 `Renderer` 并把全部模板重新注册、重新编译一遍
+  （宽松是建环境时的标志，无法在同一渲染器上切换）。改为惰性构建一次并缓存，
+  注册新模板时失效；构建失败原因一并缓存，返回语义不变。
+
+#### Fixed
+
+- **覆盖率门禁恢复为真门禁**（`.github/workflows/ci.yml`）：`coverage` job 的
+  `continue-on-error: true` 已移除。该 job 自引入起持续失败，而失败被
+  `continue-on-error` 掩盖成"非阻断项"，结果是**覆盖率从未被真正度量**——
+  CI 全绿并不代表覆盖达标。改用 `cargo install cargo-llvm-cov --locked`
+  替代第三方 `install-action`（原实现疑似与其装的二进制不兼容），
+  并把覆盖率数字打进 job summary（没有数字的门禁等于没有门禁，
+  后续设阈值也需要先有真实基线）。
+
+#### 新增的测试
+
+- `registry_is_reused_while_directory_is_unchanged`：目录未变必须复用同一份
+  注册表（`Rc::ptr_eq`）。
+- `registry_is_rebuilt_after_template_edit` / `registry_is_rebuilt_when_template_added`：
+  改内容、加文件都必须重建，且新内容真正生效（用旧注册表会渲染出错误的 G-code）。
+- `fresh_registry_does_not_pollute_shared_cache`：`build_registry_fresh` 注册的
+  临时模板不得泄漏进共享缓存。
+- `analysis_is_computed_once_and_matches_direct_extraction`：缓存结论必须与
+  直接 `parse` + `extract_undeclared` 逐项一致，且重复取用命中同一份。
+- `lenient_renderer_cache_sees_templates_registered_later`：宽松渲染器缓存
+  必须随模板注册失效，否则新模板在宽松模式下报 `TemplateNotFound`。
 
 ---
 

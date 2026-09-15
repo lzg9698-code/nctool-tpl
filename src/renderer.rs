@@ -8,7 +8,9 @@ use std::path::Path;
 use minijinja::Environment;
 
 use crate::error::{from_minijinja_error, TplError};
-use crate::filters::{checked_math, filter_nc_fixed, filter_nc_pad, filter_nc_strip};
+use crate::filters::{
+    checked_math, filter_nc_fixed, filter_nc_pad, filter_nc_signed, filter_nc_strip,
+};
 
 // 渲染器：minijinja Environment + 数学过滤器集
 // ---------------------------------------------------------------------------
@@ -18,10 +20,31 @@ use crate::filters::{checked_math, filter_nc_fixed, filter_nc_pad, filter_nc_str
 /// 数学过滤器集（全部基于 Rust 标准库 `f64`，零额外依赖）：
 /// `sin` `cos` `tan` `asin` `acos` `atan` `sqrt` `exp` `ln` `log10` `pow` `floor` `ceil`
 ///
+/// **角度制三角函数**（工艺图纸按度输入，见下）：
+/// - `sin_d(D)` `cos_d(D)` `tan_d(D)`：以**度**为输入
+/// - `asin_d(x)` `acos_d(x)` `atan_d(x)`：以**度**为输出
+///
 /// NC 数值格式化过滤器（G-code 专用）：
 /// - `nc_fixed(N)`：固定小数位，`{{ x | nc_fixed(3) }}` → `21.000`
+/// - `nc_signed(N)`：强制正号 + 固定小数位，`{{ x | nc_signed(3) }}` → `+21.000`
+///   （负数为 `-4.500`）。用于**增量坐标/旋转量**——部分控制器要求显式正号，
+///   省略号会被误判为绝对值。对应源项目 Jinja2 的 `fmt_coord`
 /// - `nc_strip`：去尾零，`{{ x | nc_strip }}` → `21`（输入 21.0）
 /// - `nc_pad(N)`：前导零填充，`{{ n | nc_pad(4) }}` → `0001`（程序号/行号用）
+///
+/// # 角度制 vs 弧度制（重要）
+///
+/// `sin`/`cos`/`tan` 等**不带 `_d` 后缀**的过滤器一律按**弧度**计算（与 Rust 标准库一致）。
+/// 工艺图纸上的角度是**度**，直接写 `x | sin` 会得到错误的坐标——且是**静默**的错误
+/// （`sin(30°) = 0.5`，而 `sin(30 rad) ≈ -0.988`），错误的坐标会写进 G-code 导致撞刀。
+///
+/// 迁移自 Python/Jinja2 的模板尤其危险：Python 侧常写成 `math.sin(math.radians(x))`
+/// 并暴露为 `sin`，也就是**那个 `sin` 是度制**，而本 crate 的 `sin` 是弧度制。
+/// 迁移时必须二选一：
+/// - 写成 `x | sin_d`（推荐，意图明确）
+/// - 或显式换算 `(x * pi / 180) | sin`
+///
+/// 因此**新模板一律用 `_d` 后缀**；裸 `sin`/`cos`/`tan` 只应在确认输入本就是弧度时使用。
 ///
 /// 所有数学过滤器和 NC 过滤器对结果做**有限性校验**：一旦产生 `NaN`/`Inf`（如 `sqrt(-1)`、
 /// `asin(2)`、`ln(0)`），渲染立即失败并报 [`TplError::Render`]，避免非法坐标静默写入 G-code。
@@ -63,8 +86,30 @@ impl Renderer {
         env.add_filter("pow", |v: f64, e: f64| checked_math(v.powf(e), "pow"));
         env.add_filter("floor", |v: f64| checked_math(v.floor(), "floor"));
         env.add_filter("ceil", |v: f64| checked_math(v.ceil(), "ceil"));
+        // 角度制三角函数（工艺图纸按度输入）：`_d` 后缀 = degrees。
+        // 见上方「角度制 vs 弧度制」——新模板一律用这组，避免静默错坐标。
+        env.add_filter("sin_d", |v: f64| {
+            checked_math(v.to_radians().sin(), "sin_d")
+        });
+        env.add_filter("cos_d", |v: f64| {
+            checked_math(v.to_radians().cos(), "cos_d")
+        });
+        env.add_filter("tan_d", |v: f64| {
+            checked_math(v.to_radians().tan(), "tan_d")
+        });
+        // 反三角以度输出（`asin_d(0.5)` → `30`）
+        env.add_filter("asin_d", |v: f64| {
+            checked_math(v.asin().to_degrees(), "asin_d")
+        });
+        env.add_filter("acos_d", |v: f64| {
+            checked_math(v.acos().to_degrees(), "acos_d")
+        });
+        env.add_filter("atan_d", |v: f64| {
+            checked_math(v.atan().to_degrees(), "atan_d")
+        });
         // NC 数值格式化过滤器（G-code 专用）
         env.add_filter("nc_fixed", filter_nc_fixed);
+        env.add_filter("nc_signed", filter_nc_signed);
         env.add_filter("nc_strip", filter_nc_strip);
         env.add_filter("nc_pad", filter_nc_pad);
         Self {

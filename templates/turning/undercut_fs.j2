@@ -1,0 +1,36 @@
+{# NAME: 越程槽加工（FS 型） #}
+{# DESCRIPTION: FS 型越程槽（W2196 风格），支持左右侧镜像。不含 ES 专用参数 #}
+{# PARAMS:
+     side            string  required  加工侧面 ("Right" 或 "Left")
+     STD_KEY         string  required  标准刀具键值 (如 "W2196-E 0,2 x 0,1")
+     X_START         number  required  起始 X 坐标 (mm) = 毛坯直径 + 2 * 安全距离
+     R               number  required  圆角半径 (mm)
+     Z_START         number  required  起始 Z 坐标 (mm)
+     D1_CUT          number  required  D1 切割值 (mm)
+     ANG_1           number  required  第一角度 (°)
+     D1_COMP_START   number  required  D1 补偿起始值 (mm)
+     Z_MID           number  required  中间 Z 坐标 (mm)
+     FS_Z_PLUS1      number  条件必选  FS Z+1 坐标 (mm)，仅 side="Right" 时必选
+     FS_Z_MINUS1     number  条件必选  FS Z-1 坐标 (mm)，仅 side="Left" 时必选
+     ANG_2           number  required  第二角度 (°)
+   #}
+{# 说明：本模板只做变量替换与格式化，所有中间量（Z_START / D1_CUT / ANG_1 等）
+   由调用方预计算后注入。计算规则见 docs/TEMPLATE_INTEGRATION_PLAN.md §3.3。
+
+   与 undercut.j2 的区别：本模板**只含 FS 分支**，因此不需要 ES 专用参数。
+
+   FS_Z_PLUS1 / FS_Z_MINUS1 是互斥分支参数（同一时刻只有一个分支可达）。
+   静态变量提取会把两者都判为必选，故在 templates.yaml 的 params 覆盖层里
+   用 required_if 声明了各自的触发条件（side=Right / side=Left）——
+   见 docs/TEMPLATE_INTEGRATION_PLAN.md §4.4 缺口二。
+   **不要**改用 `| default(0)` 规避：兜底值会静默产出 Z0 这类错误坐标。 #}
+{% include "turning/_undercut_common.j2" %}
+G1 Z{{ Z_MID | nc_fixed(3) }} RND={{ R | nc_fixed(1) }}
+{# 收尾 Z 随侧面镜像：右侧用 Z+1，左侧用 Z-1 #}
+{% if side == "Right" %}
+G1 Z{{ FS_Z_PLUS1 | nc_fixed(3) }} ANG={{ ANG_2 | nc_fixed(0) }}
+{% else %}
+G1 Z{{ FS_Z_MINUS1 | nc_fixed(3) }} ANG={{ ANG_2 | nc_fixed(0) }}
+{% endif %}
+G0 G40 X{{ X_START | nc_fixed(3) }}
+; --------------------------------------

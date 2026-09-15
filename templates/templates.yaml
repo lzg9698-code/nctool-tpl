@@ -1,0 +1,226 @@
+# 模板清单（templates.yaml）
+#
+# 本文件是模板的**声明式元数据**来源，把分类/描述/可见性/输出设置从
+# Rust 源码外部化——新增模板只需放文件 + 加清单条目，不必改代码重编译。
+#
+# 元数据解析优先级（高 → 低）：
+#   1. 本清单（显式声明）
+#   2. 模板头部注释 `{# NAME: xx #}` / `{# DESCRIPTION: xx #}`
+#   3. 文件名 / 目录默认值
+#
+# 因此本清单只需描述「与默认值不同」的部分：
+#   - 分类：默认按所在目录推断（turning/ → 车削，milling/ → 铣削，
+#     drilling/ → 钻孔，grooving/ → 切槽，machines/ → 机床，
+#     general/ → 通用，其余未识别目录 → 通用）
+#   - visible：默认 true
+#   - output_extension：默认 ".NC"
+#
+# 键为「相对 templates/ 的路径」，使用 / 分隔（反斜杠会被自动规范化）。
+#
+# 隐藏模板的两种语义（都靠 visible: false 实现，但含义不同）：
+#   - 完整可用、只是不出现在选择列表（如功能模块模板、机床初始化段）
+#   - **下划线前缀命名的内部片段**：不完整、不可单独渲染，仅供 include
+#     （如 turning/_undercut_common.j2）
+
+templates:
+  # ── 车削 ───────────────────────────────────────────────
+  "turning/demo_gcode.j2":
+    name: "演示模板（越程槽风格）"
+    description: "展示变量提取 + 数学过滤器 + set/for 循环的最小示例"
+
+  "turning/undercut.j2":
+    name: "越程槽加工（ES+FS 完整版）"
+    description: "ES/FS 型越程槽，支持左右侧镜像与 DIN509/W2196 标准刀具"
+    status: unreviewed # 迁移自 NCTool_V3，未经工艺评审
+
+  # 拆分版：只含单一分支，因此参数表干净（不含另一类型的专用参数）。
+  # 见 docs/TEMPLATE_INTEGRATION_PLAN.md §4.4 缺口二。
+  "turning/undercut_es.j2":
+    name: "越程槽加工（ES 型）"
+    description: "ES 型越程槽（DIN509 风格），左右镜像；不含 FS 专用参数"
+    status: unreviewed
+
+  "turning/undercut_fs.j2":
+    name: "越程槽加工（FS 型）"
+    description: "FS 型越程槽（W2196 风格），左右镜像；不含 ES 专用参数"
+    status: unreviewed
+    # 条件必选：FS_Z_PLUS1 只被 side=Right 的分支引用，FS_Z_MINUS1 只被 Left 引用，
+    # 但静态变量提取不看运行期分支，会把两者都判为必选——只做右侧槽的用户因此被
+    # 要求再填一个左侧专用 Z 值（见 docs/TEMPLATE_INTEGRATION_PLAN.md §4.4 缺口二）。
+    # 此前只能靠 `| default(0)` 规避，而那会静默产出 Z0；这里显式声明互斥关系。
+    # 头部 `{# PARAMS: #}` 表达不了 required_if，故写在清单覆盖层里。
+    params:
+      - name: FS_Z_PLUS1
+        required_if: { param: side, values: ["Right"] }
+      - name: FS_Z_MINUS1
+        required_if: { param: side, values: ["Left"] }
+
+  # 内部片段（以下划线开头）：供其它模板 include，不作为独立模板暴露。
+  # 与 visible: false 的区别：这是「不完整、不可单独渲染」的片段，
+  # 而 visible: false 是「完整可用但不出现在选择列表」（如功能模块模板）。
+  "turning/_undercut_common.j2":
+    name: "越程槽公共起始段（内部片段）"
+    description: "ES/FS 型越程槽共用的起始定位与 D1 切入段"
+    visible: false
+    status: unreviewed
+
+  # ── 切槽 ───────────────────────────────────────────────
+  "grooving/circlip_groove.j2":
+    name: "卡簧槽加工"
+    description: "按 Z 位置批量输出卡簧槽 DB_CYCLE93 循环调用"
+    # 功能模块专用：程序可 include 调用，但不出现在用户选择列表中
+    visible: false
+    status: unreviewed
+
+  # ── 机床方案包：INDEX G420 ─────────────────────────────
+  # 机床专用模板必须声明 machine，且仅在该机床被选中时暴露。
+  # 详见 docs/TEMPLATE_INTEGRATION_PLAN.md §3.5 / §6.3 阶段 5。
+  "machines/index_g420/dg_cal_ir9.j2":
+    name: "R 参数表初始化（DG_CAL_IR9.SPF）"
+    description: "按毛坯尺寸与尾座顶尖型号生成 INDEX G420 的 R 参数单号程序"
+    output_filename: "DG_CAL_IR9"
+    output_extension: ".SPF"
+    machine: index_g420
+    status: unreviewed
+    # 机床初始化段：由其他机床程序调用，不单独出现在通用选择列表中
+    visible: false
+
+  "machines/index_g420/1_0.mpf_a.j2":
+    name: "主程序 1_0（A 方案）"
+    output_filename: "1_0"
+    output_extension: ".MPF"
+    machine: index_g420
+    status: unreviewed
+
+  "machines/index_g420/1_0.mpf_b.j2":
+    name: "主程序 1_0（B 方案）"
+    output_filename: "1_0"
+    output_extension: ".MPF"
+    machine: index_g420
+    status: unreviewed
+
+  "machines/index_g420/2_0.mpf_a.j2":
+    name: "主程序 2_0（A 方案）"
+    output_filename: "2_0"
+    output_extension: ".MPF"
+    machine: index_g420
+    status: unreviewed
+
+  "machines/index_g420/2_0.mpf_b.j2":
+    name: "主程序 2_0（B 方案）"
+    output_filename: "2_0"
+    output_extension: ".MPF"
+    machine: index_g420
+    status: unreviewed
+
+  "machines/index_g420/3_0.mpf_a.j2":
+    name: "主程序 3_0（A 方案）"
+    output_filename: "3_0"
+    output_extension: ".MPF"
+    machine: index_g420
+    status: unreviewed
+
+  "machines/index_g420/3_0.mpf_b.j2":
+    name: "主程序 3_0（B 方案）"
+    output_filename: "3_0"
+    output_extension: ".MPF"
+    machine: index_g420
+    status: unreviewed
+
+  "machines/index_g420/uz_dj_x.j2":
+    name: "键槽倒角子程序"
+    output_filename: "UZ_DJ_X"
+    output_extension: ".SPF"
+    machine: index_g420
+    status: unreviewed
+    # 参数约束（清单覆盖层：补头部 `{# PARAMS: #}` 表达不了的字段）。
+    # 这两个参数是真正的「有限集合」，且填错会产出**跑得通但几何错误**的 G-code：
+    #   - U_FX 的分支链是 `if 左开口 / elif 右开口 / else`，拼错的值会落进 else，
+    #     后续 `{% if U_FX == "闭口" %}` 又为假 → 静默走错几何分支；
+    #   - U_Q 参与 `{% if U_Q == 0 %}` 的圆弧/直线分支，若以字符串 "0" 传入，
+    #     比较为假 → 同样静默走错分支（故声明为 number 而非 any）。
+    # 候选值取自源项目 configs/variable_repo.json（U_FX/U_Q 的 options）。
+    params:
+      - name: U_FX
+        kind: choice
+        options: ["闭口", "左开口", "右开口"]
+      - name: U_Q
+        kind: number
+        options: [0, 8, 10, 12.5]
+
+  "machines/index_g420/uz_fkm_temp1.j2":
+    name: "精铣：闭口非圆头键槽"
+    output_filename: "UZ_FKM_temp1"
+    output_extension: ".SPF"
+    machine: index_g420
+    status: unreviewed
+
+  "machines/index_g420/uz_fkm_temp2.j2":
+    name: "精铣：右开口非圆头键槽"
+    output_filename: "UZ_FKM_temp2"
+    output_extension: ".SPF"
+    machine: index_g420
+    status: unreviewed
+
+  "machines/index_g420/uz_fkm_temp3.j2":
+    name: "精铣：闭口圆头键槽"
+    output_filename: "UZ_FKM_temp3"
+    output_extension: ".SPF"
+    machine: index_g420
+    status: unreviewed
+
+  "machines/index_g420/uz_fkm_temp4.j2":
+    name: "精铣：左开口非圆头键槽"
+    output_filename: "UZ_FKM_temp4"
+    output_extension: ".SPF"
+    machine: index_g420
+    status: unreviewed
+
+  "machines/index_g420/uz_rkm_temp1.j2":
+    name: "粗铣：闭口非圆头 1/2/="
+    output_filename: "UZ_RKM_temp1"
+    output_extension: ".SPF"
+    machine: index_g420
+    status: unreviewed
+
+  "machines/index_g420/uz_rkm_temp2.j2":
+    name: "粗铣：闭口非圆头 1/3/<"
+    output_filename: "UZ_RKM_temp2"
+    output_extension: ".SPF"
+    machine: index_g420
+    status: unreviewed
+
+  "machines/index_g420/uz_rkm_temp3.j2":
+    name: "粗铣：闭口非圆头 1/3/="
+    output_filename: "UZ_RKM_temp3"
+    output_extension: ".SPF"
+    machine: index_g420
+    status: unreviewed
+
+  "machines/index_g420/uz_rkm_temp4.j2":
+    name: "粗铣：闭口非圆头 2/3/<"
+    output_filename: "UZ_RKM_temp4"
+    output_extension: ".SPF"
+    machine: index_g420
+    status: unreviewed
+
+  "machines/index_g420/uz_rkm_temp5.j2":
+    name: "粗铣：右开口非圆头 1/2/="
+    output_filename: "UZ_RKM_temp5"
+    output_extension: ".SPF"
+    machine: index_g420
+    status: unreviewed
+
+  "machines/index_g420/uz_rkm_temp6.j2":
+    name: "粗铣：闭口圆头 1/2/<"
+    output_filename: "UZ_RKM_temp6"
+    output_extension: ".SPF"
+    machine: index_g420
+    status: unreviewed
+
+  "machines/index_g420/uz_rkm_temp7.j2":
+    name: "粗铣：左开口非圆头 1/2/="
+    output_filename: "UZ_RKM_temp7"
+    output_extension: ".SPF"
+    machine: index_g420
+    status: unreviewed

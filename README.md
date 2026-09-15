@@ -397,9 +397,18 @@ nctool --template-dir templates inspect chamfer.j2   # 或临时用全局参数�
 ### 例 5：Web UI / 库调用
 
 ```bash
-# 本地 Web UI（仅绑定回环地址）：模板浏览 + 参数表单 + 防抖预览 + 校验定位 + 下载
+# 本地 Web UI（仅绑定回环地址）：模板浏览 → 填参 → 实时预览 → 校验 → 导出
 nctool ui --host 127.0.0.1 --port 8787
 ```
+
+界面能力（v2 设计见 [docs/UI_DESIGN_PROPOSAL.html](docs/UI_DESIGN_PROPOSAL.html)）：
+必填进度与分组表单、**出错字段就地提示**（模板行列定位降为次级信息）、可选参数折叠、
+模板卡挂载命名预设、最近使用、长程序**工序索引**（≥40 行可点击跳转）、机床 chip 切换、
+输出选项（行号 / 头注释 / ASCII 清洗 / 删空行 / 宽松模式）、复制与下载、批量生成、亮暗主题。
+快捷键：`⌘/Ctrl+K` 命令面板、`⌘/Ctrl+⏎` 立即生成、`⌘/Ctrl+S` 存为预设、`Esc` 关闭面板/抽屉。
+
+> 单文件前端也可直接双击 `ui/index.html` 打开：`file://` 下自动进入**演示模式**，
+> 用内置模板库 + 迷你渲染器离线跑通全链路；经 `nctool ui` 访问则走服务模式调用真实后端。
 
 库调用见[快速开始](#快速开始)（解析 → 变量提取 → 渲染三段式），
 完整管线（校验 + 机床配置 + 后处理）见 [core/README.md](core/README.md)。
@@ -495,7 +504,7 @@ nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param fe
 ## 示例与测试
 
 ```bash
-# 运行可执行示例（解析 + 变量提取 + 渲染 templates/demo_gcode.j2）
+# 运行可执行示例（解析 + 变量提取 + 渲染 templates/turning/demo_gcode.j2）
 cargo run --example demo
 
 # 运行全部测试（单元 + 集成 + 文档）
@@ -581,6 +590,7 @@ cargo audit
 | [docs/TEMPLATE_WRITING_GUIDE.md](docs/TEMPLATE_WRITING_GUIDE.md) | **《模板编写指南》**：NC/数学过滤器、必选/可选判定、引用机床配置、多模板 include/extends、validate/render 校验分层、反模式与发布前清单 |
 | [docs/RELEASE.md](docs/RELEASE.md) | **迭代节奏约定**：版本号策略、发布节奏、提交流程、兼容性窗口、决策机制、Backlog 加权打分 |
 | [docs/UI_ACCEPTANCE_CHECKLIST.md](docs/UI_ACCEPTANCE_CHECKLIST.md) | **Web UI 手工验收清单**（37 项可勾选）：端到端全链路 / 移动端 ≤480px / 校验定位 / 前后端逐字节一致 / 机床切换 / 主题 |
+| [docs/UI_DESIGN_PROPOSAL.html](docs/UI_DESIGN_PROPOSAL.html) | **Web UI 设计方案 v2**（设计交付物）：现状诊断、信息架构、设计系统与令牌、四档响应式断点、组件规格、状态与键盘交互、可访问性、37 项既有验收映射 + 12 项新增验收、P0–P3 实施路径。配套高保真原型 `output/ui-prototype-v2.html` |
 | [docs/REAL_PART_WALKTHROUGH.md](docs/REAL_PART_WALKTHROUGH.md) | **真实零件场景走查**（E5）：简化法兰盘的「端面+4 孔+切断」多工序演示与多机床对比，暴露行号续编/错误聚合/参数继承的局限 |
 | [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) | **当前状态快照**：各阶段完成情况与测试计数 |
 | [docs/PROCESS_CHECKLIST.md](docs/PROCESS_CHECKLIST.md) | **工艺核对清单**（阶段 A1）：内置模板 × 机床预设逐行核对结论、发现项 F1–F5、外部工艺评审待办 |

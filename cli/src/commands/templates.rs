@@ -21,7 +21,22 @@ pub fn run(ctx: &Ctx, args: &TemplatesArgs) -> Result<(), CliError> {
 
 fn list(ctx: &Ctx, args: &TemplatesListArgs) -> Result<(), CliError> {
     let gen = ctx.build_registry()?;
-    let entries = gen.registry().list(args.category.map(CategoryArg::to_core));
+    // 默认只列可见模板；--machine 会额外放开该方案包内的模板，
+    // 但仍尊重 --all（未指定 --all 时方案包内的隐藏模板依然不显示）。
+    let entries = if args.machine.is_some() {
+        gen.registry().list_for_machine(
+            args.machine.as_deref(),
+            args.category.map(CategoryArg::to_core),
+            args.all,
+        )
+    } else if args.all {
+        gen.registry().list(args.category.map(CategoryArg::to_core))
+    } else {
+        gen.registry()
+            .list_visible(args.category.map(CategoryArg::to_core))
+    };
+
+    let hidden = entries.iter().filter(|e| !e.visible).count();
 
     // JSON 数据
     let data: Vec<serde_json::Value> = entries
@@ -31,19 +46,39 @@ fn list(ctx: &Ctx, args: &TemplatesListArgs) -> Result<(), CliError> {
                 "name": e.name,
                 "category": CategoryArg::from_core(e.category),
                 "description": e.description,
+                "visible": e.visible,
+                "output_filename": e.output_filename,
+                "output_extension": e.output_extension,
+                "machine": e.machine,
+                "status": e.status.map(|s| s.label()),
+                "source": match &e.source {
+                    nctool_core::TemplateSource::Builtin => "builtin".to_string(),
+                    nctool_core::TemplateSource::Memory => "memory".to_string(),
+                    nctool_core::TemplateSource::File(p) => p.display().to_string(),
+                },
             })
         })
         .collect();
 
     // 文本输出
-    let mut text = format!("模板列表（{} 个）\n", entries.len());
+    let mut text = format!("模板列表（{} 个", entries.len());
+    if hidden > 0 {
+        text.push_str(&format!("，其中隐藏 {hidden}"));
+    }
+    text.push_str("）\n");
     for e in &entries {
+        // 隐藏模板加标记，让 --all 场景下的输出自解释
+        let mark = if e.visible { "  " } else { "· " };
         text.push_str(&format!(
-            "{:<24} {:<6} {}\n",
+            "{mark}{:<32} {:<4} {:<5} {}\n",
             e.name,
             CategoryArg::from_core(e.category),
+            e.output_extension,
             e.description
         ));
+    }
+    if !args.all && hidden == 0 {
+        text.push_str("\n（隐藏模板未显示；用 --all 查看全部）\n");
     }
     ctx.style.print_ok(&text, data);
     Ok(())

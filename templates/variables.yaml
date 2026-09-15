@@ -1,0 +1,193 @@
+# 变量库（variables.yaml）
+#
+# 本文件是**按变量名**生效的全局参数规格：同一个变量名在多台机床/多个模板上
+# 含义一致时只写一次，避免在 12 个模板里重复声明 `U_Q` 的候选值。
+#
+# 来源：源项目 NCTool_V3 的 `configs/variable_repo.json`（62 个变量）。
+#
+# ── 三级优先级（高 → 低）────────────────────────────────────────
+#   1. `templates.yaml` 的 `params`（本模板的显式覆盖，最具体）
+#   2. **本文件**（全局按名定义）
+#   3. 模板头部 `{# PARAMS: #}`（模板局部声明）
+#
+# 合并是**按字段稀疏覆盖**：只写要改的字段，其余沿用下一级。
+#
+# ── 生效范围 ───────────────────────────────────────────────────
+# **只对"模板确实引用了"的变量生效**（头部声明的 + 源码里引用到的）。
+# 库里定义但没被任何模板引用的变量不会注入规格，因此不会触发
+# "规格声明了未引用参数"告警。
+#
+# ── 三条刻意的不导入（都是为了避免"静默产出错误 G-code"）──────
+#   1. **不导入 `default_value`**：源库默认值是**针对特定样件的预填值**
+#      （`U_A = 141.25` 是那根轴的有效长度）。规格默认值会让缺参**静默通过**
+#      （校验层把 `spec.default` 视为已提供），用户少填一个零件尺寸就会拿到
+#      另一根轴的加工程序。CNC 零件尺寸没有"合理默认值"。
+#   2. **不导入 `description`**：头部描述是写给**这个模板**的，更贴近上下文。
+#      源库描述以注释形式保留在下方。
+#   3. **`read_only` 变量只导入类型、不导入 `options`**：源库的 `read_only`
+#      意为"由机床设置/派生计算决定，用户不可编辑"，其 `options` 是**某一次
+#      装夹的取值快照**（如 `U_ANG: [20]`、`R1: [4000]`）。把它当作用户可选
+#      集合会禁掉合法的换刀/换料调整。真正由用户选择的变量（键槽宽度系列、
+#      槽宽系列、刀具号、开口方向、顶尖型号）才导入 `options`。
+#      `read_only` 的正式语义（派生计算）留给阶段 4 的 `core/src/derive/`。
+#
+# ── 怎么放宽约束 ───────────────────────────────────────────────
+# 某个模板需要库之外的取值时，在 `templates.yaml` 的该模板 `params` 下覆盖：
+#     params:
+#       - name: U_Q
+#         options: [0, 6, 8, 10, 12.5]
+# 覆盖是**本模板局部**的，不影响其它模板。
+
+variables:
+  # ══ 键槽几何（INDEX G420 键槽加工族）═════════════════════════
+  - name: U_A # 键槽有效长度 A (mm)  —— 不导入默认值 141.25
+    kind: number
+  - name: U_B # 键槽成活宽度 B (mm)：标准宽度系列，用户可选
+    kind: integer
+    options: [16, 18, 22, 25, 28, 32, 36, 40, 45, 50]
+  - name: U_C # 键槽成活深度 C (mm)
+    kind: number
+  - name: U_Q # 过渡圆角半径 Q (mm)[圆头键槽 U_Q=0]：标准系列，用户可选
+    kind: number
+    options: [0, 8, 10, 12.5]
+  - name: U_RC # 第一刀深度 RC (mm)
+    kind: number
+  - name: U_Z # 键槽有效长度右侧 Z 值 (mm)
+    kind: number
+  - name: U_D # 键槽所在外圆直径 D (mm)
+    kind: number
+
+  # ══ 键槽位置与开口方向 ═══════════════════════════════════════
+  - name: U_ID # 键槽位置：值形如 "[42]"，直接拼进 `I_R9{{ U_ID }}`
+    kind: string
+    options: ["[41]", "[42]", "[43]"]
+  - name: U_FX # 开口方向：分支链是 if 左开口 / elif 右开口 / else，
+    #            拼错的值会落进 else 且 `U_FX == "闭口"` 为假 → 跑得通但几何错误
+    kind: string
+    options: ["闭口", "左开口", "右开口"]
+
+  # ══ 刀具标识 ═════════════════════════════════════════════════
+  # 均为 `L171("{{ 刀号 }}")` 文本插值。纯数字刀号声明为 integer，
+  # 使 CLI 的 `--param U_FT=5010`（推断为数值）能命中候选项；
+  # 混有字母名称的用 any + 混合候选项（数值/文本各自按值语义比较）。
+  - name: U_CT # 倒角刀号（1631）
+    kind: integer
+    options: [1631]
+  - name: U_CTB # 倒角后备刀：数字刀号与刀具名混用
+    kind: any
+    options: [1631, "DECKEL"]
+  - name: U_FT # 精铣刀号
+    kind: integer
+    options: [5010, 5012, 5008]
+  - name: U_FTB # 精铣后备刀
+    kind: integer
+    options: [5010, 5012, 1631]
+  - name: U_RT # 粗铣刀具名称
+    kind: string
+    options: ["CT1017", "CT1021"]
+  - name: U_RTB # 粗铣后备刀：字母名与数字刀号混用
+    kind: any
+    options: ["CT1017", "CT1021", 5010, 5012]
+  - name: U_FIRST_MILLING_T # 第一把铣键槽铣刀
+    kind: string
+    options: ["CT1017", "CT1021"]
+
+  # ══ 切削参数（read_only：只导入类型，不导入取值快照）══════════
+  - name: U_ANG # 粗铣入刀角度 (°)
+    kind: integer
+  - name: U_RTD # 粗铣刀具直径 (mm)
+    kind: integer
+  - name: U_RTRPM # 粗铣刀转速 (RPM)
+    kind: integer
+  - name: U_RTRF # 粗铣进给速度 (mm/min)
+    kind: integer
+  - name: U_RTFF # 半精铣进给速度 (mm/min)
+    kind: integer
+  - name: U_FTRPM # 精铣刀转速 (RPM)
+    kind: integer
+  - name: U_FTF # 精铣进给速度 (mm/min)
+    kind: number
+  - name: U_FTD # 精铣刀直径 (mm)
+    kind: integer
+  - name: U_ALBR # 粗铣后侧面单边余量 (mm)
+    kind: number
+  - name: U_ALBHF # 半精铣后侧面单边余量 (mm)
+    kind: number
+  - name: U_CHAMFER_DEPTH # 键槽倒角深度 (mm)
+    kind: number
+  - name: U_PRET_X # 车黑皮切深（源库为用户可选：5 / 4.5）
+    kind: number
+    options: [5, 4.5]
+  - name: U_PRET_Z # 车黑皮 Z 位置
+    kind: integer
+  - name: I_SPZ # 三通道换点 1 ("Z")
+    kind: integer
+
+  # ══ 倒角刀 R 参数（uz_dj_x.j2；源库为 read_only 常量）══════════
+  - name: R1 # 倒角刀转速 (rpm)
+    kind: integer
+  - name: R2 # 倒角刀进给 (mm/min)
+    kind: integer
+  - name: R3 # 倒角刀直径 (mm)
+    kind: integer
+  - name: R4 # 刀具 Z 向下降深度 (mm)
+    kind: integer
+  - name: R5 # 刀具横刃宽度 (mm)
+    kind: integer
+  - name: R6 # 倒角刀伸出长度 (mm)
+    kind: integer
+
+  # ══ 尾座顶尖 / 毛坯（DG_CAL_IR9.SPF）══════════════════════════
+  - name: tip_model # 尾座中心孔型号：查表选刀尖深度
+    kind: string
+    options:
+      ["B4", "B6.3", "B10", "DM8", "DM10", "DM12", "DM16", "DM20", "DM24", "DM30", "DM36", "DM42"]
+  # 派生参数：由 tip_model 查表得到，在 Rust 侧算好注入（core/src/derive.rs）。
+  # 此前这张表写在模板里（`{% set tip_depth_map = {...} %}`），改表要改模板、
+  # 且与正文混在一起无法单独 review；现在数据表只此一份。
+  # 回退 29.61 = DM24（源库 tip_depth 的默认值），对应头部注释"未选择时按 DM24 处理"。
+  # 不声明 `default`：派生值恒胜，声明默认值只会造成"到底用哪个"的歧义。
+  - name: tip_depth
+    kind: number
+    description: 尾座中心孔深度（由 tip_model 派生，无需提供）
+    derive:
+      from: tip_model
+      table:
+        - [B4, 8.51]
+        - [B6.3, 12.82]
+        - [B10, 20.32]
+        - [DM8, 10.56]
+        - [DM10, 12.9]
+        - [DM12, 15.67]
+        - [DM16, 19.92]
+        - [DM20, 24.59]
+        - [DM24, 29.61]
+        - [DM30, 36.89]
+        - [DM36, 43.99]
+        - [DM42, 51.27]
+      fallback: 29.61
+  - name: raw_diameter # 毛坯直径 (mm)
+    kind: number
+  - name: raw_length # 毛坯长度 (mm)
+    kind: number
+  - name: spindle_side_z # 主轴侧 ZMW_1（源库为 read_only 常量）
+    kind: integer
+  - name: tip_height # 厂家尾座长顶尖高度 (mm)
+    kind: number
+  - name: speed_limit # 转速上限 (r/min)
+    kind: integer
+
+  # ══ 轨迹段（G 代码块）════════════════════════════════════════
+  # 这些参数的值是**整段 G 代码**（源库 default_value 就是完整程序块），
+  # 由调用方预计算/预生成后注入——符合「模板只做变量替换，计算在 Rust 侧完成」。
+  # 只声明类型为字符串：一个数值误填进轨迹段会产出语法错误甚至危险程序。
+  - { name: SYNC_TURNING_RIGHT_CH1, kind: string }
+  - { name: SYNC_TURNING_LEFT_CH1, kind: string }
+  - { name: SYNC_TURNING_RIGHT_CH2, kind: string }
+  - { name: SYNC_TURNING_LEFT_CH2, kind: string }
+  - { name: FINISH_TURNING_CH1, kind: string }
+  - { name: FINISH_TURNING_CH2, kind: string }
+  - { name: RELIEF_GROOVE_right_CH1, kind: string }
+  - { name: RELIEF_GROOVE_left_CH3, kind: string }
+  - { name: SHARP_GROOVE_right_CH1, kind: string }
+  - { name: left_T_START3_END3, kind: string }

@@ -58,6 +58,35 @@ pub(crate) fn filter_nc_strip(value: f64) -> Result<String, minijinja::Error> {
     Ok(format!("{}", value))
 }
 
+/// 带强制正号 + 固定小数位：`{{ x | nc_signed(3) }}` → `+21.000`（输入 21.0）、
+/// `-4.500`（输入 -4.5）、`+0.000`（输入 0）。
+///
+/// 对应源项目 Jinja2 侧的 `fmt_coord` 过滤器
+/// （`f"{float(v):+.3f}"`，强制显示正负号）。**部分数控系统的增量坐标
+/// （如 `G91` 或 `AROT` 的旋转量）要求显式正号**，省略号会被控制器
+/// 误判为绝对值——这类差异不会报错，只会加工出错误位置。
+///
+/// 与 [`filter_nc_fixed`] 的区别只有一个：正数与零也输出 `+`。
+/// 因此**不要**用它格式化本来就不带符号语义的值（如直径、进给）。
+pub(crate) fn filter_nc_signed(value: f64, decimals: usize) -> Result<String, minijinja::Error> {
+    if !value.is_finite() {
+        return Err(minijinja::Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            "nc_signed: 输入非有限数（NaN/Inf）",
+        ));
+    }
+    if decimals > MAX_NC_FIXED_DECIMALS {
+        return Err(minijinja::Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            format!("nc_signed: 小数位 {decimals} 超出上限 {MAX_NC_FIXED_DECIMALS}"),
+        ));
+    }
+    // `{:+.*}` 让正数与零都带 `+`；-0.0 归一到 +0.000，避免输出 "-0.000"
+    // （控制器对负零的处理不一致，且 "-0.000" 在图纸上无意义）
+    let value = if value == 0.0 { 0.0 } else { value };
+    Ok(format!("{:+.*}", decimals, value))
+}
+
 /// 前导零填充：`{{ n | nc_pad(4) }}` → `0001`（输入 1）。
 ///
 /// 用于程序号（`O0001`）、行号（`N0010`）等需要固定宽度的**非负**整数。

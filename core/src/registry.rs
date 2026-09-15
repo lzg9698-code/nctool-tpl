@@ -5,6 +5,7 @@
 //! - 渲染前参数校验（委托 [`validate_template`]）
 //! - 渲染（含 `{% include %}` / `{% extends %}` 等模板间引用）
 
+use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
@@ -14,7 +15,8 @@ use crate::model::ParamSpec;
 use crate::validate::{validate_template, ValidationReport};
 
 /// 模板分类。
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum TemplateCategory {
     /// 通用子程序（程序头/尾、换刀、安全移动、主轴/冷却）
     General,
@@ -24,6 +26,8 @@ pub enum TemplateCategory {
     Turning,
     /// 钻孔/攻丝/铰孔
     Drilling,
+    /// 切槽（卡簧槽、越程槽等成形槽）
+    Grooving,
     /// 机床特定
     Machine,
 }
@@ -36,6 +40,7 @@ impl TemplateCategory {
             TemplateCategory::Milling => "铣削",
             TemplateCategory::Turning => "车削",
             TemplateCategory::Drilling => "钻孔",
+            TemplateCategory::Grooving => "切槽",
             TemplateCategory::Machine => "机床",
         }
     }
@@ -67,6 +72,134 @@ pub struct TemplateEntry {
     pub params: Vec<ParamSpec>,
     /// 模板源码（统一为字符串，供渲染）
     pub source_text: String,
+    /// 是否在模板列表中可见（`false` = 功能模块专用，程序可调用但不展示）。
+    ///
+    /// 这是**面向用户的视图过滤**，与模板的真实可用性解耦：被隐藏的模板
+    /// 依然可以被 `include` 或被 CLI 直接渲染，只是不出现在选择列表里。
+    /// 由模板清单 `templates.yaml` 的 `visible` 字段声明，缺省 `true`。
+    pub visible: bool,
+    /// 默认输出文件名（不含扩展名）。
+    pub output_filename: Option<String>,
+    /// 默认输出扩展名（含点，如 `.NC` / `.MPF` / `.SPF`）。
+    pub output_extension: String,
+    /// 归属的机床方案包 id（`None` = 对全部机床可见）。
+    ///
+    /// 机床专用模板（含机床专有 G 代码）声明此项后，仅在选定对应机床时暴露，
+    /// 避免通用场景误用而产出无法执行的程序。
+    pub machine: Option<String>,
+    /// 工艺评审状态（`None` = 未标注）。
+    pub status: Option<crate::manifest::TemplateStatus>,
+    /// 静态分析缓存（惰性，见 [`TemplateEntry::analysis`]）。
+    ///
+    /// 私有：缓存是**实现细节**，外部只通过 `analysis()` 取用；
+    /// 若把它暴露出去，调用方就能塞进与 `source_text` 不符的结论。
+    analysis: OnceCell<Result<Analysis, nctool_tpl::TplError>>,
+}
+
+/// 模板的静态分析产物：解析一次，多处复用。
+///
+/// [`TemplateEntry`] 缓存的是**解析产物**而非 AST 本身——`nctool_tpl::Ast`
+/// 借用源码（`Ast<'a>`），无法自引用地存进条目里。
+///
+/// 这两个字段正是 [`TemplateRegistry::extract_params`] 与
+/// [`TemplateRegistry::validate`] 需要的全部信息：变量表用于参数校验，
+/// 模板引用用于穿透 `{% include %}` / `{% extends %}` 闭包。
+#[derive(Debug, Clone, Default)]
+pub struct Analysis {
+    /// 未声明变量（含可选/必选判定与行列定位）
+    pub variables: Vec<nctool_tpl::Variable>,
+    /// 引用的模板名（`{% include %}` / `{% extends %}` / `{% import %}`）
+    pub refs: Vec<String>,
+}
+
+impl Analysis {
+    /// 解析源码并提取分析产物；解析失败返回带行列定位的原始错误。
+    fn of(source: &str, name: &str) -> Result<Self, nctool_tpl::TplError> {
+        let ast = nctool_tpl::parse(source, name)?;
+        Ok(Self {
+            variables: nctool_tpl::extract_undeclared(&ast),
+            refs: nctool_tpl::extract_template_refs(&ast),
+        })
+    }
+}
+
+impl TemplateEntry {
+    /// 构造最小条目（补齐新增字段的缺省值），供既有调用方平滑迁移。
+    ///
+    /// 缺省：`visible = true`、`output_extension = ".NC"`、无输出文件名、
+    /// 不绑定机床、未标注评审状态。
+    pub fn new(
+        name: impl Into<String>,
+        category: TemplateCategory,
+        description: impl Into<String>,
+        source: TemplateSource,
+        params: Vec<ParamSpec>,
+        source_text: impl Into<String>,
+    ) -> Self {
+        Self {
+            name: name.into(),
+            category,
+            description: description.into(),
+            source,
+            params,
+            source_text: source_text.into(),
+            visible: true,
+            output_filename: None,
+            output_extension: ".NC".to_string(),
+            machine: None,
+            status: None,
+            analysis: OnceCell::new(),
+        }
+    }
+
+    /// 惰性静态分析（首次调用解析，之后直接复用）。
+    ///
+    /// 解析**失败也会被缓存**（负缓存），避免每次取用都重跑一遍注定失败的解析；
+    /// 需要结构化错误（行列定位）的调用方在 `Err` 分支自行 `nctool_tpl::parse`
+    /// 重取一次——该分支只在模板本身有语法错误时走到。
+    ///
+    /// # 与 `source_text` 可变性的关系
+    /// 本缓存以 `source_text` 为准。`source_text` 是 `pub` 字段，若在首次分析后
+    /// 改写它，必须调用 [`Self::invalidate_analysis`]，否则拿到的仍是旧源码的结论。
+    pub fn analysis(&self) -> Result<&Analysis, &nctool_tpl::TplError> {
+        match self
+            .analysis
+            .get_or_init(|| Analysis::of(&self.source_text, &self.name))
+        {
+            Ok(a) => Ok(a),
+            Err(e) => Err(e),
+        }
+    }
+
+    /// 丢弃静态分析缓存（改写 [`Self::source_text`] 后必须调用）。
+    pub fn invalidate_analysis(&mut self) {
+        self.analysis = OnceCell::new();
+    }
+
+    /// 设置可见性。
+    pub fn with_visible(mut self, visible: bool) -> Self {
+        self.visible = visible;
+        self
+    }
+
+    /// 设置默认输出文件名与扩展名。
+    pub fn with_output(mut self, filename: Option<String>, extension: impl Into<String>) -> Self {
+        self.output_filename = filename;
+        self.output_extension = extension.into();
+        self
+    }
+
+    /// 设置归属机床方案包。
+    pub fn with_machine(mut self, machine: Option<String>) -> Self {
+        self.machine = machine;
+        self
+    }
+
+    /// 设置工艺评审状态。
+    pub fn with_status(mut self, status: Option<crate::manifest::TemplateStatus>) -> Self {
+        self.status = status;
+        self
+    }
 }
 
 /// 注册表错误。
@@ -125,6 +258,13 @@ pub struct TemplateRegistry {
     /// 系统注入变量名（如 `machine`）：渲染时由管线注入上下文，
     /// 校验时视为已提供，不要求参数集提供。
     system_vars: Vec<String>,
+    /// 宽松模式渲染器缓存（惰性构建；注册新模板时失效）。
+    ///
+    /// 宽松是建 `Environment` 时的标志，无法在同一个渲染器上切换，因此需要
+    /// 第二个环境。早期实现**每次调用**都新建渲染器并把全部模板重新注册、
+    /// 重新编译一遍——成本与模板数成正比，且发生在每个宽松渲染请求上。
+    /// 改为惰性构建一次；失败原因（某模板编译不过）一并缓存，语义不变。
+    lenient_cache: OnceCell<Result<Renderer, nctool_tpl::TplError>>,
 }
 
 impl TemplateRegistry {
@@ -134,6 +274,7 @@ impl TemplateRegistry {
             entries: BTreeMap::new(),
             renderer: Renderer::new(),
             system_vars: vec!["machine".to_string()],
+            lenient_cache: OnceCell::new(),
         };
         registry.install_builtins();
         registry
@@ -155,6 +296,8 @@ impl TemplateRegistry {
                 err,
             })?;
         self.entries.insert(entry.name.clone(), entry);
+        // 模板集变了：宽松渲染器缓存随之失效（否则新模板在宽松模式下不可见）
+        self.lenient_cache = OnceCell::new();
         Ok(())
     }
 
@@ -169,14 +312,14 @@ impl TemplateRegistry {
     ) -> Result<(), RegistryError> {
         let name = name.into();
         let source_text = source.into();
-        self.add_entry(TemplateEntry {
+        self.add_entry(TemplateEntry::new(
             name,
             category,
-            description: description.into(),
-            source: TemplateSource::Memory,
+            description,
+            TemplateSource::Memory,
             params,
             source_text,
-        })
+        ))
     }
 
     /// 从文件系统模板注册（加载文件内容）。
@@ -191,14 +334,14 @@ impl TemplateRegistry {
         let name = name.into();
         let path = path.as_ref().to_path_buf();
         let source_text = std::fs::read_to_string(&path).map_err(RegistryError::Io)?;
-        self.add_entry(TemplateEntry {
+        self.add_entry(TemplateEntry::new(
             name,
             category,
-            description: description.into(),
-            source: TemplateSource::File(path),
+            description,
+            TemplateSource::File(path),
             params,
             source_text,
-        })
+        ))
     }
 
     /// 按名称获取模板条目。
@@ -207,10 +350,48 @@ impl TemplateRegistry {
     }
 
     /// 列出模板（可按分类筛选）。
+    ///
+    /// **不过滤可见性**——需要面向用户的列表用 [`Self::list_visible`]。
     pub fn list(&self, category: Option<TemplateCategory>) -> Vec<&TemplateEntry> {
         self.entries
             .values()
             .filter(|e| category.is_none_or(|c| e.category == c))
+            .collect()
+    }
+
+    /// 列出**可见**模板（可按分类筛选），跳过 `visible = false` 的条目。
+    ///
+    /// 供 `templates list` 等面向用户的场景使用；程序化遍历用 [`Self::list`]。
+    pub fn list_visible(&self, category: Option<TemplateCategory>) -> Vec<&TemplateEntry> {
+        self.entries
+            .values()
+            .filter(|e| e.visible)
+            .filter(|e| category.is_none_or(|c| e.category == c))
+            .collect()
+    }
+
+    /// 列出归属指定机床方案包（或对所有机床可见）的模板。
+    ///
+    /// `machine = None` 时只返回**不绑定机床**的通用模板；指定 id 时
+    /// 额外包含该方案包内的模板。
+    pub fn list_for_machine(
+        &self,
+        machine: Option<&str>,
+        category: Option<TemplateCategory>,
+        include_hidden: bool,
+    ) -> Vec<&TemplateEntry> {
+        self.entries
+            .values()
+            .filter(|e| include_hidden || e.visible)
+            .filter(|e| category.is_none_or(|c| e.category == c))
+            .filter(|e| match (&e.machine, machine) {
+                // 通用模板：任何机床场景都可用
+                (None, _) => true,
+                // 机床专用模板：仅当其方案包与选定机床一致
+                (Some(m), Some(id)) => m == id,
+                // 机床专用模板 + 未指定机床 → 不暴露
+                (Some(_), None) => false,
+            })
             .collect()
     }
 
@@ -222,6 +403,45 @@ impl TemplateRegistry {
     /// 是否为空。
     pub fn is_empty(&self) -> bool {
         self.entries.is_empty()
+    }
+
+    /// 提取模板的**完整参数闭包**（穿透 `{% include %}` / `{% extends %}`）。
+    ///
+    /// [`validate`](Self::validate) 内部已做同样的事，但只返回"缺没缺"的结论。
+    /// 本方法把中间结果直接暴露出来，供 `inspect` 这类需要**列出参数表**的
+    /// 调用方使用——否则组合模板（主模板 + `include` 片段）会只列出主模板
+    /// 自身的变量，遗漏片段引用的参数，用户按表填参会渲染失败。
+    ///
+    /// 注入的系统变量（默认 `machine`）已从结果中剔除：它们由管线提供，
+    /// 不是用户需要填写的参数。
+    ///
+    /// 语义与 [`validate`](Self::validate) 保持一致：同名变量的必选性取"或"，
+    /// 环引用有防护，未注册的被引用模板静默跳过（其变量无法静态并入）。
+    ///
+    /// 模板不存在时返回 [`RegistryError::NotFound`]。
+    pub fn extract_params(&self, name: &str) -> Result<Vec<nctool_tpl::Variable>, RegistryError> {
+        let entry = self
+            .entries
+            .get(name)
+            .ok_or_else(|| RegistryError::NotFound(name.to_string()))?;
+        // 复用静态分析缓存；解析失败时返回带行列定位的原始错误
+        // （`TplError` 已实现 `Clone`，故可直接从缓存取出）
+        let analysis = match entry.analysis() {
+            Ok(a) => a,
+            Err(err) => {
+                return Err(RegistryError::Compile {
+                    name: entry.name.clone(),
+                    err: err.clone(),
+                })
+            }
+        };
+        let mut vars = analysis.variables.clone();
+        let mut specs = entry.params.clone();
+        let mut visited = std::collections::BTreeSet::from([entry.name.clone()]);
+        self.collect_include_closure(entry, &mut vars, &mut specs, &mut visited);
+        // 系统注入变量由管线提供，不从用户处索要
+        vars.retain(|v| !self.system_vars.iter().any(|s| s == &v.name));
+        Ok(vars)
     }
 
     /// 校验指定模板的参数（渲染前调用）。
@@ -244,9 +464,12 @@ impl TemplateRegistry {
             .get(name)
             .ok_or_else(|| RegistryError::NotFound(name.to_string()))?;
         let system: Vec<&str> = self.system_vars.iter().map(String::as_str).collect();
-        // 主模板解析失败：由 validate_template 报告（含行列定位）
-        let ast = match nctool_tpl::parse(&entry.source_text, &entry.name) {
-            Ok(ast) => ast,
+        // 主模板解析失败：由 validate_template 报告（含行列定位）。
+        // 这里刻意走一次完整重解析而非从缓存取错误——`validate_template` 会把
+        // 行列定位包装成 `IssueKind::ParseError` 问题项，语义必须与既有一致；
+        // 该分支仅在模板本身有语法错误时进入。
+        let analysis = match entry.analysis() {
+            Ok(a) => a,
             Err(_) => {
                 return Ok(validate_template(
                     &entry.source_text,
@@ -258,10 +481,10 @@ impl TemplateRegistry {
             }
         };
         // 主模板变量 + include/extends 闭包（穿透模板间引用，防环）
-        let mut vars = nctool_tpl::extract_undeclared(&ast);
+        let mut vars = analysis.variables.clone();
         let mut specs = entry.params.clone();
         let mut visited = std::collections::BTreeSet::from([entry.name.clone()]);
-        self.collect_include_closure(&ast, &mut vars, &mut specs, &mut visited);
+        self.collect_include_closure(entry, &mut vars, &mut specs, &mut visited);
         Ok(crate::validate::validate_with_vars(
             &vars, &specs, params, &system,
         ))
@@ -271,25 +494,34 @@ impl TemplateRegistry {
     ///
     /// 同名变量的必选性取"或"（任一处非兜底引用即必选）；规格先访问者优先
     /// （更接近主模板的声明，同名不覆盖）。环引用由 `visited` 防护。
+    ///
+    /// 入口是**条目**而非 AST：AST 借用源码、无法跨调用持有，改为读取条目上
+    /// 惰性缓存的 [`Analysis`]（解析结果），使 `extract_params` / `validate`
+    /// 与全部子模板都只解析一次。
     fn collect_include_closure(
         &self,
-        ast: &nctool_tpl::Ast,
+        entry: &TemplateEntry,
         vars: &mut Vec<nctool_tpl::Variable>,
         specs: &mut Vec<ParamSpec>,
         visited: &mut std::collections::BTreeSet<String>,
     ) {
-        for ref_name in nctool_tpl::extract_template_refs(ast) {
+        // 解析失败的模板没有可并入的闭包：主模板由调用方报 ParseError，
+        // 子模板沿用「无法静态并入、留待渲染期报 TemplateNotFound」的既有语义
+        let Ok(analysis) = entry.analysis() else {
+            return;
+        };
+        for ref_name in &analysis.refs {
             if !visited.insert(ref_name.clone()) {
                 continue; // 防环：a → b → a
             }
-            let Some(sub) = self.entries.get(&ref_name) else {
+            let Some(sub) = self.entries.get(ref_name) else {
                 continue; // 引用未注册模板：渲染期报 TemplateNotFound，此处无法静态并入
             };
-            if let Ok(sub_ast) = nctool_tpl::parse(&sub.source_text, &sub.name) {
-                for v in nctool_tpl::extract_undeclared(&sub_ast) {
-                    merge_var(vars, v);
+            if let Ok(sub_analysis) = sub.analysis() {
+                for v in &sub_analysis.variables {
+                    merge_var(vars, v.clone());
                 }
-                self.collect_include_closure(&sub_ast, vars, specs, visited);
+                self.collect_include_closure(sub, vars, specs, visited);
             }
             for spec in &sub.params {
                 if !specs.iter().any(|s| s.name == spec.name) {
@@ -368,19 +600,28 @@ impl TemplateRegistry {
 
     /// 宽松模式渲染（自定义上下文）：未定义变量（裸引用）渲染为空字符串。
     ///
-    /// 每次调用用独立的宽松渲染器注册全部模板（一次性生成场景，编译缓存
-    /// 不复用）。注意：经**过滤器**引用的未定义变量仍会报错——过滤器需要
+    /// 宽松渲染器**惰性构建并缓存**（注册新模板时失效）：它需要独立的
+    /// `Environment`，早期实现每次调用都重建渲染器并把全部模板重新编译一遍。
+    /// 构建失败（某模板编译不过）的原因一并缓存，返回语义与逐次重建一致。
+    ///
+    /// 注意：经**过滤器**引用的未定义变量仍会报错——过滤器需要
     /// 具体值求值，无法以空字符串替代。
     pub fn render_template_lenient(
         &self,
         name: &str,
         context: &Value,
     ) -> Result<String, nctool_tpl::TplError> {
-        let mut renderer = nctool_tpl::Renderer::new().with_lenient();
-        for entry in self.entries.values() {
-            renderer.add_template(&entry.name, &entry.source_text)?;
+        let cached = self.lenient_cache.get_or_init(|| {
+            let mut renderer = nctool_tpl::Renderer::new().with_lenient();
+            for entry in self.entries.values() {
+                renderer.add_template(&entry.name, &entry.source_text)?;
+            }
+            Ok(renderer)
+        });
+        match cached {
+            Ok(renderer) => renderer.render_template(name, context),
+            Err(err) => Err(err.clone()),
         }
-        renderer.render_template(name, context)
     }
 
     /// 访问底层渲染器（高级用法：配置过滤器等）。
@@ -391,14 +632,14 @@ impl TemplateRegistry {
     /// 安装内置模板库。
     fn install_builtins(&mut self) {
         for (name, category, description, source, params) in builtin_templates() {
-            let entry = TemplateEntry {
-                name: name.to_string(),
+            let entry = TemplateEntry::new(
+                name,
                 category,
-                description: description.to_string(),
-                source: TemplateSource::Builtin,
+                description,
+                TemplateSource::Builtin,
                 params,
-                source_text: source.to_string(),
-            };
+                source,
+            );
             // 内置模板注册失败视为编程错误（源码应为合法模板）
             self.add_entry(entry).expect("内置模板注册失败");
         }
@@ -714,6 +955,67 @@ mod tests {
     use crate::model::ParameterSet;
 
     #[test]
+    fn analysis_is_computed_once_and_matches_direct_extraction() {
+        // 缓存不能改变结论：与直接 parse + extract 的结果逐项一致
+        let mut r = TemplateRegistry::new();
+        r.add_memory(
+            "an_probe",
+            TemplateCategory::General,
+            "分析缓存探针",
+            "{% if b is defined %}A{% endif %}G0 X{{ x | default(1) }}\n",
+            vec![],
+        )
+        .unwrap();
+        let entry = r.get("an_probe").unwrap();
+
+        let cached = entry.analysis().expect("解析应成功");
+        let ast = nctool_tpl::parse(&entry.source_text, &entry.name).unwrap();
+        let direct = nctool_tpl::extract_undeclared(&ast);
+        assert_eq!(cached.variables, direct, "缓存结果必须与直接提取一致");
+
+        // 二次取用返回同一份（指针相同 = 未重新计算）
+        let again = entry.analysis().expect("二次解析应成功");
+        assert!(std::ptr::eq(cached, again), "重复取用必须命中缓存");
+
+        // `x` 有 default 兜底 → 可选；`b` 处于 is defined → 可选
+        assert!(cached.variables.iter().all(|v| v.optional));
+    }
+
+    #[test]
+    fn lenient_renderer_cache_sees_templates_registered_later() {
+        let mut r = TemplateRegistry::new();
+        r.add_memory(
+            "lz_first",
+            TemplateCategory::General,
+            "宽松缓存探针一",
+            "A{{ x }}\n",
+            vec![],
+        )
+        .unwrap();
+
+        // 触发宽松渲染器惰性构建并缓存
+        let out = r
+            .render_template_lenient("lz_first", &Value::UNDEFINED)
+            .expect("宽松渲染应成功");
+        assert_eq!(out.trim(), "A", "宽松模式下未定义变量渲染为空");
+
+        // 之后注册的模板必须能被宽松渲染看到——缓存若未随注册失效，
+        // 这里会报 TemplateNotFound
+        r.add_memory(
+            "lz_second",
+            TemplateCategory::General,
+            "宽松缓存探针二",
+            "B{{ y }}\n",
+            vec![],
+        )
+        .unwrap();
+        let out2 = r
+            .render_template_lenient("lz_second", &Value::UNDEFINED)
+            .expect("新注册模板应可见");
+        assert_eq!(out2.trim(), "B");
+    }
+
+    #[test]
     fn registry_installs_builtins() {
         let r = TemplateRegistry::new();
         assert!(r.len() >= 7);
@@ -805,6 +1107,42 @@ mod tests {
             "machine 不应被当作缺失参数: {}",
             report.summary()
         );
+    }
+
+    #[test]
+    fn validate_rejects_value_outside_spec_options() {
+        // 端到端：规格声明候选项白名单后，registry.validate 必须拦住非法工艺选项，
+        // 而不是让它一路渲染成与图纸不符的 G-code。
+        let mut r = TemplateRegistry::new();
+        r.add_memory(
+            "groove_form",
+            TemplateCategory::Grooving,
+            "越程槽形式",
+            "U_FX={{ u_fx }}\n",
+            vec![
+                ParamSpec::new("u_fx", crate::model::ParamKind::Choice, "越程槽形式").with_options(
+                    [
+                        crate::model::ParamValue::String("闭口".into()),
+                        crate::model::ParamValue::String("左开口".into()),
+                        crate::model::ParamValue::String("右开口".into()),
+                    ],
+                ),
+            ],
+        )
+        .unwrap();
+
+        let mut ok = ParameterSet::new();
+        ok.set_string("u_fx", "左开口");
+        let report = r.validate("groove_form", &ok).unwrap();
+        assert!(report.is_ok(), "合法候选应通过: {}", report.summary());
+
+        let mut bad = ParameterSet::new();
+        bad.set_string("u_fx", "上开口");
+        let report = r.validate("groove_form", &bad).unwrap();
+        assert!(report.has_errors(), "{}", report.summary());
+        assert!(report.has_kind(crate::validate::IssueKind::NotInOptions));
+        // 报错必须列出候选值，否则用户无从修正
+        assert!(report.summary().contains("闭口"), "{}", report.summary());
     }
 
     #[test]
@@ -948,5 +1286,91 @@ mod tests {
         let ps = ParameterSet::new();
         let err = r.render("no_such_template", &ps).unwrap_err();
         assert!(matches!(err, nctool_tpl::TplError::TemplateNotFound { .. }));
+    }
+
+    #[test]
+    fn extract_params_missing_template_errors() {
+        let r = TemplateRegistry::new();
+        let err = r.extract_params("no_such").unwrap_err();
+        assert!(matches!(err, RegistryError::NotFound(_)));
+    }
+
+    /// `extract_params` 必须**穿透 `{% include %}`**：组合模板若只列出主模板
+    /// 自身的变量，用户按顺序填参会漏掉片段所需参数，直到渲染才报错。
+    ///
+    /// 回归背景：拆分 `undercut.j2` 时把公共起始段抽成
+    /// `turning/_undercut_common.j2`，`inspect` 当时只显示 6 个参数，
+    /// 而实际需要 11 个（片段的 `STD_KEY`/`Z_START`/`D1_CUT` 等全部缺失）。
+    #[test]
+    fn extract_params_traverses_include() {
+        let mut r = TemplateRegistry::new();
+        r.add_memory(
+            "frag",
+            TemplateCategory::General,
+            "片段",
+            "G0 Z{{ FRAG_Z | nc_fixed(3) }}\n",
+            vec![],
+        )
+        .unwrap();
+        r.add_memory(
+            "main",
+            TemplateCategory::General,
+            "主模板",
+            "{% include \"frag\" %}\nG1 X{{ MAIN_X | nc_fixed(3) }}\n",
+            vec![],
+        )
+        .unwrap();
+
+        let vars = r.extract_params("main").unwrap();
+        let names: Vec<&str> = vars.iter().map(|v| v.name.as_str()).collect();
+        assert!(names.contains(&"MAIN_X"), "应含主模板变量: {names:?}");
+        assert!(
+            names.contains(&"FRAG_Z"),
+            "应并入 include 片段的变量: {names:?}"
+        );
+    }
+
+    /// 系统注入变量（`machine`）不出现在参数表中——由管线提供，不问用户要。
+    #[test]
+    fn extract_params_excludes_system_vars() {
+        let mut r = TemplateRegistry::new();
+        r.add_memory(
+            "sysvar",
+            TemplateCategory::General,
+            "引用系统变量",
+            "{{ machine.rapid }} X{{ x | nc_fixed(3) }}\n",
+            vec![],
+        )
+        .unwrap();
+        let vars = r.extract_params("sysvar").unwrap();
+        let names: Vec<&str> = vars.iter().map(|v| v.name.as_str()).collect();
+        assert!(names.contains(&"x"));
+        assert!(!names.contains(&"machine"), "machine 应被剔除: {names:?}");
+    }
+
+    /// include 环引用必须能终止（a → b → a），否则 `extract_params` 会栈溢出。
+    #[test]
+    fn extract_params_survives_include_cycle() {
+        let mut r = TemplateRegistry::new();
+        r.add_memory(
+            "cyc_a",
+            TemplateCategory::General,
+            "环 A",
+            "{% include \"cyc_b\" %}{{ A_VAR }}\n",
+            vec![],
+        )
+        .unwrap();
+        r.add_memory(
+            "cyc_b",
+            TemplateCategory::General,
+            "环 B",
+            "{% include \"cyc_a\" %}{{ B_VAR }}\n",
+            vec![],
+        )
+        .unwrap();
+        let vars = r.extract_params("cyc_a").unwrap();
+        let names: Vec<&str> = vars.iter().map(|v| v.name.as_str()).collect();
+        assert!(names.contains(&"A_VAR"));
+        assert!(names.contains(&"B_VAR"));
     }
 }

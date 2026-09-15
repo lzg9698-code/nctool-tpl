@@ -16,10 +16,20 @@ use super::render::resolve_registry;
 ///   避免与统一错误输出产生两段 JSON。
 pub fn run(ctx: &Ctx, args: &ValidateArgs) -> Result<(), CliError> {
     let (gen, name, _) = resolve_registry(ctx, &args.template)?;
-    let params =
-        crate::context::build_params(args.params.params_file.as_deref(), &args.params.param)?;
+    // 规格：`--param k=v` 的值要按规格归一（argv 没有类型信息，见 args::coerce_param_value）
+    let specs = gen
+        .registry()
+        .get(&name)
+        .map(|e| e.params.clone())
+        .unwrap_or_default();
+    let params = crate::context::build_params(
+        args.params.params_file.as_deref(),
+        &args.params.param,
+        &specs,
+    )?;
 
-    // 校验：注册表模板带规格（default 兜底），文件模板无规格（基于引用判定必选）。
+    // 校验：内置模板与目录模板都带规格——目录模板的规格来自头部
+    // `{# PARAMS: #}` 参数表与清单 `params` 覆盖层（见 core::manifest）。
     let report: ValidationReport = gen.registry().validate(&name, &params)?;
 
     let has_errors = report.has_errors();

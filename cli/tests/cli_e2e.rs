@@ -107,7 +107,7 @@ fn temp_dir(tag: &str) -> PathBuf {
     dir
 }
 
-/// 仓库根目录（用于访问 `templates/demo_gcode.j2` 等仓库内资源）。
+/// 仓库根目录（用于访问 `templates/turning/demo_gcode.j2` 等仓库内资源）。
 fn repo_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
         .parent()
@@ -305,7 +305,10 @@ fn inspect_missing_exits_5() {
 
 #[test]
 fn inspect_accepts_file_path() {
-    let tpl = repo_root().join("templates").join("demo_gcode.j2");
+    let tpl = repo_root()
+        .join("templates")
+        .join("turning")
+        .join("demo_gcode.j2");
     assert!(tpl.exists(), "仓库示例模板应存在: {tpl:?}");
     let r = run_in(repo_root().as_path(), &["inspect", tpl.to_str().unwrap()]);
     assert_eq!(r.code, 0, "按文件路径 inspect 应成功");

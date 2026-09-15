@@ -1,0 +1,27 @@
+{# NAME: 越程槽加工（ES 型） #}
+{# DESCRIPTION: ES 型越程槽（DIN509 风格），支持左右侧镜像。不含 FS 专用参数 #}
+{# PARAMS:
+     side            string  required  加工侧面 ("Right" 或 "Left")
+     STD_KEY         string  required  标准刀具键值 (如 "DIN509-E 0,2 x 0,1")
+     X_START         number  required  起始 X 坐标 (mm) = 毛坯直径 + 2 * 安全距离
+     R               number  required  圆角半径 (mm)
+     Z_START         number  required  起始 Z 坐标 (mm)
+     D1_CUT          number  required  D1 切割值 (mm)
+     ANG_1           number  required  第一角度 (°)
+     D1_COMP_START   number  required  D1 补偿起始值 (mm)
+     ES_Z            number  required  ES Z 坐标 (mm)
+     ES_D2           number  required  ES D2 值 (mm)
+     D2_COMP_CUT     number  required  D2 补偿切割值 (mm)
+   #}
+{# 说明：本模板只做变量替换与格式化，所有中间量（Z_START / D1_CUT / ANG_1 等）
+   由调用方预计算后注入。计算规则见 docs/TEMPLATE_INTEGRATION_PLAN.md §3.3。
+
+   与 undercut.j2 的区别：本模板**只含 ES 分支**，因此不需要 FS 专用参数。
+   静态变量提取器会因此只要求 ES 相关参数——这正是拆分的目的（见方案 §4.4 缺口二）。 #}
+{% include "turning/_undercut_common.j2" %}
+G1 Z{{ ES_Z | nc_fixed(3) }} RND={{ R | nc_fixed(1) }}
+G1 X{{ D2_COMP_CUT | nc_fixed(3) }}
+{# 收尾角度随侧面镜像：右侧 135°，左侧 45° #}
+G1 X{{ ES_D2 | nc_fixed(3) }} ANG={{ 135 if side == "Right" else 45 }}
+G0 G40 X{{ X_START | nc_fixed(3) }}
+; --------------------------------------

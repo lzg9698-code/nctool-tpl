@@ -1,0 +1,69 @@
+{# NAME: 越程槽加工 #}
+{# DESCRIPTION: 生成 ES/FS 型越程槽 G 代码，支持左右侧镜像与 DIN509/W2196 标准刀具 #}
+{# PARAMS:
+     groove_type     string  required  工艺类型 ("ES" 或 "FS")
+     side            string  required  加工侧面 ("Right" 或 "Left")
+     STD_KEY         string  required  标准刀具键值 (如 "DIN509-E 0,2 x 0,1")
+     X_START         number  required  起始 X 坐标 (mm) = 毛坯直径 + 2 * 安全距离
+     R               number  required  圆角半径 (mm)
+     Z_START         number  required  起始 Z 坐标 (mm)
+     D1_CUT          number  required  D1 切割值 (mm)
+     ANG_1           number  required  第一角度 (°)
+     D1_COMP_START   number  required  D1 补偿起始值 (mm)
+     ES_Z            number  可选(ES) ES 型专用：ES Z 坐标 (mm)
+     ES_D2           number  可选(ES) ES 型专用：ES D2 值 (mm)
+     D2_COMP_CUT     number  可选(ES) ES 型专用：D2 补偿切割值 (mm)
+     Z_MID           number  可选(FS) FS 型专用：中间 Z 坐标 (mm)
+     FS_Z_PLUS1      number  可选(FS) FS 型专用：FS Z+1 坐标 (mm)
+     FS_Z_MINUS1     number  可选(FS) FS 型专用：FS Z-1 坐标 (mm)
+     ANG_2           number  可选(FS) FS 型专用：第二角度 (°)
+   #}
+{# 说明：本模板只做变量替换与格式化，所有中间量（Z_START / D1_CUT / ANG_1 等）
+   由调用方预计算后注入。计算规则见 docs/TEMPLATE_INTEGRATION_PLAN.md §3.3。 #}
+{% if groove_type == "ES" and side == "Right" %}
+; --- ES_Right ({{ STD_KEY }}) ---
+G0 Z{{ Z_START | nc_fixed(3) }}
+G0 X{{ X_START | nc_fixed(3) }}
+M4=97
+G0 G42 X{{ D1_COMP_START | nc_fixed(3) }}
+G1 X{{ D1_CUT | nc_fixed(3) }} ANG={{ ANG_1 | nc_fixed(0) }} RND={{ R | nc_fixed(1) }} F0.2
+G1 Z{{ ES_Z | nc_fixed(3) }} RND={{ R | nc_fixed(1) }}
+G1 X{{ D2_COMP_CUT | nc_fixed(3) }}
+G1 X{{ ES_D2 | nc_fixed(3) }} ANG=135
+G0 G40 X{{ X_START | nc_fixed(3) }}
+; --------------------------------------
+{% elif groove_type == "ES" and side == "Left" %}
+; --- ES_Left ({{ STD_KEY }}) ---
+G0 Z{{ Z_START | nc_fixed(3) }}
+G0 X{{ X_START | nc_fixed(3) }}
+M4=97
+G0 G41 X{{ D1_COMP_START | nc_fixed(3) }}
+G1 X{{ D1_CUT | nc_fixed(3) }} ANG={{ ANG_1 | nc_fixed(0) }} RND={{ R | nc_fixed(1) }} F0.2
+G1 Z{{ ES_Z | nc_fixed(3) }} RND={{ R | nc_fixed(1) }}
+G1 X{{ D2_COMP_CUT | nc_fixed(3) }}
+G1 X{{ ES_D2 | nc_fixed(3) }} ANG=45
+G0 G40 X{{ X_START | nc_fixed(3) }}
+; --------------------------------------
+{% elif groove_type == "FS" and side == "Right" %}
+; --- FS_Right ({{ STD_KEY }}) ---
+G0 Z{{ Z_START | nc_fixed(3) }}
+G0 X{{ X_START | nc_fixed(3) }}
+M4=97
+G0 G42 X{{ D1_COMP_START | nc_fixed(3) }}
+G1 X{{ D1_CUT | nc_fixed(3) }} ANG={{ ANG_1 | nc_fixed(0) }} RND={{ R | nc_fixed(1) }} F0.2
+G1 Z{{ Z_MID | nc_fixed(3) }} RND={{ R | nc_fixed(1) }}
+G1 Z{{ FS_Z_PLUS1 | nc_fixed(3) }} ANG={{ ANG_2 | nc_fixed(0) }}
+G0 G40 X{{ X_START | nc_fixed(3) }}
+; --------------------------------------
+{% elif groove_type == "FS" and side == "Left" %}
+; --- FS_Left ({{ STD_KEY }}) ---
+G0 Z{{ Z_START | nc_fixed(3) }}
+G0 X{{ X_START | nc_fixed(3) }}
+M4=97
+G0 G41 X{{ D1_COMP_START | nc_fixed(3) }}
+G1 X{{ D1_CUT | nc_fixed(3) }} ANG={{ ANG_1 | nc_fixed(0) }} RND={{ R | nc_fixed(1) }} F0.2
+G1 Z{{ Z_MID | nc_fixed(3) }} RND={{ R | nc_fixed(1) }}
+G1 Z{{ FS_Z_MINUS1 | nc_fixed(3) }} ANG={{ ANG_2 | nc_fixed(0) }}
+G0 G40 X{{ X_START | nc_fixed(3) }}
+; --------------------------------------
+{% endif %}

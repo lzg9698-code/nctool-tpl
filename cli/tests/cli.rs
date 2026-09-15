@@ -699,7 +699,10 @@ fn ui_http_contracts_and_frontend_mode() {
 
     let page = response_text(&http_request(port, "GET", "/", "").unwrap());
     assert!(page.starts_with("HTTP/1.1 200"));
-    assert!(page.contains("mode: \"server\""));
+    // v2：前端模式按协议自动判定 —— file:// 走演示模式（离线可用），
+    // http(s):// 走服务模式。经 `nctool ui` 提供服务时即服务模式。
+    assert!(page.contains(r#"location.protocol === "file:""#));
+    assert!(page.contains(r#"? "demo" : "server""#));
     assert!(page.contains("window.location.origin"));
 
     let templates = response_text(&http_request(port, "GET", "/api/templates", "").unwrap());
@@ -875,4 +878,23 @@ fn render_infers_param_types() {
         .assert()
         .success()
         .stdout(predicate::str::contains("X21.000"));
+}
+
+/// 两份 UI 页面必须保持一致。
+///
+/// `cli/ui/index.html` 被 `include_str!` 嵌进二进制（`nctool ui` 提供的那份），
+/// `ui/index.html` 是给用户直接双击打开的 `file://` 演示版。两者是同一份页面的
+/// 两份拷贝——手工同步迟早漂移，届时"改了页面却看不到变化"会很难查。
+/// 加断言把漂移变成 CI 上的失败。
+#[test]
+fn ui_html_copies_stay_in_sync() {
+    let cli_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let embedded = std::fs::read_to_string(cli_dir.join("ui").join("index.html"))
+        .expect("cli/ui/index.html 应存在");
+    let demo = std::fs::read_to_string(cli_dir.join("..").join("ui").join("index.html"))
+        .expect("ui/index.html 应存在");
+    assert_eq!(
+        embedded, demo,
+        "两份 UI 页面已漂移：请把改动同步到 cli/ui/index.html 与 ui/index.html 两份"
+    );
 }

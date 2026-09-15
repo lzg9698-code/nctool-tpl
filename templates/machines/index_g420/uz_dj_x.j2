@@ -1,0 +1,168 @@
+{# NAME: 30键槽-倒角-生成模板 -#}
+{# DESCRIPTION: 按开口方向与圆角半径分支生成键槽倒角子程序（闭口/左开口/右开口 × 带/不带圆弧） -#}
+{# MACHINE: index_g420 -#}
+{# OUTPUT: UZ_DJ_X.SPF -#}
+{# PARAMS:
+     U_D                    必选  键槽所在外圆直径D (mm)
+     U_B                    必选  键槽成活宽度 B (mm)
+     U_Q                    必选  过渡圆角半径 Q (mm)[圆头键槽U_Q=0]
+     U_CHAMFER_DEPTH        必选  键槽倒角深度(mm)
+     U_CT                   必选  倒角刀号
+     U_CTB                  必选  倒角后备刀
+     U_ID                   必选  键槽位置,[41]右侧,[42]左侧,[43]中间
+     U_Z                    必选  键槽有效长度右侧Z值 (mm)
+     U_FX                   必选  开口方向
+     U_A                    必选  键槽有效长度 A (mm)
+     R1                     可选  倒角刀转速(rpm)
+     R2                     可选  倒角刀进给 (mm/min)
+     R3                     可选  倒角刀直径 (mm)
+     R4                     可选  刀具Z向下降深度(mm)
+     R5                     可选  刀具横刃宽度(mm)
+     R6                     可选  倒角刀伸出长度(mm)
+-#}
+{# 刀具与基本参数：源项目写在一段「不在最终输出中显示」的注释里，实为带默认值的参数，
+   这里显式兜底。下面 8 条赋值**逐行占用源文件对应的 8 行**（源里 3 行是赋值、
+   5 行在注释内），因此这里刻意不用空白控制，产出与源模板完全一致。 -#}
+{% set R1 = R1 | default(4000) %}
+{% set R2 = R2 | default(1200) %}
+{% set R3 = R3 | default(8) %}
+{% set R4 = R4 | default(2) %}
+{% set R5 = R5 | default(0) %}
+{% set R6 = R6 | default(40) %}
+{% set XIANGAO = (U_D/2) - ((U_D/2)**2 - (U_B/2)**2)**0.5 %}
+{% set XIANGAO2 = (U_D/2) - ((U_D/2)**2 - (U_B/2-U_Q)**2)**0.5 -%}
+{% set R11 = -(XIANGAO + R4 + U_CHAMFER_DEPTH) + R5/2 %}
+{%- set R12 = -(R4 + U_CHAMFER_DEPTH) + R5/2 %}
+{%- set R13 = -(XIANGAO2 + R4 + U_CHAMFER_DEPTH) + R5/2 %}
+;----倒角子程序----
+GX73
+GZ73 Y0
+L184(0,0,,,,0)
+L171("{{ U_CT }}")
+L172(0)
+L171("{{ U_CTB }}")
+GX73
+GZ73 Y0
+L184(0,90,,,,0)
+L140(0.00,4,0)
+SETMS(1)
+DIAMOF
+G17
+G90
+D1
+;''''基础坐标系偏移''''
+XMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9{{ U_ID }} CMW_1=0
+G59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1
+;''''旋转-定位键槽''''
+AROT Y90
+AROT Z180
+ATRANS X{{ U_Z | nc_fixed(3) }} Z{{ (U_D / 2) | nc_fixed(3) }}
+{# ; 计算中间变量 #}
+{%- if U_FX == "左开口" %}
+    {% set R22 = -(R3/2 + 10) %}
+    {% set R23 = U_A %}
+    {% set R24 = -(U_B/2) %}
+    {% set R25 = -(R3/2 + 10) %}
+    {% set R36 = U_A + U_Q %}
+    {% set R37 = -(U_B/2 - U_Q) %}
+    {% set R38 = U_Q %}
+	{% set R4 = R4 %}
+    {% set R26 = R24 + R4 %}
+{%- elif U_FX == "右开口" %}
+    {% set R22 = R3/2 + 10 %}
+    {% set R23 = -U_A %}
+    {% set R24 = U_B/2 %}
+    {% set R25 = R3/2 + 10 %}
+    {% set R36 = -(U_A + U_Q) %}
+    {% set R37 = U_B/2 - U_Q %}
+    {% set R38 = -U_Q %}
+    {% set R4 = -R4 %}
+    {% set R26 = R24 + R4 %}
+{%- else %}
+    {% set R22 = 0 %}
+    {% set R23 = -U_A %}
+    {% set R24 = U_B/2 %}
+    {% set R25 = 0 %}
+    {% set R36 = -(U_A + U_Q) %}
+    {% set R37 = U_B/2 - U_Q %}
+    {% set R38 = -U_Q %}
+    {% set R4 = -R4 %}
+    {% set R26 = R24 + R4 %}
+{%- endif %}
+
+
+{#; --- G代码执行部分 ---#}
+G97 S1={{ R1 | nc_fixed(0) }} M1=3
+M14=8 M10=150 H50=80
+G94 G40 G0 X={{ R22 | nc_fixed(3) }} Y=0 C=DC(0.000)
+G64
+G0 Z=5
+
+{% if U_Q == 0 %}
+{% if U_FX == "闭口" %}
+; --- 闭口不带圆弧 (CLOSE_WITHOUT_CIR) ---
+G01 Z={{ R11 | nc_fixed(3) }} F100
+G40 Y={{ R26 | nc_fixed(3) }} F={{ R2 | nc_fixed(0) }}
+G01 X={{ R23 | nc_fixed(3) }}
+G03 X={{ (R23 - R26) | nc_fixed(3) }} Y=0 I=0 J={{ (-R26) | nc_fixed(3) }} Z={{ R12 | nc_fixed(3) }}
+G03 X={{ R23 | nc_fixed(3) }} Y={{ (-R26) | nc_fixed(3) }} I={{ R26 | nc_fixed(3) }} J=0 Z={{ R11 | nc_fixed(3) }}
+G01 X={{ R25 | nc_fixed(3) }}
+G03 X={{ R26 | nc_fixed(3) }} Y=0 I0 J={{ R26 | nc_fixed(3) }} Z={{ R12 | nc_fixed(3) }}
+G03 X={{ R22 | nc_fixed(3) }} Y={{ R26 | nc_fixed(3) }} I={{ (-R26) | nc_fixed(3) }} J=0 Z={{ R11 | nc_fixed(3) }}
+G01 Y=0
+{%- else %}
+; --- 开口不带圆弧 (OPEN_WITHOUT_CIR) ---
+G01 Z={{ R11 | nc_fixed(3) }} F100
+G40 Y={{ R26 | nc_fixed(3) }} F={{ R2 | nc_fixed(0) }}
+G01 X={{ R23 | nc_fixed(3) }}
+G03 X={{ (R23 - R26) | nc_fixed(3) }} Y=0 I=0 J={{ (-R26) | nc_fixed(3) }} Z={{ R12 | nc_fixed(3) }}
+G03 X={{ R23 | nc_fixed(3) }} Y={{ (-R26) | nc_fixed(3) }} I={{ R26 | nc_fixed(3) }} J=0 Z={{ R11 | nc_fixed(3) }}
+G01 X={{ R25 | nc_fixed(3) }}
+G01 Y=0
+{%- endif %}
+{%- else %}
+{%- if U_FX == "闭口" %}
+; --- 闭口带圆弧 (CLOSE_WITH_CIR) ---
+G01 Z={{ R11 | nc_fixed(3) }} F100
+G40 Y={{ R26 | nc_fixed(3) }} F={{ R2 | nc_fixed(0) }}
+G01 X={{ R23 | nc_fixed(3) }}
+G03 X={{ (R36 - R4) | nc_fixed(3) }} Y={{ R37 | nc_fixed(3) }} I=0 J={{ (R38 - R4) | nc_fixed(3) }} Z={{ R13 | nc_fixed(3) }}
+G01 Y=0 Z={{ R12 | nc_fixed(3) }}
+G01 Y={{ (-R37) | nc_fixed(3) }} Z={{ R13 | nc_fixed(3) }}
+G03 X={{ R23 | nc_fixed(3) }} Y={{ (-R26) | nc_fixed(3) }} I={{ (-R38 + R4) | nc_fixed(3) }} Z={{ R11 | nc_fixed(3) }}
+G01 X={{ R25 | nc_fixed(3) }}
+G03 X={{ (-R38 + R4) | nc_fixed(3) }} Y={{ (-R37) | nc_fixed(3) }} I=0 J={{ (-R38 + R4) | nc_fixed(3) }} Z={{ R13 | nc_fixed(3) }}
+G01 Y=0 Z={{ R12 | nc_fixed(3) }}
+G01 Y={{ R37 | nc_fixed(3) }} Z={{ R13 | nc_fixed(3) }}
+G03 X={{ R25 | nc_fixed(3) }} Y={{ R26 | nc_fixed(3) }} I={{ (R38 - R4) | nc_fixed(3) }} Z={{ R11 | nc_fixed(3) }}
+G01 Y=0
+{%- else %}
+; --- 开口带圆弧 (OPEN_WITH_CIR) ---
+G01 Z={{ R11 | nc_fixed(3) }} F100
+G40 Y={{ R26 | nc_fixed(3) }} F={{ R2 | nc_fixed(0) }}
+G01 X={{ R23 | nc_fixed(3) }}
+G03 X={{ (R36 - R4) | nc_fixed(3) }} Y={{ R37 | nc_fixed(3) }} I=0 J={{ (R38 - R4) | nc_fixed(3) }} Z={{ R13 | nc_fixed(3) }}
+G01 Y=0 Z={{ R12 | nc_fixed(3) }}
+G01 Y={{ (-R37) | nc_fixed(3) }} Z={{ R13 | nc_fixed(3) }}
+G03 X={{ R23 | nc_fixed(3) }} Y={{ (-R26) | nc_fixed(3) }} I={{ (-R38 + R4) | nc_fixed(3) }} Z={{ R11 | nc_fixed(3) }}
+G01 X={{ R25 }}
+G01 Y=0
+{% endif %}
+{% endif %}
+
+G90 G0 Z=5
+G0 G40 Z=100
+STOPRE
+;-----------
+ROT
+TRANS
+DIAMON
+M14=9
+M13=9
+M10=151
+M1=5
+GX73
+GZ73 Y0
+M01
+;-----------
+RET

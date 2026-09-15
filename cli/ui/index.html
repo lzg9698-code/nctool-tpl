@@ -11,22 +11,32 @@
   目标：为本项目（nctool-tpl / nctool-core / nctool-cli）提供本地运行的
         可视化参数表单 + 实时 G-code 预览，见 docs/DEV_PLAN_CLI_UI.md §5/§6。
 
+  界面为 v2 设计方案（docs/UI_DESIGN_PROPOSAL.html）的落地实现，四条原则：
+    · 结果优先：结果区在任何断点下可见或一步可达（窄屏用分段视图切换）
+    · 就地反馈：校验错误贴着出错字段，模板行列定位降为字段下方次级信息
+    · 渐进披露：必选参数常展开；可选参数、源码、批量、自定义机床按需展开
+    · 状态可见：运行/成功/失败状态出现在结果区头部，页脚状态条只做辅助
+
   设计要点
     · 零外部运行时依赖（无框架 / 无 CDN / 无字体库），单文件可直接双击打开，
       也可经 include_str! 内嵌进 binary 由 `nctool ui` 提供。
-    · 演示模式（默认）：内置模板库 + 迷你 Jinja 渲染器 + 客户端校验/后处理，
-      离线即可完整体验「选模板 → 填参数 → 实时预览 → 校验 → 下载」全链路。
-    · 服务模式：切换 API.mode='server' 并配置 base 后，全部请求转发到
-      nctool 的 HTTP API（§6 契约：{ ok, data?, error? }），前端零改动。
-    · 视觉：工业数控风格，暗色为默认（机床 HMI 观感），支持亮/暗主题切换、
-      响应式（桌面三栏 / 移动端堆叠）、G-code 轻量语法高亮。
+    · 模式自动判定：以 file:// 打开（双击本地文件）走演示模式——内置模板库 +
+      迷你 Jinja 渲染器 + 客户端校验/后处理，离线即可完整体验
+      「选模板 → 填参数 → 实时预览 → 校验 → 下载」全链路；经 `nctool ui`
+      以 http(s):// 提供服务时走服务模式，全部请求转发到 nctool 的
+      HTTP API（§6 契约：{ ok, data?, error? }），前端零改动。
+    · 视觉：工业数控风格，暗色为默认（机床 HMI 观感）；亮色为对等主题
+      （令牌成对定义，正文对比度 ≥ 4.5:1），支持 G-code 轻量语法高亮。
+    · 键盘：⌘/Ctrl+K 命令面板、⌘/Ctrl+⏎ 立即生成、⌘/Ctrl+S 存为预设、Esc 关闭。
 
   页面结构
-    header          顶栏：标识 / 数据源徽标 / 机床切换 / 主题切换 / 帮助
-    aside#sidebar   模板库：搜索 + 分类过滤 + 模板列表
-    main            工作台：模板工具栏 + 左侧参数表单 / 右侧实时预览与校验
-    modals          源码编辑 / 预设管理 / 批量生成 / 自定义机床 / 关于
-    footer          状态栏：数据源 / 模板数 / 渲染耗时 / 状态
+    header.appbar    应用栏：标识 / 模式徽标 / 命令面板 / 主题 / 帮助
+    aside.nav        模板导航：搜索 + 分类 + 最近使用 + 模板卡（挂预设 chips）
+    section.params   参数区：必填进度 + 预设 chips + 分组 + 就地校验 + 可选折叠
+    section.result   结果区：状态 pill + 机床 chip + 统计 + 视图 tab +
+                     工序索引 + 代码视图 + 动作条（复制 / 下载）
+    modals           侧抽屉：源码编辑 / 预设管理 / 批量生成 / 自定义机床 / 关于
+    footer           状态条：状态 / 数据源 / 模板数 / 版本
 
   API 契约（对接后端时保持）：
     GET  /api/templates?category=
@@ -38,7 +48,7 @@
   ═══════════════════════════════════════════════════════════════════
 -->
 <style>
-/* ══════════════ 设计令牌（CSS 变量）：暗色为默认 ══════════════ */
+/* ══════════════ 设计令牌（v2）：暗色为默认，亮色为对等主题 ══════════════ */
 :root, [data-theme="dark"] {
   --bg:            #0b0f14;
   --bg-panel:      #12171e;
@@ -48,592 +58,606 @@
   --border:        #222c38;
   --border-strong: #2d3a49;
   --text:          #d7dfe8;
-  --text-dim:      #8594a3;
-  --text-faint:    #55606c;
-  --accent:        #e8a33d;      /* 主强调色（琥珀，机床 HMI 观感） */
-  --accent-2:      #4aa3df;      /* 次强调色（钢蓝） */
+  --text-dim:      #9aa8b6;   /* v2：提亮一档，保证 ≥ 4.5:1 */
+  --text-faint:    #6b7887;   /* v2：仅用于非必要装饰（≥ 3:1） */
+  --accent:        #e8a33d;
+  --accent-ink:    #1a1206;
+  --accent-2:      #4aa3df;
   --ok:            #3fb68b;
   --warn:          #e0a33d;
   --err:           #e0654f;
   --info:          #4aa3df;
+  --ok-bg:         rgba(63,182,139,.12);
+  --err-bg:        rgba(224,101,79,.12);
+  --warn-bg:       rgba(224,163,61,.12);
+  --shadow:        none;
+  --ring:          rgba(232,163,61,.45);
   /* G-code 高亮 */
   --gc-line:  #5c6b7a;
-  --gc-prog:  #e8a33d;
-  --gc-g:     #4aa3df;
-  --gc-m:     #e8a33d;
-  --gc-tsf:   #5ac8a3;
-  --gc-xyz:   #d98a4a;
-  --gc-cmt:   #6d7f8f;
-  --gc-num:   #9aa7b5;
-  --shadow:   0 10px 30px rgba(0,0,0,.35);
-  --radius:   10px;
-  --mono: "JetBrains Mono", Consolas, "Cascadia Mono", Menlo, monospace;
-  --sans: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
-          "Microsoft YaHei", "Helvetica Neue", Arial, sans-serif;
+  --gc-cmt:   #6b7887;
+  --gc-g:     #e8a33d;
+  --gc-m:     #4aa3df;
+  --gc-tsf:   #9aa8b6;
+  --gc-xyz:   #7fb3e0;
+  --gc-num:   #9aa8b6;
+  --gc-prog:  #3fb68b;
 }
 [data-theme="light"] {
-  --bg:            #f2f5f8;
+  --bg:            #f4f5f3;
   --bg-panel:      #ffffff;
-  --bg-panel-2:    #f6f9fb;
-  --bg-hover:      #eaf0f5;
-  --bg-active:     #dde8f1;
-  --border:        #dde4ea;
-  --border-strong: #c6d1da;
-  --text:          #1b2530;
-  --text-dim:      #5b6b7a;
-  --text-faint:    #93a1ad;
-  --accent:        #b9791d;
-  --accent-2:      #2f7fc1;
-  --ok:            #219a72;
-  --warn:          #b9791d;
-  --err:           #c84d3a;
-  --info:          #2f7fc1;
-  --gc-line:  #9aa7b5;
-  --gc-prog:  #a86a12;
-  --gc-g:     #1c6fb4;
-  --gc-m:     #a86a12;
-  --gc-tsf:   #1e8f6d;
-  --gc-xyz:   #b05f23;
-  --gc-cmt:   #7a8a99;
-  --gc-num:   #4a5a6a;
-  --shadow:   0 10px 30px rgba(30,50,70,.12);
+  --bg-panel-2:    #fafaf8;
+  --bg-hover:      #eceee9;
+  --bg-active:     #e6eef7;
+  --border:        #e0e2dc;
+  --border-strong: #cfd2cb;
+  --text:          #25251f;
+  --text-dim:      #5f5e5a;
+  --text-faint:    #8a8983;
+  --accent:        #b26a12;
+  --accent-ink:    #ffffff;
+  --accent-2:      #185fa5;
+  --ok:            #2f7f62;
+  --warn:          #8a5a08;
+  --err:           #a32d2d;
+  --info:          #185fa5;
+  --ok-bg:         #e8f4ee;
+  --err-bg:        #fcebeb;
+  --warn-bg:       #faeeda;
+  --shadow:        0 1px 2px rgba(20,20,15,.05), 0 6px 18px rgba(20,20,15,.06);
+  --ring:          rgba(178,106,18,.35);
+  --gc-line:  #b4b2a9;
+  --gc-cmt:   #8a8983;
+  --gc-g:     #8a5a08;
+  --gc-m:     #185fa5;
+  --gc-tsf:   #5f5e5a;
+  --gc-xyz:   #185fa5;
+  --gc-num:   #5f5e5a;
+  --gc-prog:  #0f6e56;
 }
 
-* { box-sizing: border-box; margin: 0; padding: 0; }
+* { box-sizing: border-box; }
 html, body { height: 100%; }
 body {
-  font-family: var(--sans);
-  background: var(--bg);
-  color: var(--text);
-  font-size: 14px;
-  line-height: 1.55;
-  display: flex; flex-direction: column;
-  transition: background .25s ease, color .25s ease;
-  overflow: hidden;
+  margin: 0; background: var(--bg); color: var(--text);
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC", "Hiragino Sans GB", "Microsoft YaHei", sans-serif;
+  font-size: 14px; line-height: 1.6; overflow: hidden;
 }
-::-webkit-scrollbar { width: 10px; height: 10px; }
-::-webkit-scrollbar-thumb { background: var(--border-strong); border-radius: 6px; }
-::-webkit-scrollbar-track { background: transparent; }
+button, input, select, textarea { font: inherit; color: inherit; }
+button { cursor: pointer; background: none; border: none; }
+:focus-visible { outline: 2px solid var(--ring); outline-offset: 2px; border-radius: 6px; }
+code { font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, "Liberation Mono", monospace; font-size: 12.5px; }
+h1, h2, h3 { font-weight: 500; margin: 0; letter-spacing: -.2px; }
 
-/* ══════════════ 顶栏 ══════════════ */
-header {
-  display: flex; align-items: center; gap: 14px;
-  padding: 10px 16px;
-  background: var(--bg-panel);
-  border-bottom: 1px solid var(--border);
-  flex: 0 0 auto;
-  z-index: 20;
+/* ── 应用外壳 ── */
+.app { height: 100vh; display: grid; grid-template-rows: 56px 1fr 28px; overflow: hidden; }
+.appbar {
+  display: flex; align-items: center; gap: 14px; padding: 0 16px;
+  background: var(--bg-panel); border-bottom: 1px solid var(--border);
 }
 .brand { display: flex; align-items: center; gap: 10px; min-width: 0; }
 .brand .logo {
-  width: 34px; height: 34px; border-radius: 8px; flex: 0 0 auto;
-  background: linear-gradient(135deg, var(--accent), #c77b1d);
+  width: 28px; height: 28px; border-radius: 8px; flex: none;
+  background: var(--accent); color: var(--accent-ink);
   display: flex; align-items: center; justify-content: center;
-  color: #10151c; box-shadow: var(--shadow);
 }
-.brand .logo svg { width: 22px; height: 22px; }
-.brand h1 { font-size: 17px; letter-spacing: .5px; white-space: nowrap; }
-.brand .sub { font-size: 11px; color: var(--text-faint); margin-top: -2px; white-space: nowrap; }
-.header-right { margin-left: auto; display: flex; align-items: center; gap: 10px; }
-
+.brand .logo svg { width: 17px; height: 17px; }
+.brand h1 { font-size: 16px; }
+.brand .sub { font-size: 12px; color: var(--text-dim); margin: 0; white-space: nowrap; }
+.spacer { flex: 1; }
 .mode-badge {
-  font-size: 11px; padding: 3px 10px; border-radius: 999px;
-  border: 1px solid var(--border-strong);
-  color: var(--text-dim); background: var(--bg-panel-2);
-  display: flex; align-items: center; gap: 6px; white-space: nowrap;
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12px;
+  padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border);
+  color: var(--text-dim); white-space: nowrap;
 }
-.mode-badge .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--accent); }
-.mode-badge.demo .dot { background: var(--accent); box-shadow: 0 0 6px var(--accent); }
-.mode-badge.server .dot { background: var(--ok); box-shadow: 0 0 6px var(--ok); }
+.mode-badge .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.mode-badge.demo .dot { background: var(--accent-2); }
+.mode-badge.server .dot { background: var(--ok); }
 
-/* 选择器 / 按钮通用 */
-select, .btn, .chip {
-  font-family: var(--sans); font-size: 13px; color: var(--text);
-  background: var(--bg-panel-2); border: 1px solid var(--border-strong);
-  border-radius: 8px; padding: 6px 10px; cursor: pointer;
-  transition: border-color .15s, background .15s, transform .06s;
-  outline: none;
+/* ── 按钮 ── */
+.btn {
+  display: inline-flex; align-items: center; justify-content: center; gap: 7px;
+  height: 34px; padding: 0 12px; border-radius: 8px; font-size: 13px;
+  border: 1px solid var(--border); background: var(--bg-panel-2); color: var(--text);
+  transition: background 120ms ease-out, border-color 120ms ease-out;
 }
-select:hover, .btn:hover, .chip:hover { border-color: var(--accent); }
-.btn:active { transform: translateY(1px); }
-.btn.primary { background: var(--accent); border-color: var(--accent); color: #14100a; font-weight: 600; }
-.btn.primary:hover { filter: brightness(1.07); }
+.btn:hover { background: var(--bg-hover); border-color: var(--border-strong); }
+.btn svg { width: 16px; height: 16px; flex: none; }
+.btn.primary { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); font-weight: 500; }
+.btn.primary:hover { filter: brightness(1.06); }
 .btn.ghost { background: transparent; }
-.btn.icon { display: inline-flex; align-items: center; gap: 6px; }
-.btn svg { width: 14px; height: 14px; }
+.btn.icon { width: 34px; padding: 0; }
+.btn:disabled { opacity: .45; cursor: not-allowed; }
+.kbd { font-size: 11.5px; color: var(--text-faint); border: 1px solid var(--border); border-radius: 5px; padding: 1px 5px; }
 
-/* ══════════════ 主布局 ══════════════ */
-.layout { flex: 1 1 auto; display: flex; min-height: 0; }
+/* ── 主体：导航 / 参数 / 结果 ── */
+.body { display: grid; grid-template-columns: 280px 400px minmax(0, 1fr); min-height: 0; }
+.body > * { min-width: 0; }
 
-/* ── 侧栏：模板库 ── */
-aside {
-  width: 272px; flex: 0 0 auto;
-  background: var(--bg-panel);
-  border-right: 1px solid var(--border);
-  display: flex; flex-direction: column;
-  min-height: 0;
+.nav { display: flex; flex-direction: column; min-height: 0; background: var(--bg-panel); border-right: 1px solid var(--border); }
+.nav-head { padding: 12px; border-bottom: 1px solid var(--border); display: flex; flex-direction: column; gap: 10px; }
+.search { position: relative; display: flex; align-items: center; }
+.search input {
+  width: 100%; height: 36px; padding: 0 32px 0 11px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg-panel-2);
 }
-.sidebar-head { padding: 12px 12px 6px; }
-.search-box { position: relative; }
-.search-box input {
-  width: 100%; padding: 8px 30px 8px 12px;
-  background: var(--bg-panel-2); border: 1px solid var(--border-strong);
-  border-radius: 8px; color: var(--text); font-size: 13px; outline: none;
-  transition: border-color .15s;
+.search input::placeholder { color: var(--text-faint); }
+.search svg { position: absolute; right: 10px; width: 15px; height: 15px; color: var(--text-faint); pointer-events: none; }
+.chips { display: flex; flex-wrap: wrap; gap: 6px; }
+.chip {
+  display: inline-flex; align-items: center; gap: 5px; font-size: 12px;
+  padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border);
+  color: var(--text-dim); background: transparent;
+  transition: all 120ms ease-out;
 }
-.search-box input:focus { border-color: var(--accent); }
-.search-box svg { position: absolute; right: 9px; top: 50%; transform: translateY(-50%); width: 15px; height: 15px; color: var(--text-faint); }
-.cats { display: flex; flex-wrap: wrap; gap: 6px; padding: 10px 12px 4px; }
-.chip { font-size: 12px; padding: 4px 10px; border-radius: 999px; border-color: var(--border); color: var(--text-dim); }
-.chip.active { background: var(--bg-active); border-color: var(--accent); color: var(--accent); font-weight: 600; }
-.chip .n { opacity: .6; font-size: 11px; margin-left: 4px; }
+.chip:hover { border-color: var(--border-strong); color: var(--text); }
+.chip.active { background: var(--bg-active); border-color: var(--accent); color: var(--text); }
+.chip .n { font-size: 11px; color: var(--text-faint); }
+.chip.act { color: var(--accent); border-color: var(--accent); }
 
-.tpl-list { flex: 1 1 auto; overflow-y: auto; padding: 6px 8px 12px; }
+.tpl-list { flex: 1; overflow-y: auto; padding: 8px; }
+.tpl-sec { font-size: 11.5px; color: var(--text-faint); padding: 10px 8px 6px; }
 .tpl-item {
-  padding: 9px 10px; border-radius: 8px; cursor: pointer;
-  border: 1px solid transparent; margin-bottom: 3px;
-  transition: background .12s, border-color .12s;
+  position: relative; padding: 10px 12px 10px 14px; border-radius: 10px;
+  border: 1px solid transparent; margin-bottom: 2px; cursor: pointer;
+  transition: background 120ms ease-out;
 }
 .tpl-item:hover { background: var(--bg-hover); }
-.tpl-item.active { background: var(--bg-active); border-color: var(--accent); }
+.tpl-item.active { background: var(--bg-active); border-color: var(--border-strong); }
+.tpl-item.active::before {
+  content: ""; position: absolute; left: 4px; top: 10px; bottom: 10px;
+  width: 3px; border-radius: 2px; background: var(--accent);
+}
 .tpl-item .row1 { display: flex; align-items: center; gap: 8px; }
-.tpl-item .name { font-weight: 600; font-family: var(--mono); font-size: 12.5px; }
+.tpl-item .name { font-size: 14px; font-weight: 500; }
 .tpl-item .badge {
-  font-size: 10px; padding: 1px 7px; border-radius: 999px;
-  border: 1px solid var(--border-strong); color: var(--text-faint); margin-left: auto;
+  font-size: 10.5px; padding: 1px 6px; border-radius: 999px;
+  border: 1px solid var(--border); color: var(--text-faint);
 }
-.tpl-item .badge.builtin { color: var(--accent-2); border-color: var(--accent-2); }
-.tpl-item .badge.demo { color: var(--ok); border-color: var(--ok); }
-.tpl-item .desc { font-size: 11.5px; color: var(--text-dim); margin-top: 3px; overflow: hidden; text-overflow: ellipsis; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
-.tpl-item .meta { font-size: 10.5px; color: var(--text-faint); margin-top: 4px; display: flex; gap: 10px; }
+.tpl-item .badge.builtin { color: var(--accent); border-color: var(--accent); }
+.tpl-item .desc {
+  font-size: 12px; color: var(--text-dim); margin-top: 2px;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.tpl-item .meta { display: flex; gap: 10px; font-size: 11.5px; color: var(--text-faint); margin-top: 6px; }
+.tpl-presets { display: flex; flex-wrap: wrap; gap: 5px; margin-top: 7px; }
 
-/* ── 主工作区 ── */
-main { flex: 1 1 auto; display: flex; flex-direction: column; min-width: 0; min-height: 0; }
-.toolbar {
-  display: flex; align-items: center; gap: 10px; flex-wrap: wrap;
-  padding: 10px 16px; background: var(--bg-panel); border-bottom: 1px solid var(--border);
-}
-.toolbar .crumb { font-size: 12px; color: var(--text-faint); font-family: var(--mono); }
-.toolbar .crumb b { color: var(--text-dim); font-weight: 600; }
-.toolbar .tpl-title { font-size: 15px; font-weight: 700; font-family: var(--mono); }
-.toolbar .tpl-desc { font-size: 12px; color: var(--text-dim); }
-.toolbar .spacer { flex: 1 1 auto; }
-.toolbar .actions { display: flex; gap: 8px; flex-wrap: wrap; }
+/* ── 参数区 ── */
+.params { display: flex; flex-direction: column; min-height: 0; background: var(--bg-panel); border-right: 1px solid var(--border); }
+.p-head { padding: 14px 16px 12px; border-bottom: 1px solid var(--border); }
+.p-title { display: flex; align-items: center; gap: 10px; }
+.p-title h2 { font-size: 16px; }
+.p-title .crumb { font-size: 12px; color: var(--text-dim); }
+.p-title .reset { margin-left: auto; font-size: 12px; color: var(--text-dim); text-decoration: underline; }
+.progress { margin-top: 10px; height: 2px; border-radius: 2px; background: var(--border); overflow: hidden; }
+.progress i { display: block; height: 100%; width: 0; background: var(--ok); transition: width 180ms ease-out; }
+.p-meta { display: flex; align-items: center; gap: 8px; margin-top: 8px; font-size: 12px; color: var(--text-dim); flex-wrap: wrap; }
+.p-meta .req { color: var(--warn); }
+.p-meta .done { color: var(--ok); }
+.presets { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 10px; }
+.p-body { flex: 1; overflow-y: auto; padding: 6px 16px 24px; }
 
-.workspace {
-  flex: 1 1 auto; display: grid; grid-template-columns: minmax(340px, 44%) 1fr;
-  gap: 14px; padding: 14px 16px; min-height: 0; overflow: hidden;
+.form-group { margin-top: 16px; }
+.form-group-title { font-size: 12px; font-weight: 500; color: var(--text-faint); margin-bottom: 10px; }
+.param-field { margin-bottom: 14px; padding: 2px; border-radius: 8px; }
+.param-field.focus { background: var(--warn-bg); }
+.param-top { display: flex; align-items: baseline; gap: 6px; margin-bottom: 5px; flex-wrap: wrap; }
+.param-top label { font-size: 13.5px; }
+.req-tag { font-size: 11px; color: var(--err); }
+.opt-tag { font-size: 11px; color: var(--text-faint); }
+.range { margin-left: auto; font-size: 11.5px; color: var(--text-faint); }
+.param-desc { font-size: 12px; color: var(--text-dim); margin-bottom: 5px; }
+.param-input-wrap { position: relative; display: flex; align-items: center; }
+.param-input-wrap input[type=number],
+.param-input-wrap input[type=text] {
+  width: 100%; height: 40px; padding: 0 54px 0 11px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg-panel-2);
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px;
 }
-.panel {
-  background: var(--bg-panel); border: 1px solid var(--border);
-  border-radius: var(--radius); display: flex; flex-direction: column;
-  min-height: 0; overflow: hidden;
+.param-input-wrap select {
+  width: 100%; height: 40px; padding: 0 11px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg-panel-2); color: inherit;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 14px;
 }
-.panel-head {
-  display: flex; align-items: center; gap: 8px;
-  padding: 10px 14px; border-bottom: 1px solid var(--border);
-  font-size: 12.5px; font-weight: 700; letter-spacing: .4px;
-  color: var(--text-dim); text-transform: uppercase; flex: 0 0 auto;
-}
-.panel-head .hint { margin-left: auto; font-weight: 400; text-transform: none; font-size: 11px; color: var(--text-faint); }
-.panel-body { flex: 1 1 auto; overflow-y: auto; padding: 12px 14px; }
+.param-input-wrap input:hover { border-color: var(--border-strong); }
+.param-input-wrap select:hover { border-color: var(--border-strong); }
+/* 派生参数提示（这些参数由系统算好注入，不出现在表单里） */
+.param-note { margin-top: 10px; font-size: 12px; color: var(--text-faint); line-height: 1.6; }
+.param-input-wrap .suffix { position: absolute; right: 11px; font-size: 12px; color: var(--text-faint); pointer-events: none; }
+.param-field.err .param-input-wrap input { border-color: var(--err); background: var(--err-bg); }
+.field-msg { display: none; margin-top: 5px; font-size: 12px; color: var(--err); }
+.field-msg .hint { color: var(--text-faint); font-size: 11.5px; }
+.param-field.err .field-msg { display: block; }
+.param-field.err .range { display: none; }
 
-/* ── 参数表单 ── */
-.form-group { margin-bottom: 16px; }
-.form-group-title {
-  font-size: 12px; font-weight: 700; color: var(--accent);
-  display: flex; align-items: center; gap: 8px; margin-bottom: 8px;
-}
-.form-group-title::after { content: ""; flex: 1; height: 1px; background: var(--border); }
-.param-field {
-  border: 1px solid var(--border); border-radius: 8px;
-  padding: 8px 10px; margin-bottom: 8px; background: var(--bg-panel-2);
-  transition: border-color .15s, box-shadow .15s;
-}
-.param-field.req { border-left: 3px solid var(--err); }
-.param-field.opt { border-left: 3px solid var(--border-strong); }
-.param-field.error { border-color: var(--err); box-shadow: 0 0 0 3px rgba(224,101,79,.15); }
-.param-field.focus { border-color: var(--accent); }
-.param-top { display: flex; align-items: center; gap: 8px; margin-bottom: 6px; }
-.param-top label { font-weight: 600; font-family: var(--mono); font-size: 13px; }
-.param-top .req-tag {
-  font-size: 10px; color: var(--err); border: 1px solid var(--err);
-  border-radius: 4px; padding: 0 5px; line-height: 16px;
-}
-.param-top .opt-tag { font-size: 10px; color: var(--text-faint); border: 1px solid var(--border-strong); border-radius: 4px; padding: 0 5px; line-height: 16px; }
-.param-top .unit { font-size: 11px; color: var(--text-faint); }
-.param-top .range { font-size: 10.5px; color: var(--text-faint); margin-left: auto; font-family: var(--mono); }
-.param-desc { font-size: 11.5px; color: var(--text-dim); margin-bottom: 6px; }
-.param-input-wrap { display: flex; align-items: center; gap: 8px; }
-.param-input-wrap input[type="number"], .param-input-wrap input[type="text"] {
-  flex: 1; padding: 7px 10px; background: var(--bg);
-  border: 1px solid var(--border-strong); border-radius: 6px; color: var(--text);
-  font-family: var(--mono); font-size: 13px; outline: none; transition: border-color .15s;
-}
-.param-input-wrap input:focus { border-color: var(--accent); }
-.param-input-wrap .suffix { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
-
-/* 布尔开关 */
-.switch { position: relative; width: 42px; height: 24px; flex: 0 0 auto; cursor: pointer; }
+.switch { position: relative; display: inline-block; width: 40px; height: 22px; flex: none; }
 .switch input { opacity: 0; width: 0; height: 0; }
 .switch .slider {
-  position: absolute; inset: 0; background: var(--border-strong);
-  border-radius: 999px; transition: background .2s;
+  position: absolute; inset: 0; border-radius: 999px;
+  background: var(--border-strong); transition: background 120ms ease-out;
 }
 .switch .slider::before {
-  content: ""; position: absolute; width: 18px; height: 18px; left: 3px; top: 3px;
-  background: #fff; border-radius: 50%; transition: transform .2s;
+  content: ""; position: absolute; width: 16px; height: 16px; border-radius: 50%;
+  left: 3px; top: 3px; background: #fff; transition: transform 120ms ease-out;
 }
 .switch input:checked + .slider { background: var(--accent); }
 .switch input:checked + .slider::before { transform: translateX(18px); }
-.switch-row { display: flex; align-items: center; gap: 8px; }
-.switch-row .lbl { font-size: 12px; color: var(--text-dim); }
 
-/* 生成选项 */
-.opts { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 18px; }
-.opt-item { display: flex; align-items: center; gap: 8px; font-size: 12.5px; cursor: pointer; }
-.opt-item input[type="checkbox"] { accent-color: var(--accent); width: 14px; height: 14px; cursor: pointer; }
-.opt-item .sub { color: var(--text-faint); font-size: 11px; }
-.opt-inline { display: flex; align-items: center; gap: 6px; font-size: 12.5px; color: var(--text-dim); }
-.opt-inline input { width: 60px; padding: 4px 6px; background: var(--bg); border: 1px solid var(--border-strong); border-radius: 5px; color: var(--text); font-family: var(--mono); }
-.seg { display: flex; border: 1px solid var(--border-strong); border-radius: 8px; overflow: hidden; }
-.seg button { flex: 1; padding: 6px 10px; background: var(--bg-panel-2); border: none; color: var(--text-dim); font-size: 12px; cursor: pointer; }
-.seg button.active { background: var(--accent); color: #14100a; font-weight: 600; }
+.optbox { border: 1px solid var(--border); border-radius: 10px; margin-top: 18px; overflow: hidden; }
+.optbox > summary {
+  display: flex; align-items: center; gap: 8px; padding: 11px 12px;
+  font-size: 13px; color: var(--text-dim); cursor: pointer; list-style: none;
+}
+.optbox > summary::-webkit-details-marker { display: none; }
+.optbox > summary:hover { background: var(--bg-hover); }
+.optbox > summary .caret { transition: transform 180ms ease-out; }
+.optbox[open] > summary .caret { transform: rotate(90deg); }
+.optbox .optbox-body { padding: 4px 12px 12px; border-top: 1px solid var(--border); }
 
-/* ── 预览区 ── */
-.preview-wrap { display: flex; flex-direction: column; min-height: 0; flex: 1; }
-.preview-toolbar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; border-bottom: 1px solid var(--border); flex: 0 0 auto; }
-.preview-toolbar .stat { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
-.preview-toolbar .stat b { color: var(--text-dim); }
-/* ASCII 模式提示：勾上 ASCII 清洗时显示，避免用户把中文被替换为 ? 当成显示 bug */
-.preview-toolbar .stat.ascii-on { color: #ff8866; font-weight: 600; }
-.preview-toolbar .spacer { flex: 1; }
-.tabs { display: flex; gap: 2px; }
+.opts { display: flex; flex-direction: column; gap: 2px; }
+.opt-item { display: flex; align-items: center; gap: 8px; padding: 6px 0; font-size: 13px; cursor: pointer; }
+.opt-item input[type=checkbox] { width: 16px; height: 16px; accent-color: var(--accent); }
+.opt-item .sub { font-size: 11.5px; color: var(--text-faint); }
+.opt-inline { display: flex; align-items: center; gap: 6px; font-size: 12px; color: var(--text-dim); padding: 6px 0 6px 24px; }
+.opt-inline input { width: 70px; height: 28px; padding: 0 8px; border-radius: 6px; border: 1px solid var(--border); background: var(--bg-panel-2); }
+.seg { display: inline-flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+.seg button { font-size: 12.5px; padding: 5px 12px; color: var(--text-dim); }
+.seg button.active { background: var(--bg-active); color: var(--text); font-weight: 500; }
+.opt-note { font-size: 11.5px; color: var(--text-faint); }
+
+/* ── 结果区 ── */
+.result { display: flex; flex-direction: column; min-height: 0; min-width: 0; background: var(--bg); }
+.r-head {
+  position: relative; display: flex; align-items: center; gap: 10px;
+  height: 44px; padding: 0 16px; overflow: hidden;
+  background: var(--bg-panel); border-bottom: 1px solid var(--border);
+}
+.state {
+  display: inline-flex; align-items: center; gap: 6px; font-size: 12.5px; font-weight: 500;
+  padding: 3px 10px; border-radius: 999px; border: 1px solid var(--border);
+  color: var(--text-dim); white-space: nowrap;
+}
+.state.ok { color: var(--ok); background: var(--ok-bg); border-color: transparent; }
+.state.err { color: var(--err); background: var(--err-bg); border-color: transparent; }
+.state.err[data-jump] { cursor: pointer; }
+.mchip {
+  display: inline-flex; align-items: center; gap: 6px; padding: 0 6px 0 10px;
+  height: 28px; border-radius: 999px; border: 1px solid var(--border); flex: none;
+}
+.mchip:hover { border-color: var(--accent); }
+.mchip svg { width: 13px; height: 13px; color: var(--text-dim); flex: none; }
+.mchip select {
+  border: none; background: transparent; font-size: 12.5px; color: var(--text);
+  max-width: 190px; padding: 0 2px; cursor: pointer;
+}
+.mchip select:focus { outline: none; }
+.mchip .btn.ghost { height: 22px; padding: 0 7px; font-size: 11.5px; border-radius: 999px; }
+.r-head .stats { margin-left: auto; display: flex; gap: 12px; font-size: 12px; color: var(--text-dim); white-space: nowrap; }
+.r-head .stats .stat.ascii-on { color: var(--err); }
+.r-head .prog { position: absolute; left: 0; right: 0; bottom: -1px; height: 2px; overflow: hidden; }
+.r-head .prog i { display: block; height: 100%; width: 0; background: var(--accent); }
+.r-head.busy .prog i { width: 100%; animation: slide 900ms ease-in-out infinite; }
+@keyframes slide { 0% { transform: translateX(-100%); } 100% { transform: translateX(100%); } }
+
+.tabs { display: flex; gap: 2px; padding: 8px 12px 0; background: var(--bg-panel); border-bottom: 1px solid var(--border); }
 .tab {
-  padding: 5px 14px; font-size: 12px; color: var(--text-dim); cursor: pointer;
-  border: 1px solid transparent; border-radius: 7px 7px 0 0; background: transparent;
+  font-size: 13px; padding: 7px 12px 9px; color: var(--text-dim);
+  border-bottom: 2px solid transparent; margin-bottom: -1px;
 }
-.tab.active { background: var(--bg-panel-2); border-color: var(--border); border-bottom-color: transparent; color: var(--accent); font-weight: 600; }
-.preview-body { position: relative; flex: 1 1 auto; min-height: 0; }
-.preview-body .tabpage { display: none; position: absolute; inset: 0; overflow: auto; }
-.preview-body .tabpage.active { display: block; }
+.tab:hover { color: var(--text); }
+.tab.active { color: var(--text); border-bottom-color: var(--accent); font-weight: 500; }
+
+.r-main { flex: 1; display: grid; grid-template-columns: minmax(0, 1fr); min-height: 0; min-width: 0; position: relative; }
+.r-main.with-index { grid-template-columns: 150px minmax(0, 1fr); }
+.idx { border-right: 1px solid var(--border); background: var(--bg-panel); overflow-y: auto; padding: 8px 0; }
+.idx .h { font-size: 11.5px; color: var(--text-faint); padding: 6px 12px 8px; }
+.idx button {
+  display: block; width: 100%; text-align: left; font-size: 12px; color: var(--text-dim);
+  padding: 6px 12px; border-left: 2px solid transparent;
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.idx button:hover { background: var(--bg-hover); color: var(--text); }
+.idx button.on { color: var(--accent); border-left-color: var(--accent); }
+
+.preview-body { overflow: auto; min-height: 0; min-width: 0; }
+.preview-body.rendering { animation: fade 200ms ease-out; }
+@keyframes fade { from { opacity: .55; } to { opacity: 1; } }
+.tabpage { display: none; }
+.tabpage.active { display: block; }
+
 .gcode-view {
-  font-family: var(--mono); font-size: 12.5px; line-height: 1.7;
-  padding: 14px 16px; white-space: pre; color: var(--text);
+  margin: 0; padding: 10px 0 40px;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.55;
 }
-.gcode-view .ln { color: var(--gc-line); user-select: none; }
-.gcode-view .prog { color: var(--gc-prog); font-weight: 600; }
-.gcode-view .g { color: var(--gc-g); font-weight: 600; }
-.gcode-view .m { color: var(--gc-m); font-weight: 600; }
+.gcode-view .cl { display: flex; padding: 0 12px 0 0; scroll-margin-top: 8px; }
+.gcode-view .cl:hover { background: var(--bg-hover); }
+.gcode-view .cl.hi { background: var(--warn-bg); }
+.gcode-view .no { width: 52px; flex: none; text-align: right; padding-right: 12px; color: var(--gc-line); user-select: none; }
+.gcode-view .tx { white-space: pre; }
+.gcode-view .cmt { color: var(--gc-cmt); }
+.gcode-view .ln { color: var(--gc-line); }
+.gcode-view .prog { color: var(--gc-prog); }
+.gcode-view .g { color: var(--gc-g); }
+.gcode-view .m { color: var(--gc-m); }
 .gcode-view .tsf { color: var(--gc-tsf); }
 .gcode-view .xyz { color: var(--gc-xyz); }
 .gcode-view .num { color: var(--gc-num); }
-.gcode-view .cmt { color: var(--gc-cmt); font-style: italic; }
-.gcode-empty { color: var(--text-faint); text-align: center; padding-top: 60px; font-size: 13px; }
-.gcode-empty svg { width: 42px; height: 42px; opacity: .35; margin-bottom: 10px; }
 
-/* 渲染扫描动画 */
-.preview-body.rendering .gcode-view { animation: scanFade .35s ease; }
-@keyframes scanFade {
-  0% { opacity: .25; }
-  100% { opacity: 1; }
+.src-view {
+  margin: 0; padding: 14px 16px 40px; white-space: pre-wrap; word-break: break-word;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.6;
 }
+.src-view .tg { color: var(--accent); }
+.src-view .tgc { color: var(--text-faint); }
 
-/* 源码视图 */
-.src-view { font-family: var(--mono); font-size: 12px; line-height: 1.6; padding: 12px 14px; white-space: pre; color: var(--text); }
-.src-view .tg { color: var(--accent-2); }      /* {{ }} {% %} */
-.src-view .tgc { color: var(--text-faint); }   /* {# #} */
-.src-view .cmt { color: var(--gc-cmt); font-style: italic; }
-
-/* 校验面板 */
-.validation { border-top: 1px solid var(--border); flex: 0 0 auto; max-height: 40%; display: flex; flex-direction: column; }
-.validation .v-head {
-  display: flex; align-items: center; gap: 10px; padding: 8px 14px; font-size: 12px;
-  border-bottom: 1px solid var(--border); color: var(--text-dim); flex: 0 0 auto;
+.gcode-empty {
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  gap: 14px; color: var(--text-dim); text-align: center; padding: 30px;
 }
-.validation .v-head .sum { margin-left: auto; font-family: var(--mono); }
-.validation .v-body { overflow-y: auto; flex: 1 1 auto; padding: 6px 10px; }
-.v-item { display: flex; gap: 8px; padding: 5px 6px; border-radius: 6px; font-size: 12.5px; align-items: baseline; cursor: pointer; }
-.v-item:hover { background: var(--bg-hover); }
-.v-item .lv { width: 8px; height: 8px; border-radius: 50%; flex: 0 0 auto; transform: translateY(-1px); }
-.v-item.error .lv { background: var(--err); box-shadow: 0 0 5px var(--err); }
-.v-item.warn .lv { background: var(--warn); }
+.gcode-empty svg { width: 34px; height: 34px; color: var(--text-faint); }
+.guide-steps { display: flex; gap: 12px; flex-wrap: wrap; justify-content: center; margin-top: 4px; }
+.guide-steps .step {
+  background: var(--bg-panel); border: 1px solid var(--border); border-radius: 10px;
+  padding: 12px 14px; width: 172px; text-align: left;
+}
+.guide-steps .step b { display: block; font-size: 12px; color: var(--accent); margin-bottom: 3px; }
+.guide-steps .step span { font-size: 12.5px; color: var(--text-dim); }
+
+.v-empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 10px; padding: 60px 20px; color: var(--text-dim); }
+.v-empty svg { width: 30px; height: 30px; color: var(--ok); }
+.vlist { padding: 14px 16px; }
+.v-item {
+  display: flex; gap: 10px; padding: 11px 13px; border-radius: 10px; margin-bottom: 8px;
+  border: 1px solid var(--border); background: var(--bg-panel); font-size: 13px; cursor: pointer;
+}
+.v-item:hover { border-color: var(--border-strong); }
+.v-item .lv { width: 8px; height: 8px; border-radius: 50%; flex: none; margin-top: 6px; background: var(--text-faint); }
+.v-item.error .lv { background: var(--err); }
+.v-item.warning .lv { background: var(--warn); }
 .v-item.info .lv { background: var(--info); }
-.v-item.error { color: var(--err); }
-.v-item.warn { color: var(--warn); }
-.v-item.info { color: var(--info); }
-.v-item .v-param { font-family: var(--mono); font-size: 11.5px; opacity: .8; }
-.v-item .v-msg { flex: 1; }
-.v-empty { color: var(--ok); font-size: 12.5px; padding: 8px; display: flex; align-items: center; gap: 8px; }
-.v-empty svg { width: 15px; height: 15px; }
+.v-item .v-param { font-weight: 500; color: var(--accent); font-family: ui-monospace, Menlo, Consolas, monospace; }
+.v-item .v-msg { color: var(--text); }
+.v-item .v-loc { font-size: 11.5px; color: var(--text-faint); margin-top: 2px; }
 
-/* ── 状态栏 ── */
-footer {
-  flex: 0 0 auto; display: flex; align-items: center; gap: 18px;
-  padding: 6px 16px; background: var(--bg-panel); border-top: 1px solid var(--border);
-  font-size: 11.5px; color: var(--text-faint); font-family: var(--mono);
+.r-foot { display: flex; align-items: center; gap: 8px; padding: 10px 16px; background: var(--bg-panel); border-top: 1px solid var(--border); }
+
+/* ── 状态条 ── */
+.statusbar {
+  display: flex; align-items: center; gap: 16px; padding: 0 16px;
+  font-size: 12px; color: var(--text-dim);
+  background: var(--bg-panel); border-top: 1px solid var(--border);
 }
-footer .st { display: flex; align-items: center; gap: 6px; }
-footer .st .dot { width: 7px; height: 7px; border-radius: 50%; background: var(--text-faint); }
-footer .st.ok .dot { background: var(--ok); box-shadow: 0 0 5px var(--ok); }
-footer .st.err .dot { background: var(--err); box-shadow: 0 0 5px var(--err); }
-footer .st.rendering .dot { background: var(--accent); animation: pulse 1s infinite; }
-@keyframes pulse { 0%,100% { opacity: 1; } 50% { opacity: .25; } }
-footer .right { margin-left: auto; display: flex; gap: 18px; }
+.statusbar .st { display: inline-flex; align-items: center; gap: 6px; }
+.statusbar .st .dot { width: 6px; height: 6px; border-radius: 50%; background: var(--ok); }
+.statusbar .st.rendering .dot { background: var(--warn); }
+.statusbar .st.err { color: var(--err); }
+.statusbar .st.err .dot { background: var(--err); }
+.statusbar .right { margin-left: auto; display: flex; gap: 16px; }
 
-/* ── 弹窗 ── */
+/* ── 抽屉（沿用 modal-mask 机制，视觉为右侧抽屉） ── */
 .modal-mask {
-  position: fixed; inset: 0; background: rgba(5,8,12,.6); backdrop-filter: blur(3px);
-  display: none; align-items: center; justify-content: center; z-index: 100;
-  padding: 20px;
+  position: fixed; inset: 0; z-index: 40; display: none;
+  background: rgba(8, 10, 14, .45);
 }
-.modal-mask.open { display: flex; animation: fadeIn .18s ease; }
-@keyframes fadeIn { from { opacity: 0; } to { opacity: 1; } }
+.modal-mask.open { display: block; }
 .modal {
-  background: var(--bg-panel); border: 1px solid var(--border-strong);
-  border-radius: 14px; box-shadow: var(--shadow); width: 640px; max-width: 100%;
-  max-height: 86vh; display: flex; flex-direction: column;
-  animation: modalIn .2s cubic-bezier(.2,.8,.3,1.1);
+  position: absolute; top: 0; right: 0; bottom: 0; width: min(520px, 94vw);
+  display: flex; flex-direction: column; background: var(--bg-panel);
+  border-left: 1px solid var(--border-strong); box-shadow: var(--shadow);
+  animation: drawer 240ms ease-out;
 }
-@keyframes modalIn { from { transform: translateY(14px) scale(.97); opacity: 0; } to { transform: none; opacity: 1; } }
-.modal-head { display: flex; align-items: center; padding: 14px 18px; border-bottom: 1px solid var(--border); }
+@keyframes drawer { from { transform: translateX(24px); opacity: .6; } to { transform: none; opacity: 1; } }
+.modal-head { display: flex; align-items: center; gap: 10px; padding: 14px 16px; border-bottom: 1px solid var(--border); }
 .modal-head h3 { font-size: 15px; }
-.modal-head .close { margin-left: auto; background: none; border: none; color: var(--text-dim); font-size: 20px; cursor: pointer; line-height: 1; }
-.modal-body { padding: 16px 18px; overflow-y: auto; flex: 1 1 auto; }
-.modal-foot { display: flex; justify-content: flex-end; gap: 8px; padding: 12px 18px; border-top: 1px solid var(--border); }
-.modal textarea {
-  width: 100%; min-height: 260px; background: var(--bg); color: var(--text);
-  border: 1px solid var(--border-strong); border-radius: 8px; padding: 10px 12px;
-  font-family: var(--mono); font-size: 12.5px; line-height: 1.6; resize: vertical; outline: none;
+.modal-head .close { margin-left: auto; font-size: 20px; line-height: 1; color: var(--text-dim); padding: 0 4px; }
+.modal-head .close:hover { color: var(--text); }
+.modal-body { flex: 1; overflow-y: auto; padding: 16px; }
+.modal-foot { display: flex; gap: 8px; padding: 12px 16px; border-top: 1px solid var(--border); }
+.modal-foot .btn.primary { margin-left: auto; }
+.field { margin-bottom: 14px; }
+.field > label { display: block; font-size: 12.5px; color: var(--text-dim); margin-bottom: 5px; }
+.field input[type=text], .field textarea, .field input[type=number] {
+  width: 100%; padding: 9px 11px; border-radius: 8px;
+  border: 1px solid var(--border); background: var(--bg-panel-2);
 }
-.modal textarea:focus { border-color: var(--accent); }
-.modal .field { margin-bottom: 12px; }
-.modal .field label { display: block; font-size: 12px; color: var(--text-dim); margin-bottom: 5px; font-weight: 600; }
-.modal .field input[type="text"] {
-  width: 100%; padding: 7px 10px; background: var(--bg); border: 1px solid var(--border-strong);
-  border-radius: 6px; color: var(--text); font-size: 13px; outline: none;
+.field textarea {
+  min-height: 260px; resize: vertical;
+  font-family: ui-monospace, Menlo, Consolas, monospace; font-size: 12.5px; line-height: 1.55;
 }
-.modal .field input:focus { border-color: var(--accent); }
-.modal .tip { font-size: 11.5px; color: var(--text-faint); margin-top: 6px; line-height: 1.6; }
-.modal .tip code { font-family: var(--mono); background: var(--bg); padding: 1px 5px; border-radius: 4px; color: var(--accent-2); }
-
-/* 预设列表 */
-.preset-list { list-style: none; }
+.tip { font-size: 12px; color: var(--text-dim); line-height: 1.7; }
+.tip code { background: var(--bg-hover); border-radius: 4px; padding: 1px 5px; }
+.preset-list { list-style: none; margin: 0; padding: 0; }
 .preset-list li {
-  display: flex; align-items: center; gap: 10px; padding: 9px 10px;
-  border: 1px solid var(--border); border-radius: 8px; margin-bottom: 6px;
+  display: flex; align-items: center; gap: 8px; padding: 9px 0;
+  border-bottom: 1px solid var(--border); font-size: 13px;
 }
-.preset-list li .p-name { font-weight: 600; font-size: 13px; }
-.preset-list li .p-meta { font-size: 11px; color: var(--text-faint); font-family: var(--mono); }
-.preset-list li .spacer { flex: 1; }
-.preset-list li .btn { padding: 3px 9px; font-size: 12px; }
+.preset-list .p-name { font-weight: 500; }
+.preset-list .p-meta { font-size: 11.5px; color: var(--text-faint); }
+.preset-list .btn { height: 28px; padding: 0 10px; font-size: 12px; }
+.about-kv { margin: 0; font-size: 13px; }
+.about-kv dt { color: var(--text-faint); font-size: 12px; margin-top: 12px; }
+.about-kv dd { margin: 3px 0 0; color: var(--text-dim); line-height: 1.7; }
+.about-kv dd code { background: var(--bg-hover); border-radius: 4px; padding: 1px 5px; }
+.batch-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.tab2 { font-size: 12px; padding: 4px 10px; border-radius: 999px; border: 1px solid var(--border); color: var(--text-dim); }
+.tab2.active { background: var(--bg-active); border-color: var(--accent); color: var(--text); }
 
-/* 批量结果 */
-.batch-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 10px; }
-.batch-tabs .tab2 {
-  padding: 4px 12px; font-size: 12px; border-radius: 999px; cursor: pointer;
-  border: 1px solid var(--border-strong); color: var(--text-dim);
+/* ── 命令面板 ── */
+.palette {
+  position: fixed; z-index: 50; left: 50%; top: 14vh; transform: translateX(-50%);
+  width: min(560px, 92vw); display: none; overflow: hidden;
+  background: var(--bg-panel); border: 1px solid var(--border-strong);
+  border-radius: 14px; box-shadow: var(--shadow);
 }
-.batch-tabs .tab2.active { background: var(--accent); color: #14100a; border-color: var(--accent); font-weight: 600; }
+.palette.open { display: block; }
+.palette input { width: 100%; height: 50px; padding: 0 16px; border: none; border-bottom: 1px solid var(--border); background: transparent; font-size: 15px; outline: none; }
+.palette .res { max-height: 340px; overflow-y: auto; padding: 6px; }
+.palette .row { display: flex; align-items: center; gap: 10px; padding: 9px 11px; border-radius: 8px; font-size: 13px; cursor: pointer; }
+.palette .row.on { background: var(--bg-active); }
+.palette .row .k { margin-left: auto; font-size: 11.5px; color: var(--text-faint); }
+.palette .sec { font-size: 11.5px; color: var(--text-faint); padding: 8px 11px 4px; }
 
-/* Toast */
-#toast-wrap { position: fixed; bottom: 44px; left: 50%; transform: translateX(-50%); z-index: 200; display: flex; flex-direction: column; gap: 8px; align-items: center; pointer-events: none; }
+/* ── Toast ── */
+#toast-wrap { position: fixed; right: 16px; bottom: 44px; z-index: 60; display: flex; flex-direction: column; gap: 8px; align-items: flex-end; }
 .toast {
-  background: var(--bg-panel-2); color: var(--text); border: 1px solid var(--border-strong);
-  padding: 9px 18px; border-radius: 999px; font-size: 13px; box-shadow: var(--shadow);
-  animation: toastIn .25s ease; display: flex; align-items: center; gap: 8px;
+  padding: 9px 13px; border-radius: 10px; font-size: 13px;
+  background: var(--bg-panel); border: 1px solid var(--border-strong);
+  box-shadow: var(--shadow); animation: pop 180ms ease-out;
 }
-.toast.ok { border-color: var(--ok); }
 .toast.err { border-color: var(--err); color: var(--err); }
-.toast.warn { border-color: var(--warn); }
-.toast.out { animation: toastOut .3s ease forwards; }
-@keyframes toastIn { from { transform: translateY(12px); opacity: 0; } to { transform: none; opacity: 1; } }
-@keyframes toastOut { to { transform: translateY(12px); opacity: 0; } }
+.toast.warn { border-color: var(--warn); color: var(--warn); }
+.toast.out { opacity: 0; transition: opacity 300ms ease-out; }
+@keyframes pop { from { opacity: 0; transform: translateY(6px); } to { opacity: 1; transform: none; } }
 
-/* 空状态 / 帮助 */
-.about-kv { display: grid; grid-template-columns: 150px 1fr; gap: 6px 12px; font-size: 12.5px; }
-.about-kv dt { color: var(--text-dim); font-weight: 600; }
-.about-kv dd { color: var(--text); }
-.about-kv code { font-family: var(--mono); background: var(--bg); padding: 1px 5px; border-radius: 4px; color: var(--accent-2); font-size: 11.5px; }
+/* ── 移动端分段 ── */
+.mobile-seg { display: none; }
 
 /* ── 响应式 ── */
-@media (max-width: 1180px) {
-  .workspace { grid-template-columns: 1fr; overflow-y: auto; }
-  .workspace > .panel { min-height: 420px; }
-  .preview-body { min-height: 420px; }
+@media (max-width: 1439px) {
+  .body { grid-template-columns: 64px 360px minmax(0, 1fr); }
+  .nav .search, .nav .chips, .nav .tpl-sec, .tpl-item .desc, .tpl-item .meta, .tpl-presets { display: none; }
+  .nav-head { padding: 10px 6px; }
+  .tpl-item { padding: 10px 6px; text-align: center; }
+  .tpl-item .name { font-size: 11.5px; display: block; overflow: hidden; text-overflow: ellipsis; }
+  .tpl-item .badge { display: none; }
 }
-@media (max-width: 700px) {
-  body { overflow: auto; }
-  aside { width: 100%; max-height: 300px; border-right: none; border-bottom: 1px solid var(--border); }
-  .layout { flex-direction: column; }
-  header { flex-wrap: wrap; }
+@media (max-width: 1023px) {
+  .body { grid-template-columns: 64px minmax(0, 1fr); grid-template-rows: 52vh 1fr; }
+  .nav { grid-row: 1 / 3; }
+  .params { border-right: none; border-bottom: 1px solid var(--border); }
+  .result { grid-column: 2; }
+}
+@media (max-width: 767px) {
+  .app { grid-template-rows: 52px 1fr 28px; }
   .brand .sub { display: none; }
-  .toolbar .tpl-desc { width: 100%; }
-  .opts { grid-template-columns: 1fr; }
-  .header-right .mode-badge { display: none; }
+  .appbar { padding: 0 10px; gap: 8px; }
+  .appbar .mode-badge { display: none; }
+  #paletteBtn { width: 34px; padding: 0; }
+  #paletteBtn .lbl, #paletteBtn .kbd { display: none; }
+  .statusbar { gap: 10px; font-size: 11.5px; }
+  .statusbar .src, .statusbar .right span:last-child { display: none; }
+  .body { display: flex; flex-direction: column; grid-template-columns: none; grid-template-rows: none; }
+  .mobile-seg {
+    display: flex; gap: 4px; padding: 8px 12px 0; flex: none;
+    background: var(--bg-panel); border-bottom: 1px solid var(--border);
+  }
+  .mobile-seg button { flex: 1; height: 38px; border-radius: 8px; font-size: 13px; color: var(--text-dim); border: 1px solid var(--border); }
+  .mobile-seg button.active { background: var(--bg-active); border-color: var(--accent); color: var(--text); font-weight: 500; }
+  .params, .result { flex: 1; min-height: 0; }
+  .body:not([data-mv="tpl"]) > .nav { display: none; }
+  .body[data-mv="tpl"] > .nav { display: flex; border-right: none; }
+  .body[data-mv="tpl"] > .params, .body[data-mv="tpl"] > .result { display: none; }
+  .body[data-mv="params"] > .result { display: none; }
+  .body[data-mv="result"] > .params { display: none; }
+  .nav .search { display: flex; }
+  .nav .chips { display: flex; }
+  .nav .tpl-sec { display: block; }
+  .tpl-item { text-align: left; padding: 10px 12px 10px 14px; }
+  .tpl-item .name { font-size: 14px; display: inline; }
+  .tpl-item .badge { display: inline-block; }
+  .tpl-item .desc { display: block; }
+  .tpl-item .meta { display: flex; }
+  .tpl-presets { display: flex; }
+  .param-input-wrap input, .param-input-wrap select { height: 44px; font-size: 16px; }
+  .r-head { height: auto; padding: 8px 12px; flex-wrap: wrap; }
+  .r-head .stats { margin-left: 0; width: 100%; }
+  .r-main.with-index { grid-template-columns: minmax(0, 1fr); }
+  .idx { display: none; }
+  .r-foot { position: sticky; bottom: 0; }
+  .r-foot .btn { height: 40px; }
+  .modal { width: 100%; }
 }
-
-/* ── 移动端（≤480px）：可读可点，控件不遮挡预览 ── */
-@media (max-width: 480px) {
-  /* 1) 输入框字号 ≥16px，否则 iOS Safari 聚焦时会自动放大整页 */
-  input[type="text"], input[type="number"], input[type="search"], select, textarea { font-size: 16px; }
-  /* 修正：.param-input-wrap input 的 13px 规则特异性 (0,2,1) 高于裸 input[type] (0,1,1)，
-     会覆盖上面的 16px；这里用同特异性 + 后定义胜出，确保移动端输入框真正 ≥16px */
-  .param-input-wrap input[type="number"], .param-input-wrap input[type="text"] { font-size: 16px; }
-  .opt-inline input { width: 76px; }
-
-  /* 2) 触摸目标高度 ≥40px，降低误触 */
-  .btn, select, .chip { min-height: 40px; }
-  .btn { padding: 8px 12px; }
-  .tab { min-height: 38px; padding: 8px 12px; }
-  .seg button { min-height: 38px; }
-  .switch-row, .opt-item { min-height: 38px; }
-
-  /* 3) 顶栏压缩，只留品牌与必要操作 */
-  header { padding: 8px 10px; gap: 8px; }
-  .brand h1 { font-size: 15px; }
-  .brand .logo svg { width: 20px; height: 20px; }
-  .header-right { gap: 6px; }
-
-  /* 4) 侧栏限高，保证下方预览不被压没 */
-  aside { max-height: 220px; }
-  .tpl-list { padding: 4px 6px 8px; }
-  .tpl-item .desc { -webkit-line-clamp: 1; }
-
-  /* 5) 工作区单列、收紧留白：控件与预览纵向排布，互不遮挡 */
-  .workspace { padding: 10px; gap: 10px; }
-  .workspace > .panel { min-height: 360px; }
-  .panel-body { padding: 10px 11px; }
-  .toolbar { padding: 8px 10px; gap: 8px; }
-  .toolbar .actions { width: 100%; }
-  .toolbar .actions .btn { flex: 1 1 auto; justify-content: center; }
-
-  /* 6) 参数行允许换行：单位/范围不再把标签挤出屏幕 */
-  .param-top { flex-wrap: wrap; }
-  .param-top .range { margin-left: 0; width: 100%; }
-  .param-input-wrap { flex-wrap: wrap; }
-  .param-input-wrap input[type="number"],
-  .param-input-wrap input[type="text"] { min-width: 0; flex: 1 1 120px; }
-
-  /* 7) 预览工具条换行；代码区缩小字号以容纳等宽显示 */
-  .preview-toolbar { flex-wrap: wrap; padding: 7px 10px; gap: 6px; }
-  .preview-toolbar .spacer { display: none; }
-  .gcode-view { font-size: 11.5px; padding: 10px 12px; }
-
-  /* 8) 选项卡横向滚动，不挤压变形 */
-  .tabs { overflow-x: auto; -webkit-overflow-scrolling: touch; }
-  .tab { white-space: nowrap; }
-
-  /* 9) 键值型信息（关于/帮助）改单列 */
-  .about-kv { grid-template-columns: 1fr; gap: 2px 0; }
-  .about-kv dd { margin: 0 0 6px; }
+@media (prefers-reduced-motion: reduce) {
+  * { animation: none !important; transition: none !important; }
 }
 </style>
 </head>
 <body>
-
-<header>
-  <div class="brand">
-    <div class="logo" aria-hidden="true">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
-        <circle cx="12" cy="12" r="9"/>
-        <path d="M12 3v4M12 17v4M3 12h4M17 12h4"/>
-        <circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/>
-      </svg>
+<div class="app">
+  <header class="appbar">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/>
+          <circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/>
+        </svg>
+      </div>
+      <div>
+        <h1>nctool</h1>
+        <p class="sub">NC 模板工作台 · G-code 生成</p>
+      </div>
     </div>
-    <div>
-      <h1>nctool</h1>
-      <div class="sub">NC 模板工作台 · G-code 生成</div>
-    </div>
-  </div>
-  <div class="header-right">
     <span id="modeBadge" class="mode-badge demo"><span class="dot"></span><span id="modeText">演示模式</span></span>
-    <label class="opt-inline" title="生成目标机床">
-      <span>机床</span>
-      <select id="machineSel" style="min-width:130px"></select>
-    </label>
-    <button class="btn icon" id="themeBtn" title="切换亮/暗主题">
-      <svg id="themeIcon" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
-        <path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/>
-      </svg>
+    <div class="spacer"></div>
+    <button class="btn" id="paletteBtn" title="打开命令面板（⌘K / Ctrl+K）">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg>
+      <span class="lbl">搜索</span><span class="kbd">⌘K</span>
     </button>
-    <button class="btn icon ghost" id="helpBtn" title="关于本 UI">
-      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+    <button class="btn icon" id="themeBtn" title="切换亮/暗主题" aria-label="切换主题">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
+    </button>
+    <button class="btn icon ghost" id="helpBtn" title="关于本 UI" aria-label="关于">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round">
         <circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.6 2.2c-.8.4-1.1 1-1.1 1.8"/><path d="M12 17h.01"/>
       </svg>
     </button>
-  </div>
-</header>
+  </header>
 
-<div class="layout">
-  <!-- 侧栏：模板库 -->
-  <aside id="sidebar">
-    <div class="sidebar-head">
-      <div class="search-box">
-        <input id="searchInput" type="text" placeholder="搜索模板名 / 描述…" autocomplete="off">
-        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg>
-      </div>
-      <div class="cats" id="catBar"></div>
-    </div>
-    <div class="tpl-list" id="tplList"></div>
-  </aside>
-
-  <!-- 主工作区 -->
-  <main>
-    <div class="toolbar">
-      <div class="crumb" id="crumb">未选择模板</div>
-      <div class="spacer"></div>
-      <div class="actions">
-        <button class="btn ghost" id="srcBtn" title="查看 / 编辑模板源码">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M13 5l-2 14"/></svg>源码
-        </button>
-        <button class="btn ghost" id="savePresetBtn" title="将当前参数保存为命名预设">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>预设
-        </button>
-        <button class="btn ghost" id="batchBtn" title="零件级批量生成">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="4" width="18" height="4" rx="1"/><rect x="3" y="10" width="18" height="4" rx="1"/><rect x="3" y="16" width="18" height="4" rx="1"/></svg>批量
-        </button>
-        <button class="btn ghost" id="copyBtn" title="复制 G-code 到剪贴板">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>复制
-        </button>
-        <button class="btn primary" id="downloadBtn" title="下载 .nc 文件">
-          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>下载 .nc
-        </button>
-      </div>
+  <div class="body" id="appBody" data-mv="params">
+    <div class="mobile-seg" role="tablist" aria-label="视图切换">
+      <button data-mv="tpl" role="tab" aria-selected="false">模板</button>
+      <button class="active" data-mv="params" role="tab" aria-selected="true">参数</button>
+      <button data-mv="result" role="tab" aria-selected="false">结果</button>
     </div>
 
-    <div class="workspace">
-      <!-- 左：参数表单 -->
-      <section class="panel">
-        <div class="panel-head">
-          <span id="panelTitle">参数</span>
-          <span class="hint" id="paramHint"></span>
+    <!-- 模板导航 -->
+    <aside class="nav" aria-label="模板导航">
+      <div class="nav-head">
+        <div class="search">
+          <input id="searchInput" type="text" placeholder="搜索模板名 / 描述…" autocomplete="off" aria-label="搜索模板">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg>
         </div>
-        <div class="panel-body" id="formBody">
-          <div class="gcode-empty" style="padding-top:80px">
-            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="9"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg>
-            <div>在左侧选择一个模板开始</div>
-          </div>
-        </div>
-      </section>
+        <div class="chips" id="catBar"></div>
+      </div>
+      <div class="tpl-list" id="tplList"></div>
+    </aside>
 
-      <!-- 右：预览 + 校验 -->
-      <section class="panel preview-wrap">
-        <div class="panel-head">
-          <span>实时预览</span>
-          <span class="hint" id="previewHint"></span>
+    <!-- 参数区 -->
+    <section class="params" aria-label="参数">
+      <div class="p-head">
+        <div class="p-title">
+          <h2 id="panelTitle">未选择模板</h2>
+          <span class="crumb" id="crumb"></span>
+          <button class="reset" id="resetBtn" hidden>重置</button>
         </div>
-        <div class="preview-toolbar">
-          <div class="tabs" id="previewTabs">
-            <button class="tab active" data-tab="gcode">G-code</button>
-            <button class="tab" data-tab="src">模板源码</button>
-            <button class="tab" data-tab="validate">校验</button>
-          </div>
-          <div class="spacer"></div>
+        <div class="progress"><i id="progBar"></i></div>
+        <div class="p-meta" id="paramHint">从左侧选择一个模板开始</div>
+        <div class="presets" id="presetChips"></div>
+      </div>
+      <div class="p-body" id="formBody"></div>
+    </section>
+
+    <!-- 结果区 -->
+    <section class="result" aria-label="结果">
+      <div class="r-head" id="rHead">
+        <span class="state" id="statePill">未生成</span>
+        <div class="mchip" title="输出目标机床（影响 G/M 代码与程序号格式）">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h4M7 13h7"/></svg>
+          <select id="machineSel" aria-label="选择机床"></select>
+        </div>
+        <div class="stats">
           <span class="stat" id="statAscii"></span>
           <span class="stat" id="statChars"></span>
           <span class="stat" id="statTime"></span>
         </div>
+        <div class="prog"><i></i></div>
+      </div>
+      <div class="tabs" id="previewTabs" role="tablist">
+        <button class="tab active" data-tab="gcode" role="tab" aria-selected="true">G-code</button>
+        <button class="tab" data-tab="src" role="tab" aria-selected="false">模板源码</button>
+        <button class="tab" data-tab="validate" role="tab" aria-selected="false">校验</button>
+      </div>
+      <div class="r-main" id="rMain">
+        <div class="idx" id="procIndex" hidden></div>
         <div class="preview-body" id="previewBody">
           <div class="tabpage active" id="page-gcode">
             <div class="gcode-empty" style="padding-top:70px">
@@ -649,21 +673,38 @@ footer .right { margin-left: auto; display: flex; gap: 18px; }
             </div>
           </div>
         </div>
-      </section>
-    </div>
-  </main>
+      </div>
+      <div class="r-foot">
+        <button class="btn" id="copyBtn" title="复制 G-code 到剪贴板">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+          复制
+        </button>
+        <button class="btn primary" id="downloadBtn" title="下载 .nc 文件">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+          下载 .nc
+        </button>
+        <div class="spacer"></div>
+        <button class="btn ghost" id="srcBtn" title="查看 / 编辑模板源码">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M13 5l-2 14"/></svg>
+          源码
+        </button>
+        <button class="btn ghost" id="savePresetBtn" title="将当前参数保存为命名预设">预设</button>
+        <button class="btn ghost" id="batchBtn" title="零件级批量生成">批量</button>
+      </div>
+    </section>
+  </div>
+
+  <footer class="statusbar">
+    <span class="st" id="statusBar"><span class="dot"></span><span>就绪</span></span>
+    <span class="st src" id="apiMode"><span>数据源：演示数据（本地渲染）</span></span>
+    <span class="right">
+      <span id="tplCount"></span>
+      <span id="verText"></span>
+    </span>
+  </footer>
 </div>
 
-<footer>
-  <span class="st" id="statusBar"><span class="dot"></span><span>就绪</span></span>
-  <span class="st" id="apiMode"><span>数据源：演示数据（本地渲染）</span></span>
-  <span class="right">
-    <span id="tplCount"></span>
-    <span id="verText"></span>
-  </span>
-</footer>
-
-<!-- ═══════════ 弹窗 ═══════════ -->
+<!-- ═══════════ 侧抽屉（源码 / 预设 / 批量 / 关于） ═══════════ -->
 <!-- 源码编辑 -->
 <div class="modal-mask" id="modalSrc">
   <div class="modal">
@@ -707,14 +748,14 @@ footer .right { margin-left: auto; display: flex; gap: 18px; }
 
 <!-- 批量生成 -->
 <div class="modal-mask" id="modalBatch">
-  <div class="modal" style="width:760px">
+  <div class="modal" style="width:min(760px,96vw)">
     <div class="modal-head"><h3>零件级批量生成</h3><button class="close" data-close="modalBatch">×</button></div>
     <div class="modal-body">
       <div class="field">
         <label>零件 JSON（多工序一次生成；每道工序：模板名 + 参数 + 可选机床）</label>
         <textarea id="batchArea" spellcheck="false"></textarea>
       </div>
-      <div class="tip">示例格式见右下方「填入示例」。任一工序校验失败整批拒绝并定位。<br>
+      <div class="tip">示例格式见下方「填入示例」。任一工序校验失败整批拒绝并定位。<br>
         <code>{ "name": "齿轮轴", "ops": [ { "template": "drill_cycle", "params": { ... } }, ... ] }</code></div>
       <div style="display:flex;gap:8px;margin-top:10px">
         <button class="btn ghost" id="batchExampleBtn">填入示例</button>
@@ -743,8 +784,10 @@ footer .right { margin-left: auto; display: flex; gap: 18px; }
         <dt>演示模式</dt><dd>内置模板库 + 迷你 Jinja 渲染器 + 客户端校验/后处理，离线完整可用</dd>
         <dt>服务模式</dt><dd>将 JS 中 <code>API.mode</code> 改为 <code>'server'</code> 并设置 <code>base</code>，
           全部请求转至 <code>nctool ui</code> 的 HTTP 接口（<code>{ ok, data?, error? }</code>）</dd>
-        <dt>功能覆盖</dt><dd>模板浏览/搜索/分类 · 参数表单自动生成（必选高亮）· 实时预览 · 校验分级 ·
-          生成选项（行号/头部/ASCII/空行/宽松）· 复制/下载 · 机床切换 · 参数预设 · 批量生成 · 主题切换</dd>
+        <dt>界面设计</dt><dd>v2 设计方案见 <code>docs/UI_DESIGN_PROPOSAL.html</code>：结果优先 · 就地反馈 · 渐进披露 · 状态可见；
+          快捷键 <code>⌘/Ctrl+K</code> 命令面板、<code>⌘/Ctrl+⏎</code> 立即生成、<code>⌘/Ctrl+S</code> 存为预设</dd>
+        <dt>功能覆盖</dt><dd>模板浏览/搜索/分类 · 参数表单自动生成（必填进度 + 就地校验）· 实时预览 ·
+          生成选项（行号/头部/ASCII/空行/宽松）· 工序索引 · 复制/下载 · 机床切换 · 参数预设 · 批量生成 · 主题切换</dd>
         <dt>渲染口径</dt><dd>与 <code>nctool-core</code> 管线一致：校验 → 规格默认值兜底 → <code>machine</code> 注入 → 后处理</dd>
       </dl>
     </div>
@@ -752,7 +795,14 @@ footer .right { margin-left: auto; display: flex; gap: 18px; }
   </div>
 </div>
 
+<!-- 命令面板 -->
+<div class="palette" id="palette" role="dialog" aria-label="命令面板">
+  <input id="pq" type="text" placeholder="搜索模板、动作、机床…" autocomplete="off">
+  <div class="res" id="pres"></div>
+</div>
+
 <div id="toast-wrap"></div>
+
 
 <script>
 "use strict";
@@ -1441,7 +1491,10 @@ function postprocess(rendered, templateName, opts, machine) {
    4. API 抽象层（§6 契约）：demo 本地执行 / server 转发
    ═══════════════════════════════════════════════════════════════ */
 const API = {
-  mode: "server",          // "demo" | "server"
+  /* 模式自动判定：file:// 打开（双击本地文件）走演示模式，离线完整可用；
+     经 `nctool ui` 以 http(s):// 提供服务时走服务模式，请求转发到后端 API。
+     需要强制指定时直接改这一行即可（"demo" | "server"）。 */
+  mode: (typeof location !== "undefined" && location.protocol === "file:") ? "demo" : "server",
   base: window.location.origin,
   get registry() { return API_REGISTRY; },
   get machines() { return API_MACHINES; },
@@ -1606,6 +1659,7 @@ const state = {
   lastOutput: "",
   lastReport: { issues: [] },
   renderSeq: 0,
+  recent: [],               /* v2：最近使用（localStorage 持久化，最多 5 个） */
 };
 
 /* ═══════════════════════════════════════════════════════════════
@@ -1614,11 +1668,51 @@ const state = {
 const $ = id => document.getElementById(id);
 const CATS = ["全部", "通用", "铣削", "车削", "钻孔", "机床"];
 
+/* localStorage 安全访问：Chrome 在 file:// 下会抛 SecurityError，
+   隐私模式同样可能拒绝写入。界面是只读工具，存取失败一律降级为「无持久化」，
+   绝不让持久化问题中断主流程。 */
+const LS = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* 忽略：无持久化 */ } },
+  del(k) { try { localStorage.removeItem(k); } catch { /* 忽略 */ } },
+};
+
 function esc(s) {
   return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
 }
 
+/* —— 最近使用（v2：复用路径前移，刷新后仍保留） —— */
+function loadRecent() {
+  try {
+    const raw = JSON.parse(LS.get("nctool.recent") || "[]");
+    return raw.filter(n => state.templates.some(t => t.name === n));
+  } catch { return []; }
+}
+function pushRecent(name) {
+  const r = [name, ...loadRecent().filter(n => n !== name)].slice(0, 5);
+  LS.set("nctool.recent", JSON.stringify(r));
+  state.recent = r;
+}
+
 /* —— 侧栏 —— */
+function tplCardHtml(t) {
+  const specs = t.params || [];
+  const reqN = specs.filter(p => p.required && paramDefault(p) === undefined).length;
+  const optN = specs.length - reqN;
+  /* v2：该模板已有的预设直接挂到卡片上，让「复用」发生在选模板之前 */
+  const all = loadPresets();
+  const presets = Object.keys(all).filter(k => (all[k] || {}).template === t.name).slice(0, 2);
+  const chips = presets.map(k =>
+    `<button class="chip act" data-preset="${esc(k)}" title="载入预设「${esc(k)}」">${esc(k)}</button>`).join("");
+  return `<div class="tpl-item ${state.selected === t.name ? "active" : ""}" data-tpl="${t.name}">
+    <div class="row1"><span class="name">${t.name}</span>
+      <span class="badge ${t.builtin ? "builtin" : "demo"}">${t.builtin ? "内置" : "示例"}</span></div>
+    <div class="desc">${esc(t.description || "")}</div>
+    <div class="meta"><span>${t.category}</span><span>必选 ${reqN}</span><span>可选 ${optN}</span></div>
+    ${chips ? `<div class="tpl-presets">${chips}</div>` : ""}
+  </div>`;
+}
+
 function renderSidebar() {
   /* 分类栏 */
   const counts = {};
@@ -1626,23 +1720,18 @@ function renderSidebar() {
   $("catBar").innerHTML = CATS.map(c =>
     `<button class="chip ${state.cat === c ? "active" : ""}" data-cat="${c}">${c}<span class="n">${counts[c]}</span></button>`
   ).join("");
-  /* 模板列表 */
+  /* 模板列表：最近使用置顶，其余按分类/搜索过滤 */
   const q = state.query.toLowerCase();
   const list = state.templates.filter(t =>
     (state.cat === "全部" || t.category === state.cat) &&
     (!q || t.name.toLowerCase().includes(q) || (t.description || "").toLowerCase().includes(q))
   );
-  $("tplList").innerHTML = list.length ? list.map(t => {
-    const specs = t.params || [];
-    const reqN = specs.filter(p => p.required && paramDefault(p) === undefined).length;
-    const optN = specs.length - reqN;
-    return `<div class="tpl-item ${state.selected === t.name ? "active" : ""}" data-tpl="${t.name}">
-      <div class="row1"><span class="name">${t.name}</span>
-        <span class="badge ${t.builtin ? "builtin" : "demo"}">${t.builtin ? "内置" : "示例"}</span></div>
-      <div class="desc">${esc(t.description || "")}</div>
-      <div class="meta"><span>${t.category}</span><span>必选 ${reqN}</span><span>可选 ${optN}</span></div>
-    </div>`;
-  }).join("") : `<div class="gcode-empty" style="padding:30px 10px">无匹配模板</div>`;
+  const recent = state.recent.map(n => list.find(t => t.name === n)).filter(Boolean);
+  const rest = list.filter(t => !recent.includes(t));
+  const html = (recent.length ? `<div class="tpl-sec">最近使用</div>${recent.map(tplCardHtml).join("")}` : "")
+    + `<div class="tpl-sec">${state.cat === "全部" ? "全部模板" : "分类 · " + state.cat}（${rest.length}）</div>`
+    + rest.map(tplCardHtml).join("");
+  $("tplList").innerHTML = list.length ? html : `<div class="gcode-empty" style="padding:30px 10px">无匹配模板</div>`;
   $("tplCount").textContent = `模板 ${state.templates.length} 个`;
 }
 
@@ -1662,22 +1751,46 @@ function paramDefault(s) {
 
 function renderForm() {
   const t = state.templateDetails[state.selected] || state.templates.find(x => x.name === state.selected);
-  if (!t) { $("formBody").innerHTML = `<div class="gcode-empty" style="padding-top:80px"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="9"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg><div>在左侧选择一个模板开始</div></div>`; return; }
-  const specs = t.params || [];
+  if (!t) {
+    $("paramHint").textContent = "从左侧选择一个模板开始";
+    $("progBar").style.width = "0";
+    $("presetChips").innerHTML = "";
+    $("formBody").innerHTML = `<div class="gcode-empty" style="height:auto;padding-top:48px">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="9"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg>
+      <div>选择模板后在此填写参数</div></div>`;
+    return;
+  }
+  /* 派生参数（spec.derive）由系统在 Rust 侧算好注入，**不放进表单**：
+     用户填了也会被派生值覆盖（后端给警告），放个输入框只会误导。 */
+  const allSpecs = t.params || [];
+  const derivedSpecs = allSpecs.filter(s => s.derive);
+  const specs = allSpecs.filter(s => !s.derive);
   const req = specs.filter(p => p.required && paramDefault(p) === undefined);
   const opt = specs.filter(p => !(p.required && paramDefault(p) === undefined));
-  $("paramHint").textContent = `必选 ${req.length} · 可选 ${opt.length}`;
   let html = "";
   if (req.length) {
-    html += `<div class="form-group"><div class="form-group-title">必选参数</div>${req.map(s => fieldHtml(t, s)).join("")}</div>`;
+    html += `<div class="form-group"><div class="form-group-title">必填参数（${req.length}）</div>${req.map(s => fieldHtml(t, s)).join("")}</div>`;
   }
   if (opt.length) {
-    html += `<div class="form-group"><div class="form-group-title">可选参数（缺失时用默认值兜底）</div>${opt.map(s => fieldHtml(t, s)).join("")}</div>`;
+    html += `<details class="optbox" id="optBoxOpt"><summary>
+      <svg class="caret" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+      可选参数（${opt.length}）· 均有默认值</summary>
+      <div class="optbox-body">${opt.map(s => fieldHtml(t, s)).join("")}</div></details>`;
   }
-  html += `<div class="form-group"><div class="form-group-title">生成选项</div>${optionsHtml()}</div>`;
+  html += `<details class="optbox" id="optBoxGen" open><summary>
+    <svg class="caret" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+    输出选项</summary>
+    <div class="optbox-body">${optionsHtml()}</div></details>`;
+  if (derivedSpecs.length) {
+    html += `<div class="param-note">由系统派生（无需填写）：${derivedSpecs
+      .map(s => `${esc(s.name)}${(s.description || s.desc) ? `（${esc(s.description || s.desc)}）` : ""}`)
+      .join("、")}</div>`;
+  }
   $("formBody").innerHTML = html;
+  renderPresetChips();
+  updateProgress(t);
   /* 事件绑定 */
-  $("formBody").querySelectorAll("input[data-param]").forEach(inp => {
+  $("formBody").querySelectorAll("input[data-param], select[data-param]").forEach(inp => {
     inp.addEventListener("input", () => { collectParams(t); });
     inp.addEventListener("change", () => { collectParams(t); });
   });
@@ -1694,6 +1807,39 @@ function renderForm() {
       scheduleRender();
     });
   });
+  if (state.lastReport.issues && state.lastReport.issues.length) applyInlineErrors(state.lastReport.issues);
+}
+
+/* —— 参数规格辅助（与后端 ParamSpec 对齐）—— */
+
+/* ParamValue：后端序列化为带标签形式 {type, value}，演示模式是裸值 */
+function bareValue(v) { return (v && typeof v === "object" && "value" in v) ? v.value : v; }
+
+/* 规格声明的候选项（裸值数组） */
+function optionValues(s) { return (s.options || []).map(bareValue).filter(v => v !== undefined && v !== null); }
+
+/* 条件必选的可读形式：`side = "Right"` */
+function requiredIfText(rif) {
+  if (!rif) return "";
+  const vals = (rif.values || []).map(v => JSON.stringify(bareValue(v))).join(" 或 ");
+  return `${rif.param} = ${vals}`;
+}
+
+/* 按规格把输入值归一。
+   优先级与后端 `--param` 一致：**先取能命中白名单的解释**（`U_CTB` 的
+   1631 与 "DECKEL" 混用，数值/文本各自按值语义比较），再按声明的类型。 */
+function coerceParamValue(s, raw) {
+  const t = String(raw).trim();
+  if (t === "") return undefined;
+  /* 前导零纯数字保持字符串（数值化会丢前导零，如 `T007`→`T7`） */
+  const numeric = (/^0\d/.test(t) || isNaN(Number(t))) ? undefined : Number(t);
+  const vals = optionValues(s);
+  if (vals.length) {
+    if (numeric !== undefined && vals.some(v => v === numeric)) return numeric;
+    if (vals.some(v => String(v) === t)) return t;
+  }
+  if (s.kind === "String") return t;
+  return numeric !== undefined ? numeric : t;
 }
 
 function fieldHtml(t, s) {
@@ -1703,6 +1849,13 @@ function fieldHtml(t, s) {
   const range = [s.min, s.max].filter(x => x !== undefined).map(x => `${x}`).join(" ~ ");
   if (s.kind === "Bool") {
     input = `<label class="switch"><input type="checkbox" data-param="${s.name}" ${cur ? "checked" : ""}><span class="slider"></span></label>`;
+  } else if (optionValues(s).length) {
+    /* 白名单参数用下拉框：后端会拒绝白名单外的取值，让用户在这里就选对 */
+    const vals = optionValues(s);
+    input = `<select data-param="${s.name}">
+      <option value="">— 请选择 —</option>
+      ${vals.map(v => `<option value="${esc(String(v))}" ${has && String(cur) === String(v) ? "selected" : ""}>${esc(String(v))}</option>`).join("")}
+    </select>`;
   } else if (s.kind === "Number" || s.kind === "Integer") {
     input = `<input type="number" data-param="${s.name}" step="${s.kind === "Integer" ? "1" : "any"}"
       placeholder="${paramDefault(s) !== undefined ? paramDefault(s) : "—"}" value="${has ? cur : ""}">
@@ -1711,14 +1864,20 @@ function fieldHtml(t, s) {
     input = `<input type="text" data-param="${s.name}" placeholder="${paramDefault(s) !== undefined ? paramDefault(s) : ""}" value="${has ? esc(cur) : ""}">`;
   }
   const req = s.required && paramDefault(s) === undefined;
+  const rif = s.requiredIf;
+  const tag = req ? `<span class="req-tag">*必填</span>`
+    : rif ? `<span class="opt-tag">条件必选</span>`
+    : `<span class="opt-tag">可选</span>`;
   return `<div class="param-field ${req ? "req" : "opt"}" id="field-${s.name}">
     <div class="param-top">
       <label>${s.name}</label>
-      ${req ? `<span class="req-tag">必选</span>` : `<span class="opt-tag">可选</span>`}
-      ${range ? `<span class="range">${range}</span>` : ""}
+      ${tag}
+      ${range ? `<span class="range">范围 ${range}</span>` : ""}
     </div>
     ${(s.description || s.desc) ? `<div class="param-desc">${esc(s.description || s.desc)}</div>` : ""}
+    ${rif ? `<div class="param-desc">条件必选：${esc(requiredIfText(rif))} 时必填</div>` : ""}
     <div class="param-input-wrap">${input}</div>
+    <div class="field-msg"></div>
   </div>`;
 }
 
@@ -1748,14 +1907,15 @@ function optionsHtml() {
 function collectParams(t) {
   const p = {};
   (t.params || []).forEach(s => {
-    const inp = $("formBody").querySelector(`input[data-param="${s.name}"]`);
+    if (s.derive) return; /* 派生参数由系统注入，不由表单提供 */
+    const inp = $("formBody").querySelector(`[data-param="${s.name}"]`);
     if (!inp) return;
     if (s.kind === "Bool") { p[s.name] = inp.checked; return; }
-    if (inp.value.trim() === "") { p[s.name] = undefined; return; }
-    if (s.kind === "Number" || s.kind === "Integer") p[s.name] = Number(inp.value);
-    else p[s.name] = inp.value;
+    /* 空值统一记为 undefined（"未提供"，交给后端默认值/条件必选判定） */
+    p[s.name] = coerceParamValue(s, inp.value);
   });
   state.params = p;
+  updateProgress(t);
   scheduleRender();
 }
 
@@ -1771,10 +1931,12 @@ async function doRender() {
   const seq = ++state.renderSeq;
   $("statusBar").className = "st rendering";
   $("statusBar").querySelector("span:last-child").textContent = "渲染中…";
+  $("rHead").classList.add("busy");
   const t0 = performance.now();
   const res = await API.render(t.name, state.params, state.machine, state.options);
   if (seq !== state.renderSeq) return;
   const ms = (performance.now() - t0).toFixed(1);
+  $("rHead").classList.remove("busy");
   $("statusBar").className = "st " + (res.ok && !res.data.blocked ? "ok" : "err");
   $("statusBar").querySelector("span:last-child").textContent =
     res.ok ? (res.data.blocked ? "校验未通过" : "就绪") : "渲染失败";
@@ -1806,13 +1968,57 @@ function renderGcode(blocked) {
   body.classList.add("rendering");
   if (blocked || !state.lastOutput) {
     const hasErr = state.lastReport.issues.some(i => i.level === "error");
-    page.innerHTML = `<div class="gcode-empty" style="padding-top:70px">
+    page.innerHTML = `<div class="gcode-empty" style="padding-top:56px">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
         <circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
-      <div>${hasErr ? "校验未通过，修正参数后将实时显示 G-code" : "生成的 G-code 将显示在这里"}</div></div>`;
+      <div>${hasErr ? "校验未通过，修正参数后将实时显示 G-code" : "生成的 G-code 将显示在这里"}</div>
+      ${hasErr ? `<div class="guide-steps">
+        <div class="step"><b>1 看红色字段</b><span>出错参数已就地标红并给出原因</span></div>
+        <div class="step"><b>2 修正参数</b><span>改完自动重新生成，无需手动触发</span></div>
+        <div class="step"><b>3 通览问题</b><span>切到「校验」可点击跳回对应字段</span></div>
+      </div>` : ""}</div>`;
+    buildProcessIndex("");
     return;
   }
-  page.innerHTML = `<pre class="gcode-view">${highlightGcode(state.lastOutput)}</pre>`;
+  /* v2：逐行渲染并带行号列，便于工序索引跳转与长程序核对 */
+  const lines = state.lastOutput.split("\n");
+  page.innerHTML = `<pre class="gcode-view">` + lines.map((l, i) =>
+    `<div class="cl" id="cl${i}"><span class="no">${i + 1}</span><span class="tx">${highlightGcode(l)}</span></div>`
+  ).join("") + `</pre>`;
+  buildProcessIndex(state.lastOutput);
+}
+
+/* v2：工序索引 —— 从注释块 / 循环 / 换刀 / 程序结束推导锚点（≥40 行才出现） */
+function buildProcessIndex(text) {
+  const idx = $("procIndex");
+  const rMain = $("rMain");
+  const clear = () => { idx.hidden = true; idx.innerHTML = ""; rMain.classList.remove("with-index"); };
+  if (!text) { clear(); return; }
+  const lines = text.split("\n");
+  if (lines.length < 40) { clear(); return; }
+  const items = [];
+  lines.forEach((l, i) => {
+    const cm = l.match(/\(([^)]+)\)/);
+    const code = l.replace(/^N\d+\s*/, "");
+    if (cm && !/^=+$/.test(cm[1].trim()) && !/^nctool generated/.test(cm[1].trim()) && !/^template:/.test(cm[1].trim())) {
+      items.push({ i, label: cm[1].trim().slice(0, 18) });
+    } else if (/G8[13]|G73|M6\b|M30\b|M3\b|M8\b/.test(code)) {
+      items.push({ i, label: code.replace(/\s+/g, " ").trim().slice(0, 18) });
+    }
+  });
+  if (items.length < 3) { clear(); return; }
+  idx.hidden = false;
+  rMain.classList.add("with-index");
+  idx.innerHTML = `<div class="h">工序索引</div>` + items.slice(0, 30).map((it, k) =>
+    `<button data-go="${it.i}" class="${k === 0 ? "on" : ""}" title="${esc(it.label)}">${esc(it.label)}</button>`).join("");
+  idx.querySelectorAll("button[data-go]").forEach(b => b.addEventListener("click", () => {
+    document.querySelectorAll(".gcode-view .cl.hi").forEach(el => el.classList.remove("hi"));
+    const el = $("cl" + b.dataset.go);
+    if (!el) return;
+    el.classList.add("hi");
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    idx.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+  }));
 }
 
 /* G-code 轻量高亮 */
@@ -1842,32 +2048,134 @@ function highlightGcode(text) {
   }).join("\n");
 }
 
+/* v2：错误呈现分主次 —— 主信息给「填参数的人能直接照做」的说法，模板坐标
+   与完整技术口径降为次级信息（完整原文保留在 title 中，信息不丢）。
+   后端消息形如：
+     必选参数缺失（模板引用且无默认值兜底，参数集未提供）（第 1 行第 24 列引用）
+     参数值 -5 mm 低于下界 0（第 1 行第 28 列引用） */
+function friendlyIssue(text) {
+  if (/必选参数缺失/.test(text)) return "必填，未填写";
+  if (/低于下界/.test(text)) return text.replace(/^参数值\s*/, "值 ").replace("低于下界", "低于允许的最小值");
+  if (/高于上界/.test(text)) return text.replace(/^参数值\s*/, "值 ").replace("高于上界", "高于允许的最大值");
+  return text;
+}
+function splitLoc(msg) {
+  const raw = msg || "";
+  const m = /（第 (\d+) 行第 (\d+) 列引用）\s*$/.exec(raw);
+  if (m) {
+    return { text: friendlyIssue(raw.slice(0, m.index)), loc: `模板第 ${m[1]} 行第 ${m[2]} 列引用`, raw };
+  }
+  return { text: friendlyIssue(raw), loc: "", raw };
+}
+
+/* v2：字段级就地错误（问题项同时驱动字段红框与提示） */
+function applyInlineErrors(issues) {
+  document.querySelectorAll(".param-field").forEach(el => {
+    el.classList.remove("err");
+    const m = el.querySelector(".field-msg");
+    if (m) m.innerHTML = "";
+  });
+  (issues || []).forEach(it => {
+    if (!it.param) return;
+    const el = $("field-" + it.param);
+    if (!el) return;
+    el.classList.add("err");
+    const box = el.closest("details.optbox");
+    if (box) box.open = true;      /* 可选参数里的错误自动展开，不让用户去找 */
+    const msg = el.querySelector(".field-msg");
+    if (msg) {
+      const p = splitLoc(it.message || it.msg || "");
+      msg.innerHTML = esc(p.text) + (p.loc ? `<div class="hint">${esc(p.loc)}</div>` : "");
+      msg.title = p.raw;
+    }
+  });
+}
+
+/* v2：结果区状态 pill（就近显示，失败可点击跳到校验列表） */
+function setStatePill() {
+  const pill = $("statePill");
+  const issues = state.lastReport.issues || [];
+  const errN = issues.filter(i => i.level === "error").length;
+  const warnN = issues.filter(i => i.level === "warning").length;
+  if (errN) {
+    pill.className = "state err";
+    pill.textContent = errN + " 个问题";
+    pill.dataset.jump = "1";
+  } else if (state.lastOutput) {
+    pill.className = "state ok";
+    pill.textContent = warnN ? "就绪（" + warnN + " 提示）" : "就绪";
+    delete pill.dataset.jump;
+  } else {
+    pill.className = "state";
+    pill.textContent = state.selected ? "待生成" : "未生成";
+    delete pill.dataset.jump;
+  }
+}
+
+/* v2：必填进度 */
+function updateProgress(t) {
+  const specs = (t && t.params) || [];
+  const req = specs.filter(p => p.required && paramDefault(p) === undefined);
+  const filled = req.filter(p => {
+    const v = state.params[p.name];
+    return v !== undefined && v !== "" && !(typeof v === "number" && isNaN(v));
+  }).length;
+  $("progBar").style.width = req.length ? (filled / req.length * 100) + "%" : "100%";
+  $("paramHint").innerHTML = `<span class="${filled === req.length ? "done" : "req"}">${filled} / ${req.length} 必填</span>`
+    + `<span>· ${specs.length - req.length} 可选</span>`;
+}
+
+/* v2：参数区顶部预设 chips（当前模板的命名预设） */
+function renderPresetChips() {
+  const box = $("presetChips");
+  if (!state.selected) { box.innerHTML = ""; return; }
+  const all = loadPresets();
+  const keys = Object.keys(all).filter(k => (all[k] || {}).template === state.selected);
+  box.innerHTML = keys.length
+    ? `<span class="opt-note">预设</span>` + keys.map(k =>
+        `<button class="chip act" data-preset="${esc(k)}" title="载入预设「${esc(k)}」">${esc(k)}</button>`).join("")
+    : "";
+}
+
 /* 校验面板 */
 function renderValidation() {
   const r = state.lastReport;
   const errN = r.issues.filter(i => i.level === "error").length;
   const warnN = r.issues.filter(i => i.level === "warning").length;
   const infoN = r.issues.filter(i => i.level === "info").length;
+  const total = errN + warnN + infoN;
   const page = $("page-validate");
   const pageTab = document.querySelector(".tab[data-tab='validate']");
-  pageTab.innerHTML = `校验${errN + warnN + infoN ? ` · ${errN}${warnN ? "/" + warnN : ""}` : ""}`;
+  pageTab.innerHTML = total
+    ? `校验 <span style="font-size:11px;padding:0 5px;border-radius:999px;background:var(--err-bg);color:var(--err)">${total}</span>`
+    : "校验";
   pageTab.style.color = errN ? "var(--err)" : warnN ? "var(--warn)" : "";
+  applyInlineErrors(r.issues);
+  setStatePill();
   if (!r.issues.length) {
     page.innerHTML = `<div class="v-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg><span>校验通过，无问题</span></div>`;
     return;
   }
-  page.innerHTML = r.issues.map((i, idx) => {
-    const param = i.param ? `<span class="v-param">${esc(i.param)}</span>` : "";
-    return `<div class="v-item ${i.level}" data-idx="${idx}">
-      <span class="lv"></span>${param}<span class="v-msg">${esc(i.message || i.msg || "")}</span></div>`;
-  }).join("");
+  page.innerHTML = `<div class="vlist">` + r.issues.map((i, idx) => {
+    const param = i.param ? `<span class="v-param">${esc(i.param)}</span> ` : "";
+    const p = splitLoc(i.message || i.msg || "");
+    return `<div class="v-item ${i.level}" data-idx="${idx}" title="${esc(p.raw)}">
+      <span class="lv"></span><span><span class="v-msg">${param}${esc(p.text)}</span>
+      ${p.loc ? `<div class="v-loc">${esc(p.loc)}</div>` : ""}</span></div>`;
+  }).join("") + `</div>`;
   page.querySelectorAll(".v-item").forEach(el => {
     el.addEventListener("click", () => {
       const p = r.issues[+el.dataset.idx].param;
       if (!p) return;
       const f = $("field-" + p);
-      if (f) { f.scrollIntoView({ behavior: "smooth", block: "center" }); f.classList.add("focus"); setTimeout(() => f.classList.remove("focus"), 1200); }
-      switchTab("gcode");
+      if (f) {
+        const box = f.closest("details.optbox");
+        if (box) box.open = true;
+        setMobileView("params");
+        f.scrollIntoView({ behavior: "smooth", block: "center" });
+        f.classList.add("focus");
+        setTimeout(() => f.classList.remove("focus"), 1200);
+      }
     });
   });
 }
@@ -1907,9 +2215,11 @@ async function selectTemplate(name, opts) {
     else if (def !== undefined) state.params[s.name] = def;
     else state.params[s.name] = undefined;
   });
-  $("crumb").innerHTML = `模板 / <b>${t.category}</b> / <span style="color:var(--accent)">${t.name}</span>`;
-  $("panelTitle").textContent = t.name + " · 参数";
-  const reqN = (t.params || []).filter(p => p.required && p.default === undefined).length;
+  $("crumb").innerHTML = `· <b>${t.category}</b>`;
+  $("panelTitle").textContent = t.name;
+  pushRecent(name);
+  $("resetBtn").hidden = false;
+  if (window.innerWidth <= 767) setMobileView("params");
   renderSidebar();
   renderForm();
   renderSource();
@@ -1934,7 +2244,7 @@ function switchTab(name) {
 /* 主题 */
 function setTheme(t) {
   document.documentElement.dataset.theme = t;
-  localStorage.setItem("nctool.theme", t);
+  LS.set("nctool.theme", t);
 }
 function toggleTheme() {
   setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
@@ -1978,8 +2288,8 @@ function downloadGcode() {
 }
 
 /* 预设（localStorage） */
-function loadPresets() { try { return JSON.parse(localStorage.getItem("nctool.presets") || "{}"); } catch { return {}; } }
-function savePresets(p) { localStorage.setItem("nctool.presets", JSON.stringify(p)); }
+function loadPresets() { try { return JSON.parse(LS.get("nctool.presets") || "{}"); } catch { return {}; } }
+function savePresets(p) { LS.set("nctool.presets", JSON.stringify(p)); }
 function renderPresetList() {
   const p = loadPresets();
   const ul = $("presetList");
@@ -2011,7 +2321,7 @@ function loadPreset(name) {
 
 /* 自定义机床 */
 function loadCustomMachine() {
-  try { const j = JSON.parse(localStorage.getItem("nctool.customMachine") || "null"); return j; } catch { return null; }
+  try { const j = JSON.parse(LS.get("nctool.customMachine") || "null"); return j; } catch { return null; }
 }
 
 /* 批量 */
@@ -2059,6 +2369,68 @@ function downloadAll() {
   URL.revokeObjectURL(a.href);
 }
 
+/* ═══════════════════════════════════════════════════════════════
+   7.5 v2 新增：命令面板 / 移动端分段视图
+   ═══════════════════════════════════════════════════════════════ */
+function openPalette() {
+  $("palette").classList.add("open");
+  $("pq").value = "";
+  renderPalette();
+  $("pq").focus();
+}
+function closePalette() { $("palette").classList.remove("open"); }
+
+function paletteItems() {
+  const q = $("pq").value.trim().toLowerCase();
+  const items = [];
+  state.templates.forEach(t =>
+    items.push({ type: "模板", label: t.name, sub: t.description || "", cmd: "tpl:" + t.name }));
+  items.push({ type: "动作", label: "立即生成", sub: "⌘/Ctrl+⏎", cmd: "act:render" });
+  items.push({ type: "动作", label: "复制 G-code", sub: "⌘/Ctrl+⇧+C", cmd: "act:copy" });
+  items.push({ type: "动作", label: "下载 .nc", sub: "", cmd: "act:download" });
+  items.push({ type: "动作", label: "保存为预设", sub: "⌘/Ctrl+S", cmd: "act:preset" });
+  items.push({ type: "动作", label: "切换亮 / 暗主题", sub: "", cmd: "act:theme" });
+  state.machines.forEach(m =>
+    items.push({ type: "机床", label: m.id, sub: `${m.vendor || ""} ${m.model || ""}`.trim(), cmd: "machine:" + m.id }));
+  return items.filter(i => !q || i.label.toLowerCase().includes(q) || i.sub.toLowerCase().includes(q));
+}
+
+function renderPalette() {
+  const items = paletteItems();
+  $("pres").innerHTML = items.length
+    ? items.map((i, k) => `<div class="row ${k === 0 ? "on" : ""}" data-cmd="${esc(i.cmd)}">
+        <span>${esc(i.label)}</span><span class="k">${esc(i.type)}${i.sub ? " · " + esc(i.sub) : ""}</span></div>`).join("")
+    : `<div class="row" style="color:var(--text-faint)">无匹配结果</div>`;
+}
+
+function runCmd(cmd) {
+  const [kind, arg] = (cmd || "").split(":");
+  closePalette();
+  if (kind === "tpl") selectTemplate(arg);
+  else if (kind === "machine") {
+    state.machine = arg;
+    $("machineSel").value = arg;
+    doRender();
+    toast("已按 " + arg + " 重新生成");
+  } else if (kind === "act") {
+    if (arg === "render") doRender();
+    if (arg === "copy") copyGcode();
+    if (arg === "download") downloadGcode();
+    if (arg === "preset") { openModal("modalPreset"); renderPresetList(); $("presetName").focus(); }
+    if (arg === "theme") toggleTheme();
+  }
+}
+
+/* 移动端：模板 / 参数 / 结果 分段视图 */
+function setMobileView(v) {
+  $("appBody").dataset.mv = v;
+  document.querySelectorAll(".mobile-seg button").forEach(b => {
+    const on = b.dataset.mv === v;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", on);
+  });
+}
+
 /* 弹窗通用 */
 function openModal(id) { $(id).classList.add("open"); }
 function closeModal(id) { $(id).classList.remove("open"); }
@@ -2068,11 +2440,15 @@ function closeModal(id) { $(id).classList.remove("open"); }
    ═══════════════════════════════════════════════════════════════ */
 function init() {
   /* 主题 */
-  const saved = localStorage.getItem("nctool.theme");
+  const saved = LS.get("nctool.theme");
   if (saved) setTheme(saved);
 
-  /* 机床 */
-  $("machineSel").addEventListener("change", e => { state.machine = e.target.value; doRender(); });
+  /* 机床（v2：切换后显式反馈「已按 X 重新生成」，机床属于输出目标而非界面偏好） */
+  $("machineSel").addEventListener("change", e => {
+    state.machine = e.target.value;
+    doRender();
+    toast("已按 " + e.target.value + " 重新生成");
+  });
 
   /* 侧栏 */
   renderSidebar();
@@ -2155,6 +2531,65 @@ function init() {
     openModal("modalCustomMachine");
   });
 
+  /* ── v2：命令面板 / 重置 / 移动端分段 / 快捷键 ── */
+  state.recent = loadRecent();
+  $("paletteBtn").addEventListener("click", () => openPalette());
+  $("resetBtn").addEventListener("click", () => {
+    if (!state.selected) return;
+    selectTemplate(state.selected);
+    toast("已重置为默认参数");
+  });
+  $("statePill").addEventListener("click", () => {
+    if ($("statePill").dataset.jump) switchTab("validate");
+  });
+  document.querySelectorAll(".mobile-seg button").forEach(b =>
+    b.addEventListener("click", () => setMobileView(b.dataset.mv)));
+  /* 模板卡上的预设 chips：捕获阶段拦截，避免同时触发模板选择 */
+  $("tplList").addEventListener("click", e => {
+    const chip = e.target.closest("[data-preset]");
+    if (chip) { e.stopPropagation(); loadPreset(chip.dataset.preset); }
+  }, true);
+  $("presetChips").addEventListener("click", e => {
+    const chip = e.target.closest("[data-preset]");
+    if (chip) loadPreset(chip.dataset.preset);
+  });
+  $("pq").addEventListener("input", renderPalette);
+  $("pq").addEventListener("keydown", e => {
+    const rows = [...document.querySelectorAll(".palette .row[data-cmd]")];
+    const cur = rows.findIndex(r => r.classList.contains("on"));
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!rows.length) return;
+      const nx = (cur + (e.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length;
+      rows.forEach(r => r.classList.remove("on"));
+      rows[nx].classList.add("on");
+      rows[nx].scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const row = rows[cur < 0 ? 0 : cur];
+      if (row) runCmd(row.dataset.cmd);
+    }
+  });
+  $("pres").addEventListener("click", e => {
+    const row = e.target.closest("[data-cmd]");
+    if (row) runCmd(row.dataset.cmd);
+  });
+  document.addEventListener("click", e => {
+    const p = $("palette");
+    if (p.classList.contains("open") && !p.contains(e.target) && !$("paletteBtn").contains(e.target)) closePalette();
+  });
+  document.addEventListener("keydown", e => {
+    const meta = e.metaKey || e.ctrlKey;
+    if (meta && e.key.toLowerCase() === "k") { e.preventDefault(); openPalette(); }
+    else if (meta && e.key === "Enter") { e.preventDefault(); if (state.selected) doRender(); }
+    else if (meta && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      if (!state.selected) return;
+      openModal("modalPreset"); renderPresetList(); $("presetName").value = ""; $("presetName").focus();
+    }
+    else if (e.key === "Escape") closePalette();
+  });
+
   $("verText").textContent = "nctool UI · 单文件前端设计";
   $("modeText").textContent = API.mode === "demo" ? "演示模式" : "服务模式";
   $("modeBadge").className = "mode-badge " + API.mode;
@@ -2212,13 +2647,14 @@ init();
     try {
       const cfg = JSON.parse($("customArea").value);
       if (!cfg.id || !cfg.config) throw new Error("缺少 id 或 config");
-      localStorage.setItem("nctool.customMachine", JSON.stringify(cfg));
+      try { localStorage.setItem("nctool.customMachine", JSON.stringify(cfg)); }
+      catch { alert("当前环境不允许本地存储（file:// 或隐私模式），配置未能保存"); return; }
       closeCustom();
       location.reload();
     } catch (e) { alert("JSON 无效：" + e.message); }
   });
   $("customResetBtn").addEventListener("click", () => {
-    localStorage.removeItem("nctool.customMachine");
+    try { localStorage.removeItem("nctool.customMachine"); } catch { /* 忽略 */ }
     closeCustom();
     location.reload();
   });

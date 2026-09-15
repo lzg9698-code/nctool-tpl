@@ -2,7 +2,7 @@
 
 use std::path::Path;
 
-use nctool_core::{ParamValue, ParameterSet};
+use nctool_core::{ParamKind, ParamSpec, ParamValue, ParameterSet};
 
 use crate::output::CliError;
 
@@ -12,7 +12,12 @@ use crate::output::CliError;
 /// - 可解析为 f64 → 数值（含整数 `21`、科学计数 `1e3`）；前导零纯数字（如
 ///   `007`）保持字符串（数值会丢前导零）
 /// - 其余 → 字符串（如 `D12`、`轴`）
-pub fn parse_kv(s: &str) -> Result<(String, ParamValue), CliError> {
+/// 解析单个 `k=v` 参数，**按规格归一取值**（见 [`coerce_param_value`]）。
+///
+/// `specs` 传空切片即退化为纯启发式推断（无规格信息时的行为）。
+/// 显式类型后缀（`k:s=` / `k:n=` / `k:b=`）**优先于**规格归一——
+/// 那是用户明确表达意图的通道。
+pub fn parse_kv_with_specs(s: &str, specs: &[ParamSpec]) -> Result<(String, ParamValue), CliError> {
     let (k, v) = s
         .split_once('=')
         .ok_or_else(|| CliError::new("args", format!("参数格式应为 k=v，得到: {s}")))?;
@@ -47,7 +52,8 @@ pub fn parse_kv(s: &str) -> Result<(String, ParamValue), CliError> {
                 ));
             }
         }
-        _ => infer_param_value(v.trim()),
+        // 无显式后缀 → 按规格归一（无规格信息时退化为启发式推断）
+        _ => coerce_param_value(v.trim(), specs.iter().find(|sp| sp.name == raw_key)),
     };
     Ok((raw_key.to_string(), value))
 }
@@ -73,6 +79,41 @@ pub fn infer_param_value(v: &str) -> ParamValue {
         }
     }
     ParamValue::String(v.to_string())
+}
+
+/// 按规格归一 `--param` 的取值。
+///
+/// argv 里没有类型信息，此前只按"像不像数字"推断（`5010` → 数值）。但字符串型
+/// 参数若值恰好形如数字（`U_CTB` 的 `1631`、`U_ID` 的 `[42]`）会被推断成数值 →
+/// 类型不匹配，用户只能改用 `--params-file` 传 JSON 字符串或加 `k:s=` 后缀。
+///
+/// 规则（**先白名单、后类型**）：
+/// 1. 规格声明了候选值 → **优先取能命中白名单的那种解释**：`U_CTB` 的候选项混有
+///    `1631` 与 `"DECKEL"`，两种解释各命中一半，按值语义比较即可；
+/// 2. 候选值都没命中 → 保持启发式结果，交给校验层报"不在候选项内"
+///    （错误信息里的值更贴近用户输入）；
+/// 3. 规格没声明候选值 → 按声明的类型：`String` 保持字符串，其余沿用启发式推断；
+/// 4. 无规格（文件路径模板 / 未注册模板）→ 沿用启发式推断。
+fn coerce_param_value(raw: &str, spec: Option<&ParamSpec>) -> ParamValue {
+    let heuristic = infer_param_value(raw);
+    let Some(spec) = spec else {
+        return heuristic;
+    };
+    if let Some(accepted) = spec.accepts_option(&heuristic) {
+        if accepted {
+            return heuristic;
+        }
+        // 启发式解释不在白名单里，试"文本"解释（`1631` → `"1631"`）
+        let as_text = ParamValue::String(raw.to_string());
+        if spec.accepts_option(&as_text) == Some(true) {
+            return as_text;
+        }
+        return heuristic;
+    }
+    match spec.kind {
+        ParamKind::String => ParamValue::String(raw.to_string()),
+        _ => heuristic,
+    }
 }
 
 /// 前导零纯数字（`007`/`00`）：数值化会丢前导零，保持字符串。
@@ -103,53 +144,74 @@ pub fn load_params_file(path: &Path) -> Result<ParameterSet, CliError> {
 }
 
 /// 从 JSON 对象构造参数集，供 CLI 参数文件和 Web API 共用。
+///
+/// 支持的类型：数值 / 字符串 / 布尔 / 数组（→ 列表参数，驱动模板循环）。
+/// 数组元素递归解析，因此支持嵌套数组与混合类型。
 pub fn parameter_set_from_json(value: &serde_json::Value) -> Result<ParameterSet, CliError> {
     let obj = value
         .as_object()
         .ok_or_else(|| CliError::new("args", "参数应为 JSON 对象（键值对）"))?;
     let mut set = ParameterSet::new();
     for (k, v) in obj {
-        match v {
-            serde_json::Value::Number(n) => {
-                let f = n
-                    .as_f64()
-                    .ok_or_else(|| CliError::new("args", format!("参数 {k} 数值无法解析为 f64")))?;
-                if !f.is_finite() {
-                    return Err(CliError::new(
-                        "args",
-                        format!("参数 {k} 为非有限数（NaN/Inf），拒绝生成"),
-                    ));
-                }
-                set.set_number(k.clone(), f);
-            }
-            serde_json::Value::String(s) => {
-                set.set_string(k.clone(), s.clone());
-            }
-            serde_json::Value::Bool(b) => {
-                set.set_bool(k.clone(), *b);
-            }
-            other => {
-                return Err(CliError::new(
-                    "args",
-                    format!("参数 {k} 类型不支持（仅支持数值/字符串/布尔）: {other}"),
-                ));
-            }
-        }
+        set.values.insert(k.clone(), json_to_param_value(k, v)?);
     }
     Ok(set)
+}
+
+/// JSON 值 → 参数值（递归；`path` 用于错误定位）。
+fn json_to_param_value(path: &str, v: &serde_json::Value) -> Result<ParamValue, CliError> {
+    match v {
+        serde_json::Value::Number(n) => {
+            let f = n
+                .as_f64()
+                .ok_or_else(|| CliError::new("args", format!("参数 {path} 数值无法解析为 f64")))?;
+            if !f.is_finite() {
+                return Err(CliError::new(
+                    "args",
+                    format!("参数 {path} 为非有限数（NaN/Inf），拒绝生成"),
+                ));
+            }
+            Ok(ParamValue::Number(f))
+        }
+        serde_json::Value::String(s) => Ok(ParamValue::String(s.clone())),
+        serde_json::Value::Bool(b) => Ok(ParamValue::Bool(*b)),
+        serde_json::Value::Array(items) => {
+            let mut out = Vec::with_capacity(items.len());
+            for (i, item) in items.iter().enumerate() {
+                // 错误信息带上标号（`passes[2].x`），否则嵌套列表里无法定位
+                out.push(json_to_param_value(&format!("{path}[{i}]"), item)?);
+            }
+            Ok(ParamValue::List(out))
+        }
+        // 对象类型不直接作为参数值：模板对结构体的字段访问（`p.x`）需要的是
+        // 具名结构，而 ParamValue 是扁平值模型。需要结构时建模为「平行列表」
+        // （如 `xs` + `zs`）或改用模板内置的列表推导。
+        serde_json::Value::Object(_) => Err(CliError::new(
+            "args",
+            format!(
+                "参数 {path} 不支持对象类型：请改用扁平值或平行列表。\
+                 若模板需要结构体，请在模板内用列表元素字段组合表达"
+            ),
+        )),
+        serde_json::Value::Null => Err(CliError::new(
+            "args",
+            format!("参数 {path} 为 null：请省略该键以使用默认值，或显式提供值"),
+        )),
+    }
 }
 
 /// 合并参数输入：先加载 `--params-file`，再用 `--param` 覆盖（显式参数优先）。
 pub fn build_parameter_set(
     params_file: Option<&Path>,
     params: &[String],
+    specs: &[ParamSpec],
 ) -> Result<ParameterSet, CliError> {
     let mut set = ParameterSet::new();
     if let Some(path) = params_file {
         set.merge(&load_params_file(path)?);
     }
     for kv in params {
-        let (k, v) = parse_kv(kv)?;
+        let (k, v) = parse_kv_with_specs(kv, specs)?;
         set.values.insert(k, v);
     }
     Ok(set)
@@ -210,18 +272,18 @@ mod tests {
 
     #[test]
     fn parse_kv_formats() {
-        let (k, v) = parse_kv("x=21.0").unwrap();
+        let (k, v) = parse_kv_with_specs("x=21.0", &[]).unwrap();
         assert_eq!(k, "x");
         assert_eq!(v, ParamValue::Number(21.0));
-        let (k, v) = parse_kv("tool=D12").unwrap();
+        let (k, v) = parse_kv_with_specs("tool=D12", &[]).unwrap();
         assert_eq!(k, "tool");
         assert_eq!(v, ParamValue::String("D12".to_string()));
     }
 
     #[test]
     fn parse_kv_missing_equals() {
-        assert!(parse_kv("nokey").is_err());
-        assert!(parse_kv("=1").is_err());
+        assert!(parse_kv_with_specs("nokey", &[]).is_err());
+        assert!(parse_kv_with_specs("=1", &[]).is_err());
     }
 
     #[test]
@@ -236,19 +298,19 @@ mod tests {
 
     #[test]
     fn parse_kv_type_suffix() {
-        let (k, v) = parse_kv("tool:s=D12").unwrap();
+        let (k, v) = parse_kv_with_specs("tool:s=D12", &[]).unwrap();
         assert_eq!(k, "tool");
         assert_eq!(v, ParamValue::String("D12".into()));
-        let (_, v) = parse_kv("n:n=21").unwrap();
+        let (_, v) = parse_kv_with_specs("n:n=21", &[]).unwrap();
         assert_eq!(v, ParamValue::Number(21.0));
-        let (_, v) = parse_kv("flag:b=TRUE").unwrap();
+        let (_, v) = parse_kv_with_specs("flag:b=TRUE", &[]).unwrap();
         assert_eq!(v, ParamValue::Bool(true));
         // true/false 文本经 :s 可强制为字符串
-        let (_, v) = parse_kv("note:s=true").unwrap();
+        let (_, v) = parse_kv_with_specs("note:s=true", &[]).unwrap();
         assert_eq!(v, ParamValue::String("true".into()));
         // 强制类型失败 → 报错
-        assert!(parse_kv("x:n=abc").is_err());
-        assert!(parse_kv("x:b=yes").is_err());
+        assert!(parse_kv_with_specs("x:n=abc", &[]).is_err());
+        assert!(parse_kv_with_specs("x:b=yes", &[]).is_err());
     }
 
     #[test]
@@ -268,7 +330,7 @@ mod tests {
     #[test]
     fn build_set_from_params() {
         let set =
-            build_parameter_set(None, &["x=1.5".to_string(), "tool=D12".to_string()]).unwrap();
+            build_parameter_set(None, &["x=1.5".to_string(), "tool=D12".to_string()], &[]).unwrap();
         assert_eq!(set.get("x"), Some(&ParamValue::Number(1.5)));
         assert_eq!(
             set.get("tool"),
@@ -296,18 +358,98 @@ mod tests {
         let dir = std::env::temp_dir();
         let path = dir.join(format!("nctool_test_override_{}.json", std::process::id()));
         std::fs::write(&path, r#"{"x": 1.0}"#).unwrap();
-        let set = build_parameter_set(Some(&path), &["x=99.0".to_string()]).unwrap();
+        let set = build_parameter_set(Some(&path), &["x=99.0".to_string()], &[]).unwrap();
         std::fs::remove_file(&path).ok();
         assert_eq!(set.get("x"), Some(&ParamValue::Number(99.0)));
     }
 
+    /// 数组现在被解析为列表参数（`ParamValue::List`），不再是坏类型。
     #[test]
-    fn load_params_file_bad_type() {
+    fn load_params_file_array_as_list() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("nctool_test_arr_{}.json", std::process::id()));
+        std::fs::write(&path, r#"{"z_offsets": [261, 463.75]}"#).unwrap();
+        let set = load_params_file(&path).unwrap();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(
+            set.get("z_offsets"),
+            Some(&ParamValue::List(vec![
+                ParamValue::Number(261.0),
+                ParamValue::Number(463.75),
+            ]))
+        );
+    }
+
+    /// 嵌套数组同样支持，且错误信息带下标路径。
+    #[test]
+    fn load_params_file_nested_and_bad_element() {
         let dir = std::env::temp_dir();
         let path = dir.join(format!("nctool_test_bad_{}.json", std::process::id()));
-        std::fs::write(&path, r#"{"x": [1,2]}"#).unwrap();
+        // 嵌套数组中的对象元素 → 报错，且路径应定位到 passes[1][0]
+        std::fs::write(&path, r#"{"passes": [[1, 2], [{"x": 1}]]}"#).unwrap();
         let err = load_params_file(&path).unwrap_err();
         std::fs::remove_file(&path).ok();
-        assert!(err.message.contains("不支持"));
+        assert!(
+            err.message.contains("passes[1][0]"),
+            "实际: {}",
+            err.message
+        );
+
+        // 顶层对象同样拒绝
+        let path2 = dir.join(format!("nctool_test_obj_{}.json", std::process::id()));
+        std::fs::write(&path2, r#"{"p": {"x": 1}}"#).unwrap();
+        let err2 = load_params_file(&path2).unwrap_err();
+        std::fs::remove_file(&path2).ok();
+        assert!(
+            err2.message.contains("不支持对象类型"),
+            "实际: {}",
+            err2.message
+        );
+    }
+
+    #[test]
+    fn param_value_coerced_by_spec_whitelist() {
+        // 值形如数字的字符串型参数：按白名单命中哪种解释就用哪种。
+        // `U_CTB` 的候选项混有 1631 与 "DECKEL"，两种输入都应能命中。
+        let specs = [
+            ParamSpec::new("U_CTB", ParamKind::Any, "倒角后备刀").with_options([
+                ParamValue::Integer(1631),
+                ParamValue::String("DECKEL".into()),
+            ]),
+        ];
+        let (_, v) = parse_kv_with_specs("U_CTB=1631", &specs).unwrap();
+        assert_eq!(v, ParamValue::Number(1631.0), "数值解释命中 Integer(1631)");
+        let (_, v) = parse_kv_with_specs("U_CTB=DECKEL", &specs).unwrap();
+        assert_eq!(v, ParamValue::String("DECKEL".into()));
+    }
+
+    #[test]
+    fn param_value_coerced_by_declared_kind() {
+        // 无白名单时按声明的类型：String 型参数即使值形如数字也保持字符串
+        // （此前会被推断成数值 → 类型不匹配，只能用 --params-file 或 k:s= 绕过）
+        let specs = [ParamSpec::new("tool_name", ParamKind::String, "刀具名")];
+        let (_, v) = parse_kv_with_specs("tool_name=1631", &specs).unwrap();
+        assert_eq!(v, ParamValue::String("1631".into()));
+        // 数值型参数照旧按启发式推断
+        let specs2 = [ParamSpec::new("x", ParamKind::Number, "X 坐标")];
+        let (_, v) = parse_kv_with_specs("x=21", &specs2).unwrap();
+        assert_eq!(v, ParamValue::Number(21.0));
+    }
+
+    #[test]
+    fn forced_type_suffix_beats_spec_coercion() {
+        // `k:s=` 等显式后缀是用户明确表达意图的通道，优先于规格归一
+        let specs = [ParamSpec::new("x", ParamKind::Number, "X 坐标")];
+        let (_, v) = parse_kv_with_specs("x:s=1631", &specs).unwrap();
+        assert_eq!(v, ParamValue::String("1631".into()));
+    }
+
+    #[test]
+    fn no_spec_falls_back_to_heuristic() {
+        // 无规格（文件路径模板 / 未注册模板）→ 沿用启发式推断，行为不变
+        let (_, v) = parse_kv_with_specs("x=21.5", &[]).unwrap();
+        assert_eq!(v, ParamValue::Number(21.5));
+        let (_, v) = parse_kv_with_specs("t=D12", &[]).unwrap();
+        assert_eq!(v, ParamValue::String("D12".into()));
     }
 }

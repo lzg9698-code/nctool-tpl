@@ -11,9 +11,10 @@
 
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
+use std::rc::Rc;
 
 use nctool_core::machine::MachinePreset;
-use nctool_core::pipeline::{GenerationOptions, OutputFormat};
+use nctool_core::pipeline::{GCodeGenerator, GenerationOptions, OutputFormat};
 use nctool_core::registry::{TemplateCategory, TemplateSource};
 use nctool_tpl::Variable;
 
@@ -174,12 +175,18 @@ fn template_detail(ctx: &Ctx, raw_name: &str) -> Resp {
 ///
 /// 与前端演示数据字段对齐：`kind` 用首字母大写类型名，`desc` 为
 /// `description` 的别名（两份都给，前后端字段名不敏感）。
-fn spec_json(spec: &nctool_core::ParamSpec) -> serde_json::Value {
+pub(crate) fn spec_json(spec: &nctool_core::ParamSpec) -> serde_json::Value {
     let kind = match spec.kind {
         nctool_core::ParamKind::Number => "Number",
         nctool_core::ParamKind::Integer => "Integer",
         nctool_core::ParamKind::String => "String",
         nctool_core::ParamKind::Bool => "Bool",
+        // 前端据此外渲染「列表」控件（JSON 数组输入框）
+        nctool_core::ParamKind::List => "List",
+        // 前端据此渲染下拉选择；候选值见 `options` 字段
+        nctool_core::ParamKind::Choice => "Choice",
+        // 未标注类型：前端回退为文本输入
+        nctool_core::ParamKind::Any => "Any",
     };
     serde_json::json!({
         "name": spec.name,
@@ -190,6 +197,12 @@ fn spec_json(spec: &nctool_core::ParamSpec) -> serde_json::Value {
         "max": spec.max,
         "integer": spec.integer,
         "unit": spec.unit,
+        // 候选项白名单：前端可据此渲染 <select>，空/未声明时为 null
+        "options": spec.options,
+        // 条件必选：前端可据此把参数标为「条件必选」并展示触发条件
+        "requiredIf": spec.required_if,
+        // 派生规则：前端可据此把参数标为「由系统派生」并展示来源（不要求用户填写）
+        "derive": spec.derive,
         "desc": spec.description,
         "description": spec.description,
     })
@@ -234,10 +247,10 @@ fn api_template_params(
 }
 
 /// HTTP 模板解析只允许注册表中的逻辑名称，不复用 CLI 的文件路径解析能力。
-fn registered_template(
-    ctx: &Ctx,
-    name: &str,
-) -> Result<(nctool_core::pipeline::GCodeGenerator, String), Resp> {
+///
+/// 返回共享的缓存注册表（`Rc`）：`Ctx::build_registry` 按模板目录指纹缓存，
+/// 避免每个请求都重新遍历目录、读取并解析全部模板。
+fn registered_template(ctx: &Ctx, name: &str) -> Result<(Rc<GCodeGenerator>, String), Resp> {
     let gen = ctx.build_registry().map_err(internal_error)?;
     if gen.registry().get(name).is_none() {
         return Err(Resp::Json(
@@ -665,13 +678,7 @@ mod tests {
     use super::*;
 
     fn test_ctx() -> Ctx {
-        Ctx {
-            style: crate::output::OutputStyle::Text,
-            verbose: false,
-            template_dir: None,
-            default_machine: None,
-            loaded: Default::default(),
-        }
+        Ctx::for_test()
     }
 
     #[test]

@@ -1,4 +1,4 @@
-//! 可运行演示：解析 `templates/demo_gcode.j2`，
+//! 可运行演示：解析 `templates/turning/demo_gcode.j2`，
 //! 打印模板用到的变量 / 未声明变量，再用给定上下文渲染出 G-code。
 //!
 //! 运行：`cargo run --example demo`
@@ -7,7 +7,10 @@ use nctool_tpl::{extract_undeclared, extract_variables, parse, Renderer};
 
 fn main() {
     // 读取示例模板（相对 crate 根目录）
-    let path = concat!(env!("CARGO_MANIFEST_DIR"), "/templates/demo_gcode.j2");
+    let path = concat!(
+        env!("CARGO_MANIFEST_DIR"),
+        "/templates/turning/demo_gcode.j2"
+    );
     let source = std::fs::read_to_string(path).expect("读取模板失败");
     let name = "demo_gcode.j2";
 

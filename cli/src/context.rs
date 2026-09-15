@@ -1,16 +1,31 @@
 //! 命令执行上下文：解析全局选项、构建模板注册表、解析机床配置。
 
-use std::path::PathBuf;
+use std::cell::RefCell;
+use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::time::SystemTime;
 
 use nctool_core::machine::MachinePreset;
+use nctool_core::manifest::{path_to_rel_key, ResolvedMeta, TemplateManifest, MANIFEST_FILE};
 use nctool_core::pipeline::GCodeGenerator;
-use nctool_core::registry::TemplateCategory;
+use nctool_core::registry::{TemplateEntry, TemplateSource};
+use nctool_core::variables::VariableLibrary;
 use nctool_core::{MachineConfig, ParameterSet};
 
 use crate::args;
 use crate::cli::GlobalArgs;
 use crate::config;
 use crate::output::{CliError, OutputStyle};
+
+/// 注册表缓存键：模板目录 + 该目录树的最新 mtime。
+///
+/// `root = None` 表示"未配置模板目录"（仅内置模板，与磁盘无关）。
+/// 把 `root` 一并入键是为了防住 `template_dir` 被改写后误命中旧缓存。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) struct RegistryKey {
+    root: Option<PathBuf>,
+    stamp: SystemTime,
+}
 
 /// 命令执行上下文（由全局选项 + 配置文件解析而来）。
 #[derive(Debug, Clone)]
@@ -25,6 +40,15 @@ pub struct Ctx {
     pub default_machine: Option<String>,
     /// 一次性加载的层叠配置（含来源路径，供各命令复用，避免重复读盘）
     pub loaded: config::LoadedConfig,
+    /// 模板注册表缓存（键 + 共享注册表），见 [`Ctx::build_registry`]。
+    ///
+    /// `RefCell` 而非 `OnceCell`：键会随目录指纹变化而更新。
+    /// 单线程使用（CLI 一次性执行、Web 服务顺序处理请求），无需加锁。
+    ///
+    /// `pub(crate)`：本 crate 的测试会以结构体字面量构造 `Ctx`（需要精确指定
+    /// `template_dir` 等字段），私有字段会让这些构造点全部编译失败。
+    /// 对外仍不可见——它不是 API 的一部分。
+    pub(crate) registry_cache: RefCell<Option<(RegistryKey, Rc<GCodeGenerator>)>>,
 }
 
 impl Ctx {
@@ -49,56 +73,175 @@ impl Ctx {
                 .clone()
                 .or_else(|| loaded.merged.default_machine.clone()),
             loaded,
+            registry_cache: RefCell::new(None),
         })
     }
 
-    /// 构建模板注册表：内置模板 + 模板目录中的 *.j2 文件。
+    /// 构建（或复用）模板注册表：内置模板 + 模板目录中的 `*.j2` 文件（**递归**）。
     ///
-    /// 目录模板以**完整文件名（含扩展名）**作为模板名（如 `my_op.j2`），
-    /// 与 `nctool-tpl` 的目录加载器约定一致，且不与内置模板名冲突。
-    pub fn build_registry(&self) -> Result<GCodeGenerator, CliError> {
-        let mut gen = GCodeGenerator::new();
-        if let Some(dir) = &self.template_dir {
-            if !dir.exists() {
-                return Err(CliError::new(
-                    "io",
-                    format!("模板目录不存在: {}", dir.display()),
-                ));
+    /// 目录模板以**相对模板目录的路径**作为模板名（如 `turning/undercut.j2`），
+    /// 使用 `/` 作分隔符。相对名唯一（同名文件在不同子目录下互不冲突），
+    /// 且不与内置模板的扁平名冲突。
+    ///
+    /// 元数据按「清单 > 模板头部注释 > 文件名」三级回退解析（见
+    /// [`nctool_core::manifest::ResolvedMeta`]）：分类、描述、可见性、
+    /// 输出文件名/后缀均可在 `templates.yaml` 中声明，未声明时按目录名推断分类。
+    ///
+    /// 隐藏文件与目录（`.` 开头）、清单文件自身、以及符号链接逃逸路径一律跳过。
+    ///
+    /// # 缓存
+    /// 构建一次要遍历目录、读取并解析**全部**模板源码，成本与模板数成正比；
+    /// 而 Web UI 的每个请求都要用它。故按「模板目录 + 目录树最新 mtime」缓存：
+    /// 指纹未变则复用同一份注册表。
+    ///
+    /// **指纹不可省**：若无条件长期缓存，用户改完模板仍会拿到旧注册表，
+    /// 渲染出与图纸不符的 G-code —— 属于本项目零容忍的"静默产出错误程序"。
+    ///
+    /// 需要**可变**注册表（注册临时文件模板等）时请改用
+    /// [`Self::build_registry_fresh`]：缓存中的注册表由所有调用方共享，
+    /// 就地改动会污染后续调用。
+    pub fn build_registry(&self) -> Result<Rc<GCodeGenerator>, CliError> {
+        // 无模板目录 = 仅内置模板，与磁盘无关，恒定不变
+        let Some(dir) = &self.template_dir else {
+            let key = RegistryKey {
+                root: None,
+                stamp: SystemTime::UNIX_EPOCH,
+            };
+            if let Some((cached_key, cached)) = self.registry_cache.borrow().as_ref() {
+                if *cached_key == key {
+                    return Ok(Rc::clone(cached));
+                }
             }
-            let root = std::fs::canonicalize(dir).map_err(|e| {
-                CliError::new("io", format!("解析模板目录失败 {}: {e}", dir.display()))
-            })?;
-            let entries = std::fs::read_dir(&root)?;
-            for entry in entries {
-                let path = entry?.path();
-                let is_j2 = path
-                    .extension()
-                    .is_some_and(|e| e.eq_ignore_ascii_case("j2"));
-                if !is_j2 || !path.is_file() {
-                    continue;
-                }
-                // 跟随符号链接读取前，确认真实目标仍在模板根目录内。
-                let canonical = match std::fs::canonicalize(&path) {
-                    Ok(p) if p.starts_with(&root) && p.is_file() => p,
-                    _ => continue,
-                };
-                let name = path
-                    .file_name()
-                    .map(|n| n.to_string_lossy().to_string())
-                    .unwrap_or_default();
-                if name.is_empty() {
-                    continue;
-                }
-                gen.registry_mut().add_file(
-                    name,
-                    TemplateCategory::General,
-                    format!("文件模板: {}", canonical.display()),
-                    &canonical,
-                    vec![],
-                )?;
+            let gen = Rc::new(GCodeGenerator::new());
+            *self.registry_cache.borrow_mut() = Some((key, Rc::clone(&gen)));
+            return Ok(gen);
+        };
+
+        let root = canonicalize_dir(dir)?;
+        // 指纹取不到（IO 异常）时**放弃缓存**：宁可每次重算，也不拿陈旧注册表
+        let Some(stamp) = tree_stamp(&root) else {
+            return Ok(Rc::new(self.load_registry(&root)?));
+        };
+        let key = RegistryKey {
+            root: Some(root.clone()),
+            stamp,
+        };
+        if let Some((cached_key, cached)) = self.registry_cache.borrow().as_ref() {
+            if *cached_key == key {
+                return Ok(Rc::clone(cached));
             }
         }
+        let gen = Rc::new(self.load_registry(&root)?);
+        *self.registry_cache.borrow_mut() = Some((key, Rc::clone(&gen)));
         Ok(gen)
+    }
+
+    /// 每次重建注册表（不读缓存）。
+    ///
+    /// 供需要 `&mut GCodeGenerator` 的调用方使用 —— 典型是 `render` 的
+    /// 「把临时文件模板注册进来」路径。走缓存会让该临时模板泄漏进共享注册表，
+    /// 使后续调用看到一个本不该存在的模板名。
+    pub fn build_registry_fresh(&self) -> Result<GCodeGenerator, CliError> {
+        match &self.template_dir {
+            None => Ok(GCodeGenerator::new()),
+            Some(dir) => {
+                let root = canonicalize_dir(dir)?;
+                self.load_registry(&root)
+            }
+        }
+    }
+
+    /// 遍历 `root` 并装载全部模板（不做缓存，`root` 须已规范化）。
+    fn load_registry(&self, root: &Path) -> Result<GCodeGenerator, CliError> {
+        let mut gen = GCodeGenerator::new();
+
+        // 清单加载失败不阻断：清单是可选的，损坏时降级为「无清单」并告警，
+        // 这样模板仍可用，用户也能看到问题所在。
+        let manifest = match TemplateManifest::load(root) {
+            Ok(m) => m,
+            Err(e) => {
+                eprintln!("warning: {e}");
+                TemplateManifest::empty()
+            }
+        };
+        // 变量库同理：可选文件，损坏时降级为空库（参数规格退回头部声明）
+        let library = match VariableLibrary::load(root) {
+            Ok(l) => l,
+            Err(e) => {
+                eprintln!("warning: {e}");
+                VariableLibrary::empty()
+            }
+        };
+
+        // 收集待注册模板：先完成整目录遍历再注册，避免遍历中途发现重名时报错
+        // 而留下半成品注册表。
+        let mut found: Vec<(String, std::path::PathBuf)> = Vec::new();
+        collect_templates(root, root, &mut found)?;
+        // 按路径排序，保证列表输出稳定（BTreeMap 只保证注册顺序后的键序，
+        // 而注册顺序取决于文件系统返回顺序）
+        found.sort_by(|a, b| a.0.cmp(&b.0));
+
+        for (rel_key, canonical) in found {
+            let source_text = std::fs::read_to_string(&canonical).map_err(|e| {
+                CliError::new("io", format!("读取模板失败 {}: {e}", canonical.display()))
+            })?;
+            let rel_path = std::path::Path::new(&rel_key);
+            let meta =
+                ResolvedMeta::resolve(rel_path, &source_text, manifest.get(&rel_key), &library);
+
+            // 头部 `{# PARAMS: #}` 里无法解析的行：提示但不阻断加载——
+            // 静默跳过等于静默少一条参数约束（类型/白名单就不再校验了）。
+            for warning in &meta.warnings {
+                eprintln!("warning: {rel_key}: {warning}");
+            }
+
+            // 描述为空时补上来源路径，避免列表里出现空白描述
+            let description = if meta.description.is_empty() {
+                format!("文件模板: {}", canonical.display())
+            } else {
+                meta.description.clone()
+            };
+
+            let entry = TemplateEntry::new(
+                rel_key.clone(),
+                meta.category,
+                description,
+                TemplateSource::File(canonical),
+                // 参数规格：头部 `{# PARAMS: #}` + 清单 `params` 覆盖层。
+                // 此前恒为空切片，导致文件模板的类型/区间/白名单约束全部失效，
+                // `validate` 对 `Z_START=abc` 这类错误直接放行。
+                meta.params.clone(),
+                source_text,
+            )
+            .with_visible(meta.visible)
+            .with_output(meta.output_filename.clone(), meta.output_extension.clone())
+            .with_machine(meta.machine.clone())
+            .with_status(meta.status);
+
+            // 与内置模板重名不算错误：内置名是扁平的单段名（如 `facing`），
+            // 而目录模板名至少含一个扩展名点或路径分隔符，正常不会冲突；
+            // 真冲突时上游 add_entry 会返回 Duplicate，这里转换为用户可读错误。
+            gen.registry_mut()
+                .add_entry(entry)
+                .map_err(|e| CliError::new("template_register", format!("注册模板失败: {e}")))?;
+        }
+        Ok(gen)
+    }
+
+    /// 测试用最小上下文（无模板目录、无默认机床、文本输出）。
+    ///
+    /// 集中一处列出全部字段：新增 `Ctx` 字段时只需改这里，
+    /// 而不必逐个修补散落在各模块测试里的结构体字面量。
+    #[cfg(test)]
+    pub(crate) fn for_test() -> Self {
+        Self {
+            style: OutputStyle::Text,
+            verbose: false,
+            template_dir: None,
+            default_machine: None,
+            loaded: Default::default(),
+            registry_cache: RefCell::new(None),
+        }
     }
 
     /// 解析机床配置：`--machine` / 配置默认值 / 内置 generic。
@@ -143,6 +286,112 @@ impl Ctx {
     }
 }
 
+/// 校验并规范化模板目录：不存在或无法解析时报 IO 错误。
+fn canonicalize_dir(dir: &Path) -> Result<PathBuf, CliError> {
+    if !dir.exists() {
+        return Err(CliError::new(
+            "io",
+            format!("模板目录不存在: {}", dir.display()),
+        ));
+    }
+    std::fs::canonicalize(dir)
+        .map_err(|e| CliError::new("io", format!("解析模板目录失败 {}: {e}", dir.display())))
+}
+
+/// 计算目录树的"最新修改时间"指纹：任一文件/子目录被增删改都会改变它。
+///
+/// 只读 `metadata`（不读文件内容），成本远低于"读取并解析全部模板"。
+/// 目录自身的 mtime 也要计入——新增/删除文件只改父目录 mtime。
+///
+/// 任一环节 IO 失败返回 `None`，调用方据此**放弃缓存**（宁可重算，
+/// 也不拿陈旧注册表去渲染 G-code）。
+fn tree_stamp(root: &Path) -> Option<SystemTime> {
+    let mut newest = std::fs::metadata(root).ok()?.modified().ok()?;
+    let mut stack = vec![root.to_path_buf()];
+    while let Some(dir) = stack.pop() {
+        for entry in std::fs::read_dir(&dir).ok()? {
+            let entry = entry.ok()?;
+            // DirEntry::metadata 不跟随符号链接：与 collect_templates 的
+            // "符号链接逃逸一律跳过"口径一致，链接目标的变化不影响指纹
+            let meta = entry.metadata().ok()?;
+            if let Ok(modified) = meta.modified() {
+                if modified > newest {
+                    newest = modified;
+                }
+            }
+            if meta.is_dir() {
+                stack.push(entry.path());
+            }
+        }
+    }
+    Some(newest)
+}
+
+/// 递归收集模板目录下的 `*.j2` 文件。
+///
+/// 跳过规则（安全相关，逐条都有理由）：
+///
+/// - **隐藏项**（`.` 开头，含目录）：避免扫到 `.git`、`.venv` 等无关目录
+/// - **清单文件**（`templates.yaml`）：它是元数据而非模板，且无 `.j2` 后缀，
+///   实际不会命中；显式跳过是为了语义清晰
+/// - **符号链接逃逸**：`canonicalize` 后真实路径必须仍在 `root` 之内，
+///   否则跳过。这是防路径遍历的关键一步——目录链接可以指向模板根之外
+/// - **非 `*.j2` 文件**：模板扩展名约定
+///
+/// 输出 `(相对路径键, 规范化绝对路径)`；相对路径键统一用 `/` 分隔。
+fn collect_templates(
+    root: &Path,
+    dir: &Path,
+    out: &mut Vec<(String, PathBuf)>,
+) -> Result<(), CliError> {
+    let entries = std::fs::read_dir(dir)
+        .map_err(|e| CliError::new("io", format!("读取目录失败 {}: {e}", dir.display())))?;
+    for entry in entries {
+        let entry = entry
+            .map_err(|e| CliError::new("io", format!("读取目录项失败 {}: {e}", dir.display())))?;
+        let path = entry.path();
+
+        // 隐藏项（文件或目录）一律跳过
+        let is_hidden = path
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.starts_with('.'));
+        if is_hidden {
+            continue;
+        }
+
+        if path.is_dir() {
+            collect_templates(root, &path, out)?;
+            continue;
+        }
+
+        // 只认 .j2 扩展名（大小写不敏感）
+        let is_j2 = path
+            .extension()
+            .is_some_and(|e| e.eq_ignore_ascii_case("j2"));
+        if !is_j2 {
+            continue;
+        }
+        // 清单文件不是模板（防御性检查，正常已被扩展名过滤）
+        if path.file_name().is_some_and(|n| n == MANIFEST_FILE) {
+            continue;
+        }
+
+        // 跟随符号链接前确认真实目标仍在模板根目录内，防止逃逸到目录外。
+        let canonical = match std::fs::canonicalize(&path) {
+            Ok(p) if p.starts_with(root) && p.is_file() => p,
+            _ => continue,
+        };
+        let rel = match canonical.strip_prefix(root) {
+            Ok(r) => r,
+            // 理论不可达（上一步已保证 starts_with），保守跳过而非 panic
+            Err(_) => continue,
+        };
+        out.push((path_to_rel_key(rel), canonical));
+    }
+    Ok(())
+}
+
 /// 构造参数集：`--params-file` + `--param`（显式参数优先）。
 ///
 /// 渲染上下文的构建（参数裸值 + `machine` 注入）与宽松渲染均已收编到
@@ -151,36 +400,52 @@ impl Ctx {
 pub fn build_params(
     params_file: Option<&std::path::Path>,
     params: &[String],
+    specs: &[nctool_core::ParamSpec],
 ) -> Result<ParameterSet, CliError> {
-    args::build_parameter_set(params_file, params)
+    args::build_parameter_set(params_file, params, specs)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
+    /// 建一个只含单个模板的临时目录，返回 (目录, 模板文件路径)。
+    fn temp_template_dir(tag: &str) -> (PathBuf, PathBuf) {
+        let dir = std::env::temp_dir().join(format!("nctool_ctx_{tag}_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(dir.join("turning")).expect("建临时目录");
+        let tpl = dir.join("turning").join("a.j2");
+        std::fs::write(&tpl, "G0 X{{ x }}\n").expect("写模板");
+        (dir, tpl)
+    }
+
+    /// 把**文件**的 mtime 推后若干秒。
+    ///
+    /// 指纹只到 mtime，而部分文件系统的时间戳粒度较粗——两次写入若落在同一
+    /// 刻度内，指纹不变、缓存不失效，测试会随机失败。显式推后即消除该不确定性。
+    ///
+    /// 只对文件有效：Windows 下以写方式打开**目录**必然返回
+    /// `PermissionDenied`（os error 5），不要传目录进来。
+    fn bump_mtime(path: &Path, secs: u64) {
+        assert!(path.is_file(), "bump_mtime 只接受文件: {}", path.display());
+        let f = std::fs::OpenOptions::new()
+            .write(true)
+            .open(path)
+            .expect("打开文件");
+        f.set_modified(SystemTime::now() + std::time::Duration::from_secs(secs))
+            .expect("设置 mtime");
+    }
+
     #[test]
     fn ctx_default_machine_is_generic() {
-        let ctx = Ctx {
-            style: OutputStyle::Text,
-            verbose: false,
-            template_dir: None,
-            default_machine: None,
-            loaded: Default::default(),
-        };
+        let ctx = Ctx::for_test();
         let m = ctx.resolve_machine(None).unwrap();
         assert_eq!(m.id, "generic");
     }
 
     #[test]
     fn resolve_builtin_preset() {
-        let ctx = Ctx {
-            style: OutputStyle::Text,
-            verbose: false,
-            template_dir: None,
-            default_machine: None,
-            loaded: Default::default(),
-        };
+        let ctx = Ctx::for_test();
         let wfl = ctx.resolve_machine(Some("wfl_m65")).unwrap();
         assert_eq!(wfl.vendor, "WFL");
         let idx = ctx.resolve_machine(Some("index_ms40")).unwrap();
@@ -189,13 +454,107 @@ mod tests {
 
     #[test]
     fn unknown_machine_errors() {
-        let ctx = Ctx {
-            style: OutputStyle::Text,
-            verbose: false,
-            template_dir: None,
-            default_machine: None,
-            loaded: Default::default(),
-        };
+        let ctx = Ctx::for_test();
         assert!(ctx.resolve_machine(Some("no_such")).is_err());
+    }
+
+    #[test]
+    fn registry_is_reused_while_directory_is_unchanged() {
+        let (dir, _tpl) = temp_template_dir("cache_hit");
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(dir.clone());
+
+        let first = ctx.build_registry().expect("首次构建");
+        let second = ctx.build_registry().expect("二次构建");
+        assert!(
+            Rc::ptr_eq(&first, &second),
+            "目录树未变时必须复用同一份注册表（否则每请求都在重读全部模板）"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn registry_is_rebuilt_after_template_edit() {
+        let (dir, tpl) = temp_template_dir("cache_invalidate");
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(dir.clone());
+
+        let first = ctx.build_registry().expect("首次构建");
+        assert!(first.registry().get("turning/a.j2").is_some());
+
+        // 改内容 + 推后 mtime：必须重建，且新内容要真正生效——
+        // 用旧注册表会渲染出与图纸不符的 G-code，是本项目零容忍的失败模式
+        std::fs::write(&tpl, "G0 Z{{ z }}\n").expect("改写模板");
+        bump_mtime(&tpl, 2);
+
+        let second = ctx.build_registry().expect("改后重建");
+        assert!(!Rc::ptr_eq(&first, &second), "目录树变化后必须重建注册表");
+        let entry = second.registry().get("turning/a.j2").expect("模板仍在");
+        assert!(
+            entry.source_text.contains("Z{{ z }}"),
+            "重建后必须读到新内容，实际为: {}",
+            entry.source_text
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn registry_is_rebuilt_when_template_added() {
+        let (dir, _tpl) = temp_template_dir("cache_added");
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(dir.clone());
+
+        let first = ctx.build_registry().expect("首次构建");
+        let added = dir.join("turning").join("b.j2");
+        std::fs::write(&added, "G0 Y{{ y }}\n").expect("新增模板");
+        // 推后新文件的 mtime 而非父目录：目录无法以写方式打开（Windows 下必然
+        // 拒绝访问），而指纹取全树最大值，新文件足够新即可让指纹变化
+        bump_mtime(&added, 2);
+
+        let second = ctx.build_registry().expect("新增后重建");
+        assert!(!Rc::ptr_eq(&first, &second), "新增模板必须使缓存失效");
+        assert!(
+            second.registry().get("turning/b.j2").is_some(),
+            "新增模板必须出现在重建后的注册表中"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn fresh_registry_does_not_pollute_shared_cache() {
+        let (dir, _tpl) = temp_template_dir("fresh_isolation");
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(dir.clone());
+
+        let cached = ctx.build_registry().expect("缓存构建");
+
+        // 模拟 render 的「就地注册临时文件模板」：必须落在独立副本上，
+        // 否则该模板名会泄漏进共享缓存，后续调用会看到一个本不存在的模板
+        let mut fresh = ctx.build_registry_fresh().expect("独立构建");
+        fresh
+            .registry_mut()
+            .add_memory(
+                "tmp_ad_hoc",
+                nctool_core::registry::TemplateCategory::General,
+                "临时模板",
+                "G0 X0\n",
+                vec![],
+            )
+            .expect("注册临时模板");
+
+        let cached_again = ctx.build_registry().expect("再次取缓存");
+        assert!(
+            Rc::ptr_eq(&cached, &cached_again),
+            "缓存不应被 fresh 构建替换"
+        );
+        assert!(
+            cached_again.registry().get("tmp_ad_hoc").is_none(),
+            "临时模板不得泄漏进共享缓存"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

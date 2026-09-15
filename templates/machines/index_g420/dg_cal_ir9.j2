@@ -1,0 +1,46 @@
+{# NAME: 全局参数配置 (DG_CAL_IR9.SPF) #}
+{# DESCRIPTION: INDEX G420 机床的 R 参数表初始化段。将毛坯尺寸、尾座顶尖型号等#}
+{#              外部信息换算为该机床 R 参数（I_R9[]）单号程序。 #}
+{# MACHINE: index_g420 #}
+{# OUTPUT: DG_CAL_IR9.SPF #}
+{# PARAMS:
+     tip_model       string  可选  尾座中心孔型号（对照表见 templates/variables.yaml），未选择时按 DM24 处理
+     raw_diameter    number  必选  毛坯直径
+     raw_length      number  必选  毛坯长度
+     spindle_side_z  number  可选  主轴侧 ZMW_1（默认 345）
+     tip_height      number  可选  厂家尾座长顶尖高度（默认 88.3）
+     speed_limit     number  可选  转速上限（默认 600）
+#}
+{# 说明：本模板只做变量替换与格式化。顶尖型号 -> 中心孔深度 的**查表在 Rust 侧**
+   完成（`templates/variables.yaml` 的 `derive` 规则 + `core/src/derive.rs`），
+   派生值以 `tip_depth` 注入——模板不再内嵌数据表，改表只改 YAML。
+
+   注意 `tip_depth` 由 tip_model **派生**，不是调用方参数：无需提供，
+   提供了也会被派生值覆盖（校验会给出提示）。故它不出现在上面的参数表里。
+
+   此前这张表写在模板里（`{% set tip_depth_map = {...} %}`），原因是 minijinja 的
+   map 没有任何方法（见约定 R6），只能写成 `map[k] | default(v)`。挪到 Rust 侧后
+   连这条绕行约定也不需要了。
+
+   对照表以 `templates/variables.yaml` 的 `tip_depth.derive.table` 为**唯一来源**，
+   可用 `nctool inspect` 或直接查该文件；程序里只打印实际选中的型号与算出的深度。 #}
+;----------------------
+; 尾座中心孔型号: {{ tip_model|default('未选择') }} -> 自动深度: {{ tip_depth }}
+;----------------------
+I_R9[35]={{ spindle_side_z|default(345) | nc_strip }}  ;主轴侧ZMW_1 345
+I_R9[32]={{ tip_height|default(88.3) | nc_strip }}  ;厂家尾座长顶尖高度 88.3
+I_R9[33]={{ tip_depth }}  ;尾座中心孔深度
+;----------------------
+I_R9[40]={{ speed_limit|default(600) | nc_strip }}  ;转速上限
+;----------------------
+I_R9[50]={{ raw_diameter | nc_strip }} ;毛坯直径
+I_R9[51]={{ raw_length | nc_strip }} ;毛坯长度
+;----------------------
+I_R9[80]=I_R9[51] - I_R9[33]  ;顶紧位置
+I_R9[81]=I_R9[51] + 50  ;准备位置
+I_R9[85]=I_R9[51] + 10  ;预夹紧位置
+I_R9[82]=1700  ;检查停车位置
+I_R9[83]=1000  ;顶紧时的进给
+I_R9[84]=15000  ;顶紧力1500-15000N
+;----------------------
+RET

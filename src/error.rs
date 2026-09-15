@@ -10,8 +10,11 @@ use std::fmt;
 ///
 /// 细分变体让上层可精准处理：例如 `UndefinedVariable` 可触发"参数缺失"提示，
 /// `TemplateNotFound` 可触发模板路径检查，而不必解析 message 字符串。
+/// `Clone` 是刻意的：`nctool-core` 的注册表会**缓存模板的静态分析结果**，
+/// 其中失败态需连同 `TplError` 一起留存，避免每次取用都重新解析一遍
+/// （`extract_params` 需要返回带行列定位的原始错误，不能只存 Display 文本）。
 #[non_exhaustive]
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub enum TplError {
     /// 语法错误，带模板名与行列号。
     ///
@@ -201,6 +204,103 @@ pub(crate) fn extract_undefined_var_name(
     Some(id)
 }
 
+/// 沿 `source()` 链收集嵌套错误描述，把被外层包装吞掉的**根因**找回来。
+///
+/// minijinja 把子模板（`{% include %}` / `{% extends %}` / `{% import %}`）
+/// 的错误包成 `BadInclude` / `EvalBlock` 等外层错误，而**外层 `Display` 不含内层原因**：
+///
+/// ```text
+/// could not render include: error in "turning/_undercut_common.j2" (in turning/undercut_fs.j2:24)
+/// ```
+///
+/// 用户据此只知道"某个 include 挂了"，不知道挂在哪一行、为什么挂——实测中这条
+/// 消息完全无法定位问题。而 `source()` 链上的内层错误仍带着自己的模板名、行号与
+/// 原因（如 `unknown filter: ... (in frag.j2:1)`），因此沿链收集即可恢复可诊断性。
+///
+/// 返回**从外到内**的每一层描述（不含最外层本身，它已由调用方持有）；最内层
+/// 即根本原因。链长度上限 [`MAX_ERROR_CHAIN`]，防御异常实现造成的环。
+fn nested_error_chain(err: &minijinja::Error) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut cur: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(err);
+    while let Some(e) = cur {
+        if out.len() >= MAX_ERROR_CHAIN {
+            break;
+        }
+        // minijinja 内层错误的 `Display` 自带 `(in <模板>:<行>)` 定位，
+        // 直接采用即可，无需再拼模板名与行号（否则重复）。
+        out.push(e.to_string());
+        cur = e.source();
+    }
+    out
+}
+
+/// 错误链展开的最大层数（防异常 `source()` 实现构成环）。
+const MAX_ERROR_CHAIN: usize = 8;
+
+/// 把最外层消息与嵌套链拼成一条可诊断的消息。
+///
+/// 无嵌套时原样返回；有嵌套时以 ` ← ` 逐层追加，末段即根本原因：
+///
+/// ```text
+/// could not render include: error in "sub.j2" (in main.j2:2) ← unknown filter: ... (in sub.j2:1)
+/// ```
+fn message_with_root_cause(err: &minijinja::Error, source: Option<&str>, name: &str) -> String {
+    let mut message = err.to_string();
+    // 类别名式消息（无 detail）补上出错表达式片段
+    if let Some(snippet) = opaque_error_snippet(err, source, name) {
+        message.push_str(&format!("（出错表达式：{snippet}）"));
+    }
+    let chain = nested_error_chain(err);
+    if !chain.is_empty() {
+        message.push_str(&format!(" ← {}", chain.join(" ← ")));
+    }
+    message
+}
+
+/// 对**类别名式**错误（`detail` 为空）补出出错表达式的源码片段。
+///
+/// minijinja 对部分运行期错误不设置 `detail`，消息退化成
+/// `invalid operation (in uz_dj_x.j2:83)`——用户既不知道错在哪一句、也不知道
+/// 错的是什么。实测此时 `range()` 仍精确指向出错表达式（如 `-U_A`），
+/// 据此可以给出可操作的提示。
+///
+/// 仅在以下条件同时满足时取值，避免误报：
+/// - `detail` 为空（有可读原因时不必再补片段）；
+/// - 错误确实发生在所传源码对应的模板（`include`/`extends` 期间子模板报错时，
+///   其字节范围不适用于主模板源码，强行取会得到无关片段）；
+/// - `range()` 可用且切片非空。
+fn opaque_error_snippet(
+    err: &minijinja::Error,
+    source: Option<&str>,
+    fallback_name: &str,
+) -> Option<String> {
+    if err.detail().is_some_and(|d| !d.is_empty()) {
+        return None;
+    }
+    if err.name() != Some(fallback_name) {
+        return None;
+    }
+    let snippet = source?.get(err.range()?)?.trim();
+    if snippet.is_empty() {
+        return None;
+    }
+    Some(truncate_chars(snippet, SNIPPET_MAX_CHARS))
+}
+
+/// 出错表达式片段的最大字符数（超出加省略号）。
+///
+/// 表达式可能很长（整行三元表达式），不截断会让错误消息失去可读性；
+/// 按**字符**而非字节截断，避免在多字节字符中间切断。
+const SNIPPET_MAX_CHARS: usize = 60;
+
+fn truncate_chars(s: &str, max: usize) -> String {
+    let mut out: String = s.chars().take(max).collect();
+    if s.chars().count() > max {
+        out.push('…');
+    }
+    out
+}
+
 /// 将 minijinja 错误转换为细分的 [`TplError`]。
 ///
 /// `fallback_name`：当 minijinja 错误未携带模板名时使用的名称。
@@ -212,7 +312,9 @@ pub(crate) fn from_minijinja_error(
 ) -> TplError {
     use minijinja::ErrorKind;
     let name = err.name().unwrap_or(fallback_name).to_string();
-    let message = err.to_string();
+    // 消息带上嵌套链的根因与（必要时）出错表达式：外层包装（BadInclude 等）
+    // 自身不含原因，只报外层等于让用户无从下手。
+    let message = message_with_root_cause(&err, source, fallback_name);
     let detail = err.detail().unwrap_or("");
 
     match err.kind() {

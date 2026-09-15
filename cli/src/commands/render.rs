@@ -1,6 +1,7 @@
 //! `render` / `generate` 子命令：渲染生成 G-code。
 
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
 
 use nctool_core::pipeline::{GCodeGenerator, GenerationOptions, OutputFormat};
 use nctool_core::registry::{TemplateCategory, TemplateSource};
@@ -12,7 +13,17 @@ use crate::output::CliError;
 /// `render` 命令：解析模板 → 校验 → 渲染 → 后处理 → 输出/写文件。
 pub fn run(ctx: &Ctx, args: &RenderArgs) -> Result<(), CliError> {
     let (gen, name, template_source) = resolve_registry(ctx, &args.template)?;
-    let params = build_params(args.params.params_file.as_deref(), &args.params.param)?;
+    // 规格：`--param k=v` 的值要按规格归一（argv 没有类型信息，见 args::coerce_param_value）
+    let specs = gen
+        .registry()
+        .get(&name)
+        .map(|e| e.params.clone())
+        .unwrap_or_default();
+    let params = build_params(
+        args.params.params_file.as_deref(),
+        &args.params.param,
+        &specs,
+    )?;
     let machine = ctx.resolve_machine(None)?;
 
     let opts = GenerationOptions {
@@ -27,7 +38,15 @@ pub fn run(ctx: &Ctx, args: &RenderArgs) -> Result<(), CliError> {
     // 渲染前校验（宽松模式不阻断，仅提示）
     let report = gen.registry().validate(&name, &params)?;
     if report.has_errors() && !args.lenient {
-        return Err(CliError::new("validation", report.summary()));
+        // 报告走 stderr：stdout 要留给 G-code（未指定 --out 时 G-code 写 stdout）。
+        // 且**不能**把整份报告塞进 `CliError::message`——统一错误输出只给首行加
+        // `error: ` 前缀，多行报告的首行会被当成错误摘要（提示行还可能排在最前，
+        // 变成 `error: 提示 …` 这种自相矛盾的输出）。
+        eprintln!("{}", report.summary());
+        return Err(CliError::new(
+            "validation",
+            "参数校验未通过（详见上方报告）",
+        ));
     }
     if (report.has_warnings() || report.has_errors()) && ctx.verbose {
         eprintln!("note: 校验报告\n{}", report.summary());
@@ -118,11 +137,15 @@ fn same_path(a: &Path, b: &Path) -> bool {
 ///
 /// 优先级：已注册模板名（内置/目录）→ 文件路径（注册进注册表后用文件名引用）。
 /// 源文件路径用于 `--out` 同路径检测（内置模板无源路径 → `None`）。
+///
+/// 走 [`Ctx::build_registry`] 的缓存注册表；仅当需要**就地注册临时文件模板**时
+/// 退化为 [`Ctx::build_registry_fresh`] 重建一份独立注册表——临时模板不该
+/// 污染共享缓存（否则后续调用会看到一个本不存在的模板名）。
 pub fn resolve_registry(
     ctx: &Ctx,
     name_or_path: &str,
-) -> Result<(GCodeGenerator, String, Option<PathBuf>), CliError> {
-    let mut gen = ctx.build_registry()?;
+) -> Result<(Rc<GCodeGenerator>, String, Option<PathBuf>), CliError> {
+    let gen = ctx.build_registry()?;
 
     // 1) 已注册模板名（内置 / 目录）优先
     if let Some(entry) = gen.registry().get(name_or_path) {
@@ -140,13 +163,15 @@ pub fn resolve_registry(
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
         if !fname.is_empty() && gen.registry().get(&fname).is_none() {
-            gen.registry_mut().add_file(
+            let mut fresh = ctx.build_registry_fresh()?;
+            fresh.registry_mut().add_file(
                 fname.clone(),
                 TemplateCategory::General,
                 format!("文件模板: {}", path.display()),
                 &path,
                 vec![],
             )?;
+            return Ok((Rc::new(fresh), fname, Some(path)));
         }
         return Ok((gen, fname, Some(path)));
     }

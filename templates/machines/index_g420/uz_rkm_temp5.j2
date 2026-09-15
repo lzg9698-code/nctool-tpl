@@ -1,0 +1,86 @@
+{# NAME: 15-右开口-非圆头键槽-粗铣(深度1刀/宽度2刀/刀具半径=圆角半径) -#}
+{# DESCRIPTION: 右开口非圆头键槽粗铣：深度 1 刀、宽度 2 刀、刀具半径 = 圆角半径 -#}
+{# MACHINE: index_g420 -#}
+{# OUTPUT: UZ_RKM_temp5.SPF -#}
+{# PARAMS:
+     U_RT                   必选  粗铣刀具名称
+     U_RTB                  必选  粗铣后备刀
+     U_ID                   必选  键槽位置,[41]右侧,[42]左侧,[43]中间
+     U_Z                    必选  键槽有效长度右侧Z值 (mm)
+     U_D                    必选  键槽所在外圆直径D (mm)
+     U_RTRPM                必选  粗铣刀转速 (RPM)
+     U_RTD                  必选  粗铣刀具直径 (mm)
+     U_RC                   必选  第一刀深度 RC (mm)
+     U_B                    必选  键槽成活宽度 B (mm)
+     U_ALBR                 必选  粗铣后侧面单边余量 (mm)
+     U_RTRF                 必选  粗铣进给速度 (mm/min)
+     U_A                    必选  键槽有效长度 A (mm)
+     U_Q                    必选  过渡圆角半径 Q (mm)[圆头键槽U_Q=0]
+     U_C                    必选  键槽成活深度 C (mm)
+     U_ALBHF                必选  半精铣后侧面单边余量 (mm)
+     U_RTFF                 必选  半精铣进给速度 (mm/min)
+-#}
+;----粗铣键槽子程序----
+GX73
+GZ73 Y0
+L184(0,0,,,,0)
+L171("{{ U_RT }}")
+L172(0)
+L171("{{ U_RTB }}")
+GX73
+GZ73 Y0
+L184(0,90,,,,0)
+L140(0.00,4,0)
+SETMS(1)
+DIAMOF
+G17
+G90
+D1
+;''''基础坐标系偏移''''
+XMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9{{ U_ID }} CMW_1=0
+G59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1
+;''''旋转-定位键槽''''
+AROT Y90
+AROT Z180
+ATRANS X{{ U_Z | nc_fixed(3) }} Z{{ (U_D/2) | nc_fixed(3) }}
+;''''起转-给水''''
+G97 S1={{ U_RTRPM | nc_fixed(0) }} M1=3
+M13=8 M10=150 H50=80
+;-----------
+;''''粗铣''''
+;''''刀具定位''''
+G94 G40 G0 X{{ (U_RTD/2+5) | nc_fixed(3) }} Y0 C=DC(0.00)
+G0 Z10
+G1 Z2 F400
+;''''开口处入刀''''
+G1 Z{{ (-U_RC) | nc_fixed(1) }} F200
+
+G1 G41 Y{{ (U_B/2-U_ALBR) | nc_fixed(3) }} F{{ (U_RTRF/2) | nc_fixed(0) }}
+G1 X{{ (-(U_A-U_Q)) | nc_fixed(3) }} F{{ U_RTRF | nc_fixed(0) }}
+G1 X{{ (-(U_A+U_Q-U_ALBR)) | nc_fixed(3) }} F{{ (U_RTRF/2) | nc_fixed(0) }}
+G1 Y{{ (-(U_B/2-U_ALBR)) | nc_fixed(3) }}
+G1 X{{ (U_RTD/2+5) | nc_fixed(3) }} F{{ U_RTRF | nc_fixed(0) }}
+G1 Y{{ (U_B/2-U_ALBR) | nc_fixed(3) }}
+;''''半精铣''''
+G1 Z{{ (-U_C) | nc_fixed(3) }} F60
+G1 Y{{ (U_B/2-U_ALBHF) | nc_fixed(3) }} F{{ (U_RTFF/2) | nc_fixed(0) }}
+G1 X{{ (-(U_A-U_Q)) | nc_fixed(3) }} F{{ U_RTFF | nc_fixed(0) }}
+G1 X{{ (-(U_A+U_Q-U_ALBHF)) | nc_fixed(3) }} F{{ (U_RTFF/2) | nc_fixed(0) }}
+G1 Y{{ (-(U_B/2-U_ALBHF)) | nc_fixed(3) }}
+G1 X{{ (U_RTD/2+5) | nc_fixed(3) }} F{{ U_RTFF | nc_fixed(0) }}
+G1 G40 Y0 Z2
+G0 Z100
+;-----------
+ROT
+TRANS
+DIAMON
+M14=9
+M13=9
+M10=151
+M1=5
+GX73
+GZ73 Y0
+M01
+;-----------
+
+M17

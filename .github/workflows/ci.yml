@@ -54,12 +54,6 @@ jobs:
   coverage:
     name: Coverage (Ubuntu)
     runs-on: ubuntu-latest
-    # 覆盖率为可选质量门（ROADMAP B4.1），非阻断项：
-    # 该 job 自引入起在 ubuntu runner 上持续失败（quality 三平台矩阵始终
-    # 全绿，本地 Windows 复现同一命令成功）。日志需 admin 权限下载，
-    # 根因（疑似 install-action 装的 cargo-llvm-cov 与 runner 环境不兼容）
-    # 待拿到日志后修复，见 ROADMAP Backlog。先解除 CI 红灯。
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -68,23 +62,41 @@ jobs:
         uses: dtolnay/rust-toolchain@stable
         with:
           # llvm-tools-preview 是 cargo-llvm-cov 生成插桩覆盖率数据的必需组件，
-          # 缺失时 llvm-cov 直接失败（taiki-e/install-action 只装 cargo-llvm-cov
-          # 二进制本身，不含该组件）
+          # 缺失时 llvm-cov 直接失败
           components: llvm-tools-preview
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
+      # 用 `cargo install` 而非第三方 install-action：
+      # 原实现走 taiki-e/install-action，其装的 cargo-llvm-cov 与 runner 环境
+      # 不兼容，该 job 自引入起持续失败；失败又被 `continue-on-error: true`
+      # 掩盖成"非阻断项"，结果是**覆盖率从未被真正度量**——CI 全绿并不代表
+      # 覆盖达标。改为官方安装路径，并去掉 continue-on-error 让它成为真门禁。
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@v2
-        with:
-          tool: cargo-llvm-cov
+        run: cargo install cargo-llvm-cov --locked
 
       - name: Generate coverage report
         run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+
+      # 把覆盖率数字打进 job summary：没有数字的门禁等于没有门禁，
+      # 后续要设阈值也需要先有一段真实数据基线。
+      # `--workspace` 不可省：漏掉它只会统计根 crate（nctool-tpl），
+      # 而 core / cli 才是代码主体——摘要会"看起来有数字"却漏掉大部分代码。
+      - name: Coverage summary
+        run: |
+          cargo llvm-cov report --workspace --summary-only | tee coverage-summary.txt
+          {
+            echo '## 覆盖率'
+            echo '```'
+            cat coverage-summary.txt
+            echo '```'
+          } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage artifact
         uses: actions/upload-artifact@v4
         with:
           name: rust-coverage-lcov
-          path: lcov.info
+          path: |
+            lcov.info
+            coverage-summary.txt

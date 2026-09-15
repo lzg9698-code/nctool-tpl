@@ -16,6 +16,10 @@ repository = "https://github.com/lzg9698-code/nctool-tpl"
 nctool-tpl = { path = "..", version = "0.3.2" }
 # serde：数据模型（参数集/机床配置等）的序列化，供 CLI / 配置文件使用
 serde = { version = "1", features = ["derive"] }
+# serde_yaml：模板清单（templates.yaml）解析。
+#   选 YAML 而非 JSON 的原因：清单需要写注释（字段语义、模板用途、迁移说明），
+#   JSON 无法承载注释。参数库同理。
+serde_yaml = "0.9"
 
 [dev-dependencies]
 # 集成测试中的 JSON 序列化往返验证

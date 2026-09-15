@@ -1,0 +1,21 @@
+{# NAME: 越程槽公共起始段（内部子模板） #}
+{# DESCRIPTION: ES/FS 型越程槽共用的起始定位与 D1 切入段，由 undercut_es/undercut_fs 引入 #}
+{# PARAMS:
+     STD_KEY         string  required  标准刀具键值（仅作注释输出）
+     R               number  required  圆角半径 (mm)
+     X_START         number  required  起始 X 坐标 (mm)
+     Z_START         number  required  起始 Z 坐标 (mm)
+     D1_CUT          number  required  D1 切割值 (mm)
+     ANG_1           number  required  第一角度 (°)
+     D1_COMP_START   number  required  D1 补偿起始值 (mm)
+     side            string  required  加工侧面 ("Right" 或 "Left")
+   #}
+{# 补偿方向随加工侧面切换：右侧用 G42，左侧用 G41。
+   此处用 set 一次性定下，避免在每个调用点重复三分支。 #}
+{% set g_comp = "G42" if side == "Right" else "G41" %}
+; --- 起始段 ({{ STD_KEY }}) ---
+G0 Z{{ Z_START | nc_fixed(3) }}
+G0 X{{ X_START | nc_fixed(3) }}
+M4=97
+G0 {{ g_comp }} X{{ D1_COMP_START | nc_fixed(3) }}
+G1 X{{ D1_CUT | nc_fixed(3) }} ANG={{ ANG_1 | nc_fixed(0) }} RND={{ R | nc_fixed(1) }} F0.2

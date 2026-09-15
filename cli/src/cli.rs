@@ -102,6 +102,12 @@ pub struct TemplatesListArgs {
     /// 按分类筛选（通用/铣削/车削/钻孔/机床）
     #[arg(long, value_enum)]
     pub category: Option<CategoryArg>,
+    /// 包含隐藏模板（清单中声明 `visible: false` 的功能模块专用模板）
+    #[arg(long)]
+    pub all: bool,
+    /// 仅列出指定机床方案包内的模板（含通用模板）
+    #[arg(long, value_name = "ID")]
+    pub machine: Option<String>,
 }
 
 #[derive(Debug, Args)]
@@ -137,6 +143,9 @@ pub enum CategoryArg {
     /// 钻孔
     #[value(alias = "钻孔")]
     Drilling,
+    /// 切槽
+    #[value(alias = "切槽")]
+    Grooving,
     /// 机床
     #[value(alias = "机床")]
     Machine,
@@ -150,6 +159,7 @@ impl CategoryArg {
             CategoryArg::Milling => TemplateCategory::Milling,
             CategoryArg::Turning => TemplateCategory::Turning,
             CategoryArg::Drilling => TemplateCategory::Drilling,
+            CategoryArg::Grooving => TemplateCategory::Grooving,
             CategoryArg::Machine => TemplateCategory::Machine,
         }
     }
@@ -161,6 +171,7 @@ impl CategoryArg {
             TemplateCategory::Milling => "铣削",
             TemplateCategory::Turning => "车削",
             TemplateCategory::Drilling => "钻孔",
+            TemplateCategory::Grooving => "切槽",
             TemplateCategory::Machine => "机床",
         }
     }

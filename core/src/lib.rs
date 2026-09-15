@@ -13,21 +13,35 @@
 
 #![warn(missing_docs)]
 
+pub mod derive;
 pub mod machine;
+pub mod manifest;
 pub mod model;
 pub mod pipeline;
 pub mod registry;
 pub mod validate;
+pub mod variables;
 
 // 数据模型根导出
-pub use model::{MachineConfig, ParamKind, ParamSpec, ParamValue, ParameterSet};
+pub use model::{
+    DeriveRule, MachineConfig, ParamKind, ParamSpec, ParamValue, ParameterSet, RequiredIf,
+};
 // 校验
 pub use validate::{
     spec, validate_template, validate_with_vars, IssueKind, ValidationIssue, ValidationLevel,
     ValidationReport,
 };
 // 模板注册表
-pub use registry::{TemplateCategory, TemplateEntry, TemplateRegistry, TemplateSource};
+pub use registry::{Analysis, TemplateCategory, TemplateEntry, TemplateRegistry, TemplateSource};
+// 模板清单（templates.yaml）
+pub use manifest::{
+    extract_header_meta, merge_params, HeaderMeta, ManifestError, ParamOverride, ResolvedMeta,
+    TemplateManifest, TemplateMeta, TemplateStatus,
+};
+// 变量库（variables.yaml）
+pub use variables::{VariableLibrary, VARIABLES_FILE};
+// 参数派生（Rust 侧查表计算后注入）
+pub use derive::DeriveError;
 // 生成管线
 pub use pipeline::{GCodeGenerator, GenerationOptions, OutputFormat, PipelineError};
 // 机床配置

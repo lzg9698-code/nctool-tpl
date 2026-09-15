@@ -1,0 +1,32 @@
+{# NAME: 卡簧槽加工 #}
+{# DESCRIPTION: 生成卡簧槽车削程序，按 Z 位置批量输出 DB_CYCLE93 循环调用 #}
+{# PARAMS:
+     z_offsets      list    required  卡簧槽 Z 位置列表 (mm)
+     X_RAW_D        number  required  毛坯直径 (mm)
+     X_TIP_D        number  required  刀尖直径 (mm)
+     X_DOWN_D       number  required  槽底直径 (mm)
+     WIDTH_CIRCLIP  number  required  卡簧槽宽度 (mm)
+     MAX_CUTDIPTH   number  required  单次最大切深 (mm)
+     WIDTH_CUTER    number  required  刀具宽度 (mm)
+     FEEDRATE       number  required  进给率 (mm/r)
+   #}
+; --- 卡簧槽加工程序 ---
+{% for z_pos in z_offsets %}
+; --- 卡簧槽 Z={{ z_pos | nc_signed(3) }} ---
+G0 Z{{ z_pos | nc_fixed(3) }}
+G0 X{{ (X_RAW_D + 10) | nc_fixed(3) }}
+M4=97
+R12={{ X_TIP_D | nc_fixed(3) }}
+R13={{ z_pos | nc_fixed(3) }}
+R14={{ WIDTH_CIRCLIP | nc_fixed(3) }}
+R15={{ ((X_TIP_D - X_DOWN_D) / 2) | nc_fixed(3) }}
+R16=0.000
+R17=0.000
+R18={{ MAX_CUTDIPTH | nc_fixed(3) }}
+R19={{ WIDTH_CUTER | nc_fixed(3) }}
+R20={{ FEEDRATE | nc_fixed(3) }}
+R21=0.300
+DB_CYCLE93(R12,R13,R14,R15,R16,R17,R18,R19,R20,R21)
+G0 X{{ (X_RAW_D + 10) | nc_fixed(3) }}
+STOPRE
+{% endfor %}

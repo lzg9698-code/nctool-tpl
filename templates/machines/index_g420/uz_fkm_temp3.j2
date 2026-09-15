@@ -1,0 +1,71 @@
+{# NAME: 23-闭口-圆头键槽-精铣 -#}
+{# DESCRIPTION: 闭口圆头键槽精铣子程序（两端为半圆，U_Q=0） -#}
+{# MACHINE: index_g420 -#}
+{# OUTPUT: UZ_FKM_temp3.SPF -#}
+{# PARAMS:
+     U_FT                   必选  精铣刀号
+     U_FTB                  必选  精铣后备刀
+     U_ID                   必选  键槽位置,[41]右侧,[42]左侧,[43]中间
+     U_Z                    必选  键槽有效长度右侧Z值 (mm)
+     U_D                    必选  键槽所在外圆直径D (mm)
+     U_FTRPM                必选  精铣刀转速 (RPM)
+     U_C                    必选  键槽成活深度 C (mm)
+     U_B                    必选  键槽成活宽度 B (mm)
+     U_FTF                  必选  精铣进给速度 (mm/min)
+     U_A                    必选  键槽有效长度 A (mm)
+-#}
+;----精铣键槽子程序----
+GX73
+GZ73 Y0
+L184(0,0,,,,0)
+L171("{{ U_FT }}")
+L172(0)
+L171("{{ U_FTB }}")
+GX73
+GZ73 Y0
+L184(0,90,,,,0)
+L140(0.00,4,0)
+SETMS(1)
+DIAMOF
+G17
+G90
+D1
+;''''基础坐标系偏移''''
+XMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9{{ U_ID }} CMW_1=0
+G59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1
+;''''旋转-定位键槽''''
+AROT Y90
+AROT Z180
+ATRANS X{{ U_Z | nc_fixed(3) }} Z{{ (U_D / 2) | nc_fixed(3) }}
+;''''起转-给水''''
+G97 S1={{ U_FTRPM | nc_fixed(0) }} M1=3
+M14=8 M10=150 H50=80
+;-----------
+;''''刀具定位''''
+G94 G40 G0 X0 Y0 C=DC(0.00)
+G0 Z10
+;''''入刀''''
+G1 Z{{ (-(U_C - 5)) | nc_fixed(3) }} F3000
+G1 Z{{ (-U_C) | nc_fixed(3) }} F100
+;''''精铣''''
+G1 G41 Y{{ (U_B / 2) | nc_fixed(3) }} F{{ U_FTF | nc_fixed(0) }}
+G1 X{{ (-U_A) | nc_fixed(3) }}
+G3 X{{ (-U_A) | nc_fixed(3) }} Y={{ (-U_B/2) | nc_fixed(3) }} J={{ (-U_B/2) | nc_fixed(3) }}
+G1 X0
+G3 X0 Y{{ (U_B / 2) | nc_fixed(3) }} J={{ (U_B/2) | nc_fixed(3) }}
+G1 G40 Y0 Z2
+G0 Z100
+;-----------
+ROT
+TRANS
+DIAMON
+M14=9
+M13=9
+M10=151
+M1=5
+GX73
+GZ73 Y0
+M01
+;-----------
+
+M17

@@ -291,6 +291,9 @@ impl<'a> Collector<'a> {
     ///
     /// `in_optional` 为 `true` 表示本次引用处于兜底上下文（`default` 过滤器 /
     /// `defined` 测试的操作数），此时不把该变量记为「必选」。
+    ///
+    /// **模板局部变量的引用同样不记「必选」**（见下）：局部变量由模板自己
+    /// 赋值，不是外部参数，不参与必选判定。
     fn record(&mut self, v: &Spanned<ast::Var<'a>>, in_optional: bool) {
         let name = v.id;
         if RESERVED_NAMES.contains(&name) {
@@ -305,7 +308,19 @@ impl<'a> Collector<'a> {
             end: span.end_offset as usize,
             optional: false, // 在 finalize() 中按 required_refs 统一回填
         };
-        if !in_optional {
+        // 关键：只有「外部参数引用」才记必选，模板局部变量不记。
+        //
+        // 反例（本修复前的行为）：
+        //   {% set R1 = R1|default(4000) %}   ← RHS 是兜底引用，本应可选
+        //   {{ R1 }}                          ← 引用的是上一行 set 出来的局部量
+        // 修复前第二行的局部引用会无条件写入 required_refs，把第一行判定的
+        // 「可选」整体翻转为「必选」，导致 `{% set x = x|default(v) %}`
+        // 这一标准兜底惯用法无法使用。
+        //
+        // 注意 `{% set total = total + x %}` 中 RHS 的 total 仍记必选：
+        // set 的 RHS 先于目标声明求值（见 walk_stmt 的 Stmt::Set 分支），
+        // 此刻 total 还不是局部变量。
+        if !in_optional && !self.is_local(name) {
             self.required_refs.insert(var.name.clone());
         }
         if self.all_seen.insert(var.name.clone()) {

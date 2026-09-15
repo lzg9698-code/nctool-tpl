@@ -194,6 +194,29 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
     }
 
     #[test]
+    fn extract_undeclared_set_self_default_stays_optional() {
+        // 「自赋值兜底」惯用法：`{% set x = x | default(v) %}`
+        // x 的 RHS 引用是兜底引用 → 应判可选；后续 `{{ x }}` 引用的是
+        // set 出来的局部量，不能再把 x 翻回必选。
+        let src = "{% set R1 = R1 | default(4000) %}S1={{ R1 }}";
+        let ast = parse(src, "t.j2").unwrap();
+        let v = extract_undeclared(&ast);
+        assert_eq!(v.len(), 1, "只应识别出 R1：{v:?}");
+        assert_eq!(v[0].name, "R1");
+        assert!(v[0].optional, "自赋值兜底的变量应保持可选");
+    }
+
+    #[test]
+    fn extract_undeclared_set_self_assign_without_default_is_required() {
+        // 对照：没有 default 兜底时，`{% set x = x + 1 %}` 的 RHS 引用仍为必选
+        let src = "{% set R1 = R1 + 1 %}S1={{ R1 }}";
+        let ast = parse(src, "t.j2").unwrap();
+        let v = extract_undeclared(&ast);
+        assert_eq!(v.len(), 1, "只应识别出 R1：{v:?}");
+        assert!(!v[0].optional, "无兜底的 RHS 引用应为必选");
+    }
+
+    #[test]
     fn extract_undeclared_mixed_reference_is_required() {
         // 同一变量既出现在兜底上下文、又出现在必选上下文 → 整体视为必选
         let src = "G1 F{{ feed | default(0.15) }} X{{ feed }}";
@@ -445,9 +468,93 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
             TplError::Render { name, message } => {
                 assert_eq!(name, "main.j2");
                 assert!(message.contains("sub.j2"), "消息应可定位子模板: {message}");
+                // 外层 BadInclude 包装自身不含原因，必须把根因补回消息，
+                // 否则用户只看到"某个 include 挂了"而不知为何
+                assert!(
+                    message.contains(" ← "),
+                    "消息应带嵌套根因（` ← ` 分隔）: {message}"
+                );
             }
             other => panic!("应为 Render（BadInclude 包装）: {other:?}"),
         }
+    }
+
+    #[test]
+    fn nested_include_error_reports_root_cause() {
+        // 回归：此前嵌套 include 的错误消息只有外层包装
+        // `could not render include: error in "sub.j2" (in main.j2:2)`，
+        // 根因（子模板第几行、什么错）被丢弃，实测无法定位问题。
+        let mut r = Renderer::new();
+        r.add_template("sub.j2", "G1 X{{ x | nc_fixed(3) }}\n")
+            .unwrap();
+        r.add_template("main.j2", "A\n{% include \"sub.j2\" %}\nB\n")
+            .unwrap();
+        // 字符串喂给 nc_fixed → 渲染期错误，且发生在子模板内
+        let err = r
+            .render_template("main.j2", &minijinja::context! { x => "abc" })
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains(" ← "), "消息应包含根因链: {message}");
+        // 根因段必须能定位到子模板（模板名 + 行号）
+        assert!(
+            message.contains("sub.j2"),
+            "根因段应定位到子模板: {message}"
+        );
+        // 最外层分类与模板名保持不变（现有调用方按此判断）
+        match err {
+            TplError::Render { name, .. } => assert_eq!(name, "main.j2"),
+            other => panic!("应为 Render: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn shallow_error_has_no_chain_suffix() {
+        // 无嵌套时不应画蛇添足地追加 ` ← `（保持既有消息格式不变）
+        let mut r = Renderer::new();
+        r.add_template("solo.j2", "G1 X{{ x | nc_fixed(3) }}\n")
+            .unwrap();
+        let err = r
+            .render_template("solo.j2", &minijinja::context! { x => "abc" })
+            .unwrap_err();
+        assert!(
+            !err.to_string().contains(" ← "),
+            "单层错误不应带根因链: {err}"
+        );
+    }
+
+    #[test]
+    fn opaque_render_error_reports_offending_expression() {
+        // 回归：minijinja 对"对字符串取负"这类错误不设 detail，消息退化成
+        // `invalid operation (in neg.j2:1)`——既不知错在哪句也不知错的是什么。
+        // 此时 range() 仍精确指向出错表达式，据此补出可操作提示。
+        let mut r = Renderer::new();
+        r.add_template("neg.j2", "{% set v = -U_A %}{{ v | default(0) }}\n")
+            .unwrap();
+        let err = r
+            .render_template("neg.j2", &minijinja::context! { U_A => "abc" })
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(message.contains("出错表达式"), "{message}");
+        assert!(message.contains("-U_A"), "应给出出错表达式片段: {message}");
+    }
+
+    #[test]
+    fn detailed_error_does_not_add_snippet() {
+        // 已有可读原因（detail 非空）时不补片段，避免消息冗余
+        let mut r = Renderer::new();
+        r.add_template("div.j2", "X{{ U_A / 2 }}\n").unwrap();
+        let err = r
+            .render_template("div.j2", &minijinja::context! { U_A => "abc" })
+            .unwrap_err();
+        let message = err.to_string();
+        assert!(
+            message.contains("tried to use / operator"),
+            "原有可读原因应保留: {message}"
+        );
+        assert!(
+            !message.contains("出错表达式"),
+            "有可读原因时不应再补片段: {message}"
+        );
     }
 
     #[test]
@@ -1191,6 +1298,55 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
         assert_eq!(out, "X-21.500 X-21.5");
     }
 
+    /// `nc_signed`：正数与零都带 `+`，负数带 `-`（对应源项目的 `fmt_coord`）。
+    #[test]
+    fn nc_signed_forces_explicit_plus() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! { p => 21.0, n => -4.5, z => 0.0 };
+        let out = r
+            .render(
+                "{{ p | nc_signed(3) }} {{ n | nc_signed(3) }} {{ z | nc_signed(3) }}",
+                "s.j2",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "+21.000 -4.500 +0.000");
+    }
+
+    /// 负零归一到 `+0.000`：控制器对 `-0.000` 处理不一致，且图纸上无意义。
+    #[test]
+    fn nc_signed_normalizes_negative_zero() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! { z => -0.0 };
+        let out = r.render("{{ z | nc_signed(3) }}", "nz.j2", &ctx).unwrap();
+        assert_eq!(out, "+0.000");
+    }
+
+    /// `nc_signed` 与 `nc_fixed` 的唯一差别就是正号——回归守护两者混淆。
+    #[test]
+    fn nc_signed_differs_from_nc_fixed_only_by_sign() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! { p => 21.0 };
+        let signed = r.render("{{ p | nc_signed(3) }}", "a.j2", &ctx).unwrap();
+        let fixed = r.render("{{ p | nc_fixed(3) }}", "b.j2", &ctx).unwrap();
+        assert_eq!(signed, "+21.000");
+        assert_eq!(fixed, "21.000");
+    }
+
+    #[test]
+    fn nc_signed_rejects_non_finite() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! { x => f64::NAN };
+        assert!(r.render("{{ x | nc_signed(3) }}", "n.j2", &ctx).is_err());
+    }
+
+    #[test]
+    fn nc_signed_decimal_limit() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! { x => 1.0 };
+        assert!(r.render("{{ x | nc_signed(33) }}", "d.j2", &ctx).is_err());
+    }
+
     #[test]
     fn nc_filters_reject_non_finite() {
         let r = Renderer::new();
@@ -1575,6 +1731,67 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
         assert!(out.contains("X21.0"));
         assert!(out.contains("F0.15"));
         assert!(out.contains("S3000"));
+    }
+
+    // -----------------------------------------------------------------------
+    // 角度制三角函数（sin_d / cos_d / tan_d / asin_d / acos_d / atan_d）
+    // -----------------------------------------------------------------------
+
+    /// 度制过滤器必须与弧度制裸过滤器**结果不同**——这是防撞刀的核心断言。
+    #[test]
+    fn degree_trig_matches_expected_values() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! { a => 30.0, b => 60.0, c => 45.0 };
+        let out = r
+            .render(
+                "{{ a | sin_d | round(6) }} {{ b | cos_d | round(6) }} {{ c | tan_d | round(6) }}",
+                "d.j2",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "0.5 0.5 1.0");
+    }
+
+    /// 反三角以**度**输出（而非弧度）：`asin_d(0.5)` → `30`，不是 `0.5236`。
+    #[test]
+    fn inverse_degree_trig_outputs_degrees() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! { h => 0.5, one => 1.0, zero => 0.0 };
+        let out = r
+            .render(
+                "{{ h | asin_d | round(6) }} {{ h | acos_d | round(6) }} \
+                 {{ one | atan_d | round(6) }} {{ zero | atan_d | round(6) }}",
+                "i.j2",
+                &ctx,
+            )
+            .unwrap();
+        assert_eq!(out, "30.0 60.0 45.0 0.0");
+    }
+
+    /// 回归守护：30 度与 30 弧度结果迥异。若有人把 `sin_d` 误实现为
+    /// `v.sin()`（漏掉 `to_radians`），此断言会失败。
+    #[test]
+    fn degree_and_radian_trig_are_distinguishable() {
+        let r = Renderer::new();
+        let ctx = minijinja::context! { a => 30.0 };
+        let deg = r.render("{{ a | sin_d }}", "deg.j2", &ctx).unwrap();
+        let rad = r.render("{{ a | sin }}", "rad.j2", &ctx).unwrap();
+        assert_ne!(deg, rad, "度制与弧度制必须产生不同结果");
+        let deg_v: f64 = deg.parse().unwrap();
+        assert!((deg_v - 0.5).abs() < 1e-9, "sin_d(30) 应约等于 0.5");
+    }
+
+    /// `_d` 过滤器沿用有限性防线：定义域外输入必须报错而非写入 NaN。
+    #[test]
+    fn degree_trig_rejects_non_finite() {
+        let r = Renderer::new();
+        // asin 定义域为 [-1, 1]，2.0 产出 NaN
+        let ctx = minijinja::context! { x => 2.0 };
+        assert!(r.render("{{ x | asin_d }}", "bad.j2", &ctx).is_err());
+        // tan_d(90) 在 f64 下是有限的大数（非 Inf），应可渲染——
+        // 这里断言的是"不 panic"，实际工艺应在参数校验层拦下 90 度。
+        let ctx90 = minijinja::context! { x => 90.0 };
+        assert!(r.render("{{ x | tan_d }}", "t90.j2", &ctx90).is_ok());
     }
 
     #[test]

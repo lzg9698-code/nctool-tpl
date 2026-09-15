@@ -22,6 +22,8 @@ pub enum PipelineError {
     Render(nctool_tpl::TplError),
     /// 注册表错误（校验阶段的兜底路径：模板存在性已前置检查，正常不可达）
     Registry(crate::registry::RegistryError),
+    /// 派生参数无法计算（校验阶段已报为 `DeriveFailed`，此处为渲染路径兜底）
+    Derive(crate::derive::DeriveError),
 }
 
 impl std::fmt::Display for PipelineError {
@@ -33,6 +35,7 @@ impl std::fmt::Display for PipelineError {
             }
             PipelineError::Render(err) => write!(f, "渲染失败: {err}"),
             PipelineError::Registry(err) => write!(f, "注册表错误: {err}"),
+            PipelineError::Derive(err) => write!(f, "派生参数计算失败: {err}"),
         }
     }
 }
@@ -160,8 +163,12 @@ impl GCodeGenerator {
             return Err(PipelineError::Validation(report));
         }
 
-        // 3. 规格默认值兜底 + 合并上下文 + 渲染
-        let effective = apply_spec_defaults(&entry.params, params);
+        // 3. 派生参数 + 规格默认值兜底 + 合并上下文 + 渲染
+        //    顺序：**先派生、再兜底默认值**——派生依赖源参数取值，而源参数可能
+        //    靠规格默认值兜底才存在（`derive::apply` 内部已对源参数应用一次默认值）。
+        //    校验阶段已把派生失败报为 `DeriveFailed`，这里只在真正走到渲染时兜底。
+        let derived = crate::derive::apply(&entry.params, params).map_err(PipelineError::Derive)?;
+        let effective = apply_spec_defaults(&entry.params, &derived);
         let context = build_render_context(&effective, machine);
         let rendered = self
             .registry
@@ -225,8 +232,9 @@ impl GCodeGenerator {
         }
         report.downgrade_errors_except(&[IssueKind::NonFinite]);
 
-        // 与 generate 相同的兜底与上下文构建（宽松只影响渲染器行为）
-        let effective = apply_spec_defaults(&entry.params, params);
+        // 与 generate 相同的派生 + 兜底与上下文构建（宽松只影响渲染器行为）
+        let derived = crate::derive::apply(&entry.params, params).map_err(PipelineError::Derive)?;
+        let effective = apply_spec_defaults(&entry.params, &derived);
         let context = build_render_context(&effective, machine);
         let rendered = self
             .registry
