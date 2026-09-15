@@ -14,10 +14,14 @@
 ## 质量门（提交前本地已跑通）
 
 - [ ] `cargo fmt --all -- --check`
-- [ ] `cargo clippy --all-targets -- -D warnings`
-- [ ] `cargo test --all-targets`
-- [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --no-deps`
+- [ ] `cargo clippy --workspace --all-targets -- -D warnings`
+- [ ] `cargo test --workspace --all-targets`
+- [ ] `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`
+- [ ] `node scripts/check_param_parity.mjs`（改过 `--param` 归一规则时必跑）
 - [ ] `cargo audit`
+
+<!-- `--workspace` 不能省：根目录既是 workspace 根又是一个 package，
+     不加它就只检查根 crate，core / cli 的测试与 lint 会被静默跳过。 -->
 
 ## 测试
 

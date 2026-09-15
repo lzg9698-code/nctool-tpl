@@ -1,7 +1,7 @@
 //! 模板清单（`templates.yaml`）：模板的**声明式元数据**来源。
 //!
 //! 引入本模块的原因：在引入清单之前，模板的分类/描述/可见性只能写在
-//! Rust 源码里（见 [`crate::registry::builtin_templates`]），导致
+//! Rust 源码里（见 `registry::builtin_templates`），导致
 //! 「新增一个模板」必须改代码重编译。清单把这份元数据外部化，
 //! 使模板目录可以独立于代码演进。
 //!
@@ -101,7 +101,7 @@ pub struct TemplateMeta {
     ///
     /// 机床专用模板（含机床专有 G 代码，如 INDEX 的 `L184`/`AROT`）必须声明此项，
     /// 且其所在目录名为 `machines/<machine_id>/`。
-    /// [Q16] 未声明时该模板对所有机床可见；声明后仅在选定对应机床时暴露。
+    /// \[Q16\] 未声明时该模板对所有机床可见；声明后仅在选定对应机床时暴露。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub machine: Option<String>,
 
@@ -109,7 +109,7 @@ pub struct TemplateMeta {
     ///
     /// 迁移自外部项目的模板默认标记为 `unreviewed`——
     /// 这些模板的 G/M 代码**未经真实工艺评审与机床空运行验证**，
-    /// 投产前必须由工艺人员逐行核对。[Q16]
+    /// 投产前必须由工艺人员逐行核对。\[Q16\]
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub status: Option<TemplateStatus>,
 
@@ -507,9 +507,9 @@ pub fn classify_by_path(rel: &Path) -> TemplateCategory {
 ///   #}
 /// ```
 ///
-/// `NAME` / `DESCRIPTION` 只在前 [`HEADER_SCAN_LINES`] 行内查找；
-/// `PARAMS` 是一张表，另用 [`PARAMS_SCAN_LINES`] 为界（见
-/// [`extract_params_block`]）。
+/// `NAME` / `DESCRIPTION` 只在前 `HEADER_SCAN_LINES` 行内查找；
+/// `PARAMS` 是一张表，另用 `PARAMS_SCAN_LINES` 为界（见
+/// `extract_params_block`）。
 ///
 /// 标记不完整（缺 `#}`）时跳过该字段，不报错——头部注释是辅助信息，
 /// 不应阻断模板加载。但 `PARAMS` 里**单行解析失败**会记入

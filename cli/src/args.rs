@@ -6,13 +6,13 @@ use nctool_core::{ParamKind, ParamSpec, ParamValue, ParameterSet};
 
 use crate::output::CliError;
 
-/// 解析单个 `k=v` 参数，并按值推断类型：
+/// 解析单个 `k=v` 参数：按值推断类型，并**按规格归一取值**（见 [`coerce_param_value`]）。
+///
 /// - `k:s=v` / `k:n=v` / `k:b=v` 强制字符串/数值/布尔（消除歧义的通道）
 /// - `true`/`false`（不区分大小写）→ 布尔
 /// - 可解析为 f64 → 数值（含整数 `21`、科学计数 `1e3`）；前导零纯数字（如
 ///   `007`）保持字符串（数值会丢前导零）
 /// - 其余 → 字符串（如 `D12`、`轴`）
-/// 解析单个 `k=v` 参数，**按规格归一取值**（见 [`coerce_param_value`]）。
 ///
 /// `specs` 传空切片即退化为纯启发式推断（无规格信息时的行为）。
 /// 显式类型后缀（`k:s=` / `k:n=` / `k:b=`）**优先于**规格归一——
@@ -451,5 +451,82 @@ mod tests {
         assert_eq!(v, ParamValue::Number(21.5));
         let (_, v) = parse_kv_with_specs("t=D12", &[]).unwrap();
         assert_eq!(v, ParamValue::String("D12".into()));
+    }
+
+    /// `--param` 取值归一的规则有两份实现：本文件的 `coerce_param_value` 与前端
+    /// `ui/index.html` 的 `coerceParamValue`（`cli/ui/index.html` 是它的副本）。
+    /// 两份各自漂移，CLI 与 Web UI 就会对同一输入产出不同 G-code —— 典型的静默错误。
+    ///
+    /// 故用例与期望值集中在 `scripts/param_parity_cases.json`：本测试消费它，
+    /// 前端由 `scripts/check_param_parity.mjs`（CI 硬门禁）消费同一份。
+    /// 改任一侧都必须同步改 fixture，否则另一侧立刻失败。
+    #[test]
+    fn param_coercion_matches_shared_fixture() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../scripts/param_parity_cases.json"))
+                .expect("param_parity_cases.json 必须是合法 JSON");
+        let cases = fixture["cases"]
+            .as_array()
+            .expect("fixture 顶层必须有 cases 数组");
+        assert!(!cases.is_empty(), "fixture 不应为空");
+
+        for (i, case) in cases.iter().enumerate() {
+            let raw = case["input"]
+                .as_str()
+                .unwrap_or_else(|| panic!("case #{i}: input 缺失"));
+            let spec = fixture_spec(&case["spec"], i);
+            // 与 `parse_kv_with_specs` 一致：归一前先 trim
+            let got = coerce_param_value(raw.trim(), Some(&spec));
+            let want = fixture_value(&case["expect"], i);
+            assert_eq!(
+                got, want,
+                "case #{i}: input={raw:?} kind={:?} options={:?}",
+                spec.kind, spec.options
+            );
+        }
+    }
+
+    /// fixture 里的 `kind` 用**前端收到的形态**（首字母大写，见
+    /// `server::spec_json`），因为它同时被 `check_param_parity.mjs` 直接喂给 JS。
+    /// 注意与 `ParamValue` 的 serde 形态（小写）不是一套大小写，别混用。
+    fn fixture_kind(s: &str, i: usize) -> ParamKind {
+        match s {
+            "Number" => ParamKind::Number,
+            "Integer" => ParamKind::Integer,
+            "String" => ParamKind::String,
+            "Bool" => ParamKind::Bool,
+            "Choice" => ParamKind::Choice,
+            "Any" => ParamKind::Any,
+            "List" => ParamKind::List,
+            other => panic!("case #{i}: 未知 kind {other:?}（应取 spec_json 的形态）"),
+        }
+    }
+
+    fn fixture_spec(v: &serde_json::Value, i: usize) -> ParamSpec {
+        let kind = fixture_kind(v["kind"].as_str().unwrap_or("Any"), i);
+        let spec = ParamSpec::new("p", kind, "");
+        match v["options"].as_array() {
+            Some(opts) => spec.with_options(
+                opts.iter()
+                    .map(|o| fixture_value(o, i))
+                    .collect::<Vec<ParamValue>>(),
+            ),
+            None => spec,
+        }
+    }
+
+    /// 带标签形式 `{"type": ..., "value": ...}` —— 与后端序列化给 UI 的形状一致，
+    /// 前端因此也走同一条 `bareValue` 解析路径。
+    fn fixture_value(v: &serde_json::Value, i: usize) -> ParamValue {
+        let t = v["type"]
+            .as_str()
+            .unwrap_or_else(|| panic!("case #{i}: type 缺失"));
+        match t {
+            "number" => ParamValue::Number(v["value"].as_f64().expect("number 需要数值")),
+            "integer" => ParamValue::Integer(v["value"].as_i64().expect("integer 需要整数")),
+            "string" => ParamValue::String(v["value"].as_str().expect("string 需要文本").into()),
+            "bool" => ParamValue::Bool(v["value"].as_bool().expect("bool 需要布尔")),
+            other => panic!("case #{i}: 未知 type {other:?}"),
+        }
     }
 }

@@ -75,11 +75,13 @@
 
 | 指标 | 实测值 |
 | --- | --- |
-| 测试总数 | **453**（单元 366 / CLI 集成 87） |
-| CI 门禁 | `cargo fmt --check`、`cargo clippy --all-targets -- -D warnings`、`cargo test --all-targets`、`cargo doc` 带 `-D warnings`、`cargo audit` |
+| 测试总数 | **492**（同日补测后；评估当时为 453） |
+| CI 门禁 | `cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace --all-targets`、`cargo doc --workspace` 带 `-D warnings`、`cargo audit`、`node scripts/check_param_parity.mjs` |
+| CI 门禁有效性 | 2026-09-15 修：此前 clippy / test / doc 三条都漏了 `--workspace`，实际只检查根 crate（`core` / `cli` 被静默跳过），属"假绿"；同日移除 coverage job 的 `continue-on-error` |
 | CI 平台矩阵 | ubuntu / windows / macos 三平台 |
 | 黄金样本 | `tests/golden/`，移植模板走逐字节比对（INDEX G420 已 18/18 逐行一致） |
 | 一致性测试 | `ui_html_copies_stay_in_sync` 拦住 UI 双份文件漂移 |
+| 双输入面一致性 | `--param` 取值归一的 Rust / 前端两份实现由共享 fixture `scripts/param_parity_cases.json` 对拍（40 用例，两侧各自失败即红） |
 | 可测性设计 | `extract`/`validate`/`derive` 均为纯函数，无 I/O，单元测试成本低 |
 
 **扣分项**

@@ -242,7 +242,7 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 - [ ] 三个 crate 新版本号在 crates.io 或 tag 上可见
 - [ ] `cargo audit` 零告警（含新引入的 HTTP 库）
 - [ ] CI 全平台全绿
-- [ ] `cargo clippy --all-targets -- -D warnings` 零告警
+- [ ] `cargo clippy --workspace --all-targets -- -D warnings` 零告警
 
 #### 风险
 

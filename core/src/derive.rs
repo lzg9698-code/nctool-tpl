@@ -99,9 +99,9 @@ impl std::error::Error for DeriveError {}
 /// - 规格中**未声明 `derive`** 的参数原样保留；
 /// - 声明了 `derive` 的参数**总是**以派生结果写入（覆盖调用方提供的同名值，
 ///   见模块文档"为什么覆盖"）；
-/// - 返回值是新集合，入参不被修改（与 [`crate::model::apply_spec_defaults`] 一致）。
+/// - 返回值是新集合，入参不被修改（与 `crate::model::apply_spec_defaults` 一致）。
 ///
-/// 与 [`crate::model::apply_spec_defaults`] 的调用顺序：**先派生、再兜底默认值**。
+/// 与 `crate::model::apply_spec_defaults` 的调用顺序：**先派生、再兜底默认值**。
 /// 派生依赖源参数的取值，而源参数可能是靠规格默认值兜底才存在的——因此
 /// 本函数内部先对源参数应用一次规格默认值，避免"源参数有默认值却算不出派生值"。
 pub fn apply(specs: &[ParamSpec], params: &ParameterSet) -> Result<ParameterSet, DeriveError> {

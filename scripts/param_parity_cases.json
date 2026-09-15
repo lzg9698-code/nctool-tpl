@@ -1,0 +1,102 @@
+{
+  "_readme": [
+    "`--param` 取值归一有两份实现：后端 cli/src/args.rs::coerce_param_value 与前端 ui/index.html 的 coerceParamValue（cli/ui/index.html 是它的副本）。",
+    "两侧行为不一致会让 CLI 与 Web UI 对同一输入产出不同结果，属于静默错误，故用例与期望值集中在本文件，由两侧共同消费：",
+    "  - 后端：cli/src/args.rs 的 param_coercion_matches_shared_fixture 测试（cargo test 时跑）；",
+    "  - 前端：node scripts/check_param_parity.mjs（CI 的 quality job 里跑）。",
+    "改任一侧都必须同步改本文件，否则另一侧立刻失败；改本文件则两侧一起动，不会漏改某一端。",
+    "",
+    "输入约定：与 parse_kv_with_specs 一致，归一前先 trim（故 \" 42 \" 与 \"42\" 同结果）；",
+    "空串不在此列——CLI 的 `--param k=` 得到空字符串，而 UI 把空输入框视为「未填、不入参」，是刻意的两面差异，不属于归一逻辑。",
+    "",
+    "spec.kind 用前端实际收到的形态（Number / String / Integer / Bool / Choice / Any / List，首字母大写，见 cli/src/server.rs::spec_json）；",
+    "expect 与 options 的值是 ParamValue 的序列化形态 {\"type\": ..., \"value\": ...}（type 小写：number | integer | string | bool，见 model.rs 的 ParamValue）。",
+    "两种大小写并存不是笔误：spec_json 面向 UI 用大写，ParamValue 的 serde 用小写，fixture 按各自真源写。"
+  ],
+  "cases": [
+    { "input": "42", "spec": { "kind": "Number" }, "expect": { "type": "number", "value": 42 } },
+    { "input": "42", "spec": { "kind": "String" }, "expect": { "type": "string", "value": "42" }, "note": "声明为 String：即使值形如数字也保持文本（U_ID 的 [42] 之类靠这条）" },
+    { "input": "1631", "spec": { "kind": "Number" }, "expect": { "type": "number", "value": 1631 } },
+
+    { "input": "007", "spec": { "kind": "String" }, "expect": { "type": "string", "value": "007" } },
+    { "input": "007", "spec": { "kind": "Number" }, "expect": { "type": "string", "value": "007" }, "note": "前导零纯数字保持文本：数值化会静默丢前导零（T007 -> T7）" },
+    { "input": "00", "spec": { "kind": "Number" }, "expect": { "type": "string", "value": "00" } },
+    { "input": "0", "spec": { "kind": "Number" }, "expect": { "type": "number", "value": 0 }, "note": "单个 0 不是前导零" },
+    { "input": "01.5", "spec": { "kind": "Number" }, "expect": { "type": "number", "value": 1.5 }, "note": "含小数点 -> 不算前导零纯数字，按数值解析" },
+    { "input": "-007", "spec": { "kind": "Number" }, "expect": { "type": "number", "value": -7 }, "note": "前导零判定只看首字符，负号开头走数值解析（与 Rust 实现一致）" },
+
+    { "input": "0.5", "spec": { "kind": "Number" }, "expect": { "type": "number", "value": 0.5 } },
+    { "input": ".5", "spec": { "kind": "Number" }, "expect": { "type": "number", "value": 0.5 } },
+    { "input": "+2.5", "spec": { "kind": "Number" }, "expect": { "type": "number", "value": 2.5 } },
+    { "input": "5.", "spec": { "kind": "Number" }, "expect": { "type": "number", "value": 5 } },
+    { "input": "-3", "spec": { "kind": "Number" }, "expect": { "type": "number", "value": -3 } },
+    { "input": "1e3", "spec": { "kind": "Number" }, "expect": { "type": "number", "value": 1000 } },
+    { "input": "1e-3", "spec": { "kind": "Number" }, "expect": { "type": "number", "value": 0.001 } },
+    { "input": "42", "spec": { "kind": "Integer" }, "expect": { "type": "number", "value": 42 }, "note": "启发式只产出 Number；Integer 与 Number 的比较由 matches_option 兜住" },
+
+    { "input": "0x10", "spec": { "kind": "Number" }, "expect": { "type": "string", "value": "0x10" }, "note": "JS Number() 能解析 0x10 / Infinity 而 Rust f64::from_str 不能，两侧都必须按文本处理" },
+    { "input": "Infinity", "spec": { "kind": "Number" }, "expect": { "type": "string", "value": "Infinity" } },
+    { "input": "-Infinity", "spec": { "kind": "Number" }, "expect": { "type": "string", "value": "-Infinity" } },
+    { "input": "NaN", "spec": { "kind": "Number" }, "expect": { "type": "string", "value": "NaN" } },
+    { "input": "1e400", "spec": { "kind": "Number" }, "expect": { "type": "string", "value": "1e400" }, "note": "指数溢出成 Infinity，同样不判为数值" },
+    { "input": "1_000", "spec": { "kind": "Number" }, "expect": { "type": "string", "value": "1_000" } },
+    { "input": "1,5", "spec": { "kind": "Number" }, "expect": { "type": "string", "value": "1,5" } },
+
+    { "input": "true", "spec": { "kind": "Number" }, "expect": { "type": "bool", "value": true }, "note": "布尔字面量的判定先于声明类型，交给校验层报类型不匹配（比当成文本更贴近用户输入）" },
+    { "input": "TRUE", "spec": { "kind": "Number" }, "expect": { "type": "bool", "value": true }, "note": "忽略大小写" },
+    { "input": "False", "spec": { "kind": "Bool" }, "expect": { "type": "bool", "value": false } },
+    { "input": "true", "spec": { "kind": "String" }, "expect": { "type": "string", "value": "true" }, "note": "声明为 String 时强制文本" },
+    { "input": "false", "spec": { "kind": "String" }, "expect": { "type": "string", "value": "false" } },
+
+    { "input": "D12", "spec": { "kind": "String" }, "expect": { "type": "string", "value": "D12" } },
+    { "input": "T007", "spec": { "kind": "String" }, "expect": { "type": "string", "value": "T007" } },
+    { "input": " 42 ", "spec": { "kind": "Number" }, "expect": { "type": "number", "value": 42 } },
+
+    {
+      "input": "1631",
+      "spec": { "kind": "String", "options": [{"type": "integer", "value": 1631}, {"type": "string", "value": "DECKEL"}] },
+      "expect": { "type": "number", "value": 1631 },
+      "note": "U_CTB 的混型白名单：数值解释命中候选项即取数值解释"
+    },
+    {
+      "input": "DECKEL",
+      "spec": { "kind": "String", "options": [{"type": "integer", "value": 1631}, {"type": "string", "value": "DECKEL"}] },
+      "expect": { "type": "string", "value": "DECKEL" }
+    },
+    {
+      "input": "DECKEL",
+      "spec": { "kind": "Number", "options": [{"type": "integer", "value": 1631}, {"type": "string", "value": "DECKEL"}] },
+      "expect": { "type": "string", "value": "DECKEL" },
+      "note": "白名单优先于声明类型：命中候选的文本解释照样采纳"
+    },
+    {
+      "input": "1631",
+      "spec": { "kind": "String", "options": [{"type": "string", "value": "1631"}] },
+      "expect": { "type": "string", "value": "1631" },
+      "note": "数值解释不命中 -> 退到文本解释"
+    },
+    {
+      "input": "99",
+      "spec": { "kind": "Number", "options": [{"type": "number", "value": 1}, {"type": "number", "value": 2}, {"type": "number", "value": 3}] },
+      "expect": { "type": "number", "value": 99 },
+      "note": "两种解释都不命中 -> 保留启发式结果，交给校验层报「不在候选项内」"
+    },
+    {
+      "input": "99",
+      "spec": { "kind": "String", "options": [{"type": "number", "value": 1}, {"type": "number", "value": 2}, {"type": "number", "value": 3}] },
+      "expect": { "type": "number", "value": 99 },
+      "note": "白名单分支先于类型分支：不命中时保留启发式结果，不会走到 String 强制文本"
+    },
+    {
+      "input": "true",
+      "spec": { "kind": "Bool", "options": [{"type": "bool", "value": true}, {"type": "string", "value": "YES"}] },
+      "expect": { "type": "bool", "value": true },
+      "note": "布尔候选项按布尔比较，不能拿 String(true) === \"true\" 蒙混过关"
+    },
+    {
+      "input": "YES",
+      "spec": { "kind": "Bool", "options": [{"type": "bool", "value": true}, {"type": "string", "value": "YES"}] },
+      "expect": { "type": "string", "value": "YES" }
+    }
+  ]
+}

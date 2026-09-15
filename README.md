@@ -508,11 +508,11 @@ nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param fe
 cargo run --example demo
 
 # 运行全部测试（单元 + 集成 + 文档）
-cargo test
+cargo test --workspace
 
 # 静态检查与格式
-cargo clippy --all-targets -- -D warnings
-cargo fmt --check
+cargo clippy --workspace --all-targets -- -D warnings
+cargo fmt --all -- --check
 ```
 
 ## 定位精度与判定边界
@@ -538,7 +538,7 @@ cargo fmt --check
 git clone https://github.com/lzg9698-code/nctool-tpl.git
 cd nctool-tpl
 cargo build --workspace
-cargo test --workspace              # 344 项（2026-09-11 实测全绿）
+cargo test --workspace              # 492 项（2026-09-15 实测全绿）
 cargo install cargo-audit --locked  # 安全审计，CI 必查
 ```
 
@@ -546,11 +546,17 @@ cargo install cargo-audit --locked  # 安全审计，CI 必查
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all-targets
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --all-targets
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+node scripts/check_param_parity.mjs   # --param 归一规则的 Rust/前端对拍
 cargo audit
 ```
+
+> `--workspace` 一个字都不能省：根目录**既是 workspace 根又是一个 package**，
+> 而 cargo 在没有 `default-members` 时默认只选根 package —— 漏掉它，
+> 上面三条 cargo 命令就只对 `nctool-tpl` 生效，`core` / `cli`（代码主体、
+> 绝大多数测试）会被静默跳过，质量门却照样显示全绿。
 
 > Windows 上 `cargo package` 在 rustc 1.98 有打包期 ICE 的已知问题，
 > 需加 `CARGO_INCREMENTAL=0`：`CARGO_INCREMENTAL=0 cargo package --workspace --allow-dirty`。
@@ -565,6 +571,7 @@ cargo audit
 | 架构 / 模块职责 / 数据流 | `docs/ARCHITECTURE.md` |
 | 机床配置键 | `docs/MACHINE_CONFIG_GUIDE.md`（键清单、未知键告警） |
 | 新增内置模板 | golden 用例 + `docs/PROCESS_CHECKLIST.md` 登记，并声明未经工艺评审 |
+| `--param` 取值归一规则（`cli/src/args.rs` 或 UI 的 `coerceParamValue`） | 另一侧实现 + 共享 fixture `scripts/param_parity_cases.json`；两侧漂移会让 CLI 与 Web UI 对同一输入产出不同 G-code |
 
 ### 提交与分支
 

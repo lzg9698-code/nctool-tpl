@@ -1825,21 +1825,41 @@ function requiredIfText(rif) {
   return `${rif.param} = ${vals}`;
 }
 
-/* 按规格把输入值归一。
-   优先级与后端 `--param` 一致：**先取能命中白名单的解释**（`U_CTB` 的
-   1631 与 "DECKEL" 混用，数值/文本各自按值语义比较），再按声明的类型。 */
+/* 后端 `args::infer_param_value` 的等价实现。
+   由 scripts/check_param_parity.mjs 对拍（CI 硬门禁），改这里或改 Rust 都会失败：
+   1. `true` / `false`（忽略大小写）先判为布尔，与声明类型无关；
+   2. 前导零纯数字（007/00）保持字符串，数值化会丢前导零（T007→T7）；
+   3. 只接受 Rust `f64::from_str` 的语法（十进制 + 可选指数），故 JS `Number()`
+      能解析但 Rust 拒绝的 `0x10`、`Infinity` 一律按字符串处理；
+   4. 指数溢出（1e400 → Infinity）等非有限数同样不判为数值。 */
+function inferParamValue(t) {
+  if (t.toLowerCase() === "true") return true;
+  if (t.toLowerCase() === "false") return false;
+  const leadingZero = t.length > 1 && t[0] === "0" && /^\d+$/.test(t);
+  if (!leadingZero && /^[+-]?((\d+\.?\d*)|(\.\d+))([eE][+-]?\d+)?$/.test(t)) {
+    const n = Number(t);
+    if (isFinite(n)) return n;
+  }
+  return t;
+}
+
+/* 按规格把输入值归一，逐条对应后端 `args::coerce_param_value`：
+   先白名单（启发式解释 → 文本解释），再声明类型（String 强制文本）。
+   空输入返回 undefined —— UI 语义是「未填即不入参」，
+   CLI 的 `--param k=` 会得到空字符串，属刻意的两面差异，不在对拍范围内。 */
 function coerceParamValue(s, raw) {
   const t = String(raw).trim();
   if (t === "") return undefined;
-  /* 前导零纯数字保持字符串（数值化会丢前导零，如 `T007`→`T7`） */
-  const numeric = (/^0\d/.test(t) || isNaN(Number(t))) ? undefined : Number(t);
+  const heur = inferParamValue(t);
   const vals = optionValues(s);
   if (vals.length) {
-    if (numeric !== undefined && vals.some(v => v === numeric)) return numeric;
-    if (vals.some(v => String(v) === t)) return t;
+    /* 严格同类型比较：不能用 String(true) === "true" 去匹配布尔候选项 */
+    if (vals.some(v => v === heur)) return heur;
+    if (vals.some(v => v === t)) return t;
+    return heur;
   }
   if (s.kind === "String") return t;
-  return numeric !== undefined ? numeric : t;
+  return heur;
 }
 
 function fieldHtml(t, s) {

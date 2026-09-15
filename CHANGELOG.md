@@ -397,10 +397,12 @@
 - **覆盖率门禁恢复为真门禁**（`.github/workflows/ci.yml`）：`coverage` job 的
   `continue-on-error: true` 已移除。该 job 自引入起持续失败，而失败被
   `continue-on-error` 掩盖成"非阻断项"，结果是**覆盖率从未被真正度量**——
-  CI 全绿并不代表覆盖达标。改用 `cargo install cargo-llvm-cov --locked`
-  替代第三方 `install-action`（原实现疑似与其装的二进制不兼容），
-  并把覆盖率数字打进 job summary（没有数字的门禁等于没有门禁，
-  后续设阈值也需要先有真实基线）。
+  CI 全绿并不代表覆盖达标。安装方式最终改用
+  `taiki-e/install-action@cargo-llvm-cov`（预编译二进制）：`cargo install --locked`
+  会在 runner 上编译整套依赖并撞上 crates.io 索引漂移，连续两次 exit 101，
+  改固定版本后耗时 <1s 即失败（说明压根没进入构建）。另加一步 `cargo llvm-cov --version`
+  把"没装上"与"装上了但跑不起来"分开，并把覆盖率数字打进 job summary
+  （没有数字的门禁等于没有门禁，后续设阈值也需要先有真实基线）。
 
 #### 新增的测试
 
@@ -414,6 +416,41 @@
   直接 `parse` + `extract_undeclared` 逐项一致，且重复取用命中同一份。
 - `lenient_renderer_cache_sees_templates_registered_later`：宽松渲染器缓存
   必须随模板注册失效，否则新模板在宽松模式下报 `TemplateNotFound`。
+
+---
+
+### 双输入面一致性与 CI 有效性（架构评估 P1 项）
+
+#### Fixed
+
+- **CI 的 clippy / test / doc 只覆盖了根 crate**（`.github/workflows/ci.yml`）：
+  根目录**既是 workspace 根又是一个 package**，而 cargo 在没有 `default-members`
+  时默认只选根 package。三条命令都漏了 `--workspace`，于是只对 `nctool-tpl` 生效，
+  `nctool-core` / `nctool-cli`（代码主体、绝大多数测试）**从未被 CI 真正检查过**，
+  却一直显示全绿——与覆盖率门禁是同一类"假绿"。现补齐 `--workspace`，
+  README / CONTRIBUTING / PR 模板里的同款命令一并订正。
+  随之暴露并修掉 8 处 rustdoc 告警（`core/src/derive.rs`、`core/src/manifest.rs`：
+  指向私有项的链接改为代码 span，`[Q16]` 标记转义）。CI 实测用例数由
+  155（仅根 crate）变为 **492**。
+
+- **`--param` 归一规则的 Rust / 前端分歧**（`cli/src/args.rs` + `ui/index.html`
+  与 `cli/ui/index.html`）：前端 `coerceParamValue` 与后端 `coerce_param_value`
+  有 4 处真实分歧——`01.5`（Rust 取数值、JS 取文本）、`0x10` 与 `Infinity`
+  （JS `Number()` 能解析而 Rust `f64::from_str` 不能）、`true` 配数值型规格
+  （Rust 取布尔、JS 取文本）。两侧不一致意味着 CLI 与 Web UI 对同一输入会产出
+  不同的 G-code，属本项目零容忍的静默错误。现前端补齐布尔字面量推断、
+  把数值判定收紧到 Rust `f64::from_str` 的语法（十进制 + 可选指数，且必须有限）、
+  白名单比较改为严格同类型（不再出现 `String(true) === "true"` 匹配布尔候选项）。
+
+#### Added
+
+- **`--param` 归一规则对拍门禁**：用例与期望值集中在
+  `scripts/param_parity_cases.json`（40 例，覆盖前导零、指数溢出、十六进制、
+  混型白名单、布尔与声明类型的优先级），后端 `args.rs` 的
+  `param_coercion_matches_shared_fixture` 与前端 `scripts/check_param_parity.mjs`
+  **消费同一份**。脚本从 HTML 里抠出真实函数再跑，不在脚本内重写一份
+  （重写就等于第三份实现），并额外比对两份 UI 是否互为镜像。
+  改任一侧而不同步 fixture，另一侧立刻失败；CI 在 ubuntu 上跑该脚本。
 
 ---
 

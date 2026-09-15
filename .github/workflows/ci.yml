@@ -23,6 +23,22 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
+      # `--param` 取值归一的规则有两份实现：后端 args.rs 与前端 ui/index.html
+      # （cli/ui/index.html 是副本）。两者漂移会让 CLI 与 Web UI 对同一输入产出
+      # 不同的 G-code —— 静默错误，必须拦。做法是用同一份 fixture
+      # （scripts/param_parity_cases.json）对拍：Rust 侧由下面的 cargo test 消费，
+      # 前端由本步骤消费。放在最前面是为了让 JS 漂移在几十秒内红，不必等完整构建。
+      # 只在 Linux 跑：脚本与系统无关，而 Rust 侧由三个系统的 cargo test 各覆盖一次。
+      - name: Setup Node
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Param parity (Rust <-> UI)
+        if: matrix.os == 'ubuntu-latest'
+        run: node scripts/check_param_parity.mjs
+
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:
@@ -34,14 +50,18 @@ jobs:
       - name: Format check
         run: cargo fmt --all -- --check
 
+      # `--workspace` 一个字都不能省：根目录同时是 workspace 根和一个 package，
+      # 而 cargo 在没有 default-members 时**默认只选根 package** —— 不加它，
+      # 下面三条命令就只对 nctool-tpl 生效，core / cli（代码主体、绝大多数测试）
+      # 从未被 CI 真正检查过，却一直显示全绿。这与覆盖率命令踩的是同一个坑。
       - name: Clippy
-        run: cargo clippy --all-targets -- -D warnings
+        run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --all-targets
+        run: cargo test --workspace --all-targets
 
       - name: Doc check (zero warnings)
-        run: cargo doc --no-deps
+        run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: "-D warnings"
 

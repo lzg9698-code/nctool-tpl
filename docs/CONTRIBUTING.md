@@ -57,14 +57,21 @@ cargo install cargo-audit --locked           # 安全审计
 
 ```bash
 cargo fmt --all -- --check
-cargo clippy --all-targets -- -D warnings
-cargo test --all-targets
-RUSTDOCFLAGS="-D warnings" cargo doc --no-deps
+cargo clippy --workspace --all-targets -- -D warnings
+cargo test --workspace --all-targets
+RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
+node scripts/check_param_parity.mjs   # --param 归一规则的 Rust / 前端对拍
 cargo audit
 ```
 
-CI（`.github/workflows/ci.yml`）在 **ubuntu / windows / macos** 三平台各跑一遍上述检查，
-全部必须绿灯；`coverage` job 是**非阻断**项（`continue-on-error: true`，见 ci.yml 注释）。
+> **`--workspace` 不能省**：根目录既是 workspace 根又是一个 package，cargo 在没有
+> `default-members` 时默认只选根 package。漏掉它，三条 cargo 命令就只对
+> `nctool-tpl` 生效，`core` / `cli` 的测试与 lint 会被静默跳过——质量门照样全绿，
+> 实际上什么都没查。
+
+CI（`.github/workflows/ci.yml`）在 **ubuntu / windows / macos** 三平台各跑一遍上述 cargo 检查
+（对拍脚本与系统无关，只在 ubuntu 跑一次），全部必须绿灯；
+`coverage` job 同样是**阻断**项，覆盖率数据会写进 job summary。
 
 已知平台问题：
 
