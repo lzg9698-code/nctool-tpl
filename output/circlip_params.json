@@ -1,0 +1,10 @@
+{
+  "z_offsets": [261, 463.75],
+  "X_RAW_D": 140,
+  "X_TIP_D": 124,
+  "X_DOWN_D": 120,
+  "WIDTH_CIRCLIP": 4.15,
+  "MAX_CUTDIPTH": 2,
+  "WIDTH_CUTER": 4.15,
+  "FEEDRATE": 0.05
+}

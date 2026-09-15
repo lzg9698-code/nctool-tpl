@@ -1,0 +1,18 @@
+{
+  "groove_type": "ES",
+  "side": "Right",
+  "STD_KEY": "DIN509-E 0,2 x 0,1",
+  "X_START": 144.0,
+  "R": 0.2,
+  "Z_START": 441.75,
+  "D1_CUT": 74.8,
+  "ANG_1": -165,
+  "D1_COMP_START": 79.0,
+  "ES_Z": 439.75,
+  "ES_D2": 75.0,
+  "D2_COMP_CUT": 74.5,
+  "Z_MID": 438.0,
+  "FS_Z_PLUS1": 440.75,
+  "FS_Z_MINUS1": 438.75,
+  "ANG_2": 102
+}
