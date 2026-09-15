@@ -605,3 +605,226 @@ fn walk_call_arg<'a>(arg: &ast::CallArg<'a>, c: &mut Collector<'a>, opt: bool) {
 }
 
 // ---------------------------------------------------------------------------
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn all_of(src: &str) -> Vec<Variable> {
+        let ast = parse(src, "t.j2").expect("解析失败");
+        extract_variables(&ast)
+    }
+
+    fn undeclared_of(src: &str) -> Vec<Variable> {
+        let ast = parse(src, "t.j2").expect("解析失败");
+        extract_undeclared(&ast)
+    }
+
+    fn names(vs: &[Variable]) -> Vec<&str> {
+        vs.iter().map(|v| v.name.as_str()).collect()
+    }
+
+    /// 取变量可选性；缺失时 panic 并列出实际结果，便于定位。
+    fn opt(vs: &[Variable], name: &str) -> bool {
+        vs.iter()
+            .find(|v| v.name == name)
+            .unwrap_or_else(|| panic!("变量 {name} 未出现在结果中：{:?}", names(vs)))
+            .optional
+    }
+
+    // ---- 兜底语义：只对「裸变量直接操作数」生效，不向下传播 ----
+
+    /// 裸变量被 `default` 兜底 → 可选。
+    #[test]
+    fn default_covers_bare_var() {
+        let vs = undeclared_of("{{ x | default(1) }}");
+        assert!(opt(&vs, "x"));
+    }
+
+    /// `default` 兜不住运算：undefined 参与运算即报错，故 a、b 必选。
+    #[test]
+    fn default_does_not_cover_arithmetic_operand() {
+        let vs = undeclared_of("{{ (a + b) | default(1) }}");
+        assert!(!opt(&vs, "a"), "a 参与运算，default 兜不住 → 必选");
+        assert!(!opt(&vs, "b"), "b 参与运算，default 兜不住 → 必选");
+    }
+
+    /// `default` 兜不住属性访问：需先对 undefined 取属性，同样报错。
+    #[test]
+    fn default_does_not_cover_getattr_operand() {
+        let vs = undeclared_of("{{ a.b | default(1) }}");
+        assert!(!opt(&vs, "a"), "a 需先取属性，default 兜不住 → 必选");
+    }
+
+    /// `is defined` 同理：只兜底裸变量，属性路径上的父变量仍必选。
+    #[test]
+    fn defined_test_only_covers_bare_var() {
+        let bare = undeclared_of("{% if x is defined %}Y{% endif %}");
+        assert!(opt(&bare, "x"), "裸变量 + defined → 可选");
+
+        let attr = undeclared_of("{% if a.b is defined %}Y{% endif %}");
+        assert!(!opt(&attr, "a"), "a.b 中的 a 需先取属性 → 必选");
+    }
+
+    /// 过滤器参数不受操作数兜底影响：`default(y)` 的 y 仍需外部提供。
+    #[test]
+    fn filter_arg_not_covered_by_operand_default() {
+        let vs = undeclared_of("{{ x | default(y) }}");
+        assert!(opt(&vs, "x"), "x 被 default 兜底 → 可选");
+        assert!(!opt(&vs, "y"), "默认值表达式 y 仍需外部提供 → 必选");
+    }
+
+    // ---- set 惯用法：局部引用不得翻转兜底判定 ----
+
+    /// `{% set x = x | default(v) %}` 是标准兜底惯用法，x 必须保持可选。
+    ///
+    /// 这是本模块修过的真实缺陷：早期实现里后续 `{{ R1 }}` 的**局部**引用会
+    /// 无条件记「必选」，把首行判定的可选整体翻转，导致惯用法不可用。
+    #[test]
+    fn set_default_idiom_keeps_var_optional() {
+        let vs = undeclared_of("{% set R1 = R1 | default(4000) %}{{ R1 }}");
+        assert!(opt(&vs, "R1"), "R1 整体应可选，否则兜底惯用法失效");
+    }
+
+    /// 但 set 的 RHS 先于目标声明求值：`{% set total = total + x %}` 中
+    /// 右侧 total 引用的仍是外层/上下文值 → 必选（避免漏报）。
+    #[test]
+    fn set_rhs_evaluated_before_target_declared() {
+        let vs = undeclared_of("{% set total = total + x %}{{ total }}");
+        assert!(!opt(&vs, "total"), "RHS 的 total 在绑定前求值 → 必选");
+        assert!(!opt(&vs, "x"));
+    }
+
+    // ---- with 块：逐条交错「求值右值 → 绑定目标」----
+
+    /// `{% with a = 1, b = a + 1 %}` 中 b 的右值看到本块已绑定的 a → a 不算未声明。
+    #[test]
+    fn with_block_later_binding_sees_earlier_one() {
+        let vs = undeclared_of("{% with a = 1, b = a + 1 %}{{ b }}{% endwith %}");
+        assert!(
+            !names(&vs).contains(&"a"),
+            "a 由本块绑定，不应进未声明集合：{:?}",
+            names(&vs)
+        );
+    }
+
+    /// 同一条赋值内右值先于绑定求值：`{% with y = y + 1 %}` 的 y 仍必选。
+    #[test]
+    fn with_block_rhs_before_its_own_binding() {
+        let vs = undeclared_of("{% with y = y + 1 %}{{ y }}{% endwith %}");
+        assert!(!opt(&vs, "y"), "右值 y 在绑定前求值 → 必选");
+    }
+
+    // ---- 作用域 ----
+
+    /// for 循环变量是模板局部，不进未声明集合。
+    #[test]
+    fn for_target_is_local() {
+        let vs = undeclared_of("{% for h in holes %}{{ h.x }}{% endfor %}");
+        assert_eq!(names(&vs), vec!["holes"]);
+    }
+
+    /// block 体是独立作用域：块内 set 的名字不外泄，块外引用按未声明处理。
+    #[test]
+    fn block_body_has_own_scope() {
+        let vs =
+            undeclared_of("{% block b %}{% set inner = 1 %}{{ inner }}{% endblock %}{{ inner }}");
+        assert!(
+            names(&vs).contains(&"inner"),
+            "块外引用 inner 应视为未声明：{:?}",
+            names(&vs)
+        );
+        assert!(!opt(&vs, "inner"));
+    }
+
+    /// macro 名与参数均为局部（宏名在外层定义，参数在宏作用域内）。
+    #[test]
+    fn macro_name_and_args_are_local() {
+        let vs = undeclared_of(
+            "{% macro line(x, y) %}G1 X{{ x }} Y{{ y }}{% endmacro %}{{ line(10, 20) }}",
+        );
+        assert!(
+            names(&vs).is_empty(),
+            "宏名/参数均为局部，不应有未声明变量：{:?}",
+            names(&vs)
+        );
+    }
+
+    /// `{% set x %}...{% endset %}`：块体先于目标绑定求值，块体里的外部变量
+    /// 仍计入未声明，而目标名本身是局部。
+    #[test]
+    fn set_block_body_evaluated_before_binding() {
+        let vs = undeclared_of("{% set greeting %}hello {{ who }}{% endset %}{{ greeting }}");
+        assert_eq!(
+            names(&vs),
+            vec!["who"],
+            "块体中的 who 未声明；greeting 是局部"
+        );
+    }
+
+    // ---- 保留名与内置全局 ----
+
+    /// 引擎保留名不进变量集合。
+    #[test]
+    fn reserved_names_excluded() {
+        let vs = all_of("{% for i in items %}{{ loop.index }}{{ i }}{% endfor %}");
+        let n = names(&vs);
+        assert!(n.contains(&"items"));
+        assert!(n.contains(&"i"));
+        assert!(!n.contains(&"loop"), "loop 是引擎内置：{n:?}");
+    }
+
+    /// Jinja 内置全局（range/dict/debug 等）不算「需要外部提供的参数」。
+    #[test]
+    fn builtin_globals_not_undeclared() {
+        let vs = undeclared_of(
+            "{% for i in range(3) %}{{ i }}{% endfor %}{{ dict(a=1) }}{% if debug %}{{ debug() }}{% endif %}",
+        );
+        assert!(
+            names(&vs).is_empty(),
+            "内置全局不应进未声明集合：{:?}",
+            names(&vs)
+        );
+    }
+
+    // ---- 静态模板引用 ----
+
+    /// include / extends / import / from-import 的字面量模板名被收集且去重。
+    #[test]
+    fn template_refs_collected_and_deduped() {
+        let ast = parse(
+            r#"{% extends "base.j2" %}{% include "header.j2" %}{% include "header.j2" %}{% import "macros.j2" as m %}{% from "macros.j2" import helper %}"#,
+            "t.j2",
+        )
+        .unwrap();
+        assert_eq!(
+            extract_template_refs(&ast),
+            vec!["base.j2", "header.j2", "macros.j2"]
+        );
+    }
+
+    /// 动态模板名无法静态确定，不收集。
+    #[test]
+    fn template_refs_ignores_dynamic_names() {
+        let ast = parse(r#"{% include name %}"#, "t.j2").unwrap();
+        assert!(
+            extract_template_refs(&ast).is_empty(),
+            "变量形式的模板名无法静态确定"
+        );
+    }
+
+    // ---- 位置信息 ----
+
+    /// 行/列/字节偏移准确，供上层把校验错误定位回源码。
+    #[test]
+    fn variable_position_is_accurate() {
+        let src = "G0 X10\nG1 X{{ dia }}";
+        let vs = undeclared_of(src);
+        let v = &vs[0];
+        assert_eq!(v.name, "dia");
+        assert_eq!(v.line, 2);
+        assert_eq!(&src[v.start..v.end], "dia", "字节偏移应精确覆盖变量名");
+        // 列号按 lexer token 计，而非按字节：`{{` 整体占一列。
+        // 故第 2 行 `G1 X{{ dia }}` 的列为：G(1) 1(2) ␠(3) X(4) `{{`(5) ␠(6) d(7)。
+        assert_eq!(v.col, 7);
+    }
+}
