@@ -78,19 +78,25 @@ graph TD
 
 | 模块 | 文件 | 行数 | 说明 |
 | --- | --- | --- | --- |
-| `nctool-tpl` | `extract.rs` | 592 | 变量提取核心（AST 遍历 + 可选/必选判定） |
-| | `error.rs` | 294 | 结构化模板错误 + 行列定位 |
-| | `renderer.rs` | 193 | minijinja Environment 封装 |
-| | `filters.rs` | 113 | NC 数值格式化 + 数学过滤器 |
-| `nctool-core` | `pipeline.rs` | 998 | 生成管线 + 后处理 |
-| | `registry.rs` | 843 | 模板注册表 + 5 个内置模板 |
-| | `validate.rs` | 800 | 参数校验引擎 |
-| | `model.rs` | 511 | 参数 / 机床数据模型 |
-| | `machine.rs` | 184 | 机床预设 |
-| `nctool-cli` | `cli.rs` | 332 | clap 命令树 |
-| | `args.rs` | 307 | `--param k=v` 类型推断 |
+| `nctool-tpl` | `lib.rs` | 1821 | 对外 API + 大量行为契约测试 |
+| | `extract.rs` | 607 | 变量提取核心（AST 遍历 + 可选/必选判定） |
+| | `error.rs` | 393 | 结构化模板错误 + 行列定位 + 根因链/出错表达式 |
+| | `renderer.rs` | 236 | minijinja Environment 封装 |
+| | `filters.rs` | 142 | NC 数值格式化 + 数学过滤器 |
+| `nctool-core` | `manifest.rs` | 1468 | 模板清单 + 头部 `{# PARAMS: #}` 解析 + 参数规格覆盖层 |
+| | `validate.rs` | 1432 | 参数校验引擎 |
+| | `registry.rs` | 1221 | 模板注册表 + 5 个内置模板 |
+| | `model.rs` | 1151 | 参数 / 机床数据模型 |
+| | `pipeline.rs` | 998 | 生成管线 + 后处理 |
+| | `machine.rs` | 455 | 机床预设 |
+| | `variables.rs` | 379 | 变量库（`variables.yaml`，全局按名定义） |
+| | `derive.rs` | 300 | 参数派生（Rust 侧查表计算后注入） |
+| `nctool-cli` | `server.rs` | 853 | HTTP API（Web UI 后端）+ `spec_json` 单一来源 |
+| | `args.rs` | 445 | `--param k=v` 按规格归一（先白名单后类型） |
+| | `cli.rs` | 341 | clap 命令树 |
+| | `commands/inspect.rs` | 224 | 参数规格展示（四桶分组） |
+| | `context.rs` | 321 | 命令执行上下文 + 模板目录加载 |
 | | `config.rs` | 240 | 配置层叠加载 |
-| | `context.rs` | 194 | 命令执行上下文 |
 | | `output.rs` | 181 | 统一错误与双通道输出 |
 
 ---
@@ -147,6 +153,16 @@ undefined 参与运算或取属性就会直接报错，`default` 根本来不及
 `UnknownFilter`、`UnknownTest`、`Render`。后三者会**从 minijinja 的错误详情里反解出
 变量名 / 过滤器名 / 测试名**，并尽力从源码字节偏移恢复标识符，让错误信息直接指到出问题的名字上。
 
+**错误消息的可诊断性**（两条补强，都是实测中"信息被吞掉"的案例）：
+
+| 场景 | 问题 | 处理 |
+| --- | --- | --- |
+| 嵌套 `{% include %}` 失败 | minijinja 只给外层 `could not render include: error in "sub.j2" (in main.j2:2)`，**根因被吞** | 沿 `std::error::Error::source()` 链收集各层描述，以 ` ← ` 追加；末段即根本原因（含子模板名与行号） |
+| 无 `detail` 的错误 | 消息退化成 `invalid operation (in x.j2:83)`，不知错在哪句 | `detail` 为空且错误发生在所传源码对应模板时，用 `range()` 取出**出错表达式片段**（实测 `-U_A`）附在消息后 |
+
+两条都**不改外层 `TplError` 变体与 `name`**——既有调用方（与测试）按"嵌套错误 ⇒ `Render` +
+`name` = 主模板 + 消息含子模板名"的契约判断，补强只发生在 `message` 内部。
+
 ---
 
 ### 3.2 `nctool-core` —— G-code 领域层
@@ -163,8 +179,11 @@ erDiagram
     MachineConfig ||--o| Value : "注入 machine 对象"
 ```
 
-- **`ParamValue`**：`Number(f64)` / `Integer(i64)` / `String` / `Bool`
-- **`ParamSpec`**：参数规格 —— 类型、`required`、默认值、`min`/`max`、`integer` 约束、单位、说明
+- **`ParamValue`**：`Number(f64)` / `Integer(i64)` / `String` / `Bool` / `List(Vec<ParamValue>)`
+- **`ParamSpec`**：参数规格 —— 类型、`required`、默认值、`min`/`max`、`integer` 约束、
+  `options` 候选项白名单、`required_if` 条件必选、单位、说明
+- **`ParamKind`**：`Number` / `Integer` / `String` / `Bool` / `List` / `Choice`（枚举）/
+  `Any`（已声明但未标注类型，不做类型检查）
 - **`ParameterSet`**：`BTreeMap<String, ParamValue>`，保证顺序稳定可序列化
 - **`MachineConfig`**：`id` / `vendor` / `model` + 键值均为字符串的 `config` 表
 
@@ -189,6 +208,9 @@ flowchart TD
     D --> I[NonFinite NaN/Inf]
     D --> J[OutOfRange 越界]
     D --> K[NotInteger 非整数]
+    D --> K2[NotInOptions 不在候选项内]
+    D --> K3[ConditionalSkipped 条件未命中而跳过]
+    D --> K4[DeriveFailed 派生参数算不出来]
     D --> L[Unused 冗余参数]
     D --> M[ShadowedSystemVar 遮蔽系统变量]
     D --> N[ParseError 解析失败]
@@ -197,6 +219,9 @@ flowchart TD
     I --> O
     J --> O
     K --> O
+    K2 --> O
+    K3 --> O
+    K4 --> O
     L --> O
     M --> O
     N --> O
@@ -209,13 +234,91 @@ flowchart TD
 正确写法是 `report.has_kind(IssueKind::NonFinite)`。
 
 检查项（按执行顺序）：
-1. **规格默认值自洽性** —— `spec.default` 自己违反类型/区间/整数约束时报错。这类错误只源于模板作者，
-   且会在渲染前被静默注入上下文，导致用户提供的合法值反而用不上，必须在校验阶段暴露
+0. **派生参数** —— 声明了 `derive` 的参数先由 [`derive`] 算出（详见下节）；
+   派生失败报 `DeriveFailed`（Error），且不再对同一参数叠报"缺失"
+1. **规格默认值自洽性** —— `spec.default` 自己违反**类型**/区间/整数/候选项约束时报错。这类错误只源于
+   模板作者，且会在渲染前被静默注入上下文，导致用户提供的合法值反而用不上，必须在校验阶段暴露
 2. **有限性** —— NaN/Inf 拒绝生成
 3. **类型匹配** —— `ParamKind::matches`
-4. **取值区间** —— `min`/`max`，含边界
-5. **整数约束** —— 规格标记 `integer` 但值带小数
-6. **冗余参数** —— 参数集提供了模板未引用的参数（警告级，可能是参数名拼错）
+4. **候选项白名单** —— `spec.options`（见下），非法值报 `NotInOptions`
+5. **取值区间** —— `min`/`max`，含边界
+6. **整数约束** —— 规格标记 `integer` 但值带小数
+7. **规格自洽（`SpecInert`）** —— 规格里的声明永不生效时报警告：参数名模板未引用，
+   或 `min`/`max`/`integer` 声明在 `String`/`Bool`/`List` 上（数值约束对非数值永不执行）
+8. **缺失** —— 模板引用、无 `default` 兜底、参数集未提供；若声明了 `required_if`
+   则先按控制参数取值判定（条件未命中 → 报 `ConditionalSkipped`（提示级）而非 `Missing`）
+9. **冗余参数** —— 参数集提供了模板未引用的参数（警告级，可能是参数名拼错）
+
+> **为什么白名单检查必须独立于 `check_value_constraints()`**：后者对非数值类型在
+> `as_f64()` 处直接返回，而字符串枚举（`闭口 / 左开口 / 右开口`）恰恰是白名单的
+> 主要用途。塞进区间检查内部等于永不执行。因此拆出 `check_value_options()`，
+> 由"逐变量检查"与"规格默认值自洽性"两个调用点显式调用，且**排在区间/整数检查之前**。
+
+**候选项白名单（`ParamSpec::options`）**：
+
+| 项 | 约定 |
+| --- | --- |
+| 声明形式 | `options: Option<Vec<ParamValue>>`，`None`/空列表 = 不约束（旧规格行为不变） |
+| 生效范围 | **所有类型**，不只 `ParamKind::Choice`：`Number + options` 表达数值枚举 |
+| 类型匹配 | `ParamKind::Choice` 有意放宽为"任意标量"，真正的约束是白名单而非类型 |
+| 成员比较 | 同变体同值；**数值/整数跨变体按数值相等**（`Integer(8)` ≡ `Number(8.0)`） |
+| 文本 vs 数值 | `"8"` 与 `8` 是**不同**候选项，不做隐式归一化 |
+| 非法值处理 | 报 `Error`，**不降级、不替换为默认值或首个候选项**（否则产出与图纸不符的 G-code） |
+
+**条件必选（`ParamSpec::required_if`）**：
+
+互斥分支参数（同一时刻只有一个分支可达）在静态变量提取下会被判为"全部必选"。
+`required_if` 把"哪个分支用到哪个参数"显式声明出来，一处声明全局受益：
+
+| 项 | 约定 |
+| --- | --- |
+| 声明形式 | `RequiredIf { param, values }`（`required_when(param, values)` builder） |
+| 判定 | 控制参数生效取值命中 `values` → 必选；未命中 → 可缺失（报 `ConditionalSkipped`，提示级） |
+| 生效取值 | 用户提供值 **>** 规格 `default`（与 `apply_spec_defaults` 的渲染期口径一致） |
+| 不可判定 | 控制参数未提供且无规格默认值 → **保守判必选**（分支可能被走到，宁可多要参数） |
+| 已知边界 | 控制参数若靠**模板内联** `\| default(...)` 兜底，其取值无法静态求得，同样落到"保守判必选" |
+
+**参数规格的来源（三级，与元数据回退一致）**：
+
+```mermaid
+flowchart LR
+    A["模板头部 `{# PARAMS: #}`<br/>名字 + 类型 + 必选性 + 描述"] --> C[ParamSpec 列表]
+    B["variables.yaml<br/>全局按名定义（类型/白名单）"] --> C
+    D["templates.yaml `params`<br/>本模板稀疏覆盖：min/max/integer/options/required_if/default"] --> C
+    C --> E[TemplateEntry.params]
+    E --> F[validate 类型/白名单/条件必选]
+    E --> G[HTTP API spec_json → 前端表单]
+```
+
+| 来源 | 作用域 | 能表达 | 说明 |
+| --- | --- | --- | --- |
+| 头部 `{# PARAMS: #}` | 本模板 | 名字、类型、必选性、描述 | 两种写法：`name 必选 描述` 与 `name type required 描述`；类型可省（记为 `Any`） |
+| `variables.yaml` | **全局（按变量名）** | 类型、候选值、`min`/`max`/`integer` | 同一变量在多模板含义一致时只写一次；**只对模板确实引用了的变量生效** |
+| 清单 `params` | 本模板 | 全部约束 | **稀疏覆盖**：只写要改的字段（`ParamOverride` 字段全为 `Option`，能区分"没写"与"写成默认值"） |
+
+**优先级：清单 `params` > `variables.yaml` > 头部 `{# PARAMS: #}`**（越靠后越具体）。
+三者都复用同一套稀疏覆盖机制（`ParamOverride` + `merge_params`），因此"只写要改的字段"
+这一约定在三个层级上完全一致。
+
+解析失败的行会 `eprintln!("warning: …")` 而非静默跳过——静默丢一行等于静默少一条参数约束。
+变量库里**同名重复定义直接报错**（后者静默覆盖前者会让"改了定义却不生效"变成难查的问题）。
+
+**派生参数（`core/src/derive.rs`）**：把**查表型换算**从模板搬到规格，落实
+「模板只做变量替换，计算在 Rust 侧完成」这条核心原则。
+
+| 项 | 约定 |
+| --- | --- |
+| 声明 | `ParamSpec.derive: DeriveRule { from, table, fallback }`（YAML 见 `templates/variables.yaml`） |
+| 求值时机 | **校验前**（`check_vars` 内）与**渲染前**（`pipeline`），两处口径一致 |
+| 顺序 | 先派生、再 `apply_spec_defaults`——派生依赖源参数取值，而源参数可能靠默认值兜底才存在 |
+| 系统注入 | 派生参数**不要求调用方提供**；提供了则**派生值恒胜**并报 `ShadowedSystemVar` 警告 |
+| 失败 | 源缺失/未命中且无 `fallback` → `DeriveFailed`（Error）。**不取 0**：中心孔深度取 0 会让 `I_R9[80]` 顶紧位置算错 |
+| 派生值 | 照常过类型/白名单/区间检查——派生不是绕过校验的后门 |
+| 键比较 | 走 `ParamValue::matches_option`（数值/整数跨变体按数值相等），表键写 `8` 也能命中 `8.0` |
+
+首个用例：`machines/index_g420/dg_cal_ir9.j2` 的 `tip_model → tip_depth`（12 项表，
+回退 29.61 = DM24）。此前表写在模板里（`{% set tip_depth_map = {...} %}` +
+`map[k] | default(v)`，为绕开 minijinja 的 map 无方法限制），现在数据表只此一份。
 
 #### `registry.rs` —— 模板注册表
 
@@ -551,6 +654,7 @@ minijinja，两边的 `Value` 就是**两个不同的类型**，拼不到一起�
 | 新增过滤器 | `src/renderer.rs` 的 `Renderer::new()` 中 `env.add_filter(...)` |
 | 新增命令 | `cli/src/cli.rs` 加枚举变体 + `cli/src/commands/` 加实现 + `commands/mod.rs` 分发 |
 | 新增校验规则 | `core/src/validate.rs` 的 `check_vars()` + `IssueKind` 新变体 |
+| 新增参数类型 | `core/src/model.rs`（`ParamKind` 变体 + `matches()` + `label()`）→ `core/src/validate.rs`（`check_value_constraints()` / `check_value_options()`）→ `cli/src/server.rs::spec_json()`（**该 match 无通配分支，漏改会编译失败**） |
 | 新增系统注入变量 | `TemplateRegistry::set_system_vars()` |
 | 接 Web UI | `ui/index.html` 已定义 API 契约（`{ ok, data?, error? }`）；服务端实现后替换 `commands/ui.rs` 占位 |
 | 零件级批量生成 | `commands/part.rs` 占位，规划于阶段 4 |
@@ -573,9 +677,9 @@ minijinja，两边的 `Value` 就是**两个不同的类型**，拼不到一起�
 
 | 项 | 位置 | 数量 |
 | --- | --- | --- |
-| 单元测试 | `src/lib.rs` 等 | 206 |
-| 集成测试 | `tests/`、`core/tests/`、`cli/tests/` | 65 |
-| 文档测试 | `src/lib.rs` doctest | 1 |
+| 单元测试 | `src/lib.rs`、`core/src/`、`cli/src/` | 348 |
+| 集成测试 | `tests/`、`core/tests/`、`cli/tests/` | 119 |
+| 文档测试 | `src/lib.rs` doctest | 1（另 1 个 ignored） |
 | 基准测试 | `benches/bench.rs`（criterion） | — |
 | Golden 文件 | `tests/golden/*.nc` | 4 |
 | CI | `.github/` | fmt / clippy / test / doc / audit |

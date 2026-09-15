@@ -1,0 +1,359 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>nctool 系统架构图</title>
+<style>
+  :root{
+    --bg:#f4f6f8; --panel:#ffffff; --panel-2:#fafbfc;
+    --text:#16191d; --muted:#5c6672; --faint:#8b95a1;
+    --border:#e3e7ec; --border-strong:#cfd6de;
+    --tpl:#2f6feb; --tpl-bg:#eef4ff;
+    --core:#b45309; --core-bg:#fff7ed;
+    --cli:#0f766e; --cli-bg:#effbf8;
+    --mj:#6b7280; --mj-bg:#f3f4f6;
+    --ok:#15803d; --ok-bg:#f0fdf4;
+    --err:#b91c1c; --err-bg:#fef2f2;
+    --arrow:#94a3b8;
+  }
+  @media (prefers-color-scheme: dark){
+    :root{
+      --bg:#0e1116; --panel:#161a21; --panel-2:#1b2029;
+      --text:#e7eaee; --muted:#a2acb8; --faint:#7b8794;
+      --border:#262c36; --border-strong:#39414d;
+      --tpl:#7aa7ff; --tpl-bg:#16233a;
+      --core:#f0a860; --core-bg:#2e2115;
+      --cli:#4ecdc4; --cli-bg:#12302e;
+      --mj:#9aa3af; --mj-bg:#1f242c;
+      --ok:#5ec97f; --ok-bg:#12271a;
+      --err:#f87171; --err-bg:#2c1618;
+      --arrow:#5b6672;
+    }
+  }
+  *{box-sizing:border-box}
+  body{
+    margin:0; padding:32px 24px 64px;
+    background:var(--bg); color:var(--text);
+    font-family:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,-apple-system,sans-serif;
+    font-size:14px; line-height:1.6;
+  }
+  .wrap{max-width:1080px;margin:0 auto}
+  header{border-bottom:1px solid var(--border);padding-bottom:18px;margin-bottom:28px}
+  h1{margin:0 0 8px;font-size:26px;letter-spacing:-.02em}
+  .sub{color:var(--muted);font-size:13px}
+  .badges{display:flex;flex-wrap:wrap;gap:8px;margin-top:14px}
+  .badge{
+    display:inline-block;padding:3px 10px;border-radius:999px;
+    font-size:12px;border:1px solid var(--border-strong);
+    background:var(--panel);color:var(--muted);font-variant-numeric:tabular-nums;
+  }
+  h2{font-size:17px;margin:38px 0 6px;letter-spacing:-.01em}
+  h2 .n{color:var(--faint);font-weight:600;margin-right:8px}
+  .lead{color:var(--muted);font-size:13px;margin:0 0 18px}
+  .card{
+    background:var(--panel);border:1px solid var(--border);border-radius:12px;
+    padding:20px;overflow-x:auto;
+  }
+  svg{display:block;width:100%;height:auto;min-width:640px}
+  .svgtext{font-family:"Segoe UI","PingFang SC","Microsoft YaHei",system-ui,sans-serif}
+  /* 分层架构 */
+  .layer{
+    display:grid;grid-template-columns:150px 1fr;gap:16px;align-items:start;
+    padding:16px;border:1px solid var(--border);border-radius:12px;
+    background:var(--panel);margin-bottom:0;
+  }
+  .layer + .arrow{height:30px;display:flex;align-items:center;justify-content:center}
+  .layer + .arrow span{
+    color:var(--faint);font-size:12px;letter-spacing:.06em;
+    display:flex;flex-direction:column;align-items:center;gap:2px;
+  }
+  .layer + .arrow span::before{content:"";width:2px;height:10px;background:var(--border-strong)}
+  .layer + .arrow span::after{content:"▼";font-size:10px;color:var(--border-strong);line-height:1}
+  .lname{font-weight:600;font-size:14px;display:flex;flex-direction:column;gap:4px}
+  .lname small{font-weight:400;color:var(--faint);font-size:11.5px;font-variant-numeric:tabular-nums}
+  .chips{display:flex;flex-wrap:wrap;gap:8px}
+  .chip{
+    padding:7px 11px;border-radius:8px;font-size:12.5px;
+    border:1px solid transparent;line-height:1.35;
+  }
+  .chip b{font-weight:600;display:block;font-size:12.5px}
+  .chip i{font-style:normal;color:var(--muted);font-size:11.5px}
+  .c-tpl{background:var(--tpl-bg);border-color:color-mix(in srgb,var(--tpl) 30%,transparent);color:var(--tpl)}
+  .c-core{background:var(--core-bg);border-color:color-mix(in srgb,var(--core) 30%,transparent);color:var(--core)}
+  .c-cli{background:var(--cli-bg);border-color:color-mix(in srgb,var(--cli) 30%,transparent);color:var(--cli)}
+  .c-mj{background:var(--mj-bg);border-color:color-mix(in srgb,var(--mj) 30%,transparent);color:var(--mj)}
+  .chip i{color:var(--text);opacity:.72}
+  table{width:100%;border-collapse:collapse;font-size:13px}
+  th,td{text-align:left;padding:9px 12px;border-bottom:1px solid var(--border);vertical-align:top}
+  th{color:var(--muted);font-weight:600;font-size:12px;text-transform:uppercase;letter-spacing:.04em;white-space:nowrap}
+  td code,p code,li code{
+    font-family:"Cascadia Code",Consolas,"SF Mono",monospace;font-size:12px;
+    background:var(--panel-2);border:1px solid var(--border);border-radius:4px;padding:1px 5px;
+  }
+  td:first-child{white-space:nowrap;font-weight:600}
+  ul{margin:8px 0 0;padding-left:20px;color:var(--muted)}
+  li{margin:4px 0}
+  footer{margin-top:44px;padding-top:16px;border-top:1px solid var(--border);color:var(--faint);font-size:12px}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>nctool 系统架构图</h1>
+  <div class="sub">CNC G-code 模板工具链 · 分层架构 / 端到端数据流 / 参数规格合并</div>
+  <div class="badges">
+    <span class="badge">nctool-tpl v0.3.2</span>
+    <span class="badge">nctool-core v0.2.2</span>
+    <span class="badge">nctool-cli v0.2.2</span>
+    <span class="badge">14 861 行 Rust</span>
+    <span class="badge">25 个模板</span>
+    <span class="badge">459 项测试</span>
+    <span class="badge">行覆盖 90.75%</span>
+  </div>
+</header>
+
+<h2><span class="n">01</span>分层架构</h2>
+<p class="lead">依赖严格单向向下：<code>cli → core → tpl → minijinja</code>。所有业务逻辑在 core，CLI 与 Web UI 只是两个输入/展示面。</p>
+
+<div class="layer">
+  <div class="lname">nctool-cli<small>binary: nctool</small><small>交付面</small></div>
+  <div class="chips">
+    <span class="chip c-cli"><b>cli.rs</b><i>clap 命令树</i></span>
+    <span class="chip c-cli"><b>config.rs</b><i>配置层叠</i></span>
+    <span class="chip c-cli"><b>context.rs</b><i>注册表装配</i></span>
+    <span class="chip c-cli"><b>args.rs</b><i>--param 归一</i></span>
+    <span class="chip c-cli"><b>server.rs</b><i>Web 后端</i></span>
+    <span class="chip c-cli"><b>output.rs</b><i>双通道 + 退出码</i></span>
+    <span class="chip c-cli"><b>commands/*</b><i>子命令实现</i></span>
+  </div>
+</div>
+<div class="arrow"><span>依赖</span></div>
+
+<div class="layer">
+  <div class="lname">nctool-core<small>G-code 领域层</small></div>
+  <div class="chips">
+    <span class="chip c-core"><b>model</b><i>参数/机床模型</i></span>
+    <span class="chip c-core"><b>manifest</b><i>清单 + 三级回退</i></span>
+    <span class="chip c-core"><b>variables</b><i>全局变量库</i></span>
+    <span class="chip c-core"><b>derive</b><i>派生计算</i></span>
+    <span class="chip c-core"><b>validate</b><i>校验引擎</i></span>
+    <span class="chip c-core"><b>registry</b><i>模板注册表</i></span>
+    <span class="chip c-core"><b>machine</b><i>机床预设</i></span>
+    <span class="chip c-core"><b>pipeline</b><i>端到端管线</i></span>
+  </div>
+</div>
+<div class="arrow"><span>依赖</span></div>
+
+<div class="layer">
+  <div class="lname">nctool-tpl<small>模板解析与渲染层</small></div>
+  <div class="chips">
+    <span class="chip c-tpl"><b>lib.rs</b><i>对外 API</i></span>
+    <span class="chip c-tpl"><b>extract.rs</b><i>可选/必选判定</i></span>
+    <span class="chip c-tpl"><b>renderer.rs</b><i>严格/宽松渲染</i></span>
+    <span class="chip c-tpl"><b>filters.rs</b><i>NC 数值过滤器</i></span>
+    <span class="chip c-tpl"><b>error.rs</b><i>行列定位 + 根因链</i></span>
+  </div>
+</div>
+<div class="arrow"><span>依赖</span></div>
+
+<div class="layer">
+  <div class="lname">minijinja<small>~2.24</small></div>
+  <div class="chips">
+    <span class="chip c-mj"><b>unstable_machinery</b><i>暴露 AST，自建提取器</i></span>
+    <span class="chip c-mj"><b>loop_controls</b><i>break / continue</i></span>
+    <span class="chip c-mj"><b>debug</b><i>错误携带字节范围</i></span>
+  </div>
+</div>
+
+<h2><span class="n">02</span>端到端数据流</h2>
+<p class="lead">主线是「渲染前可发现错误」：校验失败时 stdout 不含任何 G-code，报告走 stderr。</p>
+
+<div class="card">
+<svg viewBox="0 0 920 872" role="img" aria-label="G-code 生成管线数据流">
+  <defs>
+    <marker id="ar" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" style="fill:var(--arrow)"/>
+    </marker>
+    <marker id="ar-err" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" style="fill:var(--err)"/>
+    </marker>
+    <marker id="ar-ok" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" style="fill:var(--ok)"/>
+    </marker>
+  </defs>
+
+  <!-- 输入 -->
+  <rect x="110" y="24" width="520" height="52" rx="10" style="fill:var(--panel-2);stroke:var(--border-strong)"/>
+  <text class="svgtext" x="370" y="47" text-anchor="middle" style="fill:var(--text);font-size:14px;font-weight:600">输入</text>
+  <text class="svgtext" x="370" y="65" text-anchor="middle" style="fill:var(--muted);font-size:12px">nctool render &lt;tpl&gt; --param k=v --machine m</text>
+
+  <!-- 1 Ctx -->
+  <rect x="110" y="104" width="520" height="52" rx="10" style="fill:var(--cli-bg);stroke:var(--cli)"/>
+  <text class="svgtext" x="370" y="127" text-anchor="middle" style="fill:var(--text);font-size:13.5px;font-weight:600">Ctx::from_global()</text>
+  <text class="svgtext" x="370" y="145" text-anchor="middle" style="fill:var(--muted);font-size:12px">config::load() 层叠全局 + 项目 nctool.toml（损坏→空配置+警告）</text>
+
+  <!-- 2 build_registry -->
+  <rect x="110" y="184" width="520" height="52" rx="10" style="fill:var(--core-bg);stroke:var(--core)"/>
+  <text class="svgtext" x="370" y="207" text-anchor="middle" style="fill:var(--text);font-size:13.5px;font-weight:600">build_registry()</text>
+  <text class="svgtext" x="370" y="225" text-anchor="middle" style="fill:var(--muted);font-size:12px">递归扫描 *.j2 → ResolvedMeta::resolve（清单 &gt; 头部注释 &gt; 目录名）</text>
+
+  <!-- 3 build_parameter_set -->
+  <rect x="110" y="264" width="520" height="52" rx="10" style="fill:var(--cli-bg);stroke:var(--cli)"/>
+  <text class="svgtext" x="370" y="287" text-anchor="middle" style="fill:var(--text);font-size:13.5px;font-weight:600">build_parameter_set()</text>
+  <text class="svgtext" x="370" y="305" text-anchor="middle" style="fill:var(--muted);font-size:12px">显式后缀 &gt; 白名单命中 &gt; 声明类型 &gt; 启发式</text>
+
+  <!-- 4 validate -->
+  <rect x="110" y="344" width="520" height="52" rx="10" style="fill:var(--core-bg);stroke:var(--core)"/>
+  <text class="svgtext" x="370" y="367" text-anchor="middle" style="fill:var(--text);font-size:13.5px;font-weight:600">validate() → check_vars()</text>
+  <text class="svgtext" x="370" y="385" text-anchor="middle" style="fill:var(--muted);font-size:12px">derive → 默认值自洽 → 缺失/类型/有限/白名单/区间/整数/条件必选</text>
+
+  <!-- 判定菱形 -->
+  <path d="M370,414 L462,446 L370,478 L278,446 Z" style="fill:var(--panel-2);stroke:var(--border-strong)"/>
+  <text class="svgtext" x="370" y="450" text-anchor="middle" style="fill:var(--text);font-size:12px;font-weight:600">含 Error?</text>
+
+  <!-- 失败分支 -->
+  <rect x="660" y="420" width="240" height="52" rx="10" style="fill:var(--err-bg);stroke:var(--err)"/>
+  <text class="svgtext" x="780" y="443" text-anchor="middle" style="fill:var(--err);font-size:13px;font-weight:600">校验失败报告 → stderr</text>
+  <text class="svgtext" x="780" y="461" text-anchor="middle" style="fill:var(--muted);font-size:12px">stdout 无 G-code · 退出码 1</text>
+
+  <!-- 5 派生 + 上下文 -->
+  <rect x="110" y="500" width="520" height="52" rx="10" style="fill:var(--core-bg);stroke:var(--core)"/>
+  <text class="svgtext" x="370" y="523" text-anchor="middle" style="fill:var(--text);font-size:13.5px;font-weight:600">derive::apply → apply_spec_defaults → build_render_context</text>
+  <text class="svgtext" x="370" y="541" text-anchor="middle" style="fill:var(--muted);font-size:12px">先派生、再兜底默认值；上下文 = 参数集 + machine</text>
+
+  <!-- 6 渲染 -->
+  <rect x="110" y="580" width="520" height="52" rx="10" style="fill:var(--tpl-bg);stroke:var(--tpl)"/>
+  <text class="svgtext" x="370" y="603" text-anchor="middle" style="fill:var(--text);font-size:13.5px;font-weight:600">render_template() · minijinja</text>
+  <text class="svgtext" x="370" y="621" text-anchor="middle" style="fill:var(--muted);font-size:12px">严格模式（默认）/ 宽松模式（唯一硬失败：NaN·Inf）</text>
+
+  <!-- 7 后处理 -->
+  <rect x="110" y="660" width="520" height="52" rx="10" style="fill:var(--core-bg);stroke:var(--core)"/>
+  <text class="svgtext" x="370" y="683" text-anchor="middle" style="fill:var(--text);font-size:13.5px;font-weight:600">postprocess()</text>
+  <text class="svgtext" x="370" y="701" text-anchor="middle" style="fill:var(--muted);font-size:12px">行号 / 头部注释 / ASCII 清洗 / 空行清理（前缀与宽度取自机床配置）</text>
+
+  <!-- 输出 -->
+  <rect x="110" y="740" width="520" height="52" rx="10" style="fill:var(--ok-bg);stroke:var(--ok)"/>
+  <text class="svgtext" x="370" y="763" text-anchor="middle" style="fill:var(--text);font-size:13.5px;font-weight:600">输出 G-code</text>
+  <text class="svgtext" x="370" y="781" text-anchor="middle" style="fill:var(--muted);font-size:12px">stdout 或 --out 文件 · 退出码 0</text>
+
+  <!-- 连线 -->
+  <g style="stroke:var(--arrow);stroke-width:1.6;fill:none">
+    <path d="M370,76 L370,104" marker-end="url(#ar)"/>
+    <path d="M370,156 L370,184" marker-end="url(#ar)"/>
+    <path d="M370,236 L370,264" marker-end="url(#ar)"/>
+    <path d="M370,316 L370,344" marker-end="url(#ar)"/>
+    <path d="M370,396 L370,414" marker-end="url(#ar)"/>
+    <path d="M370,478 L370,500" marker-end="url(#ar)"/>
+    <path d="M370,552 L370,580" marker-end="url(#ar)"/>
+    <path d="M370,632 L370,660" marker-end="url(#ar)"/>
+    <path d="M370,712 L370,740" marker-end="url(#ar)"/>
+  </g>
+  <path d="M462,446 L660,446" style="stroke:var(--err);stroke-width:1.6;fill:none" marker-end="url(#ar-err)"/>
+  <text class="svgtext" x="556" y="438" text-anchor="middle" style="fill:var(--err);font-size:11.5px">是</text>
+  <text class="svgtext" x="388" y="494" style="fill:var(--ok);font-size:11.5px">否</text>
+
+  <!-- 左侧阶段标注 -->
+  <g class="svgtext" style="fill:var(--faint);font-size:11px">
+    <text x="24" y="134">装配</text>
+    <text x="24" y="214">装载</text>
+    <text x="24" y="294">取值</text>
+    <text x="24" y="374">校验</text>
+    <text x="24" y="530">求值</text>
+    <text x="24" y="610">渲染</text>
+    <text x="24" y="690">后处理</text>
+    <text x="24" y="770">交付</text>
+  </g>
+</svg>
+</div>
+
+<h2><span class="n">03</span>参数规格的三个来源</h2>
+<p class="lead">优先级：清单 <code>params</code> &gt; <code>variables.yaml</code> &gt; 头部 <code>{# PARAMS: #}</code>。三者共用同一套稀疏覆盖机制，只写要改的字段。</p>
+
+<div class="card">
+<svg viewBox="0 0 920 360" role="img" aria-label="参数规格三来源合并">
+  <defs>
+    <marker id="ar2" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M0,0 L10,5 L0,10 z" style="fill:var(--arrow)"/>
+    </marker>
+  </defs>
+
+  <rect x="24" y="26" width="250" height="62" rx="10" style="fill:var(--tpl-bg);stroke:var(--tpl)"/>
+  <text class="svgtext" x="149" y="50" text-anchor="middle" style="fill:var(--text);font-size:13px;font-weight:600">模板头部 {# PARAMS: #}</text>
+  <text class="svgtext" x="149" y="68" text-anchor="middle" style="fill:var(--muted);font-size:11.5px">本模板：名字 / 类型 / 必选性</text>
+  <text class="svgtext" x="149" y="82" text-anchor="middle" style="fill:var(--faint);font-size:11px">基础层</text>
+
+  <rect x="24" y="122" width="250" height="62" rx="10" style="fill:var(--core-bg);stroke:var(--core)"/>
+  <text class="svgtext" x="149" y="146" text-anchor="middle" style="fill:var(--text);font-size:13px;font-weight:600">variables.yaml</text>
+  <text class="svgtext" x="149" y="164" text-anchor="middle" style="fill:var(--muted);font-size:11.5px">全局按名：类型 / options</text>
+  <text class="svgtext" x="149" y="178" text-anchor="middle" style="fill:var(--faint);font-size:11px">按字段稀疏覆盖</text>
+
+  <rect x="24" y="218" width="250" height="62" rx="10" style="fill:var(--core-bg);stroke:var(--core)"/>
+  <text class="svgtext" x="149" y="242" text-anchor="middle" style="fill:var(--text);font-size:13px;font-weight:600">templates.yaml 的 params</text>
+  <text class="svgtext" x="149" y="260" text-anchor="middle" style="fill:var(--muted);font-size:11.5px">本模板覆盖：min/max/required_if…</text>
+  <text class="svgtext" x="149" y="274" text-anchor="middle" style="fill:var(--faint);font-size:11px">最高优先级</text>
+
+  <rect x="386" y="122" width="216" height="62" rx="10" style="fill:var(--panel-2);stroke:var(--border-strong)"/>
+  <text class="svgtext" x="494" y="147" text-anchor="middle" style="fill:var(--text);font-size:13px;font-weight:600">merge_params()</text>
+  <text class="svgtext" x="494" y="166" text-anchor="middle" style="fill:var(--muted);font-size:11.5px">ParamOverride 稀疏合并</text>
+
+  <rect x="674" y="122" width="222" height="62" rx="10" style="fill:var(--cli-bg);stroke:var(--cli)"/>
+  <text class="svgtext" x="785" y="147" text-anchor="middle" style="fill:var(--text);font-size:13px;font-weight:600">TemplateEntry.params</text>
+  <text class="svgtext" x="785" y="166" text-anchor="middle" style="fill:var(--muted);font-size:11.5px">Vec&lt;ParamSpec&gt;</text>
+
+  <rect x="674" y="240" width="222" height="62" rx="10" style="fill:var(--panel-2);stroke:var(--border-strong)"/>
+  <text class="svgtext" x="785" y="264" text-anchor="middle" style="fill:var(--text);font-size:12.5px;font-weight:600">validate · inspect · Web 表单</text>
+  <text class="svgtext" x="785" y="283" text-anchor="middle" style="fill:var(--muted);font-size:11.5px">同一份规格，同一套结论</text>
+
+  <g style="stroke:var(--arrow);stroke-width:1.6;fill:none">
+    <path d="M274,57 C330,57 330,140 386,145" marker-end="url(#ar2)"/>
+    <path d="M274,153 L386,153" marker-end="url(#ar2)"/>
+    <path d="M274,249 C330,249 330,166 386,161" marker-end="url(#ar2)"/>
+    <path d="M602,153 L674,153" marker-end="url(#ar2)"/>
+    <path d="M785,184 L785,240" marker-end="url(#ar2)"/>
+  </g>
+</svg>
+</div>
+
+<h2><span class="n">04</span>四条不可退让的原则</h2>
+<div class="card">
+<table>
+  <thead><tr><th>编号</th><th>原则</th><th>落地位置</th></tr></thead>
+  <tbody>
+    <tr><td>P1</td><td><b>渲染前可发现错误</b><br><span style="color:var(--muted)">参数缺失 / 类型不符 / 越界 / 非法枚举 / NaN·Inf 全部前置拦截</span></td><td><code>core/src/validate.rs</code><br><code>core/src/pipeline.rs</code></td></tr>
+    <tr><td>P2</td><td><b>模板只做变量替换，计算在 Rust 侧完成</b><br><span style="color:var(--muted)">查表换算用 <code>derive</code> 规则声明，模板内不写工艺计算</span></td><td><code>core/src/derive.rs</code><br><code>templates/variables.yaml</code></td></tr>
+    <tr><td>P3</td><td><b>静默出错零容忍，宁可渲染失败</b><br><span style="color:var(--muted)"><code>nc_pad</code> 拒绝小数/负数；过滤器对 NaN·Inf 报错；不用 <code>default(0)</code> 兜底互斥参数</span></td><td><code>src/filters.rs</code><br><code>core/src/validate.rs</code></td></tr>
+    <tr><td>P4</td><td><b>单一来源 + 双输入面共用同一内核</b><br><span style="color:var(--muted)">参数值渲染 / 规格 JSON 形状 / 取值归一顺序各自只此一处</span></td><td><code>ParamValue::display()</code><br><code>server::spec_json</code></td></tr>
+  </tbody>
+</table>
+</div>
+
+<h2><span class="n">05</span>模块速查</h2>
+<div class="card">
+<table>
+  <thead><tr><th>Crate</th><th>模块</th><th>职责</th></tr></thead>
+  <tbody>
+    <tr><td>tpl</td><td><code>extract.rs</code></td><td>AST 遍历提取变量，区分可选/必选（兜底不向下传播）</td></tr>
+    <tr><td>tpl</td><td><code>filters.rs</code></td><td>NC 数值格式化 + 数学过滤器；度制用 <code>_d</code> 后缀，全部做有限性校验</td></tr>
+    <tr><td>tpl</td><td><code>renderer.rs</code></td><td>minijinja 环境封装；严格为默认，宽松需显式开启</td></tr>
+    <tr><td>core</td><td><code>model.rs</code></td><td>扁平值模型 + 规格构建器 + 机床配置</td></tr>
+    <tr><td>core</td><td><code>manifest.rs</code></td><td>清单与头部元数据三级回退；<code>merge_params</code> 稀疏覆盖</td></tr>
+    <tr><td>core</td><td><code>variables.rs</code></td><td>全局按名变量库；刻意不导入 <code>default_value</code></td></tr>
+    <tr><td>core</td><td><code>derive.rs</code></td><td>派生参数查表计算；派生值恒胜且照常过校验</td></tr>
+    <tr><td>core</td><td><code>validate.rs</code></td><td>15 类 <code>IssueKind</code> 结构化问题；白名单独立检查</td></tr>
+    <tr><td>core</td><td><code>registry.rs</code></td><td>模板注册表；<code>extract_params</code>/<code>validate</code> 穿透 include 闭包</td></tr>
+    <tr><td>core</td><td><code>pipeline.rs</code></td><td>校验 → 派生 → 兜底 → 渲染 → 后处理；宽松模式仍硬拦 NaN·Inf</td></tr>
+    <tr><td>cli</td><td><code>context.rs</code></td><td>递归装载模板目录，逐模板解析元数据与规格</td></tr>
+    <tr><td>cli</td><td><code>server.rs</code></td><td>回环地址 HTTP API；规格 JSON 形状的单一来源</td></tr>
+  </tbody>
+</table>
+</div>
+
+<footer>
+  nctool 系统架构图 · 生成于 2026-09-15 · 配套设计文档：<code>docs/SYSTEM_DESIGN.md</code>
+</footer>
+
+</div>
+</body>
+</html>

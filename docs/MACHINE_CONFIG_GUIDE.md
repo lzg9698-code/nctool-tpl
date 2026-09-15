@@ -193,4 +193,4 @@ nctool render drill_cycle --machine hero_x9 --param x=1 --param y=2 \
 - [docs/ARCHITECTURE.md](ARCHITECTURE.md) — 核心模块职责与数据流
 - [docs/ROADMAP.md](ROADMAP.md) — 开发路线与验收状态
 - [core/src/machine.rs](../core/src/machine.rs) — `KNOWN_CONFIG_KEYS` 与校验逻辑的权威定义
-- [templates/demo_gcode.j2](../templates/demo_gcode.j2) — 可直接运行的示例模板
+- [templates/turning/demo_gcode.j2](../templates/turning/demo_gcode.j2) — 可直接运行的示例模板

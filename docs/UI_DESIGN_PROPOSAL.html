@@ -1,0 +1,606 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>nctool Web UI 设计方案（v2）</title>
+<style>
+:root{
+  --bg:#f6f7f5; --surface:#ffffff; --line:#e3e3de; --line-soft:#eeeeea;
+  --ink:#25251f; --ink-2:#5f5e5a; --ink-3:#8a8983;
+  --blue-50:#e6f1fb; --blue-300:#85b7eb; --blue-600:#185fa5; --blue-800:#0c447c;
+  --teal-50:#e1f5ee; --teal-600:#0f6e56; --teal-800:#085041;
+  --amber-50:#faeeda; --amber-600:#854f0b; --amber-800:#633806;
+  --red-50:#fcebeb; --red-600:#a32d2d; --red-800:#791f1f;
+  --green-50:#eaf3de; --green-600:#3b6d11; --green-800:#27500a;
+  --gray-50:#f1efe8; --gray-400:#b4b2a9; --gray-600:#5f5e5a;
+  --gray:#888780;
+}
+*{box-sizing:border-box}
+body{
+  margin:0; background:var(--bg); color:var(--ink);
+  font-family:-apple-system,BlinkMacSystemFont,"Segoe UI","PingFang SC","Hiragino Sans GB","Microsoft YaHei",sans-serif;
+  font-size:14px; line-height:1.7;
+}
+code,kbd,pre{font-family:ui-monospace,SFMono-Regular,Menlo,Consolas,"Liberation Mono",monospace}
+code{background:var(--gray-50); border-radius:4px; padding:1px 5px; font-size:12.5px}
+kbd{background:var(--surface); border:1px solid var(--line); border-bottom-width:2px; border-radius:5px; padding:1px 6px; font-size:12px; color:var(--ink-2)}
+.wrap{max-width:1080px; margin:0 auto; padding:0 24px 80px}
+header{padding:56px 0 32px; border-bottom:1px solid var(--line)}
+h1{font-size:30px; font-weight:500; margin:0 0 10px; letter-spacing:-.2px}
+.sub{color:var(--ink-2); font-size:14px; margin:0; max-width:80ch}
+.meta{color:var(--ink-3); font-size:13px; margin:14px 0 0}
+.metrics{display:grid; grid-template-columns:repeat(auto-fit,minmax(150px,1fr)); gap:12px; margin:28px 0 0}
+.metric{background:var(--surface); border:1px solid var(--line); border-radius:10px; padding:14px 16px}
+.metric .k{font-size:12px; color:var(--ink-3); margin:0}
+.metric .v{font-size:22px; font-weight:500; margin:2px 0 0; letter-spacing:-.3px}
+nav{margin:28px 0 0; display:flex; flex-wrap:wrap; gap:8px}
+nav a{font-size:13px; color:var(--ink-2); text-decoration:none; background:var(--surface); border:1px solid var(--line); border-radius:999px; padding:5px 13px}
+nav a:hover{border-color:var(--gray-400); color:var(--ink)}
+section{margin-top:52px}
+h2{font-size:20px; font-weight:500; margin:0 0 6px; letter-spacing:-.2px}
+h2 .n{color:var(--gray-400); font-weight:400; margin-right:8px}
+.lead{color:var(--ink-2); margin:0 0 22px; max-width:78ch}
+h3{font-size:15px; font-weight:500; margin:28px 0 10px}
+h4{font-size:14px; font-weight:500; margin:20px 0 8px; color:var(--ink-2)}
+p{margin:0 0 14px; max-width:80ch}
+ul,ol{margin:0 0 14px; padding-left:22px; max-width:80ch}
+li{margin:4px 0}
+.card{background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:22px 24px}
+.card + .card{margin-top:14px}
+table{width:100%; border-collapse:collapse; background:var(--surface); border:1px solid var(--line); border-radius:12px; overflow:hidden; font-size:13px; margin:0 0 16px}
+th,td{text-align:left; padding:11px 14px; border-bottom:1px solid var(--line-soft); vertical-align:top}
+th{font-weight:500; color:var(--ink-2); background:var(--gray-50)}
+tr:last-child td{border-bottom:none}
+.tag{display:inline-block; font-size:12px; border-radius:999px; padding:1px 9px; border:1px solid transparent}
+.tag.now{background:var(--red-50); color:var(--red-800); border-color:#f0c4c4}
+.tag.new{background:var(--green-50); color:var(--green-800); border-color:#cfe0ad}
+.tag.keep{background:var(--blue-50); color:var(--blue-800); border-color:#bcd9f2}
+.tag.p0{background:var(--amber-50); color:var(--amber-800); border-color:#eccfa4}
+.grid2{display:grid; grid-template-columns:repeat(auto-fit,minmax(300px,1fr)); gap:14px}
+.swatches{display:grid; grid-template-columns:repeat(auto-fit,minmax(120px,1fr)); gap:10px; margin:14px 0}
+.sw{border:1px solid var(--line); border-radius:10px; overflow:hidden; background:var(--surface)}
+.sw .chip{height:46px}
+.sw .lab{padding:8px 10px; font-size:12px; color:var(--ink-2)}
+.sw .lab b{display:block; color:var(--ink); font-weight:500; font-size:12.5px}
+.typescale{border:1px solid var(--line); border-radius:12px; background:var(--surface); overflow:hidden}
+.typescale .row{display:flex; align-items:baseline; gap:16px; padding:12px 18px; border-bottom:1px solid var(--line-soft)}
+.typescale .row:last-child{border-bottom:none}
+.typescale .spec{font-size:12px; color:var(--ink-3); min-width:150px; font-family:ui-monospace,Menlo,Consolas,monospace}
+.wire{display:grid; gap:8px; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:14px}
+.wire .bar{background:var(--gray-50); border:1px solid var(--line); border-radius:8px; padding:8px 12px; font-size:12px; color:var(--ink-2)}
+.wire .cols{display:grid; gap:8px}
+.wire .cell{background:var(--blue-50); border:1px solid #bcd9f2; border-radius:8px; padding:12px; font-size:12px; color:var(--blue-800); min-height:70px}
+.wire .cell.p{background:var(--amber-50); border-color:#eccfa4; color:var(--amber-800)}
+.wire .cell.r{background:var(--teal-50); border-color:#bfe2d4; color:var(--teal-800)}
+.wire .cap{font-size:12px; color:var(--ink-3); text-align:center}
+.flow{display:flex; flex-wrap:wrap; align-items:center; gap:8px; margin:6px 0 18px}
+.flow .step{background:var(--surface); border:1px solid var(--line); border-radius:8px; padding:8px 12px; font-size:13px}
+.flow .step.hi{background:var(--amber-50); border-color:#eccfa4; color:var(--amber-800)}
+.flow .arw{color:var(--gray-400); font-size:13px}
+.tree{font-family:ui-monospace,Menlo,Consolas,monospace; font-size:12.5px; line-height:1.85; background:var(--surface); border:1px solid var(--line); border-radius:12px; padding:18px 20px; white-space:pre; overflow-x:auto; color:var(--ink-2)}
+.tree b{color:var(--ink); font-weight:500}
+.note{border-left:3px solid var(--amber-600); background:var(--amber-50); color:var(--amber-800); padding:12px 16px; border-radius:0 10px 10px 0; font-size:13px; margin:0 0 16px}
+.ok{border-left-color:var(--teal-600); background:var(--teal-50); color:var(--teal-800)}
+footer{margin-top:64px; padding-top:22px; border-top:1px solid var(--line); color:var(--ink-3); font-size:13px}
+@media (max-width:640px){
+  h1{font-size:24px}
+  .typescale .spec{min-width:auto}
+  .typescale .row{flex-direction:column; gap:4px}
+}
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header>
+  <h1>nctool Web UI 设计方案（v2）</h1>
+  <p class="sub">面向「选模板 → 填参数 → 看结果 → 导出 G-code」这条主线，重构信息架构、参数工作区与结果区，
+  让界面在<b>第一次使用</b>时能自解释，在<b>第 100 次使用</b>时能快到不用思考。本文是设计交付物，不含实现改动。</p>
+  <p class="meta">设计对象：<code>ui/index.html</code>（现 2229 行，单文件零依赖）· 依据：现有实现通读 + <code>docs/UI_ACCEPTANCE_CHECKLIST.md</code> 37 项验收 + <code>docs/DEV_PLAN_CLI_UI.md</code> API 契约 · 2026-09-11</p>
+  <div class="metrics">
+    <div class="metric"><p class="k">现有验收项</p><p class="v">37 / 37</p></div>
+    <div class="metric"><p class="k">保留率（本方案）</p><p class="v">37 / 37</p></div>
+    <div class="metric"><p class="k">新增验收项</p><p class="v">12</p></div>
+    <div class="metric"><p class="k">设计诊断问题</p><p class="v">9</p></div>
+    <div class="metric"><p class="k">响应式断点</p><p class="v">4</p></div>
+  </div>
+  <nav>
+    <a href="#diag">一 诊断</a>
+    <a href="#goal">二 目标与原则</a>
+    <a href="#user">三 用户与任务流</a>
+    <a href="#ia">四 信息架构</a>
+    <a href="#ds">五 设计系统</a>
+    <a href="#layout">六 布局与断点</a>
+    <a href="#comp">七 组件规格</a>
+    <a href="#state">八 状态与交互</a>
+    <a href="#a11y">九 可访问性</a>
+    <a href="#acc">十 验收对照</a>
+    <a href="#plan">十一 实施路径</a>
+  </nav>
+</header>
+
+<section id="diag">
+  <h2><span class="n">一</span>设计诊断</h2>
+  <p class="lead">现状并不差——暗色工业 HMI 气质、三栏结构、实时预览都已到位，37 项验收全绿。问题集中在<b>层级、反馈距离、长程序可导航性</b>三处，
+  都是「功能都有，但用户要多走一步」的类型。</p>
+  <table>
+    <thead><tr><th style="width:150px">问题</th><th>现状证据</th><th style="width:230px">对用户的影响</th></tr></thead>
+    <tbody>
+      <tr>
+        <td>主操作不突出</td>
+        <td>工具栏 5 个按钮同权重平铺：源码 / 预设 / 批量 / 复制 / 下载（<code>index.html:587-601</code>），仅靠颜色区分主次</td>
+        <td>每次生成后要在一排按钮里找「下载」，肌肉记忆建立慢</td>
+      </tr>
+      <tr>
+        <td>校验离输入太远</td>
+        <td>校验结果在右侧第 3 个 tab 内，而行列定位文本是<b>模板源码坐标</b>（「第 2 行第 68 列引用」）</td>
+        <td>填参数的人看到行列号无法定位到自己哪个输入框，必须来回切 tab</td>
+      </tr>
+      <tr>
+        <td>首次使用不自解释</td>
+        <td>空态只有一句「在左侧选择一个模板开始」</td>
+        <td>新手不知道模板是什么、该填几个参数、哪些必填</td>
+      </tr>
+      <tr>
+        <td>复用路径藏得深</td>
+        <td>「预设」是工具栏里的一个普通按钮；参数值刷新即丢失（验收 X-02 明确「不保留参数值」）</td>
+        <td>同一零件反复微调的场景，每次都要重填全部参数</td>
+      </tr>
+      <tr>
+        <td>长程序不可导航</td>
+        <td>预览是纯文本 + 轻量高亮；万行级输出（实测 1.77 ms / 203 KB）无目录、无跳转</td>
+        <td>核对工序边界要手动滚动查找，容易漏看</td>
+      </tr>
+      <tr>
+        <td>机床切换的心智位置错位</td>
+        <td>机床下拉在顶栏右侧，与「主题切换」「帮助」同级</td>
+        <td>机床是<b>决定输出内容</b>的输入，却看起来像界面偏好设置；切换后缺少「输出已变化」的显式反馈</td>
+      </tr>
+      <tr>
+        <td>状态反馈在视野外</td>
+        <td>「就绪 / 校验未通过」在页脚状态条（<code>index.html:657</code>），距操作点最远</td>
+        <td>错误提示容易被忽略，尤其在长表单滚动后</td>
+      </tr>
+      <tr>
+        <td>模态窗打断上下文</td>
+        <td>源码编辑 / 预设 / 批量 / 自定义机床全部是 modal-mask 模态（<code>index.html:668+</code>）</td>
+        <td>改源码时看不到预览，无法「边改边看」</td>
+      </tr>
+      <tr>
+        <td>移动端是「能看」不是「能用」</td>
+        <td>≤480px 单列堆叠，参数面板与预览纵向互斥（验收 D-02-05/06 是在保证「预览不被压没」）</td>
+        <td>手机上填一个参数要上下滚动几次，无法边填边看结果</td>
+      </tr>
+    </tbody>
+  </table>
+  <div class="note">值得保留的资产：<b>暗色工业 HMI 观感</b>（琥珀主色 + 钢蓝次色）、<b>单文件零依赖</b>（可双击打开、可 <code>include_str!</code> 内嵌）、
+  <b>演示 / 服务双模式</b>、<b>实时预览 + 防抖</b>、<b>行号 / 头注释 / ASCII 清洗</b>等后处理开关——这些是本产品的差异化，不在重构范围内。</div>
+</section>
+
+<section id="goal">
+  <h2><span class="n">二</span>设计目标与原则</h2>
+  <p class="lead">目标一句话：<b>把「一条直线任务流」做成界面的主轴，其余全部降为次级。</b></p>
+  <div class="grid2">
+    <div class="card">
+      <h3 style="margin-top:0">四条原则</h3>
+      <ol style="margin-bottom:0">
+        <li><b>结果优先</b>——结果区在任何断点下都可见或一步可达；参数与结果不允许互相遮挡。</li>
+        <li><b>就地反馈</b>——校验错误贴着出错的输入框，模板行列号作为次级信息附在后面。</li>
+        <li><b>渐进披露</b>——必选参数永远展开；可选参数、源码、批量、自定义机床按需展开，不占主线。</li>
+        <li><b>状态可见</b>——运行 / 成功 / 失败的状态出现在操作点附近，页脚状态条只做辅助。</li>
+      </ol>
+    </div>
+    <div class="card">
+      <h3 style="margin-top:0">三条硬约束（不可违反）</h3>
+      <ul style="margin-bottom:0">
+        <li><b>零外部依赖</b>：不引入框架 / CDN / 字体库，单文件可直接双击打开。</li>
+        <li><b>契约不变</b>：<code>/api/templates</code>、<code>/api/inspect</code>、<code>/api/validate</code>、<code>/api/render</code>、<code>/api/part/generate</code> 的请求与 <code>{ok,data,error}</code> 结构保持原样。</li>
+        <li><b>逐字节一致</b>：前端预览文本与 <code>nctool render</code> 输出必须逐字节相同（验收 D-04）；<code>ui/index.html</code> 与 <code>cli/ui/index.html</code> 必须保持字节一致。</li>
+      </ul>
+    </div>
+  </div>
+</section>
+
+<section id="user">
+  <h2><span class="n">三</span>用户与核心任务流</h2>
+  <p class="lead">界面习惯不是抽象的美学，而是「谁在什么场景下重复做什么」。按使用频次排三个角色：</p>
+  <table>
+    <thead><tr><th style="width:170px">角色</th><th>目标</th><th>使用频次</th><th>界面必须为他做的事</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>工艺编程员</b>（主）</td>
+        <td>把零件特征翻译成一份可上机床的 G-code</td>
+        <td>每天数十次，单次 1–5 分钟</td>
+        <td>参数填得快、错得少、能复用上次的参数、导出一步到位</td>
+      </tr>
+      <tr>
+        <td><b>模板开发者</b>（次）</td>
+        <td>编写 / 调试 Jinja2 模板，确认变量与输出</td>
+        <td>每周数次，单次较长</td>
+        <td>边改源码边看输出、看到未声明变量与错误位置</td>
+      </tr>
+      <tr>
+        <td><b>审核 / 操作者</b>（次）</td>
+        <td>核对即将投产的程序（工序顺序、坐标、安全高度）</td>
+        <td>投产前，低频高风险</td>
+        <td>能按工序快速跳读长程序，一眼看到风险提示</td>
+      </tr>
+    </tbody>
+  </table>
+
+  <h3>五条核心任务流</h3>
+  <div class="flow">
+    <span class="step hi">选模板</span><span class="arw">→</span>
+    <span class="step hi">载入预设</span><span class="arw">→</span>
+    <span class="step hi">改 2 个参数</span><span class="arw">→</span>
+    <span class="step hi">看预览</span><span class="arw">→</span>
+    <span class="step hi">导出 .nc</span>
+  </div>
+  <table>
+    <thead><tr><th style="width:130px">任务流</th><th>场景</th><th style="width:300px">设计对策</th></tr></thead>
+    <tbody>
+      <tr><td>复用（最高频）</td><td>同一零件第二批，只改深度和进给</td><td>模板卡上直接挂「上次参数 / 命名预设」chips，一键回填</td></tr>
+      <tr><td>首用</td><td>拿到新模板，不知道要填什么</td><td>空态给三步引导；参数区顶部显示「5 必填 · 0 可选」进度；必选参数默认展开</td></tr>
+      <tr><td>排错</td><td>少填 / 越界，想立刻知道是哪个</td><td>字段就地红框 + 原因；结果区给「N 个问题」摘要并可点击跳回字段</td></tr>
+      <tr><td>换机床</td><td>同一程序换到另一台机床</td><td>机床 chip 移到结果区头部（靠近受它影响的输出），切换后结果区出现「已按 &lt;机床&gt; 重新生成」提示</td></tr>
+      <tr><td>核对长程序</td><td>投产前逐工序检查</td><td>G-code 预览左侧加「工序索引」（由注释块 / 循环 / 换刀行推导），点击跳转并高亮该段</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="ia">
+  <h2><span class="n">四</span>信息架构</h2>
+  <p class="lead">从「顶栏 + 侧栏 + 主区 + 页脚 + 5 个模态」收敛为「应用栏 + 模板导航 + 双栏工作区 + 状态条 + 侧抽屉」，模态降级为抽屉。</p>
+  <div class="tree">应用外壳
+├─ <b>应用栏</b> 56px：品牌 · 命令面板入口(⌘K) · 模式徽标 · 主题 · 帮助
+├─ <b>模板导航</b> 280px（可折叠 64px）
+│   ├─ 搜索（模板名 / 描述 / 参数名）
+│   ├─ 分类 chips：全部 · 通用 · 铣削 · 钻孔 · 车削 · 机床
+│   ├─ <b>最近使用</b>（≤5，新增）
+│   └─ 模板卡：名称 · 分类 · 参数数 · 描述 · 预设 chips
+├─ <b>工作区</b>（双栏）
+│   ├─ 参数区 380–420px
+│   │   ├─ 头部：模板名 + 「5 必填 · 0 可选」+ 重置
+│   │   ├─ 分组：几何 · 工艺 · 输出选项
+│   │   ├─ 字段：标签 + 单位 + 输入 + 范围 + <b>就地错误</b>
+│   │   └─ 可选参数折叠区（默认收起）
+│   └─ 结果区（自适应，最小 420px）
+│       ├─ 结果头：状态 pill · 机床 chip · 字符/行数/耗时
+│       ├─ 视图 tab：G-code · 模板源码 · 校验
+│       ├─ 工序索引（长程序时出现）
+│       └─ 动作条：复制 · 下载 .nc · 更多
+├─ <b>状态条</b> 28px：状态 · 数据源 · 配置来源 · 版本
+└─ <b>侧抽屉</b>（替代模态）：模板源码 · 预设管理 · 批量生成 · 自定义机床 · 关于</div>
+  <table>
+    <thead><tr><th style="width:170px">能力</th><th style="width:150px">现状位置</th><th style="width:170px">新方案位置</th><th>理由</th></tr></thead>
+    <tbody>
+      <tr><td>下载 / 复制</td><td>工具栏中部按钮</td><td><span class="tag new">新</span> 结果区动作条，常驻</td><td>与它作用的对象（预览结果）放一起，距离从 500px 降到 0</td></tr>
+      <tr><td>机床选择</td><td>顶栏下拉</td><td><span class="tag new">新</span> 结果区头部 chip</td><td>机床决定输出内容，属于「输出目标」而非界面偏好</td></tr>
+      <tr><td>校验结果</td><td>第 3 个 tab</td><td><span class="tag new">新</span> 字段就地 + tab 摘要（保留）</td><td>保留 tab 便于通览，新增就地提示消除来回切换</td></tr>
+      <tr><td>预设</td><td>工具栏按钮 + 模态</td><td><span class="tag new">新</span> 参数区顶部 chips + 抽屉管理</td><td>把最高频的复用动作提前到「填参前」</td></tr>
+      <tr><td>源码编辑</td><td>模态</td><td><span class="tag new">新</span> 右侧抽屉（可拖宽）</td><td>边改边看预览，不丢上下文</td></tr>
+      <tr><td>批量 / 自定义机床</td><td>模态</td><td><span class="tag new">新</span> 抽屉（低频，入口收进「更多」）</td><td>渐进披露</td></tr>
+      <tr><td>主题 / 帮助</td><td>顶栏</td><td><span class="tag keep">保留</span> 顶栏</td><td>界面偏好，位置本来就对</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="ds">
+  <h2><span class="n">五</span>设计系统</h2>
+  <p class="lead">沿用现有琥珀 + 钢蓝的工业 HMI 基因，但把令牌补成一套<b>可校验</b>的系统：暗色为主、亮色为完整对等主题、对比度全部达标。</p>
+
+  <h3>5.1 色彩</h3>
+  <h4>主色与语义色</h4>
+  <div class="swatches">
+    <div class="sw"><div class="chip" style="background:#e8a33d"></div><div class="lab"><b>accent / 琥珀</b>#e8a33d<br>主操作、当前选中</div></div>
+    <div class="sw"><div class="chip" style="background:#4aa3df"></div><div class="lab"><b>accent-2 / 钢蓝</b>#4aa3df<br>链接、信息态</div></div>
+    <div class="sw"><div class="chip" style="background:#3fb68b"></div><div class="lab"><b>ok</b>#3fb68b<br>就绪、校验通过</div></div>
+    <div class="sw"><div class="chip" style="background:#e0a33d"></div><div class="lab"><b>warn</b>#e0a33d<br>ASCII 清洗等提醒</div></div>
+    <div class="sw"><div class="chip" style="background:#e0654f"></div><div class="lab"><b>err</b>#e0654f<br>校验失败、越界</div></div>
+  </div>
+  <h4>中性色阶（暗色主题 / 亮色主题各一套，成对使用）</h4>
+  <table>
+    <thead><tr><th style="width:120px">令牌</th><th style="width:150px">暗色</th><th style="width:150px">亮色</th><th>用途</th></tr></thead>
+    <tbody>
+      <tr><td><code>--bg</code></td><td><code>#0b0f14</code></td><td><code>#f4f5f3</code></td><td>页面底色</td></tr>
+      <tr><td><code>--bg-panel</code></td><td><code>#12171e</code></td><td><code>#ffffff</code></td><td>面板 / 卡片</td></tr>
+      <tr><td><code>--bg-hover</code></td><td><code>#1c2530</code></td><td><code>#eceee9</code></td><td>悬停</td></tr>
+      <tr><td><code>--border</code></td><td><code>#222c38</code></td><td><code>#e0e2dc</code></td><td>分隔线</td></tr>
+      <tr><td><code>--text</code></td><td><code>#d7dfe8</code></td><td><code>#25251f</code></td><td>正文（≥ 4.5:1）</td></tr>
+      <tr><td><code>--text-dim</code></td><td><code>#9aa8b6</code> <span class="tag new">调整</span></td><td><code>#5f5e5a</code></td><td>次要文字（≥ 4.5:1）</td></tr>
+      <tr><td><code>--text-faint</code></td><td><code>#6b7887</code> <span class="tag new">调整</span></td><td><code>#8a8983</code></td><td>仅用于非必要装饰（≥ 3:1）</td></tr>
+    </tbody>
+  </table>
+  <div class="note ok">现状 <code>--text-dim:#8594a3</code> 与 <code>--text-faint:#55606c</code> 在 <code>#0b0f14</code> 上约为 5.6:1 与 3.2:1——后者作为提示文字偏低。
+  方案把两者各提亮一档，保证正文级文字全部 ≥ 4.5:1。</div>
+
+  <h3>5.2 字体与字号阶梯</h3>
+  <div class="typescale">
+    <div class="row"><span class="spec">28 / 500 / 1.25</span><span style="font-size:28px;font-weight:500;letter-spacing:-.3px">页面标题</span></div>
+    <div class="row"><span class="spec">22 / 500 / 1.3</span><span style="font-size:22px;font-weight:500">区块标题</span></div>
+    <div class="row"><span class="spec">16 / 500 / 1.4</span><span style="font-size:16px;font-weight:500">面板标题 / 主按钮</span></div>
+    <div class="row"><span class="spec">14 / 400 / 1.6</span><span style="font-size:14px">正文、表单标签、模板名</span></div>
+    <div class="row"><span class="spec">13 / 400 / 1.6</span><span style="font-size:13px">次要说明、表格、状态条</span></div>
+    <div class="row"><span class="spec">12 / 400 / 1.5</span><span style="font-size:12px">元信息、单位、范围提示</span></div>
+    <div class="row"><span class="spec">12.5 / 400 / 1.55</span><span style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12.5px">G-code 与源码（等宽）</span></div>
+  </div>
+  <p style="margin-top:14px">字重只用 <b>400 / 500 / 600</b>（500 承担绝大多数强调）；<b>移动端输入控件视觉字号强制 16px</b>（沿用现有 iOS 防缩放策略，验收 D-02-02）。</p>
+
+  <h3>5.3 间距 · 圆角 · 层级 · 动效</h3>
+  <table>
+    <thead><tr><th style="width:130px">类别</th><th>规格</th><th>说明</th></tr></thead>
+    <tbody>
+      <tr><td>间距</td><td>4 基准：4 / 8 / 12 / 16 / 24 / 32 / 48</td><td>面板内 16、面板间 12、区块间 24</td></tr>
+      <tr><td>圆角</td><td>8（输入 / 按钮）/ 12（卡片 / 面板）/ 999（chip）</td><td>沿用现状，不引入新数值</td></tr>
+      <tr><td>边框</td><td>1px，暗色下承担层级、亮色下配合 3 级阴影</td><td>暗色不叠阴影，避免脏边</td></tr>
+      <tr><td>动效</td><td>120ms（hover）/ 180ms（展开折叠）/ 240ms（抽屉）</td><td>统一 <code>ease-out</code>；<code>prefers-reduced-motion</code> 下全部降为 0</td></tr>
+      <tr><td>图标</td><td>24 网格，stroke 1.75，圆头圆角</td><td>现状混用 2 / 2.2，统一后视觉更安静</td></tr>
+      <tr><td>防抖</td><td>300ms（保留现状）</td><td>请求带序号，过期响应丢弃（防竞态）</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="layout">
+  <h2><span class="n">六</span>布局与响应式断点</h2>
+  <p class="lead">核心不变式：<b>结果区永远可见或一步可达</b>。四个断点各自解决「怎么保证这一点」。</p>
+
+  <h3>≥1440px · 三区展开</h3>
+  <div class="wire">
+    <div class="bar">应用栏　品牌 · ⌘K · 模式徽标 · 主题 · 帮助</div>
+    <div class="cols" style="grid-template-columns:220px 300px 1fr">
+      <div class="cell">模板导航 280px<br>搜索 / 分类 / 最近 / 模板卡</div>
+      <div class="cell p">参数区 400px<br>分组 · 必填展开 · 可选折叠</div>
+      <div class="cell r">结果区<br>状态头 · 视图 tab · 工序索引 · 动作条</div>
+    </div>
+    <div class="bar">状态条　状态 · 数据源 · 配置来源 · 版本</div>
+  </div>
+
+  <h3>1024–1439px · 导航折叠</h3>
+  <div class="wire">
+    <div class="bar">应用栏</div>
+    <div class="cols" style="grid-template-columns:64px 340px 1fr">
+      <div class="cell" style="min-height:60px">64px<br>图标条</div>
+      <div class="cell p">参数区 360px</div>
+      <div class="cell r">结果区（主战场）</div>
+    </div>
+  </div>
+
+  <h3>768–1023px · 上下分栏</h3>
+  <div class="wire">
+    <div class="bar">应用栏（模板导航收进抽屉）</div>
+    <div class="cols" style="grid-template-columns:1fr">
+      <div class="cell p" style="min-height:56px">参数区（55%）—— 可折叠为摘要条「5 必填已填 5」</div>
+      <div class="cell r" style="min-height:90px">结果区（45%）</div>
+    </div>
+  </div>
+
+  <h3>&lt;768px · 分段 + 抽屉</h3>
+  <div class="wire">
+    <div class="bar">应用栏（紧凑：品牌 · ⌘K · 主题）</div>
+    <div class="cols" style="grid-template-columns:1fr">
+      <div class="cell" style="min-height:44px">分段控件：<b>参数</b> ｜ 结果</div>
+      <div class="cell p" style="min-height:80px">参数视图（全屏，字段纵向，触摸目标 ≥ 44px）</div>
+      <div class="cell r" style="min-height:52px">结果以底部抽屉呈现：上拉到 90%，下压到 44px 露出状态 pill</div>
+      <div class="bar">固定底部操作条：生成 · 复制 · 下载 .nc</div>
+    </div>
+  </div>
+  <div class="note">移动端的关键改变是：参数与结果<b>不再互斥</b>——抽屉让「边填边看」在手机上成立，
+  同时保留验收 D-02-05/06 要求的「预览不被压没」（抽屉把手常驻可见）。</div>
+</section>
+
+<section id="comp">
+  <h2><span class="n">七</span>组件规格</h2>
+  <p class="lead">只列与现状有差异或需要新建的组件；其余（按钮、输入框、tab、toast、chip）沿用现有视觉，仅统一令牌。</p>
+  <table>
+    <thead><tr><th style="width:150px">组件</th><th style="width:230px">规格</th><th>状态与行为</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><b>模板卡</b></td>
+        <td>高 64px，左 4px 分类色条，名称 14/500，描述 12 单行省略，右侧参数数徽标</td>
+        <td>默认 / hover（底色 <code>--bg-hover</code>）/ 选中（左侧琥珀 3px + 底色 <code>--bg-active</code>）/ 键盘 focus 环 2px 琥珀</td>
+      </tr>
+      <tr>
+        <td><b>参数进度</b></td>
+        <td>参数区头部一行：「<b>5 必填 · 0 可选</b>」+ 已填进度条（2px）</td>
+        <td>必填未填时文字转 warn 色；全部填完转 ok 色并出现「可生成」</td>
+      </tr>
+      <tr>
+        <td><b>参数字段</b></td>
+        <td>标签 14 + 单位后缀（右侧内嵌，<code>--text-dim</code>）+ 输入 40px 高</td>
+        <td>默认 / focus / 已填 / <b>错误</b>（1px err 边框 + 下方 12px 红字原因）/ 禁用；错误文本首行给「人话」，次行给模板坐标</td>
+      </tr>
+      <tr>
+        <td><b>可选参数折叠区</b></td>
+        <td>「可选参数（3）· 均有默认值」一行，点击展开</td>
+        <td>默认收起；展开后字段样式与必填一致，仅标签后缀「可选」；状态记忆在同会话</td>
+      </tr>
+      <tr>
+        <td><b>预设 chips</b></td>
+        <td>参数区顶部横排 chip：「上次参数」+ 命名预设</td>
+        <td>点击回填并高亮变化的字段 1.2s；无预设时该行不出现（不占空间）</td>
+      </tr>
+      <tr>
+        <td><b>结果状态头</b></td>
+        <td>高 44px：状态 pill（就绪 / 生成中 / 校验未通过）+ 机床 chip + 统计（字符 · 行 · 耗时）</td>
+        <td>生成中显示 2px 进度条；失败时 pill 转 err 并显示「N 个问题」可点击跳字段</td>
+      </tr>
+      <tr>
+        <td><b>机床 chip</b></td>
+        <td>chip 内显示当前机床 id，点击弹出列表（含自定义机床），带「影响输出」副标题</td>
+        <td>切换后结果区出现 3s 提示「已按 &lt;id&gt; 重新生成」；<b>不阻断</b>渲染</td>
+      </tr>
+      <tr>
+        <td><b>工序索引</b></td>
+        <td>结果区左侧 140px，列出由注释块 / <code>G81</code> / <code>M6</code> / <code>M30</code> 推导的锚点</td>
+        <td>行数 ≥ 200 才出现；点击滚动到该段并高亮 1s；当前可见段随滚动联动加粗</td>
+      </tr>
+      <tr>
+        <td><b>代码视图</b></td>
+        <td>等宽 12.5px，行号列右对齐 44px，语法高亮沿用现状配色</td>
+        <td>支持「复制本行」「复制本段」；错误行（若有）左侧 3px 红条</td>
+      </tr>
+      <tr>
+        <td><b>动作条</b></td>
+        <td>结果区底部：复制 · 下载 .nc（主按钮）· 更多（批量 / 保存预设 / 自定义机床）</td>
+        <td>无结果时禁用；下载与复制保留「成功 toast + 状态条」双反馈</td>
+      </tr>
+      <tr>
+        <td><b>命令面板</b></td>
+        <td>⌘K 唤起，居中 560px，输入即搜模板名 / 动作 / 机床</td>
+        <td>↑↓ 选择、Enter 执行、Esc 关闭；无结果显示「无匹配」</td>
+      </tr>
+      <tr>
+        <td><b>侧抽屉</b></td>
+        <td>右侧 480px（可拖 360–720），左边缘 1px 分隔，顶部标题 + 关闭</td>
+        <td>滑入 240ms；打开时主区不收窄（覆盖式）；Esc 关闭；focus 移入抽屉并循环</td>
+      </tr>
+      <tr>
+        <td><b>空态（首用）</b></td>
+        <td>居中三步引导：① 左侧选模板 ② 填必填参数 ③ 下载 .nc + 推荐模板 3 个</td>
+        <td>选过模板后不再出现（记录到 localStorage）</td>
+      </tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="state">
+  <h2><span class="n">八</span>状态与交互</h2>
+  <h3>8.1 状态矩阵</h3>
+  <table>
+    <thead><tr><th style="width:130px">状态</th><th style="width:200px">结果区表现</th><th style="width:170px">参数区表现</th><th>状态条</th></tr></thead>
+    <tbody>
+      <tr><td>未选模板</td><td>三步引导空态</td><td>空态插画 + 「从左侧选择模板」</td><td>就绪</td></tr>
+      <tr><td>已选 / 未填</td><td>「填写必填参数后生成」占位</td><td>必填字段高亮为待填，进度 0/5</td><td>就绪</td></tr>
+      <tr><td>生成中</td><td>状态头 2px 进度条 + 保留上次结果（不闪白）</td><td>字段保持可编辑</td><td>生成中…</td></tr>
+      <tr><td>成功</td><td>G-code + 统计（字符 / 行 / 耗时）</td><td>进度转 ok</td><td>就绪（绿）</td></tr>
+      <tr><td>校验失败</td><td>pill 转 err「N 个问题」；G-code 区显示引导文案</td><td>出错字段红框 + 就地原因</td><td>校验未通过（红）</td></tr>
+      <tr><td>服务不可用</td><td>结果区顶部横幅「无法连接后端，已切到演示模式」+ 重试按钮</td><td>正常可填</td><td>数据源：演示模式</td></tr>
+      <tr><td>大程序</td><td>工序索引出现；首屏渲染只画可视区</td><td>无变化</td><td>就绪</td></tr>
+    </tbody>
+  </table>
+
+  <h3>8.2 键盘映射</h3>
+  <table>
+    <thead><tr><th style="width:150px">按键</th><th>动作</th></tr></thead>
+    <tbody>
+      <tr><td><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>K</kbd></td><td>命令面板（搜模板 / 动作 / 机床）</td></tr>
+      <tr><td><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⏎</kbd></td><td>立即生成（跳过防抖）</td></tr>
+      <tr><td><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>S</kbd></td><td>当前参数存为预设</td></tr>
+      <tr><td><kbd>⌘</kbd>/<kbd>Ctrl</kbd> + <kbd>⇧</kbd> + <kbd>C</kbd></td><td>复制 G-code</td></tr>
+      <tr><td><kbd>Esc</kbd></td><td>关闭抽屉 / 面板</td></tr>
+      <tr><td><kbd>Tab</kbd> / <kbd>⇧Tab</kbd></td><td>按「参数区 → 结果区动作条」顺序走焦，抽屉打开时焦点锁在抽屉内</td></tr>
+    </tbody>
+  </table>
+
+  <h3>8.3 错误呈现三层</h3>
+  <ol>
+    <li><b>字段级（最先看到）</b>：输入框红框 + 就地一行原因，如「必填，未填写」；次级小字给模板坐标「模板第 2 行第 68 列引用」。</li>
+    <li><b>结果区摘要</b>：状态 pill 显示「3 个问题」，点击展开列表，每条可点击 → 滚动到对应字段并聚焦。</li>
+    <li><b>状态条</b>：一句话总状态，供扫视；<code>aria-live="polite"</code> 播报给读屏。</li>
+  </ol>
+  <div class="note">现状的「第 2 行第 68 列引用」对填参数的人不可读，方案把它降级为字段下方的次级信息，
+  主信息改为参数名 + 人话原因——<b>保留信息，不丢失给模板开发者的定位能力</b>。</div>
+</section>
+
+<section id="a11y">
+  <h2><span class="n">九</span>可访问性与易用性</h2>
+  <table>
+    <thead><tr><th style="width:180px">维度</th><th style="width:250px">目标</th><th>做法</th></tr></thead>
+    <tbody>
+      <tr><td>对比度</td><td>正文 ≥ 4.5:1，大字 ≥ 3:1</td><td>调整 <code>--text-dim</code> / <code>--text-faint</code>；主按钮文字在琥珀底上用深色而非白色</td></tr>
+      <tr><td>触摸目标</td><td>≥ 44×44px（移动端）</td><td>所有 chip / tab / 图标按钮在 &lt;768px 提升到 44px 高</td></tr>
+      <tr><td>焦点可见</td><td>任何可交互元素</td><td>统一 2px 琥珀 focus ring + 2px offset，不依赖浏览器默认</td></tr>
+      <tr><td>输入字号</td><td>移动端 ≥ 16px</td><td>沿用现有媒体查询策略（验收 D-02-02）</td></tr>
+      <tr><td>语义与播报</td><td>读屏可用</td><td>字段 <code>aria-describedby</code> 关联错误文本；状态变化 <code>aria-live="polite"</code>；抽屉 <code>role="dialog"</code> + 焦点锁</td></tr>
+      <tr><td>动效</td><td>尊重系统偏好</td><td><code>prefers-reduced-motion: reduce</code> 下关闭所有过渡与抽屉动画</td></tr>
+      <tr><td>色盲友好</td><td>不靠颜色单独传意</td><td>错误除红色外带图标与文字；状态 pill 有文字标签</td></tr>
+      <tr><td>离线可用</td><td>保持现状</td><td>演示模式继续支持双击直接打开、离线完整走链路</td></tr>
+    </tbody>
+  </table>
+</section>
+
+<section id="acc">
+  <h2><span class="n">十</span>与现有验收清单的关系</h2>
+  <p class="lead">重构的前提是<b>不回退任何已通过项</b>。37 项全部保留，映射如下；另有 12 项新增验收建议。</p>
+  <table>
+    <thead><tr><th style="width:150px">验收组</th><th style="width:90px">项数</th><th>在新方案中的落点</th></tr></thead>
+    <tbody>
+      <tr><td>§1 全链路 D-01</td><td>8</td><td><span class="tag keep">保留</span> 流程不变；下载 / 复制移到结果区动作条，操作路径更短</td></tr>
+      <tr><td>§2 移动端 D-02</td><td>11</td><td><span class="tag new">增强</span> 侧栏限高改为「抽屉把手常驻」；单列改为「分段 + 抽屉」，D-02-05/06 语义等价且更可用</td></tr>
+      <tr><td>§3 校验定位 D-03</td><td>5</td><td><span class="tag new">增强</span> 行列定位文本保留，新增字段就地提示</td></tr>
+      <tr><td>§4 逐字节一致 D-04</td><td>5</td><td><span class="tag keep">不变</span> 纯逻辑层，重构不触碰渲染与后处理</td></tr>
+      <tr><td>§5 机床切换 D4.3</td><td>4</td><td><span class="tag new">增强</span> 入口移到结果区头部，新增「已按 &lt;id&gt; 重新生成」反馈</td></tr>
+      <tr><td>§6 主题 T-01/02</td><td>2</td><td><span class="tag keep">保留</span> localStorage 键名不变</td></tr>
+      <tr><td>§7 已知 UX X-01/02</td><td>2</td><td><span class="tag keep">保留</span> ASCII 清洗提示与参数不跨刷新保留的行为不变</td></tr>
+    </tbody>
+  </table>
+  <h3>新增验收建议（12 项）</h3>
+  <ol>
+    <li><b>N-01</b> 首次进入出现三步引导，选过模板后不再出现</li>
+    <li><b>N-02</b> 必填参数未填时，参数区头部显示「0/5 必填」且为 warn 色</li>
+    <li><b>N-03</b> 清空某必填字段后，该字段出现红框与就地原因，无需切 tab</li>
+    <li><b>N-04</b> 点击结果区「N 个问题」可滚动并聚焦到出错字段</li>
+    <li><b>N-05</b> 机床 chip 切换后出现「已按 &lt;id&gt; 重新生成」提示</li>
+    <li><b>N-06</b> 行数 ≥ 200 时出现工序索引，点击可跳转并高亮</li>
+    <li><b>N-07</b> ⌘K 可搜索模板并回车切换模板</li>
+    <li><b>N-08</b> ⌘⏎ 跳过防抖立即生成</li>
+    <li><b>N-09</b> &lt;768px 下参数与结果可同时可见（抽屉半开），D-02-05/06 仍成立</li>
+    <li><b>N-10</b> 生成中不清空上次结果（不闪白）</li>
+    <li><b>N-11</b> 所有可交互元素键盘可达，focus ring 可见</li>
+    <li><b>N-12</b> <code>prefers-reduced-motion: reduce</code> 下无过渡动画</li>
+  </ol>
+</section>
+
+<section id="plan">
+  <h2><span class="n">十一</span>实施路径</h2>
+  <p class="lead">按「先骨架、后血肉、再提速」的顺序，每阶段独立可发布、可回滚，每阶段结束复跑 37 项验收。</p>
+  <table>
+    <thead><tr><th style="width:70px">阶段</th><th style="width:230px">内容</th><th style="width:110px">风险</th><th>完成标志</th></tr></thead>
+    <tbody>
+      <tr>
+        <td><span class="tag p0">P0</span></td>
+        <td>设计令牌补齐（亮色对等主题、对比度修正、字号阶梯）+ 布局骨架（结果区动作条、机床 chip、状态头）</td>
+        <td>低（纯样式与搬位置）</td>
+        <td>视觉一致，37 项验收全绿，逻辑零改动</td>
+      </tr>
+      <tr>
+        <td><span class="tag p0">P1</span></td>
+        <td>参数区重构：分组、必填进度、<b>就地校验</b>、可选折叠、预设 chips</td>
+        <td>中（校验映射需与 <code>issues[].param</code> 对齐）</td>
+        <td>N-02/03/04 通过；错误定位不再依赖 tab 切换</td>
+      </tr>
+      <tr>
+        <td><span class="tag p0">P2</span></td>
+        <td>长程序体验：工序索引、代码视图增强（行号 / 段复制）+ 移动端分段与抽屉</td>
+        <td>中（工序推导规则需容错）</td>
+        <td>N-06/09/10 通过；万行级输出仍保持流畅</td>
+      </tr>
+      <tr>
+        <td><span class="tag p0">P3</span></td>
+        <td>命令面板、快捷键、抽屉化（源码 / 预设 / 批量 / 自定义机床）</td>
+        <td>低（增量能力）</td>
+        <td>N-01/07/08/11/12 通过</td>
+      </tr>
+    </tbody>
+  </table>
+  <h3>落地时必须守住的四条线</h3>
+  <ul>
+    <li><b>单文件</b>：仍是无框架、无 CDN、无外部字体的一个 HTML；改完同步 <code>cli/ui/index.html</code> 并保持字节一致。</li>
+    <li><b>契约</b>：五个 API 端点与 <code>{ok,data,error}</code> 结构不变；演示模式继续可离线跑通全链路。</li>
+    <li><b>一致</b>：预览文本与 <code>nctool render</code> 逐字节一致，含行尾。</li>
+    <li><b>不破坏</b>：37 项既有验收项逐条复跑，任何一项不过即回滚该阶段。</li>
+  </ul>
+  <div class="note ok">配套交付：<b>高保真可交互原型</b> <code>output/ui-prototype-v2.html</code>——
+  已实现本方案的主工作区、就地校验、机床 chip、工序索引、命令面板、亮暗主题与移动端分段/抽屉，
+  可直接双击打开对照评审。</div>
+</section>
+
+<footer>
+  nctool Web UI 设计方案 v2 · 2026-09-11 · 基于现有 <code>ui/index.html</code>（2229 行）通读与 37 项验收清单编写 ·
+  本文是设计交付物，未改动任何代码
+</footer>
+
+</div>
+</body>
+</html>
