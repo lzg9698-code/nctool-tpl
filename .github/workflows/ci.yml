@@ -68,19 +68,20 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      # 用 `cargo install` 而非第三方 install-action：
-      # 原实现走 taiki-e/install-action，其装的 cargo-llvm-cov 与 runner 环境
-      # 不兼容，该 job 自引入起持续失败；失败又被 `continue-on-error: true`
-      # 掩盖成"非阻断项"，结果是**覆盖率从未被真正度量**——CI 全绿并不代表
-      # 覆盖达标。改为官方安装路径，并去掉 continue-on-error 让它成为真门禁。
-      # 不带 `--locked`：该标志要求 crate 自带的 Cargo.lock 与**当前** crates.io
-      # 索引状态完全一致，上游任何 yank / 新版本发布都会让解析失败。本 job 作为真
-      # 门禁首次运行时正是此处以 exit code 101 失败（13s，解析阶段尚未编译），
-      # 而本地同时期同命令能正常解析 v0.9.1 —— 说明是索引状态漂移，不是 lock 损坏。
-      # 改为锁定工具版本：只固定 cargo-llvm-cov 自身，传递依赖交给 cargo 解析，
-      # 兼顾可复现性与稳定性。
+      # 覆盖率门禁此前从未真正生效，有两层掩盖：
+      # 1) `continue-on-error: true` 把持续失败粉饰成非阻断项，CI 全绿并不代表
+      #    覆盖达标 —— 已移除，让它成为真门禁；
+      # 2) 安装方式：`cargo install` 要在 runner 上从源码编译整套依赖，连续两次
+      #    都以 exit 101 卡在本步骤 —— `--locked` 撞上 crates.io 索引漂移；
+      #    改固定版本后耗时 <1s 即失败，说明压根没进入构建。
+      # 改用官方 install-action 下载预编译二进制：绕开整条 cargo 构建链，
+      # 不受索引状态影响，也没有数分钟的编译开销。
       - name: Install cargo-llvm-cov
-        run: cargo install cargo-llvm-cov --version 0.9.1
+        uses: taiki-e/install-action@cargo-llvm-cov
+
+      # 单独校验一步：把「没装上」与「装上了但跑不起来」区分开。
+      - name: Verify cargo-llvm-cov
+        run: cargo llvm-cov --version
 
       - name: Generate coverage report
         run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
