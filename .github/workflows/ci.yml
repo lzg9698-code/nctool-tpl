@@ -1,4 +1,8 @@
 name: CI
+# 注意：`name:` 的值里不要出现「冒号 + 空格」（如 `(gate: lines >= 89%)`）——
+# YAML 会把它当键值分隔符，**整个工作流直接加载失败**，且失败形态很迷惑：
+# run 的名字退化成文件路径 `.github/workflows/ci.yml`、jobs API 返回 total_count=null、
+# 页面上看不到任何步骤。改完本文件请先做一次 YAML 解析校验再推。
 
 on:
   push:
@@ -111,7 +115,7 @@ jobs:
       # 卡在当前值会让"新增少量未覆盖代码"也红，门禁随即被绕过；
       # 1.8pt 余量约等于 165 行新代码，真掉这么多就是覆盖在退化，该拦。
       # 覆盖率提升后请上调此值（只改这一个数字）。
-      - name: Generate coverage report (gate: lines >= 89%)
+      - name: Generate coverage report (line gate 89%)
         run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info --fail-under-lines 89
 
       # 把覆盖率数字打进 job summary：没有数字的门禁等于没有门禁。
