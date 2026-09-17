@@ -138,6 +138,46 @@ fn write_stdout_quiet(text: &str) {
     }
 }
 
+/// text 通道的成功输出：保证**恰好一个**结尾换行。
+///
+/// 多补一个换行会让 `$(nctool ...)` 之类的调用多出空行；少补一个则与
+/// `println!` 语义不一致——两种都是"看起来没问题"的输出缺陷，故单独成函数
+/// 并加测试钉住。
+fn text_ok_buf(text: &str) -> String {
+    let mut buf = text.to_string();
+    if !text.ends_with('\n') {
+        buf.push('\n');
+    }
+    buf
+}
+
+/// JSON 通道的失败包络文本（含结尾换行）；`silent` 错误返回 `None`。
+///
+/// `silent` 表示命令已自行输出完整错误（如 `validate` 已打印报告），
+/// JSON 通道不再重复——重复输出会让 `--format json` 的消费方收到两条错误。
+fn json_error_text(err: &CliError) -> Option<String> {
+    if err.silent {
+        return None;
+    }
+    let obj = serde_json::json!({
+        "ok": false,
+        "error": { "kind": err.kind, "message": err.message },
+    });
+    Some(format!(
+        "{}\n",
+        serde_json::to_string_pretty(&obj).unwrap_or_default()
+    ))
+}
+
+/// JSON 通道的成功包络文本（含结尾换行）：`{"ok":true,"data":...}`。
+fn json_ok_text<T: serde::Serialize>(data: T) -> String {
+    let obj = serde_json::json!({ "ok": true, "data": data });
+    format!(
+        "{}\n",
+        serde_json::to_string_pretty(&obj).unwrap_or_default()
+    )
+}
+
 impl OutputStyle {
     /// 输出错误：text → stderr 单行；json → 结构化错误对象（stdout）。
     ///
@@ -148,15 +188,9 @@ impl OutputStyle {
                 eprintln!("error: {}", err.message);
             }
             OutputStyle::Json => {
-                if err.silent {
-                    return;
+                if let Some(text) = json_error_text(err) {
+                    write_stdout_quiet(&text);
                 }
-                let obj = serde_json::json!({
-                    "ok": false,
-                    "error": { "kind": err.kind, "message": err.message },
-                });
-                let text = serde_json::to_string_pretty(&obj).unwrap_or_default();
-                write_stdout_quiet(&format!("{text}\n"));
             }
         }
     }
@@ -164,18 +198,210 @@ impl OutputStyle {
     /// 输出成功结果：text → 原样打印；json → 包一层 `{"ok":true,"data":...}`。
     pub fn print_ok<T: serde::Serialize>(&self, text: &str, data: T) {
         match self {
-            OutputStyle::Text => {
-                let mut buf = text.to_string();
-                if !text.ends_with('\n') {
-                    buf.push('\n');
-                }
-                write_stdout_quiet(&buf);
-            }
-            OutputStyle::Json => {
-                let obj = serde_json::json!({ "ok": true, "data": data });
-                let text = serde_json::to_string_pretty(&obj).unwrap_or_default();
-                write_stdout_quiet(&format!("{text}\n"));
-            }
+            OutputStyle::Text => write_stdout_quiet(&text_ok_buf(text)),
+            OutputStyle::Json => write_stdout_quiet(&json_ok_text(data)),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nctool_core::derive::DeriveError;
+    use nctool_core::validate::ValidationReport;
+    use nctool_tpl::TplError;
+
+    /// 退出码是对外契约（README 有完整矩阵，clap 的用法错误也按 2 走），
+    /// 逐个钉住，改动即红。
+    #[test]
+    fn exit_code_matrix() {
+        for (kind, want) in [
+            ("validation", 1),
+            ("args", 2),
+            ("io", 3),
+            ("config", 4),
+            ("template_not_found", 5),
+            ("machine_not_found", 5),
+            ("render", 6),
+            ("pipeline", 6),
+            ("registry", 6),
+            ("template_duplicate", 6),
+            ("template_empty", 6),
+            ("template_compile", 6),
+            ("not_implemented", 7),
+        ] {
+            assert_eq!(CliError::new(kind, "x").exit_code(), want, "kind={kind}");
+        }
+    }
+
+    #[test]
+    fn unknown_kind_falls_back_to_1() {
+        // 新增分类若忘了进矩阵，退出码会悄悄变成 1（与"校验未通过"撞车）——
+        // 这个兜底是有意的，但不能是"没想过"的结果
+        assert_eq!(CliError::new("brand_new_kind", "x").exit_code(), 1);
+    }
+
+    #[test]
+    fn display_is_kind_colon_message() {
+        let err = CliError::new("args", "参数格式应为 k=v");
+        assert_eq!(err.to_string(), "args: 参数格式应为 k=v");
+    }
+
+    #[test]
+    fn silent_sets_flag_and_keeps_other_fields() {
+        let err = CliError::new("validation", "缺参数").silent();
+        assert!(err.silent);
+        assert_eq!(err.kind, "validation");
+        assert_eq!(err.message, "缺参数");
+        // 默认不静默
+        assert!(!CliError::new("validation", "缺参数").silent);
+    }
+
+    #[test]
+    fn io_error_maps_to_io() {
+        let err: CliError =
+            std::io::Error::new(std::io::ErrorKind::NotFound, "没有这个文件").into();
+        assert_eq!(err.kind, "io");
+        assert_eq!(err.exit_code(), 3);
+        assert!(err.message.contains("没有这个文件"));
+    }
+
+    #[test]
+    fn registry_errors_map_to_kinds() {
+        let cases: Vec<(RegistryError, &str, u8)> = vec![
+            (RegistryError::NotFound("t".into()), "template_not_found", 5),
+            (
+                RegistryError::Duplicate("t".into()),
+                "template_duplicate",
+                6,
+            ),
+            (RegistryError::EmptySource("t".into()), "template_empty", 6),
+            (
+                RegistryError::Compile {
+                    name: "t".into(),
+                    err: TplError::Render {
+                        name: "t".into(),
+                        message: "boom".into(),
+                    },
+                },
+                "template_compile",
+                6,
+            ),
+            (RegistryError::Io(std::io::Error::other("读失败")), "io", 3),
+        ];
+        for (err, kind, code) in cases {
+            let mapped: CliError = err.into();
+            assert_eq!(mapped.kind, kind);
+            assert_eq!(mapped.exit_code(), code, "kind={kind}");
+        }
+    }
+
+    #[test]
+    fn pipeline_errors_map_to_kinds() {
+        let cases: Vec<(PipelineError, &str, u8)> = vec![
+            (
+                PipelineError::TemplateNotFound("t".into()),
+                "template_not_found",
+                5,
+            ),
+            (
+                PipelineError::Validation(ValidationReport::default()),
+                "validation",
+                1,
+            ),
+            (
+                PipelineError::Render(TplError::Render {
+                    name: "t".into(),
+                    message: "boom".into(),
+                }),
+                "render",
+                6,
+            ),
+            (
+                PipelineError::Registry(RegistryError::NotFound("t".into())),
+                "registry",
+                6,
+            ),
+            // 兜底分支：新增变体时不会被静默归到别的分类
+            (
+                PipelineError::Derive(DeriveError::MissingSource {
+                    target: "tip".into(),
+                    from: "dia".into(),
+                }),
+                "pipeline",
+                6,
+            ),
+        ];
+        for (err, kind, code) in cases {
+            let mapped: CliError = err.into();
+            assert_eq!(mapped.kind, kind);
+            assert_eq!(mapped.exit_code(), code, "kind={kind}");
+        }
+    }
+
+    #[test]
+    fn tpl_error_maps_to_render() {
+        let err: CliError = TplError::Render {
+            name: "t".into(),
+            message: "boom".into(),
+        }
+        .into();
+        assert_eq!(err.kind, "render");
+        assert_eq!(err.exit_code(), 6);
+    }
+
+    #[test]
+    fn output_style_follows_format_arg() {
+        assert_eq!(OutputStyle::from(&FormatArg::Text), OutputStyle::Text);
+        assert_eq!(OutputStyle::from(&FormatArg::Json), OutputStyle::Json);
+    }
+
+    #[test]
+    fn text_ok_has_exactly_one_trailing_newline() {
+        assert_eq!(text_ok_buf("G0 X0"), "G0 X0\n");
+        // 已带换行时不得再补一个（否则多出空行）
+        assert_eq!(text_ok_buf("G0 X0\n"), "G0 X0\n");
+        assert_eq!(text_ok_buf(""), "\n");
+    }
+
+    #[test]
+    fn json_error_envelope_shape() {
+        let text = json_error_text(&CliError::new("args", "格式错误")).expect("非 silent 应有输出");
+        let v: serde_json::Value = serde_json::from_str(&text).expect("应为合法 JSON");
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["error"]["kind"], "args");
+        assert_eq!(v["error"]["message"], "格式错误");
+        assert!(text.ends_with('\n'));
+    }
+
+    #[test]
+    fn silent_error_writes_nothing_in_json() {
+        // 命令已自行输出完整错误 → JSON 通道必须**一条都不发**，
+        // 否则消费方会收到两条错误对象
+        let err = CliError::new("validation", "缺参数").silent();
+        assert!(json_error_text(&err).is_none());
+    }
+
+    #[test]
+    fn json_ok_envelope_shape() {
+        let text = json_ok_text(serde_json::json!({ "count": 2 }));
+        let v: serde_json::Value = serde_json::from_str(&text).expect("应为合法 JSON");
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["data"]["count"], 2);
+        assert!(text.ends_with('\n'));
+    }
+
+    #[test]
+    fn print_paths_do_not_panic() {
+        // 这是 CLI 唯一的输出出口，写失败/静默分支都不该 panic。
+        // 内容正确性由 cli_e2e 的端到端断言覆盖，这里只守"不炸"。
+        // 注意：本测试会把两个 JSON 包络打到**测试进程的 stdout**（`cargo test`
+        // 输出里能看到），这是 in-process 测试无法避免的，不是输出串了。
+        let err = CliError::new("args", "x");
+        OutputStyle::Json.print_error(&err);
+        OutputStyle::Json.print_error(&CliError::new("args", "x").silent());
+        OutputStyle::Text.print_error(&err);
+        OutputStyle::Json.print_ok("", serde_json::json!({}));
+        OutputStyle::Text.print_ok("G0 X0", serde_json::json!({}));
     }
 }

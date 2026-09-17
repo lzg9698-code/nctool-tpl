@@ -76,12 +76,12 @@ CI（`.github/workflows/ci.yml`）在 **ubuntu / windows / macos** 三平台各�
 ```bash
 rustup component add llvm-tools-preview
 cargo install cargo-llvm-cov        # 本地复现 CI 的覆盖率门需要这两步
-cargo llvm-cov --workspace --all-features --fail-under-lines 89
+cargo llvm-cov --workspace --all-features --fail-under-lines 90
 ```
 
-阈值是 **行覆盖 ≥ 89%**，引入时基线为 90.81%（2026-09-17，502 项测试）。
+阈值是 **行覆盖 ≥ 90%**，当前基线 91.30%（2026-09-17，516 项测试）。
 余量是刻意留的：卡在当前值会让"新增少量未覆盖代码"也变红，门禁随即被绕过；
-1.8pt 约等于 165 行新代码，真掉这么多就是覆盖在退化。
+1.3pt 约等于 120 行新代码，真掉这么多就是覆盖在退化。
 **覆盖率提升后请上调这个数字**（只改 `ci.yml` 里 `--fail-under-lines` 一处）。
 门禁失败时 job summary 与 lcov 产物仍会产出（那两步带 `if: always()`）——
 排查"覆盖为什么掉下去"正需要它们。

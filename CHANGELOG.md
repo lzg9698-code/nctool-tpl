@@ -522,8 +522,32 @@
 
 #### 已知覆盖洼地（下一步补测的优先级）
 
-`cli/src/output.rs` 行覆盖 65.22%（函数 61.43%）、`cli/src/server.rs` 74.01%、
-`src/extract.rs` 80.53%。三者是当前拉低总体的主要来源。
+`cli/src/server.rs` 74.01%、`src/extract.rs` 80.53%、`cli/src/context.rs` 88.09%
+是当前拉低总体的主要来源（`cli/src/output.rs` 已于同日补测，见下）。
+
+---
+
+### 补测 CLI 输出层
+
+#### Changed
+
+- **`cli/src/output.rs` 由 0 测试补到 14 项**：行覆盖 **65.22% → 98.41%**、
+  函数覆盖 **61.43% → 100%**（此前是全项目最低）。该文件承载两项**对外契约**
+  ——退出码矩阵（README 有完整表）与 `--format json` 的包络形状，
+  此前只被 `cli_e2e` 间接覆盖到一部分。
+- 为可测性把三段逻辑提成纯函数（行为不变）：`text_ok_buf`（保证恰好一个结尾
+  换行）、`json_error_text`（`silent` 时返回 `None`）、`json_ok_text`；
+  `print_error` / `print_ok` 退化为"构造文本 + 写出"。
+- 覆盖率阈值随之由 **89% 上调到 90%**（基线 91.30%，余量 1.3pt ≈ 120 行）。
+
+#### Added
+
+- 退出码矩阵逐项钉住（13 个分类）+ 未知分类兜底归 1；
+- 四个 `From` 转换的分类映射：`io::Error`、`RegistryError`（5 个变体）、
+  `PipelineError`（5 个变体，含兜底 `pipeline`）、`TplError`；
+- `silent` 语义：JSON 通道**一条都不发**（消费方不该收到两条错误对象）；
+- JSON 包络形状（`ok` / `error.kind` / `error.message` / `data`）与结尾换行；
+- `text_ok_buf` 边界：已带换行时不得再补（否则 `$(nctool ...)` 会多出空行）。
 
 ---
 
