@@ -5,6 +5,11 @@
 //!   打印安全警告（本模块不做判断，保持单一职责）
 //! - 不执行任何 shell 命令；不提供任何写操作
 //! - 请求体读取设 1 MiB 上限，防异常载荷
+//! - **跨站请求防护**：`/api/` 下的请求校验 `Origin` / `Sec-Fetch-Site`
+//!   （见 [`cross_site_guard`]）——只绑回环并不够，浏览器里的任意页面都能向
+//!   `127.0.0.1:<port>` 发请求（DNS rebinding / CSRF）；本服务无状态、不落盘，
+//!   但"被陌生网页驱动"仍应拦住
+//! - 每个响应都带 CSP / nosniff / Referrer-Policy（见 [`SECURITY_HEADERS`]）
 //!
 //! 设计：路由逻辑收敛到纯函数 [`route`]（无网络依赖，可直接单元/集成测试），
 //! [`serve`] 只负责 tiny_http 粘合（监听、解析、响应）。
@@ -29,6 +34,89 @@ pub const UI_HTML: &str = include_str!("../ui/index.html");
 
 /// 单个请求体上限：inspect 的模板源码远小于此，超出视为异常载荷。
 const MAX_BODY_BYTES: usize = 1024 * 1024;
+
+/// 所有响应统一附加的安全响应头。
+///
+/// CSP 说明：前端是单文件内嵌页面，脚本与样式都是内联的，故 `script-src` /
+/// `style-src` 仍需 `'unsafe-inline'`（**已知取舍**）。它挡不住"页面里被注入
+/// `<script>`"，但能挡住外链加载、`object` / `frame` 嵌入与表单外发
+/// ——把"本地工具页面"的攻击面收回到页面自身。
+/// 若要去掉 `'unsafe-inline'`，需要给 `<script>`/`<style>` 注入每响应 nonce，
+/// 属于后续加固项。
+const SECURITY_HEADERS: &[(&str, &str)] = &[
+    (
+        "Content-Security-Policy",
+        "default-src 'self'; \
+         script-src 'self' 'unsafe-inline'; \
+         style-src 'self' 'unsafe-inline'; \
+         img-src 'self' data:; \
+         connect-src 'self'; \
+         object-src 'none'; \
+         base-uri 'none'; \
+         form-action 'none'; \
+         frame-ancestors 'none'",
+    ),
+    ("X-Content-Type-Options", "nosniff"),
+    ("Referrer-Policy", "no-referrer"),
+];
+
+/// 浏览器访问本服务时可能使用的同源写法。
+///
+/// `addr` 是实际监听地址（`127.0.0.1:8787` / `[::1]:8787`）；浏览器还可能用
+/// `localhost` 或另一种回环写法访问，故一并列入白名单。
+fn allowed_origins(addr: &SocketAddr) -> Vec<String> {
+    let port = addr.port();
+    vec![
+        format!("http://{addr}"),
+        format!("http://localhost:{port}"),
+        format!("http://127.0.0.1:{port}"),
+        format!("http://[::1]:{port}"),
+    ]
+}
+
+/// 跨站请求防护：返回 `Some(403)` 表示应拒绝该请求。
+///
+/// 判定（只针对 `/api/` 下的请求）：
+/// 1. `Origin` 存在且不在 [`allowed_origins`] 内 → 拒绝；
+/// 2. `Sec-Fetch-Site` 存在且不是 `same-origin` / `none` → 拒绝；
+/// 3. 两个头都不存在（curl 等非浏览器客户端）→ **放行**。
+///
+/// 第 3 条是刻意的：本服务是本地命令行工具，刻意保留"用 curl 直接调 API"的用法；
+/// 浏览器侧的跨站风险由前两条覆盖——浏览器的 `fetch` / `XHR` / 表单提交**必然**
+/// 带 `Origin`，伪造不了。
+pub fn cross_site_guard(headers: &[(&str, &str)], allowed: &[String]) -> Option<Resp> {
+    let get = |name: &str| -> Option<&str> {
+        headers
+            .iter()
+            .find(|(k, _)| k.eq_ignore_ascii_case(name))
+            .map(|(_, v)| *v)
+    };
+    if let Some(origin) = get("origin") {
+        // Origin 形如 `http://host:port`，个别实现会带尾斜杠
+        let origin = origin.trim_end_matches('/');
+        if !allowed.iter().any(|a| a.eq_ignore_ascii_case(origin)) {
+            return Some(Resp::Json(
+                403,
+                err(
+                    "forbidden_origin",
+                    format!("跨站请求被拒绝：Origin 为 {origin}，本服务只接受同源请求"),
+                ),
+            ));
+        }
+    }
+    if let Some(site) = get("sec-fetch-site") {
+        if !site.eq_ignore_ascii_case("same-origin") && !site.eq_ignore_ascii_case("none") {
+            return Some(Resp::Json(
+                403,
+                err(
+                    "forbidden_origin",
+                    format!("跨站请求被拒绝：Sec-Fetch-Site 为 {site}"),
+                ),
+            ));
+        }
+    }
+    None
+}
 
 /// 路由结果：JSON（带状态码）或 HTML 页面。
 #[derive(Debug)]
@@ -550,6 +638,7 @@ pub fn serve(ctx: Ctx, host: &str, port: u16) -> Result<(), CliError> {
     let server = tiny_http::Server::http(addr)
         .map_err(|e| CliError::new("io", format!("绑定 {addr} 失败: {e}")))?;
     eprintln!("nctool ui 已启动 → {}（Ctrl-C 退出）", browser_url(addr));
+    let allowed = allowed_origins(&addr);
 
     for mut request in server.incoming_requests() {
         let method = request.method().as_str().to_ascii_uppercase();
@@ -558,32 +647,48 @@ pub fn serve(ctx: Ctx, host: &str, port: u16) -> Result<(), CliError> {
             Some((p, q)) => (p.to_string(), q.to_string()),
             None => (url, String::new()),
         };
+        let headers: Vec<(&str, &str)> = request
+            .headers()
+            .iter()
+            .map(|h| (h.field.as_str().as_str(), h.value.as_str()))
+            .collect();
 
         let resp = match (method.as_str(), path.as_str()) {
             ("GET", "/") | ("GET", "/index.html") => Resp::Html,
             _ => {
-                let mut body = Vec::new();
-                let too_large = request
-                    .as_reader()
-                    .take(MAX_BODY_BYTES as u64 + 1)
-                    .read_to_end(&mut body)
-                    .is_ok()
-                    && body.len() > MAX_BODY_BYTES;
-                if too_large {
-                    Resp::Json(413, err("payload_too_large", "请求体超过 1 MiB 上限"))
+                // 跨站防护先于路由：被拒绝的请求不必再读请求体、不必建注册表
+                let blocked = path
+                    .starts_with("/api/")
+                    .then(|| cross_site_guard(&headers, &allowed))
+                    .flatten();
+                if let Some(resp) = blocked {
+                    resp
                 } else {
-                    route(&ctx, &method, &path, &query, &body)
+                    let mut body = Vec::new();
+                    let too_large = request
+                        .as_reader()
+                        .take(MAX_BODY_BYTES as u64 + 1)
+                        .read_to_end(&mut body)
+                        .is_ok()
+                        && body.len() > MAX_BODY_BYTES;
+                    if too_large {
+                        Resp::Json(413, err("payload_too_large", "请求体超过 1 MiB 上限"))
+                    } else {
+                        route(&ctx, &method, &path, &query, &body)
+                    }
                 }
             }
         };
 
         let response = match resp {
-            Resp::Html => tiny_http::Response::from_string(UI_HTML).with_header(
-                tiny_http::Header::from_bytes(
-                    &b"Content-Type"[..],
-                    &b"text/html; charset=utf-8"[..],
-                )
-                .expect("静态 Content-Type 头合法"),
+            Resp::Html => with_security_headers(
+                tiny_http::Response::from_string(UI_HTML).with_header(
+                    tiny_http::Header::from_bytes(
+                        &b"Content-Type"[..],
+                        &b"text/html; charset=utf-8"[..],
+                    )
+                    .expect("静态 Content-Type 头合法"),
+                ),
             ),
             Resp::Json(status, payload) => {
                 let data = serde_json::to_string(&payload).unwrap_or_else(|_| {
@@ -591,20 +696,35 @@ pub fn serve(ctx: Ctx, host: &str, port: u16) -> Result<(), CliError> {
                         r#"{"ok":false,"error":{"kind":"internal","message":"序列化失败"}}"#,
                     )
                 });
-                tiny_http::Response::from_string(data)
-                    .with_status_code(tiny_http::StatusCode(status))
-                    .with_header(
-                        tiny_http::Header::from_bytes(
-                            &b"Content-Type"[..],
-                            &b"application/json; charset=utf-8"[..],
-                        )
-                        .expect("静态 Content-Type 头合法"),
-                    )
+                with_security_headers(
+                    tiny_http::Response::from_string(data)
+                        .with_status_code(tiny_http::StatusCode(status))
+                        .with_header(
+                            tiny_http::Header::from_bytes(
+                                &b"Content-Type"[..],
+                                &b"application/json; charset=utf-8"[..],
+                            )
+                            .expect("静态 Content-Type 头合法"),
+                        ),
+                )
             }
         };
         let _ = request.respond(response);
     }
     Ok(())
+}
+
+/// 附加 [`SECURITY_HEADERS`]：所有响应一视同仁，包括错误响应
+/// （403/404/500 同样不该成为绕过 CSP 的口子）。
+fn with_security_headers<R: std::io::Read>(
+    mut resp: tiny_http::Response<R>,
+) -> tiny_http::Response<R> {
+    for (name, value) in SECURITY_HEADERS {
+        let header = tiny_http::Header::from_bytes(name.as_bytes(), value.as_bytes())
+            .unwrap_or_else(|_| panic!("安全头 {name} 的键值应为合法 ASCII"));
+        resp = resp.with_header(header);
+    }
+    resp
 }
 
 /// 内部错误（注册表构建失败等）：映射为 500 + CLI 错误信息。
@@ -679,6 +799,76 @@ mod tests {
 
     fn test_ctx() -> Ctx {
         Ctx::for_test()
+    }
+
+    fn origins() -> Vec<String> {
+        allowed_origins(&"127.0.0.1:8787".parse().unwrap())
+    }
+
+    #[test]
+    fn same_origin_is_allowed() {
+        for origin in [
+            "http://127.0.0.1:8787",
+            "http://localhost:8787",
+            "http://127.0.0.1:8787/",
+        ] {
+            assert!(
+                cross_site_guard(&[("origin", origin)], &origins()).is_none(),
+                "同源应放行: {origin}"
+            );
+        }
+    }
+
+    #[test]
+    fn foreign_origin_is_rejected() {
+        // 浏览器里任意页面都能向 127.0.0.1:<port> 发请求，Origin 是唯一可信凭据
+        let Some(Resp::Json(status, payload)) =
+            cross_site_guard(&[("origin", "http://evil.example")], &origins())
+        else {
+            panic!("跨站 Origin 应被拒绝")
+        };
+        assert_eq!(status, 403);
+        assert_eq!(payload["error"]["kind"], "forbidden_origin");
+        assert!(
+            payload["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("evil.example"),
+            "报错要回显被拒的 Origin: {payload}"
+        );
+    }
+
+    #[test]
+    fn sec_fetch_site_is_checked() {
+        assert!(cross_site_guard(&[("sec-fetch-site", "same-origin")], &origins()).is_none());
+        // 直接地址栏访问（无来源页面）也是允许的
+        assert!(cross_site_guard(&[("sec-fetch-site", "none")], &origins()).is_none());
+        assert!(
+            cross_site_guard(&[("sec-fetch-site", "cross-site")], &origins()).is_some(),
+            "cross-site 应被拒绝"
+        );
+    }
+
+    #[test]
+    fn non_browser_client_without_origin_is_allowed() {
+        // curl 等不带浏览器专属头——本服务刻意保留"命令行直接调 API"的用法
+        assert!(cross_site_guard(&[], &origins()).is_none());
+        assert!(cross_site_guard(&[("user-agent", "curl/8.0")], &origins()).is_none());
+    }
+
+    #[test]
+    fn allowed_origins_covers_loopback_aliases() {
+        let allowed = origins();
+        for want in [
+            "http://127.0.0.1:8787",
+            "http://localhost:8787",
+            "http://[::1]:8787",
+        ] {
+            assert!(
+                allowed.contains(&want.to_string()),
+                "缺少 {want}: {allowed:?}"
+            );
+        }
     }
 
     #[test]

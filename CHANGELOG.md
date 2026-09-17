@@ -477,6 +477,35 @@
 
 ---
 
+### 本地 UI 的跨站防护与安全响应头（架构评估 P1-4）
+
+#### Added
+
+- **`/api/` 请求的跨站防护**（`cli/src/server.rs::cross_site_guard`）：
+  只绑回环并不足以挡住浏览器侧攻击——任意网页都能向 `127.0.0.1:<port>` 发请求
+  （DNS rebinding / CSRF）。现在按两个头判定：`Origin` 不在同源白名单内 → 403；
+  `Sec-Fetch-Site` 不是 `same-origin` / `none` → 403。
+  **两个头都不存在时放行**（curl 等非浏览器客户端）：本服务是命令行工具，
+  刻意保留"直接调 API"的用法，而浏览器的 `fetch` / 表单提交**必然**带
+  `Origin`，伪造不了。判定放在路由之前，被拒的请求不必再读请求体、不必建注册表。
+- **所有响应统一附加安全头**（`SECURITY_HEADERS`）：CSP（含
+  `object-src 'none'`、`base-uri 'none'`、`frame-ancestors 'none'`、
+  `form-action 'none'`）、`X-Content-Type-Options: nosniff`、
+  `Referrer-Policy: no-referrer`。错误响应同样带，避免 403 / 500 成为绕过 CSP 的口子。
+
+#### 已知取舍
+
+- CSP 的 `script-src` / `style-src` 仍保留 `'unsafe-inline'`：前端是单文件内嵌
+  页面，脚本与样式都是内联的。它挡不住"页面内被注入 `<script>`"，但能挡住
+  外链加载与嵌入。彻底去掉需要给 `<script>` / `<style>` 注入每响应 nonce，
+  列为后续加固项。
+- 未实现评审建议的"启动一次性 token 拼进 URL"：它要求前端每个请求都带 token
+  （要改 HTML 与 JS），而生成不可预测的 token 需要引入随机源依赖——本项目的
+  依赖策略是尽量少加传递依赖。现有判定已覆盖同一威胁模型（跨站驱动本地服务），
+  故暂缓。
+
+---
+
 ## [nctool-core 0.2.2] - 2026-09-10
 
 「facing 面铣模板 + Web UI 真实浏览器验收修复 + 三平台 Release 准备」（CLI 配套改动见 [nctool-cli 0.2.2]；`nctool-tpl` 本轮无改动，保持 0.3.2）

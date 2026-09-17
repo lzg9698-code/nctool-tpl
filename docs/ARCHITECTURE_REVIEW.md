@@ -238,7 +238,7 @@
 | P1-1 | **`--param` 归一逻辑双份实现，等价性无测试** | P4 约定 + `ui_html_copies_stay_in_sync` 只比对文件相同 | 把归一顺序抽为一份规格（JSON 表）由两侧读取；或 UI 只提交字符串、由后端统一归一 | ✅ 已修复（共享 fixture 对拍 40 例 + CI 门禁） |
 | P1-2 | **最微妙逻辑零内联测试 + 无属性测试** | `src/extract.rs` 577 行 / 0 测试 | 为 `extract_undeclared` 加 proptest，断言不变量"判为可选 ⇒ 严格模式下确实可缺省渲染" | 🟡 部分（18 项样例测试已补，行覆盖 74%→80%；proptest 未做） |
 | P1-3 | **存在绕过校验的公开渲染入口** | `TemplateRegistry::render` 文档自述"绕过校验层"、可输出 `"NaN"` | 在 `render` 内部补有限性检查，或降为 `pub(crate)`，只保留 `pipeline::generate*` 为公开入口 | ✅ 已修复（`render_template*` 层加有限性闸门） |
-| P1-4 | **本地 UI 无 Origin/CSRF 校验与 CSP** | `serve()` 无 `Origin` 检查、无 CSP 头 | 校验 `Origin` 为空或同源；启动时生成一次性 token 拼进 URL；补 CSP 头 | ❌ 未开始 |
+| P1-4 | **本地 UI 无 Origin/CSRF 校验与 CSP** | `serve()` 无 `Origin` 检查、无 CSP 头 | 校验 `Origin` 为空或同源；启动时生成一次性 token 拼进 URL；补 CSP 头 | 🟡 部分（`Origin` / `Sec-Fetch-Site` 判定 + CSP 等安全头已加；一次性 token 未做，见 CHANGELOG 的取舍说明） |
 
 ### P2 —— 结构性优化，可择机进行
 
