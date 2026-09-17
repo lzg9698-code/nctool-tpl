@@ -71,7 +71,20 @@ cargo audit
 
 CI（`.github/workflows/ci.yml`）在 **ubuntu / windows / macos** 三平台各跑一遍上述 cargo 检查
 （对拍脚本与系统无关，只在 ubuntu 跑一次），全部必须绿灯；
-`coverage` job 同样是**阻断**项，覆盖率数据会写进 job summary。
+`coverage` job 同样是**阻断**项，且带**阈值门**：
+
+```bash
+rustup component add llvm-tools-preview
+cargo install cargo-llvm-cov        # 本地复现 CI 的覆盖率门需要这两步
+cargo llvm-cov --workspace --all-features --fail-under-lines 89
+```
+
+阈值是 **行覆盖 ≥ 89%**，引入时基线为 90.81%（2026-09-17，502 项测试）。
+余量是刻意留的：卡在当前值会让"新增少量未覆盖代码"也变红，门禁随即被绕过；
+1.8pt 约等于 165 行新代码，真掉这么多就是覆盖在退化。
+**覆盖率提升后请上调这个数字**（只改 `ci.yml` 里 `--fail-under-lines` 一处）。
+门禁失败时 job summary 与 lcov 产物仍会产出（那两步带 `if: always()`）——
+排查"覆盖为什么掉下去"正需要它们。
 
 已知平台问题：
 

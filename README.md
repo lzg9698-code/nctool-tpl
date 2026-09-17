@@ -551,6 +551,10 @@ cargo test --workspace --all-targets
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 node scripts/check_param_parity.mjs   # --param 归一规则的 Rust/前端对拍
 cargo audit
+
+# 覆盖率阈值门（与 CI 同款；需先装 rustup component add llvm-tools-preview
+# 与 cargo install cargo-llvm-cov）
+cargo llvm-cov --workspace --all-features --fail-under-lines 89
 ```
 
 > `--workspace` 一个字都不能省：根目录**既是 workspace 根又是一个 package**，

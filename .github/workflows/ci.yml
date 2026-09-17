@@ -103,14 +103,25 @@ jobs:
       - name: Verify cargo-llvm-cov
         run: cargo llvm-cov --version
 
-      - name: Generate coverage report
-        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+      # 阈值门与生成放在同一步：`cargo llvm-cov report` **不接受** `--all-features`
+      # （它只读已有数据），拆成两步会引入"读回的数据与生成时不一致"的风险。
+      #
+      # 89% 是**有意留出余量的地板**：引入时实测基线 90.81% 行覆盖
+      # （2026-09-17，`cargo llvm-cov --workspace --all-features`，502 项测试）。
+      # 卡在当前值会让"新增少量未覆盖代码"也红，门禁随即被绕过；
+      # 1.8pt 余量约等于 165 行新代码，真掉这么多就是覆盖在退化，该拦。
+      # 覆盖率提升后请上调此值（只改这一个数字）。
+      - name: Generate coverage report (gate: lines >= 89%)
+        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info --fail-under-lines 89
 
-      # 把覆盖率数字打进 job summary：没有数字的门禁等于没有门禁，
-      # 后续要设阈值也需要先有一段真实数据基线。
+      # 把覆盖率数字打进 job summary：没有数字的门禁等于没有门禁。
       # `--workspace` 不可省：漏掉它只会统计根 crate（nctool-tpl），
       # 而 core / cli 才是代码主体——摘要会"看起来有数字"却漏掉大部分代码。
+      #
+      # `if: always()`：阈值门失败时摘要与产物**仍要产出**——
+      # 排查"覆盖为什么掉下去"恰恰需要这两样东西。
       - name: Coverage summary
+        if: always()
         run: |
           cargo llvm-cov report --workspace --summary-only | tee coverage-summary.txt
           {
@@ -121,6 +132,7 @@ jobs:
           } >> "$GITHUB_STEP_SUMMARY"
 
       - name: Upload coverage artifact
+        if: always()
         uses: actions/upload-artifact@v4
         with:
           name: rust-coverage-lcov
