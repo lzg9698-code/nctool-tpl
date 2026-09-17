@@ -9,7 +9,7 @@ use std::cell::OnceCell;
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
-use nctool_tpl::{Renderer, Value};
+use nctool_tpl::{Renderer, Value, ValueKind};
 
 use crate::model::ParamSpec;
 use crate::validate::{validate_template, ValidationReport};
@@ -550,9 +550,10 @@ impl TemplateRegistry {
     /// program_header）请用 [`Self::render_with_machine`]，或直接走
     /// [`crate::pipeline::GCodeGenerator::generate`] 管线。
     ///
-    /// **绕过校验层**：非有限数（NaN/Inf）的拦截位于校验层（`validate` 与
-    /// 管线 `generate`），直接调用本方法时 NaN/Inf 会以文本 `"NaN"`/`"inf"`
-    /// 写入输出，请自行保证参数有限。
+    /// 完整校验（必选 / 类型 / 白名单 / 区间）仍需走 [`Self::validate`] 或管线
+    /// [`crate::pipeline::GCodeGenerator::generate`]；但**有限性不必调用方操心**——
+    /// 渲染入口统一拦一道 NaN/Inf（见 `ensure_finite_context`），
+    /// 不会把 `"NaN"` / `"inf"` 静默写进输出。
     pub fn render(
         &self,
         name: &str,
@@ -573,6 +574,7 @@ impl TemplateRegistry {
     ///
     /// 上下文口径与管线 [`crate::pipeline::GCodeGenerator::generate`] 一致：
     /// 参数裸值 + `machine` 对象（config 键值 + `id`/`vendor`/`model` 元信息）。
+    /// 同样带有限性闸门：上下文中出现 NaN/Inf 直接报错，不进入渲染。
     pub fn render_with_machine(
         &self,
         name: &str,
@@ -590,11 +592,15 @@ impl TemplateRegistry {
     }
 
     /// 渲染模板（使用自定义上下文，可用于注入 `machine` 等系统变量）。
+    ///
+    /// 渲染前跑 `ensure_finite_context`：上下文里的 NaN/Inf 一律拒绝渲染。
+    /// 自定义上下文绕过了 [`Self::validate`]，这道闸门是它唯一的数值防线。
     pub fn render_template(
         &self,
         name: &str,
         context: &Value,
     ) -> Result<String, nctool_tpl::TplError> {
+        ensure_finite_context(name, context)?;
         self.renderer.render_template(name, context)
     }
 
@@ -606,11 +612,15 @@ impl TemplateRegistry {
     ///
     /// 注意：经**过滤器**引用的未定义变量仍会报错——过滤器需要
     /// 具体值求值，无法以空字符串替代。
+    ///
+    /// 与 `render_template` 一样带有限性闸门：**宽松只放宽"未定义变量"，
+    /// 不放宽"非法数值"**——参数可以缺省，但 NaN/Inf 会让机床走到错误位置。
     pub fn render_template_lenient(
         &self,
         name: &str,
         context: &Value,
     ) -> Result<String, nctool_tpl::TplError> {
+        ensure_finite_context(name, context)?;
         let cached = self.lenient_cache.get_or_init(|| {
             let mut renderer = nctool_tpl::Renderer::new().with_lenient();
             for entry in self.entries.values() {
@@ -649,6 +659,79 @@ impl TemplateRegistry {
 impl Default for TemplateRegistry {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+/// 渲染前的**有限性闸门**：上下文里出现 NaN / Inf 一律拒绝渲染。
+///
+/// 背景：`validate` 与管线 `generate*` 有 `IssueKind::NonFinite` 检查，但直接
+/// 调用本模块的渲染入口（[`TemplateRegistry::render`]、
+/// [`TemplateRegistry::render_template`] 等）不走校验层——NaN 会以文本
+/// `"NaN"` 静默写进 G-code，机床走到非法坐标。这正是本项目零容忍的那类错误：
+/// 与其"渲染出来再说"，不如在进渲染器前就失败。
+///
+/// 闸门放在 `render_template*` 这一层而非各个参数入口，是刻意的：它同时覆盖
+/// 参数集、机床系统变量与调用方自定义上下文，不必为每种上下文各写一遍。
+fn ensure_finite_context(name: &str, context: &Value) -> Result<(), nctool_tpl::TplError> {
+    if let Some(path) = find_non_finite(context, "", 0) {
+        return Err(nctool_tpl::TplError::Render {
+            name: name.to_string(),
+            message: format!(
+                "上下文参数 {path} 为 NaN/Inf（非有限数），拒绝渲染：非有限数会写出非法坐标；\
+                 本入口不做完整校验，但有限性必须拦截"
+            ),
+        });
+    }
+    Ok(())
+}
+
+/// 深度优先找出上下文里第一个非有限数，返回它的路径（如 `machine.x`、`passes[2].z`）。
+///
+/// `depth` 是兜底：自定义对象理论上可无限嵌套，超过上限就停止下探——
+/// 宁可放过极端情况，也不能让扫描本身把渲染挂死。
+fn find_non_finite(value: &Value, path: &str, depth: usize) -> Option<String> {
+    const MAX_DEPTH: usize = 32;
+    if depth > MAX_DEPTH {
+        return None;
+    }
+    match value.kind() {
+        // minijinja 的 `Value` 没有 `as_f64`，数值取值走 `TryFrom<Value> for f64`
+        // （它会把 I64/U64/F64 统一转成 f64，整数必然有限，不会误报）
+        ValueKind::Number => match f64::try_from(value.clone()) {
+            Ok(n) if !n.is_finite() => Some(if path.is_empty() {
+                "<根值>".to_string()
+            } else {
+                path.to_string()
+            }),
+            _ => None,
+        },
+        ValueKind::Seq => {
+            for (i, item) in value.try_iter().ok()?.enumerate() {
+                let child = format!("{path}[{i}]");
+                if let Some(found) = find_non_finite(&item, &child, depth + 1) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        ValueKind::Map => {
+            for key in value.try_iter().ok()? {
+                // 取不到值的键（如自定义对象的特殊成员）跳过，不因此拒绝渲染
+                let Ok(item) = value.get_item(&key) else {
+                    continue;
+                };
+                let child = if path.is_empty() {
+                    key.to_string()
+                } else {
+                    format!("{path}.{key}")
+                };
+                if let Some(found) = find_non_finite(&item, &child, depth + 1) {
+                    return Some(found);
+                }
+            }
+            None
+        }
+        _ => None,
     }
 }
 
@@ -1161,6 +1244,96 @@ mod tests {
         ps.set_number("x", 21.0);
         let out = r.render("simple", &ps).unwrap();
         assert_eq!(out.trim(), "X21.000");
+    }
+
+    #[test]
+    fn render_rejects_non_finite_param() {
+        // 渲染入口不走完整校验，但有限性必须拦：此前 NaN 会以文本 "NaN" 写进 G-code
+        let mut r = TemplateRegistry::new();
+        r.add_memory(
+            "simple",
+            TemplateCategory::General,
+            "",
+            "X{{ x | nc_fixed(3) }}",
+            vec![],
+        )
+        .unwrap();
+        for (label, v) in [
+            ("NaN", f64::NAN),
+            ("Inf", f64::INFINITY),
+            ("-Inf", f64::NEG_INFINITY),
+        ] {
+            let mut ps = ParameterSet::new();
+            ps.set_number("x", v);
+            let err = r.render("simple", &ps).unwrap_err();
+            let msg = err.to_string();
+            assert!(msg.contains("非有限数"), "{label} 应被拒绝，实际: {msg}");
+            assert!(msg.contains('x'), "{label} 的报错要指名参数: {msg}");
+        }
+    }
+
+    #[test]
+    fn render_rejects_non_finite_in_nested_context() {
+        // 自定义上下文（嵌套列表）里的非有限数同样要拦，且报错要带路径
+        let mut r = TemplateRegistry::new();
+        r.add_memory(
+            "loop_tpl",
+            TemplateCategory::General,
+            "",
+            "{% for p in passes %}X{{ p.z }} {% endfor %}",
+            vec![],
+        )
+        .unwrap();
+        let passes = vec![
+            std::collections::BTreeMap::from([("z", 1.0f64)]),
+            std::collections::BTreeMap::from([("z", f64::INFINITY)]),
+        ];
+        let ctx = Value::from_serialize(std::collections::BTreeMap::from([("passes", passes)]));
+        let err = r.render_template("loop_tpl", &ctx).unwrap_err();
+        assert!(
+            err.to_string().contains("passes[1].z"),
+            "应定位到具体元素，实际: {err}"
+        );
+    }
+
+    #[test]
+    fn lenient_render_rejects_non_finite_too() {
+        // 宽松只放宽"未定义变量"，不放宽"非法数值"——参数可以缺省，NaN/Inf 不行
+        let mut r = TemplateRegistry::new();
+        r.add_memory("s", TemplateCategory::General, "", "X{{ x }}", vec![])
+            .unwrap();
+        let mut map = std::collections::BTreeMap::new();
+        map.insert("x", f64::NAN);
+        let ctx = Value::from_serialize(&map);
+        let err = r.render_template_lenient("s", &ctx).unwrap_err();
+        assert!(err.to_string().contains("非有限数"), "实际: {err}");
+    }
+
+    #[test]
+    fn finite_context_renders_unchanged() {
+        // 回归：闸门不能误伤合法上下文（整数 / 字符串 / 布尔 / 嵌套结构）
+        let mut r = TemplateRegistry::new();
+        r.add_memory(
+            "loop_tpl",
+            TemplateCategory::General,
+            "",
+            "{% for p in passes %}{{ p.tag }}X{{ p.z }} {% endfor %}",
+            vec![],
+        )
+        .unwrap();
+        let passes = vec![
+            std::collections::BTreeMap::from([
+                ("z", Value::from_serialize(1i64)),
+                ("tag", Value::from_serialize("A")),
+            ]),
+            std::collections::BTreeMap::from([
+                ("z", Value::from_serialize(2i64)),
+                ("tag", Value::from_serialize("B")),
+            ]),
+        ];
+        let ctx = Value::from_serialize(std::collections::BTreeMap::from([("passes", passes)]));
+        let out = r.render_template("loop_tpl", &ctx).unwrap();
+        assert_eq!(out.trim(), "AX1 BX2");
     }
 
     #[test]

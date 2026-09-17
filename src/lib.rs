@@ -55,6 +55,12 @@ pub use renderer::Renderer;
 /// `minijinja::Value`，把"版本漂移导致类型不匹配"从可能变成不可能。
 pub use minijinja::Value;
 
+/// [`Value`] 的类别标签（[`Value::kind`] 的返回类型）。
+///
+/// 与 [`Value`] 一并再导出：下游拿到 `Value` 后要判断"是数值还是容器"时，
+/// 需要的正是这个类型；不导出就只能靠 `try_iter()` 试探，既低效又易错。
+pub use minijinja::value::ValueKind;
+
 #[cfg(test)]
 use error::{extract_identifier_at, extract_quoted, extract_undefined_var_name};
 

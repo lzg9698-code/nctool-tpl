@@ -454,6 +454,29 @@
 
 ---
 
+### 渲染入口的有限性闸门（架构评估 P1-3）
+
+#### Fixed
+
+- **公开渲染入口不再绕过有限性检查**（`core/src/registry.rs`）：
+  `TemplateRegistry::render` / `render_with_machine` / `render_template` /
+  `render_template_lenient` 此前完全不走校验，而 NaN/Inf 的拦截只存在于
+  `validate` 与管线 `generate*`——直接调用这些入口的调用方（库使用者、
+  自定义上下文场景）会拿到含 `"NaN"` / `"inf"` 的输出，机床走到非法坐标。
+  现在在 `render_template*` 这一层加了闸门 `ensure_finite_context`：
+  深度优先扫描上下文，命中非有限数即返回 `TplError::Render`，报错带路径
+  （如 `passes[1].z`）。放在这一层而非各参数入口，是为了**同时覆盖参数集、
+  机床系统变量与自定义上下文**；宽松渲染同样不放宽非法数值
+  （参数可以缺省，NaN/Inf 不行）。
+
+#### Added
+
+- `nctool_tpl` 再导出 `ValueKind`（`Value::kind()` 的返回类型）：下游判断
+  "是数值还是容器"需要它，此前只能靠 `try_iter()` 试探。
+  注意它在 `minijinja::value` 下，不在 crate 根。
+
+---
+
 ## [nctool-core 0.2.2] - 2026-09-10
 
 「facing 面铣模板 + Web UI 真实浏览器验收修复 + 三平台 Release 准备」（CLI 配套改动见 [nctool-cli 0.2.2]；`nctool-tpl` 本轮无改动，保持 0.3.2）
