@@ -357,5 +357,8 @@
 
 > **2026-09-17 更新**：P1 四项中已修三项——`--param` 归一（共享 fixture 对拍）、
 > `extract.rs` 内联测试（18 项，proptest 仍未做）、公开 `render` 的有限性闸门；
-> 仅 **UI 无 Origin/CSRF 校验** 未开始。P2（`check_vars` 拆分、数据表外置、
-> `model.rs` 拆分等）仍保持原状，见 §3 的 P1 / P2 表。
+> **UI 无 Origin/CSRF 校验** 为部分完成（`Origin` / `Sec-Fetch-Site` 判定与 CSP
+> 已加，一次性 token 未做，理由见 CHANGELOG）。
+> P2 中 **P2-1（`check_vars` 拆分）已完成**（245 行 → 55 行编排 + 7 个专职函数，
+> 行为零变更，62 项测试守住）；其余（数据表外置、`model.rs` 拆分、扩展点、
+> UI 单源、上下文 map 复用）仍保持原状，见 §3 的 P1 / P2 表。

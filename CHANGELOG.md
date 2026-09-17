@@ -506,6 +506,23 @@
 
 ---
 
+### 校验核心拆分（架构评估 P2-1）
+
+#### Changed
+
+- **`check_vars` 由 245 行拆为 55 行编排 + 7 个专职函数**（`core/src/validate.rs`）：
+  `check_derive_shadowed`（20）/ `check_spec_defaults`（24）/
+  `check_spec_declarations`（44）/ `check_var_values`（41）/ `check_finite`（20）/
+  `check_missing`（57）/ `check_unused`（24）。
+  纯重构，**行为零变更**——由 `validate.rs` 现有的 62 项测试守住。
+  拆分原则：派生那段只能留在编排函数里（派生集合要么新建、要么退回入参，
+  返回的引用可能指向二者之一，借用关系无法封装进函数返回值），已在代码里注明；
+  白名单与区间/整数本来就有专职函数（`check_value_options` /
+  `check_value_constraints`），故不再往下拆，只保留"类型不匹配即短路"的顺序逻辑。
+  另：`referenced`（模板引用集合）原先在两处各建一次，现由编排函数算一次传下去。
+
+---
+
 ## [nctool-core 0.2.2] - 2026-09-10
 
 「facing 面铣模板 + Web UI 真实浏览器验收修复 + 三平台 Release 准备」（CLI 配套改动见 [nctool-cli 0.2.2]；`nctool-tpl` 本轮无改动，保持 0.3.2）

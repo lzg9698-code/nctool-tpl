@@ -318,31 +318,20 @@ fn check_vars(
     // 规格索引：参数名 → ParamSpec
     let spec_map: std::collections::HashMap<&str, &ParamSpec> =
         specs.iter().map(|s| (s.name.as_str(), s)).collect();
+    // 模板实际引用的变量集合：规格一致性检查与冗余检查共用
+    let referenced: BTreeSet<&str> = vars.iter().map(|v| v.name.as_str()).collect();
 
     let mut report = ValidationReport::default();
 
-    // 派生参数被显式提供 → 提示：派生值恒胜，调用方给的值会被覆盖。
-    // 归为 ShadowedSystemVar（与"与 machine 同名"同类）：都是"系统注入值覆盖了
-    // 用户提供的值"，调用方的处置也相同（该参数无效）。
-    for spec in specs {
-        if let Some(rule) = &spec.derive {
-            if params.contains(&spec.name) {
-                report.issues.push(ValidationIssue::warning_kind(
-                    IssueKind::ShadowedSystemVar,
-                    &spec.name,
-                    format!(
-                        "该参数由派生规则计算（{}），调用方提供的值会被覆盖（该参数无效）",
-                        rule.display()
-                    ),
-                ));
-            }
-        }
-    }
+    check_derive_shadowed(specs, params, &mut report);
 
     // 派生：把派生参数算出来，**后续检查针对派生后的集合**——这样派生参数
     // 既不会被误报"缺失"，其派生值也会照常过类型/白名单/区间检查。
     // 派生失败（源参数缺失且无回退值）报 Error：派生值会进入 G-code，算不出来
     // 就不该继续；同时退回原始集合，让其余参数的问题照常报出。
+    //
+    // 这段只能留在本函数：派生集合要么新建（`derived`）、要么退回入参，
+    // 返回的引用可能指向二者之一，借用关系无法封装进一个函数的返回值。
     let derived;
     let params = match crate::derive::apply(specs, params) {
         Ok(effective) => {
@@ -359,9 +348,51 @@ fn check_vars(
         }
     };
 
-    // 规格默认值自身的自洽性：default 写错（类型不符 / 越界 / 非整数 / 不在
-    // 候选项内）时，它会在渲染前被静默注入上下文，用户提供的合法值反而用不上。
-    // 这类错误只源于模板作者，必须在校验阶段暴露。
+    check_spec_defaults(specs, &mut report);
+    check_spec_declarations(specs, &referenced, &mut report);
+    check_var_values(vars, &spec_map, params, template_name, &mut report);
+    check_missing(
+        vars,
+        &spec_map,
+        params,
+        system_vars,
+        template_name,
+        &mut report,
+    );
+    check_unused(params, &referenced, system_vars, &mut report);
+
+    report
+}
+
+/// 派生参数被显式提供 → 提示：派生值恒胜，调用方给的值会被覆盖。
+///
+/// 归为 `ShadowedSystemVar`（与"与 machine 同名"同类）：都是"系统注入值覆盖了
+/// 用户提供的值"，调用方的处置也相同（该参数无效）。
+fn check_derive_shadowed(
+    specs: &[ParamSpec],
+    params: &ParameterSet,
+    report: &mut ValidationReport,
+) {
+    for spec in specs {
+        if let Some(rule) = &spec.derive {
+            if params.contains(&spec.name) {
+                report.issues.push(ValidationIssue::warning_kind(
+                    IssueKind::ShadowedSystemVar,
+                    &spec.name,
+                    format!(
+                        "该参数由派生规则计算（{}），调用方提供的值会被覆盖（该参数无效）",
+                        rule.display()
+                    ),
+                ));
+            }
+        }
+    }
+}
+
+/// 规格默认值自身的自洽性：`default` 写错（类型不符 / 越界 / 非整数 / 不在
+/// 候选项内）时，它会在渲染前被静默注入上下文，用户提供的合法值反而用不上。
+/// 这类错误只源于模板作者，必须在校验阶段暴露。
+fn check_spec_defaults(specs: &[ParamSpec], report: &mut ValidationReport) {
     for spec in specs {
         if let Some(default) = &spec.default {
             // 类型必须单独把门：`check_value_constraints` 对非数值类型在
@@ -380,15 +411,26 @@ fn check_vars(
                 // 类型都不对时不再叠区间/白名单错误，避免同一参数刷出噪声
                 continue;
             }
-            check_value_options(spec, default, &mut report, "（规格默认值）");
-            check_value_constraints(spec, default, &mut report, "（规格默认值）");
+            check_value_options(spec, default, report, "（规格默认值）");
+            check_value_constraints(spec, default, report, "（规格默认值）");
         }
     }
+}
 
-    // 规格自身的一致性：声明了模板未引用的参数 → 该规格**永远不会被执行**
-    // （类型/区间/白名单全部静默失效）。典型成因是参数名拼错，或模板改名后
-    // 头部/变量库/清单未同步。只报警告：模板本身仍可用。
-    let referenced: BTreeSet<&str> = vars.iter().map(|v| v.name.as_str()).collect();
+/// 规格声明**自身**的两类静默失效（与取值无关，只看规格与模板的对应关系）。
+///
+/// 1. 声明了模板未引用的参数 → 该规格永远不会被执行（类型/区间/白名单全部
+///    静默失效）。典型成因是参数名拼错，或模板改名后头部/变量库/清单未同步。
+/// 2. 区间 / 整数约束声明在 String/Bool/List 上 → 永不执行
+///    （`check_value_constraints` 对非数值提前返回）。注意 `Any` 不算：
+///    它的值可能恰好是数值，约束会按值生效。
+///
+/// 两者都只报警告：模板本身仍可用。
+fn check_spec_declarations(
+    specs: &[ParamSpec],
+    referenced: &BTreeSet<&str>,
+    report: &mut ValidationReport,
+) {
     for spec in specs {
         if !referenced.contains(spec.name.as_str()) {
             report.issues.push(ValidationIssue::warning_kind(
@@ -399,9 +441,6 @@ fn check_vars(
         }
     }
 
-    // 规格自身的另一类静默失效：区间/整数约束只对**数值**生效，声明在
-    // String/Bool/List 上时永不执行（`check_value_constraints` 对非数值提前返回）。
-    // 注意 `Any` 不算：它的值可能恰好是数值，约束会按值生效。
     for spec in specs {
         let non_numeric = matches!(
             spec.kind,
@@ -430,111 +469,149 @@ fn check_vars(
             ),
         ));
     }
+}
 
-    // 逐变量检查
+/// 逐变量检查**已提供**的取值：有限性 → 类型 → 白名单 → 区间/整数。
+///
+/// 白名单与区间/整数各自已有专职函数（[`check_value_options`] /
+/// [`check_value_constraints`]），这里只负责顺序与"类型不匹配就不再往下查"的
+/// 短路——同一参数刷多条噪声反而掩盖真正要改的那一项。
+fn check_var_values(
+    vars: &[nctool_tpl::Variable],
+    spec_map: &std::collections::HashMap<&str, &ParamSpec>,
+    params: &ParameterSet,
+    template_name: Option<&str>,
+    report: &mut ValidationReport,
+) {
     for var in vars {
         let name = var.name.as_str();
-        let spec = spec_map.get(name).copied();
+        let Some(value) = params.get(name) else {
+            continue;
+        };
+        let Some(spec) = spec_map.get(name).copied() else {
+            // 无规格：只做有限性检查（NaN/Inf 会写入非法坐标），其余无从判断
+            check_finite(name, value, template_name, var, report);
+            continue;
+        };
 
-        match params.get(name) {
-            Some(value) => {
-                // 有限性检查：数值必须有限（NaN/Inf 会写入非法坐标）
-                if let crate::model::ParamValue::Number(n) = value {
-                    if !n.is_finite() {
-                        report.issues.push(ValidationIssue::error_kind(
-                            IssueKind::NonFinite,
-                            name,
-                            format!(
-                                "数值参数为 NaN/Inf（非有限数），拒绝生成{}",
-                                location_suffix(template_name, var)
-                            ),
-                        ));
-                    }
-                }
-                // 类型检查：规格声明类型与实际提供类型必须匹配
-                if let Some(spec) = spec {
-                    if !spec.kind.matches(value) {
-                        report.issues.push(ValidationIssue::error_kind(
-                            IssueKind::TypeMismatch,
-                            name,
-                            format!(
-                                "类型不匹配：规格要求 {}, 实际提供 {}{}",
-                                spec.kind.label(),
-                                value_kind_label(value),
-                                location_suffix(template_name, var)
-                            ),
-                        ));
-                    }
-                    // 取值区间 / 整数约束（类型已不匹配时不再重复报错，
-                    // 避免同一参数刷出多条噪声）
-                    if spec.kind.matches(value) {
-                        // 白名单必须先于区间/整数检查：后两者对字符串枚举会在
-                        // `as_f64()` 处提前返回，放在它们之后等于永不执行。
-                        check_value_options(
-                            spec,
-                            value,
-                            &mut report,
-                            &location_suffix(template_name, var),
-                        );
-                        check_value_constraints(
-                            spec,
-                            value,
-                            &mut report,
-                            &location_suffix(template_name, var),
-                        );
-                    }
-                }
-            }
-            None => {
-                // 未提供：若为系统变量则跳过，否则判定是否可接受
-                if system_vars.contains(&name) {
-                    continue;
-                }
-                // 派生参数由系统注入：不要求调用方提供。派生失败时已单独报
-                // `DeriveFailed`，这里不再叠一条"缺失"造成双重报错。
-                if spec.and_then(|s| s.derive.as_ref()).is_some() {
-                    continue;
-                }
-                let has_default = var.optional || spec.and_then(|s| s.default.as_ref()).is_some();
-                if has_default {
-                    continue;
-                }
-                // 无兜底 → 缺参。若规格声明了条件必选，先按控制参数的取值判定：
-                // 条件未命中意味着该分支不可达（模板里的互斥分支），此时不报缺失。
-                let decision = spec.map(|s| required_if_decision(s, &spec_map, params));
-                if let Some(RequiredDecision::NotRequired { condition }) = &decision {
-                    report.issues.push(ValidationIssue::info_kind(
-                        IssueKind::ConditionalSkipped,
-                        name,
-                        format!(
-                            "未提供；条件必选要求 {condition} 才必选，当前不满足（该分支不可达），故不报缺失{}",
-                            location_suffix(template_name, var)
-                        ),
-                    ));
-                } else {
-                    let condition = match decision {
-                        Some(RequiredDecision::RequiredIf { condition }) => {
-                            format!("；条件必选 {condition} 成立")
-                        }
-                        _ => String::new(),
-                    };
-                    report.issues.push(ValidationIssue::error_kind(
-                        IssueKind::Missing,
-                        name,
-                        format!(
-                            "必选参数缺失（模板引用且无默认值兜底，参数集未提供）{condition}{}",
-                            location_suffix(template_name, var)
-                        ),
-                    ));
-                }
-            }
+        check_finite(name, value, template_name, var, report);
+
+        // 类型检查：规格声明类型与实际提供类型必须匹配
+        if !spec.kind.matches(value) {
+            report.issues.push(ValidationIssue::error_kind(
+                IssueKind::TypeMismatch,
+                name,
+                format!(
+                    "类型不匹配：规格要求 {}, 实际提供 {}{}",
+                    spec.kind.label(),
+                    value_kind_label(value),
+                    location_suffix(template_name, var)
+                ),
+            ));
+            continue;
+        }
+        // 白名单必须先于区间/整数检查：后两者对字符串枚举会在 `as_f64()`
+        // 处提前返回，放在它们之后等于永不执行。
+        let at = location_suffix(template_name, var);
+        check_value_options(spec, value, report, &at);
+        check_value_constraints(spec, value, report, &at);
+    }
+}
+
+/// 有限性：数值参数必须有限（NaN/Inf 会写入非法坐标）。
+fn check_finite(
+    name: &str,
+    value: &crate::model::ParamValue,
+    template_name: Option<&str>,
+    var: &nctool_tpl::Variable,
+    report: &mut ValidationReport,
+) {
+    if let crate::model::ParamValue::Number(n) = value {
+        if !n.is_finite() {
+            report.issues.push(ValidationIssue::error_kind(
+                IssueKind::NonFinite,
+                name,
+                format!(
+                    "数值参数为 NaN/Inf（非有限数），拒绝生成{}",
+                    location_suffix(template_name, var)
+                ),
+            ));
         }
     }
+}
 
-    // 冗余参数检查：参数集提供了、但模板未引用的参数（`referenced` 已在上方构建）
+/// 逐变量检查**未提供**的情形：系统变量 / 派生 / 有兜底 → 跳过；
+/// 条件必选按控制参数取值判定；否则报 `Missing`。
+fn check_missing(
+    vars: &[nctool_tpl::Variable],
+    spec_map: &std::collections::HashMap<&str, &ParamSpec>,
+    params: &ParameterSet,
+    system_vars: &[&str],
+    template_name: Option<&str>,
+    report: &mut ValidationReport,
+) {
+    for var in vars {
+        let name = var.name.as_str();
+        if params.get(name).is_some() {
+            continue;
+        }
+        let spec = spec_map.get(name).copied();
+
+        if system_vars.contains(&name) {
+            continue;
+        }
+        // 派生参数由系统注入：不要求调用方提供。派生失败时已单独报
+        // `DeriveFailed`，这里不再叠一条"缺失"造成双重报错。
+        if spec.and_then(|s| s.derive.as_ref()).is_some() {
+            continue;
+        }
+        let has_default = var.optional || spec.and_then(|s| s.default.as_ref()).is_some();
+        if has_default {
+            continue;
+        }
+        // 无兜底 → 缺参。若规格声明了条件必选，先按控制参数的取值判定：
+        // 条件未命中意味着该分支不可达（模板里的互斥分支），此时不报缺失。
+        let decision = spec.map(|s| required_if_decision(s, spec_map, params));
+        if let Some(RequiredDecision::NotRequired { condition }) = &decision {
+            report.issues.push(ValidationIssue::info_kind(
+                IssueKind::ConditionalSkipped,
+                name,
+                format!(
+                    "未提供；条件必选要求 {condition} 才必选，当前不满足（该分支不可达），故不报缺失{}",
+                    location_suffix(template_name, var)
+                ),
+            ));
+        } else {
+            let condition = match decision {
+                Some(RequiredDecision::RequiredIf { condition }) => {
+                    format!("；条件必选 {condition} 成立")
+                }
+                _ => String::new(),
+            };
+            report.issues.push(ValidationIssue::error_kind(
+                IssueKind::Missing,
+                name,
+                format!(
+                    "必选参数缺失（模板引用且无默认值兜底，参数集未提供）{condition}{}",
+                    location_suffix(template_name, var)
+                ),
+            ));
+        }
+    }
+}
+
+/// 冗余参数：参数集提供了、但模板未引用；或与系统注入变量同名。
+///
+/// 前者多半是模板选错或参数名拼错；后者会在渲染时被系统值覆盖，
+/// 两种情况用户提供的参数都是无效的，故都提示。
+fn check_unused(
+    params: &ParameterSet,
+    referenced: &BTreeSet<&str>,
+    system_vars: &[&str],
+    report: &mut ValidationReport,
+) {
     for name in params.values.keys() {
         if system_vars.contains(&name.as_str()) {
-            // 与系统注入变量同名：渲染时被系统值覆盖，用户提供的值无效
             report.issues.push(ValidationIssue::warning_kind(
                 IssueKind::ShadowedSystemVar,
                 name,
@@ -550,8 +627,6 @@ fn check_vars(
             ));
         }
     }
-
-    report
 }
 
 /// 校验问题定位后缀（nctool-tpl 的 `Variable` 携带行列）：
