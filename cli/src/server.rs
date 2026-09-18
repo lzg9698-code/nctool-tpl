@@ -1017,6 +1017,264 @@ mod tests {
         assert_eq!(payload["error"]["kind"], "not_found");
     }
 
+    /// 三个端点共用同一套入参校验：缺 `template` / 空串 / 类型不对都要 400。
+    /// 若某个端点漏了这道校验，它会把 `""` 当模板名去查注册表 → 404 而非 400，
+    /// 前端拿到的错误分类就错了。
+    #[test]
+    fn api_requires_non_empty_template_field() {
+        for path in ["/api/validate", "/api/render", "/api/inspect"] {
+            for body in [
+                &br#"{}"#[..],
+                &br#"{"template":""}"#[..],
+                &br#"{"template":123}"#[..],
+            ] {
+                let Resp::Json(status, payload) = route(&test_ctx(), "POST", path, "", body) else {
+                    panic!("{path} 应返回 JSON")
+                };
+                let shown = String::from_utf8_lossy(body);
+                assert_eq!(status, 400, "{path} body={shown}");
+                assert_eq!(
+                    payload["error"]["kind"], "bad_request",
+                    "{path} body={shown}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn unknown_template_is_404() {
+        let body = br#"{"template":"no_such_template"}"#;
+        for path in ["/api/validate", "/api/render", "/api/inspect"] {
+            let Resp::Json(status, payload) = route(&test_ctx(), "POST", path, "", body) else {
+                panic!("{path} 应返回 JSON")
+            };
+            assert_eq!(status, 404, "{path}");
+            assert_eq!(payload["error"]["kind"], "template_not_found", "{path}");
+        }
+    }
+
+    #[test]
+    fn render_unknown_machine_is_404() {
+        let body = br#"{"template":"drill_cycle","params":{"x":1,"y":1,"depth":-1,"feed":100},"machine":"no_such_machine"}"#;
+        let Resp::Json(status, payload) = route(&test_ctx(), "POST", "/api/render", "", body)
+        else {
+            panic!("render 应返回 JSON")
+        };
+        assert_eq!(status, 404, "机床不存在应是 404 而不是 400: {payload}");
+        assert_eq!(payload["error"]["kind"], "machine_not_found");
+    }
+
+    /// 严格模式下校验未通过 → `blocked: true` 且**不产出任何 G-code**；
+    /// 宽松模式下同一份入参放行。前端靠 `blocked` 决定是展示报告还是展示程序。
+    #[test]
+    fn render_blocks_on_errors_unless_lenient() {
+        let Resp::Json(status, payload) = route(
+            &test_ctx(),
+            "POST",
+            "/api/render",
+            "",
+            br#"{"template":"drill_cycle","params":{}}"#,
+        ) else {
+            panic!("render 应返回 JSON")
+        };
+        assert_eq!(status, 200);
+        assert_eq!(payload["data"]["blocked"], true);
+        assert_eq!(payload["data"]["output"], "", "被拦截时不得产出 G-code");
+        assert_eq!(payload["data"]["machine"], "generic");
+
+        let valid =
+            br#"{"template":"drill_cycle","params":{"x":21,"y":15,"depth":-10,"feed":100}}"#;
+        let Resp::Json(status, payload) = route(&test_ctx(), "POST", "/api/render", "", valid)
+        else {
+            panic!("render 应返回 JSON")
+        };
+        assert_eq!(status, 200);
+        assert_eq!(payload["data"]["blocked"], false);
+        assert_eq!(payload["data"]["template"], "drill_cycle");
+    }
+
+    #[test]
+    fn generation_options_full_set_is_applied() {
+        // 所有开关都给上（format 走默认 gcode）：覆盖 get_u32 取值路径与完整
+        // options 构造。注意 `format: "text"` 是"不带行号的纯文本"，
+        // 与 `gcode` 是两种后处理，见下一个测试。
+        let body = br#"{"template":"drill_cycle","params":{"x":21,"y":15,"depth":-10,"feed":100},"options":{"lineNumbers":true,"lineStep":5,"maxLine":999,"addHeader":true,"stripBlank":true,"ascii":true}}"#;
+        let Resp::Json(status, payload) = route(&test_ctx(), "POST", "/api/render", "", body)
+        else {
+            panic!("render 应返回 JSON")
+        };
+        assert_eq!(status, 200, "{payload}");
+        let out = payload["data"]["output"].as_str().expect("应有 output");
+
+        // 行号步长必须真的生效：按 N<数字> 抽出编号，相邻差值应恒为 5。
+        // （不断言具体位宽——位宽来自机床配置，属于另一条契约）
+        let nums: Vec<u32> = out
+            .split_whitespace()
+            .filter_map(|t| t.strip_prefix('N'))
+            .filter_map(|t| t.parse().ok())
+            .collect();
+        assert!(nums.len() >= 2, "应有多行带行号: {out}");
+        assert!(
+            nums.windows(2).all(|w| w[1] - w[0] == 5),
+            "行号步长应为 5: {nums:?}"
+        );
+    }
+
+    /// `format` 决定后处理：`gcode`（默认）带行号，`text` 是纯文本。
+    /// 二者混了会让"导出给机床的程序"少掉行号。
+    #[test]
+    fn format_text_omits_line_numbers() {
+        let base = r#"{"template":"drill_cycle","params":{"x":21,"y":15,"depth":-10,"feed":100},"options":{"lineNumbers":true,"format":"%s"}}"#;
+        let render = |fmt: &str| -> String {
+            let body = base.replace("%s", fmt);
+            let Resp::Json(status, payload) =
+                route(&test_ctx(), "POST", "/api/render", "", body.as_bytes())
+            else {
+                panic!("render 应返回 JSON")
+            };
+            assert_eq!(status, 200, "{payload}");
+            payload["data"]["output"]
+                .as_str()
+                .expect("应有 output")
+                .to_string()
+        };
+
+        // 按 token 判定（不按子串）：行号位宽由机床配置决定，
+        // 断言 "N000" 这类子串会随位宽/步长变化而误判
+        let numbered = |s: &str| {
+            s.split_whitespace()
+                .filter(|t| {
+                    t.strip_prefix('N').is_some_and(|rest| {
+                        !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+                    })
+                })
+                .count()
+        };
+        let gcode = render("gcode");
+        let text = render("text");
+        assert!(numbered(&gcode) >= 2, "gcode 应带行号: {gcode}");
+        assert_eq!(numbered(&text), 0, "text 不应带行号: {text}");
+    }
+
+    #[test]
+    fn generation_options_rejects_bad_values() {
+        for (options, needle) in [
+            (r#"{"lineStep":"10"}"#, "必须是非负整数"),
+            (r#"{"lineStep":4294967296}"#, "超出范围"),
+            (r#"{"maxLine":-1}"#, "必须是非负整数"),
+        ] {
+            let body = format!(r#"{{"template":"drill_cycle","params":{{}},"options":{options}}}"#);
+            let Resp::Json(status, payload) =
+                route(&test_ctx(), "POST", "/api/render", "", body.as_bytes())
+            else {
+                panic!("render 应返回 JSON")
+            };
+            assert_eq!(status, 400, "options={options}");
+            let msg = payload["error"]["message"].as_str().unwrap_or_default();
+            assert!(msg.contains(needle), "options={options} 实际: {msg}");
+        }
+
+        // options 存在但不是对象
+        let Resp::Json(status, payload) = route(
+            &test_ctx(),
+            "POST",
+            "/api/render",
+            "",
+            br#"{"template":"drill_cycle","params":{},"options":[]}"#,
+        ) else {
+            panic!("render 应返回 JSON")
+        };
+        assert_eq!(status, 400);
+        assert!(payload["error"]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("必须是 JSON 对象"));
+    }
+
+    /// `validation_json` 的 level 映射：前端按 level 区分展示，
+    /// 映射错了会把 error 显示成提示（用户就看不到"不能生成"的原因）。
+    #[test]
+    fn validation_json_carries_issue_levels() {
+        // 缺必选 → error
+        let Resp::Json(status, payload) = route(
+            &test_ctx(),
+            "POST",
+            "/api/validate",
+            "",
+            br#"{"template":"drill_cycle","params":{}}"#,
+        ) else {
+            panic!("validate 应返回 JSON")
+        };
+        assert_eq!(status, 200);
+        let report = &payload["data"]["report"];
+        assert!(report["errors"].as_u64().unwrap() >= 1, "{report}");
+        let issues = report["issues"].as_array().expect("应有 issues");
+        assert!(
+            issues.iter().any(|i| i["level"] == "error"),
+            "应含 error: {issues:?}"
+        );
+
+        // 多给一个模板不引用的参数 → warning（与 error 分属不同 level）
+        let body = br#"{"template":"drill_cycle","params":{"x":21,"y":15,"depth":-10,"feed":100,"typo_param":1}}"#;
+        let Resp::Json(status, payload) = route(&test_ctx(), "POST", "/api/validate", "", body)
+        else {
+            panic!("validate 应返回 JSON")
+        };
+        assert_eq!(status, 200);
+        let report = &payload["data"]["report"];
+        assert!(report["warnings"].as_u64().unwrap() >= 1, "{report}");
+        let issues = report["issues"].as_array().unwrap();
+        assert!(issues.iter().any(|i| i["level"] == "warning"), "{issues:?}");
+        // level 只能是这三个字符串之一
+        assert!(issues.iter().all(|i| matches!(
+            i["level"].as_str(),
+            Some("error") | Some("warning") | Some("info")
+        )));
+    }
+
+    #[test]
+    fn security_headers_are_attached() {
+        let resp = with_security_headers(tiny_http::Response::from_string("x"));
+        let find = |name: &str| {
+            resp.headers()
+                .iter()
+                .find(|h| h.field.as_str().as_str().eq_ignore_ascii_case(name))
+                .map(|h| h.value.as_str().to_string())
+        };
+        assert_eq!(find("x-content-type-options").as_deref(), Some("nosniff"));
+        assert_eq!(find("referrer-policy").as_deref(), Some("no-referrer"));
+
+        let csp = find("content-security-policy").expect("必须带 CSP");
+        for needle in [
+            "default-src 'self'",
+            "object-src 'none'",
+            "base-uri 'none'",
+            "frame-ancestors 'none'",
+            "form-action 'none'",
+        ] {
+            assert!(csp.contains(needle), "CSP 缺少 {needle}: {csp}");
+        }
+    }
+
+    #[test]
+    fn internal_and_cli_errors_map_status() {
+        // 500 一律归 "internal"：原始分类（registry / io / …）会被替换掉，
+        // 因为对调用方而言"服务端内部炸了"才是可操作的信息
+        let Resp::Json(status, payload) = internal_error(CliError::new("registry", "boom")) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 500);
+        assert_eq!(payload["error"]["kind"], "internal");
+        assert_eq!(payload["error"]["message"], "boom");
+
+        let Resp::Json(status, payload) = cli_error(CliError::new("render", "坏模板")) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 400);
+        assert_eq!(payload["error"]["kind"], "render");
+        assert_eq!(payload["error"]["message"], "坏模板");
+    }
+
     #[test]
     fn percent_decode_paths_and_queries() {
         // 路径：+ 保持字面
