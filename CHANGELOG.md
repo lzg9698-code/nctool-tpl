@@ -10,6 +10,54 @@
 
 ---
 
+## [未发布]
+
+本段收录 2026-09-18 第三轮代码审查（`docs/CODE_REVIEW_2026-09-18.md`）**批次一**的修复：
+四条「不报错但产出错误数值」的静默出错路径。全部改动在 `core`，未触及公共 API 形状
+（`DeriveError` 新增变体，该枚举本就 `#[non_exhaustive]`）。
+
+### Fixed
+
+- **派生参数的链式依赖不再取错源值**（`core/src/derive.rs`）：`A.derive.from = B`
+  且 `B` 自身也是派生参数时，A 的查表键此前取自 `with_defaults`（用户值 / 规格默认值），
+  而 `out`（本轮已算出的派生值）只写不读。于是「用户传了 B」用旧值查表、「B 有默认值」
+  用默认值查表 —— 两条路径都不报错，直接写出与型号不符的 G-code。
+  现改为按依赖顺序（重复扫描到不动点）计算，源参数若也是派生参数则取**已算出的派生值**；
+  互相依赖成环时返回新增的 `DeriveError::Circular`，不静默取任何值。
+
+- **条件必选不再被模板内联兜底短路**（`core/src/validate.rs`）：`check_missing` 里
+  `has_default`（含 `var.optional`）的判定早于 `required_if` 判定，导致模板写
+  `{{ FS_Z_PLUS1 | default(0) }}` 时，清单里声明的 `required_if` **永久失效且无任何提示**
+  —— 互斥分支参数被 `default(0)` 兜底后静默产出 `Z0`，正是 `undercut_fs.j2` 头部注释
+  与 `templates.yaml:47-51` 明令禁止的场景。现改为：声明了 `required_if` 的参数，
+  其必选性不受 `var.optional` 影响（规格显式声明的 `default` 仍算兜底）。
+
+- **有限性检查递归进入列表**（`core/src/validate.rs`）：`check_finite` 此前只匹配顶层
+  `Number`，`passes=[{z: NaN}]` 会「校验通过、渲染失败」（渲染期 `ensure_finite_context`
+  是递归的），错误类型从 `Validation` 变成 `Render`，宽松模式「唯一硬失败项 = NonFinite」
+  的承诺随之失真。现递归列表元素，消息带元素下标路径（如 `[1][0]`），
+  并沿用与渲染期一致的 32 层深度上限。
+
+- **规格默认值做有限性检查**（`core/src/validate.rs`）：`check_spec_defaults` 此前只查
+  类型 / 白名单 / 区间，`default: .nan` 会经类型检查、绕过区间比较（NaN 的任何比较都是
+  false）、且白名单通常未声明 —— 校验全绿，NaN 却在渲染前被静默注入上下文。
+
+- **空前缀不再让整份程序静默不编号**（`core/src/pipeline.rs`、`core/src/machine.rs`）：
+  机床配置 `line_number_prefix = ""` / `program_prefix = ""` 会让 `starts_with("")` 恒真，
+  每一行都被判为「程序号行」或「已有行号」，`line_numbers: true` 下**一行都不编号且无告警**。
+  键缺失与键为空串现在同等回退默认值（新增 `non_empty_config`）；
+  `validate_config_keys` 对字符串类键补「非空」校验。
+
+### 测试
+
+- 新增 8 项回归测试（derive 3 / validate 2 / pipeline 2 / machine 1），
+  均已**反向验证**：临时回滚实现后全部 FAILED，恢复后通过。
+- workspace 全量 **536 项**通过；`cargo fmt --all --check`、
+  `cargo clippy --workspace --all-targets -- -D warnings`、
+  `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` 均通过。
+
+---
+
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18
 
 「NCTool_V3 模板资产整合 + 参数规格系统 + 架构评估 P0/P1 收口」

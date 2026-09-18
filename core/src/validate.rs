@@ -411,6 +411,10 @@ fn check_spec_defaults(specs: &[ParamSpec], report: &mut ValidationReport) {
                 // 类型都不对时不再叠区间/白名单错误，避免同一参数刷出噪声
                 continue;
             }
+            // 有限性同样要查：`default: .nan` 会经类型检查（Number 配 Number）、
+            // 绕过区间比较（NaN 的任何比较都是 false）、且白名单通常未声明，
+            // 于是校验全绿，NaN 却在渲染前被静默注入上下文。
+            check_finite_value(&spec.name, default, "", "（规格默认值）", report, 0);
             check_value_options(spec, default, report, "（规格默认值）");
             check_value_constraints(spec, default, report, "（规格默认值）");
         }
@@ -519,6 +523,11 @@ fn check_var_values(
 }
 
 /// 有限性：数值参数必须有限（NaN/Inf 会写入非法坐标）。
+///
+/// **递归进入列表**：列表元素同样会进入渲染上下文，而渲染期的
+/// `ensure_finite_context` 也是递归的。若此处只查顶层，`passes=[{z: NaN}]` 会
+/// 变成「校验通过、渲染失败」，且错误类型从 `Validation` 变成 `Render` ——
+/// 文档承诺的「宽松模式唯一硬失败项 = NonFinite」随之失真。
 fn check_finite(
     name: &str,
     value: &crate::model::ParamValue,
@@ -526,17 +535,49 @@ fn check_finite(
     var: &nctool_tpl::Variable,
     report: &mut ValidationReport,
 ) {
-    if let crate::model::ParamValue::Number(n) = value {
-        if !n.is_finite() {
+    let suffix = location_suffix(template_name, var);
+    check_finite_value(name, value, "", &suffix, report, 0);
+}
+
+/// 递归检查单个值的有限性；`path` 定位列表元素（`passes[0]`），`suffix` 是
+/// 来源说明（模板引用位置或"（规格默认值）"）。
+///
+/// `depth` 是兜底：与渲染期 `find_non_finite` 的深度上限同口径。YAML 锚点理论上
+/// 可构造自引用结构，没有上限的递归会把校验本身挂死——宁可放过极端情况。
+fn check_finite_value(
+    name: &str,
+    value: &crate::model::ParamValue,
+    path: &str,
+    suffix: &str,
+    report: &mut ValidationReport,
+    depth: usize,
+) {
+    const MAX_DEPTH: usize = 32;
+    if depth > MAX_DEPTH {
+        return;
+    }
+    match value {
+        crate::model::ParamValue::Number(n) if !n.is_finite() => {
             report.issues.push(ValidationIssue::error_kind(
                 IssueKind::NonFinite,
                 name,
-                format!(
-                    "数值参数为 NaN/Inf（非有限数），拒绝生成{}",
-                    location_suffix(template_name, var)
-                ),
+                format!("数值参数{path}为 NaN/Inf（非有限数），拒绝生成{suffix}"),
             ));
         }
+        crate::model::ParamValue::List(items) => {
+            for (i, item) in items.iter().enumerate() {
+                check_finite_value(
+                    name,
+                    item,
+                    &format!("{path}[{i}]"),
+                    suffix,
+                    report,
+                    depth + 1,
+                );
+            }
+        }
+        // Integer / String / Bool 天然有限
+        _ => {}
     }
 }
 
@@ -565,7 +606,14 @@ fn check_missing(
         if spec.and_then(|s| s.derive.as_ref()).is_some() {
             continue;
         }
-        let has_default = var.optional || spec.and_then(|s| s.default.as_ref()).is_some();
+        // 模板内联兜底（`var.optional`，即 `{{ X | default(0) }}`）**不能**短路
+        // 条件必选：那正是项目明令禁止的写法 —— 互斥分支参数被 `default(0)` 兜底后
+        // 会静默产出 `Z0`，且此前不产生任何 Missing / ConditionalSkipped 提示，
+        // 清单里声明的 `required_if` 形同虚设（见 `undercut_fs.j2` 头部注释）。
+        // 规格显式声明的 `default` 是可 review 的合法取值，仍然算兜底。
+        let required_if_declared = spec.and_then(|s| s.required_if.as_ref()).is_some();
+        let has_default = spec.and_then(|s| s.default.as_ref()).is_some()
+            || (var.optional && !required_if_declared);
         if has_default {
             continue;
         }
@@ -979,6 +1027,58 @@ mod tests {
         assert!(
             report.has_kind(IssueKind::NonFinite),
             "NaN 应带 NonFinite 类别: {report:?}"
+        );
+    }
+
+    #[test]
+    fn nan_inside_list_is_rejected() {
+        // 回归（P0）：`check_finite` 此前只查顶层 `Number`，列表元素里的 NaN 会
+        // 「校验通过、渲染失败」（渲染期 `ensure_finite_context` 递归拦下），
+        // 错误类型从 Validation 变成 Render，宽松模式的唯一硬失败项判定失真。
+        let mut ps = ParameterSet::new();
+        ps.values.insert(
+            "x".into(),
+            ParamValue::List(vec![
+                ParamValue::Number(1.0),
+                ParamValue::List(vec![ParamValue::Number(f64::NAN)]), // 嵌套一层更隐蔽
+            ]),
+        );
+        ps.set_number("z", 5.0);
+        let report = validate_template(TPL, "t.j2", &[], &ps, &[]);
+        assert!(
+            report.has_kind(IssueKind::NonFinite),
+            "列表元素里的 NaN 必须报 NonFinite: {}",
+            report.summary()
+        );
+        // 消息要能定位到第几个元素，否则用户面对一长串列表无从下手
+        let issue = report.of_kind(IssueKind::NonFinite).next().unwrap();
+        assert!(
+            issue.message.contains("[1][0]"),
+            "应带元素下标路径: {}",
+            issue.message
+        );
+    }
+
+    #[test]
+    fn nan_spec_default_is_rejected() {
+        // 回归（P1）：规格默认值此前不做有限性检查。`default: .nan` 会通过类型
+        // 检查、绕过区间比较（NaN 的任何比较都是 false）、且白名单通常未声明，
+        // 于是校验全绿，NaN 却在渲染前被静默注入上下文。
+        let specs = [ParamSpec::new("x", ParamKind::Number, "X 坐标")
+            .with_default(ParamValue::Number(f64::NAN))];
+        let mut ps = ParameterSet::new();
+        ps.set_number("z", 5.0);
+        let report = validate_template(TPL, "t.j2", &specs, &ps, &[]);
+        assert!(
+            report.has_kind(IssueKind::NonFinite),
+            "规格默认值为 NaN 必须报错: {}",
+            report.summary()
+        );
+        let issue = report.of_kind(IssueKind::NonFinite).next().unwrap();
+        assert!(
+            issue.message.contains("规格默认值"),
+            "消息应标明来源是规格默认值: {}",
+            issue.message
         );
     }
 
@@ -1451,6 +1551,46 @@ mod tests {
         assert_eq!(info.len(), 1, "{}", report.summary());
         assert_eq!(info[0].param.as_deref(), Some("x"));
         assert!(info[0].message.contains("z = 5"), "{}", info[0].message);
+    }
+
+    #[test]
+    fn required_if_is_not_short_circuited_by_template_inline_default() {
+        // 回归（P0）：模板写 `{{ y | default(0) }}` 会让 `var.optional` 为 true，
+        // 而 `has_default` 判定此前早于 `required_if` 判定 —— 清单里声明的条件必选
+        // 因此**永久失效且无任何提示**，互斥分支参数被 `default(0)` 兜底后静默
+        // 产出 `Z0`。这正是 `undercut_fs.j2` 头部注释与 `templates.yaml:47-51`
+        // 明令禁止的场景，此前没有任何测试覆盖。
+        let specs = [
+            ParamSpec::new("y", ParamKind::Number, "仅 z=5 时使用的坐标")
+                .required_when("z", [ParamValue::Number(5.0)]),
+        ];
+        let mut ps = ParameterSet::new();
+        // x、z 都提供，隔离出 y 的行为
+        ps.set_number("x", 10.0).set_number("z", 5.0); // 条件命中 → y 必选
+        let report = validate_template(TPL, "t.j2", &specs, &ps, &[]);
+        let issue = report
+            .of_kind(IssueKind::Missing)
+            .next()
+            .unwrap_or_else(|| panic!("模板内联 default 不得短路条件必选: {}", report.summary()));
+        assert_eq!(issue.param.as_deref(), Some("y"));
+    }
+
+    #[test]
+    fn required_if_untriggered_branch_still_skips_with_inline_default() {
+        // 条件未命中时行为不变：分支不可达，模板内联兜底值不会进入 G-code
+        let specs = [
+            ParamSpec::new("y", ParamKind::Number, "仅 z=5 时使用的坐标")
+                .required_when("z", [ParamValue::Number(5.0)]),
+        ];
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", 10.0).set_number("z", 1.0); // 条件未命中
+        let report = validate_template(TPL, "t.j2", &specs, &ps, &[]);
+        assert!(
+            report.is_ok(),
+            "条件未命中时不该报缺参: {}",
+            report.summary()
+        );
+        assert!(!report.has_kind(IssueKind::Missing));
     }
 
     #[test]

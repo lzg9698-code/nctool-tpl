@@ -292,6 +292,24 @@ const MAX_LINE_NUMBER_DIGITS: usize = 32;
 ///
 /// 行号规则：程序号行（`O` 开头）与已有 `N` 前缀的行不重复编号；
 /// 行号达到 `max_line_number` 后不再递增。
+///
+/// 前缀类配置走 [`non_empty_config`]：空串会让 `starts_with("")` 恒真，
+/// 后果与键缺失一样是"整份程序不编号"，必须同等回退默认值。
+/// 读取机床配置里的**非空**字符串键：键缺失或值为空串都回退 `fallback`。
+///
+/// 空串不是"合法的空约定"：`line_number_prefix` / `program_prefix` 都参与
+/// `starts_with` 判定，空串会让 `starts_with("")` 恒真 —— 每一行都被判为
+/// "程序号行"或"已有行号"，于是 `line_numbers: true` 下**一行都不编号**，
+/// 且没有任何告警。这与键缺失的后果完全一致，因此两者必须同等对待。
+/// 机床配置是用户可编辑的字符串，这一层防御不能省。
+fn non_empty_config<'a>(machine: &'a MachineConfig, key: &str, fallback: &'a str) -> &'a str {
+    machine
+        .get(key)
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .unwrap_or(fallback)
+}
+
 fn postprocess(
     rendered: &str,
     template: &str,
@@ -323,7 +341,7 @@ fn postprocess(
     // Gcode 格式：行号 + 空行清理 + trim + 可选 ASCII 清洗。
     // 行号前缀/宽度与程序号前缀来自机床配置（generic 默认 N / 4 / O），
     // 实现"换机床即换编程约定"；键缺失时回退默认值。
-    let line_prefix = machine.get("line_number_prefix").unwrap_or("N");
+    let line_prefix = non_empty_config(machine, "line_number_prefix", "N");
     // 宽度夹在 [1, MAX_LINE_NUMBER_DIGITS]：机床配置是用户可编辑的字符串，
     // 缺失下界会产出无内容的行号，缺失上界则一行就能触发 GB 级分配
     // （分配失败是进程 abort，不是可捕获错误）。
@@ -332,7 +350,7 @@ fn postprocess(
         .and_then(|d| d.parse::<usize>().ok())
         .unwrap_or(DEFAULT_LINE_NUMBER_DIGITS)
         .clamp(1, MAX_LINE_NUMBER_DIGITS);
-    let program_prefix = machine.get("program_prefix").unwrap_or("O");
+    let program_prefix = non_empty_config(machine, "program_prefix", "O");
     // step=0 视为 1：否则行号原地不动，产出重复的 N0000 行
     let step = opts.line_number_step.max(1);
     let mut line_no: u32 = 0;
@@ -667,6 +685,46 @@ mod tests {
         let out = g.generate("program_header", &ps, &m, &opts).unwrap();
         assert!(out.contains("P000042"), "自定义程序号格式: {out}");
         assert!(out.contains("L010 "), "自定义行号格式: {out}");
+    }
+
+    #[test]
+    fn empty_line_number_prefix_falls_back_to_default() {
+        // 回归（P1）：空串前缀会让 `starts_with("")` 恒真 —— 每一行都被判为
+        // "已有行号"，`line_numbers: true` 下一行都不编号且**没有任何告警**。
+        // 键缺失与键为空串必须同等回退默认值。
+        let g = GCodeGenerator::new();
+        let mut m = machine();
+        m.config.insert("line_number_prefix".into(), "".into());
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", 21.0).set_number("y", 15.0);
+        let opts = GenerationOptions {
+            line_numbers: true,
+            ..Default::default()
+        };
+        let out = g.generate("safe_move", &ps, &m, &opts).unwrap();
+        assert!(
+            out.contains("N0010 "),
+            "空前缀必须回退 N，而不是静默不编号: {out}"
+        );
+    }
+
+    #[test]
+    fn empty_program_prefix_falls_back_to_default() {
+        // 同上：空 program_prefix 会让每一行都被当成程序号行，同样不编号
+        let g = GCodeGenerator::new();
+        let mut m = machine();
+        m.config.insert("program_prefix".into(), "".into());
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", 21.0).set_number("y", 15.0);
+        let opts = GenerationOptions {
+            line_numbers: true,
+            ..Default::default()
+        };
+        let out = g.generate("safe_move", &ps, &m, &opts).unwrap();
+        assert!(
+            out.contains("N0010 "),
+            "空程序号前缀必须回退 O，而不是静默不编号: {out}"
+        );
     }
 
     #[test]

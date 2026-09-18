@@ -299,7 +299,19 @@ pub fn validate_config_keys(cfg: &MachineConfig) -> Vec<String> {
                         ));
                     }
                 }
-                MachineKeyKind::String => {}
+                MachineKeyKind::String => {
+                    // 空串不是"合法的空约定"：这些键要么被模板直接插值（会插出
+                    // 空片段），要么参与 `starts_with` 判定 —— 空前缀会让
+                    // `starts_with("")` 恒真，导致整份程序一行都不编号且无告警
+                    // （见 `pipeline::non_empty_config`）。
+                    if v.trim().is_empty() {
+                        warnings.push(format!(
+                            "配置键 {k} 为空字符串（将静默回退默认值 {:?}；\
+                             请直接删除该键或填写有效值）",
+                            s.default
+                        ));
+                    }
+                }
             },
         }
     }
@@ -440,6 +452,25 @@ mod tests {
         let warnings = validate_config_keys(&c);
         assert_eq!(warnings.len(), 1);
         assert!(warnings[0].contains("feed_modd"));
+    }
+
+    #[test]
+    fn empty_string_value_warns() {
+        // 回归（P1）：此前 `MachineKeyKind::String => {}` 不做任何校验，
+        // 空串能通过。而空前缀会让 `starts_with("")` 恒真，整份程序的行号
+        // 静默消失（`pipeline::non_empty_config` 已回退默认值，这里补上提示）
+        let mut c = MachinePreset::Generic.config();
+        c.config.insert("line_number_prefix".into(), "".into());
+        c.config.insert("program_prefix".into(), "   ".into()); // 纯空白同样算空
+        let warnings = validate_config_keys(&c);
+        assert_eq!(warnings.len(), 2, "两个空值都应告警: {warnings:?}");
+        assert!(warnings.iter().any(|w| w.contains("line_number_prefix")));
+        assert!(warnings.iter().any(|w| w.contains("program_prefix")));
+        // 消息要给出回退值，否则用户不知道会变成什么
+        assert!(
+            warnings.iter().any(|w| w.contains("N")),
+            "应提示回退默认值: {warnings:?}"
+        );
     }
 
     #[test]
