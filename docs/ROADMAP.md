@@ -80,7 +80,7 @@ CLI 已经能完成「模板 → 参数 → G-code」全流程，功能面是完
 | Q8 | **目标平台优先级**：Windows / Linux / macOS？ | Windows 优先（CI 已加 windows 矩阵），Linux 次之 | E（决定验证矩阵投入） |
 | Q9 | **发布渠道**：只要 crates.io，还是要 GitHub Release 二进制？ | 两者都要（用户不一定装 Rust 工具链） | F |
 | Q10 | **HTTP 服务器选型**：tiny_http（轻）vs axum（可扩展）？ | tiny_http；API 超过 8 个端点再迁移 axum | C |
-| Q11 | `release.yml` 的 `CARGO_REGISTRY_TOKEN` 是否已配置？ | 未配置（CI 会跳过发布并给 notice） | B（影响发版方式：手动 or 自动） |
+| Q11 | `release.yml` 的 `CARGO_REGISTRY_TOKEN` 是否已配置？ | ~~未配置~~ **实际已配置** —— 2026-09-18 实证：tag 推送后 `Release` 工作流的 `Publish <crate>` 步骤**确实执行**（而非走「token 缺失则跳过」分支），只是因该版本已被本地先发布而报「版本已存在」。故 CI 具备自动发布能力，未来发版应**先推 tag 让 CI 发布**，或在本地发布后接受该步骤红 | B（影响发版方式：手动 or 自动） |
 
 > **Q2 与 Q6 是决定路线图形状的两个开关**，其余影响的是工作量而非结构。
 > 若 Q2 = 无法验证 → 必须在 README 与所有文档中显著声明「未经工艺验证，投产前必须自行核对」，
@@ -610,7 +610,11 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 > 实际进展（2026-09-03 更新）：**B1–B2 全部完成**——三 crate 已手动 publish 至
 > crates.io（tpl 0.3.2 / core 0.2.1 / cli 0.2.1，其中 **nctool-cli 为首次上线**），
 > tag `nctool-tpl-v0.3.2` / `nctool-core-v0.2.1` / `nctool-cli-v0.2.1` 已推送。
-> Q11 的 `CARGO_REGISTRY_TOKEN` 仍未配置，故走手动发布而非 CI 自动发布。
+> **更正（2026-09-18）**：`CARGO_REGISTRY_TOKEN` **实际已配置**（Q11 原假设「未配置」不成立）。
+> 0.3.2 / 0.2.1 / 0.2.1 那次的确走了手动 publish，本轮的 0.4.0 / 0.3.0 / 0.3.0 也是手动 publish
+> （本机 reftable 仓库致 `cargo publish` 不可用，改在普通格式克隆中执行），但 CI 的
+> `Publish <crate>` 步骤在 tag 推送后**确实运行并因版本已存在而失败** —— 这反证了 token 已配置。
+> 下次发版建议**先推 tag**，由 CI 自动 publish，可省去手动步骤且不会产生红运行。
 > B3 属阶段 C；B4.1/B4.3 完成，B4.2（golden 保护）记入 Backlog——
 > `NCTOOL_UPDATE_GOLDEN` 建议写成 CI 门禁的前置人工步骤。
 > 附带处置：CI `coverage` job 自 22a056e 引入起持续失败（quality 三平台矩阵
@@ -691,7 +695,7 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 
 - [x] **F1.1** API 冻结确认（当前 Web API 契约已补测试，正式发布前仍需最终复核）
 - [x] **F1.2** `cargo install --path cli` 验证（隔离 root 安装后 `nctool 0.2.1` 可运行）
-- [ ] **F1.3** GitHub Release 二进制（Windows / Linux / macOS）—— `.github/workflows/release.yml` 三平台二进制 job 已就绪（2026-09-10，文件名带 target 后缀），Windows release 构建与三 crate `cargo package` 已本地验证；**真实 Release 待 tag 推送触发 CI 后落地**
+- [x] **F1.3** GitHub Release 二进制（Windows / Linux / macOS）—— ✅ **2026-09-18 落地**：push tag `nctool-tpl-v0.4.0` / `nctool-core-v0.3.0` / `nctool-cli-v0.3.0` 后，三个 Release 均创建成功，各带 3 个二进制资产（`nctool-x86_64-pc-windows-msvc.exe` 4.25 MB / `nctool-x86_64-unknown-linux-gnu` 3.62 MB / `nctool-aarch64-apple-darwin` 3.09 MB）。已下载 Windows 产物实测：`nctool 0.3.0` 可运行并正确产出 G-code。**注意该 run 整体显示 failure**：`Publish <crate>` 步骤因版本已被本地先发布而报「已存在」（见 Q11 更正），三个 `Build binary assets` job 均 success，发布物本身完整
 - [x] **F1.4** CHANGELOG + README 与功能一致（README 补 `generate` / `ui` 子命令、**退出码矩阵**、管线后处理性能基线与万行实测；`core/README.md` 补 ASCII 清洗、golden 与性能测试说明、修正过时的测试计数 63+8 → 84+11+3）
 - [x] **F2.1** 《机床配置指南》（新增 `docs/MACHINE_CONFIG_GUIDE.md`：配置键完整清单、内建预设、nctool.toml 自定义、加载顺序、关键约束——`line_number_digits` 夹紧到 32 的内存安全理由、`Choice` 键合法性、未知键告警、CLI `--line-number-step=0` 兜底）
 - [x] **F2.2** 《模板编写指南》（新增 `docs/TEMPLATE_WRITING_GUIDE.md`：NC 数值格式化过滤器、数学过滤器、必选/可选判定、机床配置引用、多模板 include/extends、validate/render 两层校验、调试技巧、反模式与边界、发布前清单）

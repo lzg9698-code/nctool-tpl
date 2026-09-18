@@ -14,16 +14,17 @@
 
 | 项目 | 结论 |
 |---|---|
-| **整体进度** | 功能主线（阶段 A–E）**已收口**，阶段 F 仅剩 GitHub Release 二进制落地（配置就绪，待 tag 触发 CI）；处于「发版临门一脚」状态 |
-| **清单记账** | ROADMAP §8 执行跟踪 **69 / 72 项（96%）** 勾选（A 12/13 · B 12/13 · C 12/12 · D 12/12 · E 12/12 · F 9/10）。本轮新勾 3 项（E2.2 / E2.3 / B-Backlog），均有 CI 取证 |
+| **整体进度** | **发版已完成**（2026-09-18）：阶段 A–F 的交付项只剩 2 条外部依赖/Backlog。三个 crate 已发布 crates.io（tpl 0.4.0 / core 0.3.0 / cli 0.3.0），三个 GitHub Release 已带三平台二进制 |
+| **清单记账** | ROADMAP §8 执行跟踪 **70 / 72 项（97%）** 勾选（A 12/13 · B 12/13 · C 12/12 · D 12/12 · E 12/12 · F 10/10）。本轮共新勾 4 项（E2.2 / E2.3 / B-Backlog / F1.3），均有 CI 或发布物取证；余 2 项为 A1 机床预设按键值核对（无手册资源）与 B4.2（Backlog） |
+| **发布状态** | 三个 crate 在 crates.io 可见（实测指定版本端点 `created_at` 为 2026-09-18T05:01–05:02Z）；三个 Release 各挂 3 个二进制（Windows 4.25 MB / Linux 3.62 MB / macOS-arm64 3.09 MB）。已下载 Windows 产物实测 `nctool 0.3.0` 可运行并正确产出 G-code；亦以 `cargo install nctool-cli --version 0.3.0` 从 crates.io 全新安装验证通过 |
 | **功能可用性** | CLI **10 个子命令**全部可用（除 `part` 占位）+ Web UI 完整交互闭环；模板库已整合 NCTool_V3 资产：**7 个内置 + 25 个文件模板**（隐藏 3） |
 | **测试基线** | workspace **527 项**实测，**527 通过 / 0 失败**（另 3 项 ignored：2 项万行实测需 `--release --ignored`、1 项 doc-test） |
 | **覆盖率** | 行 **92.19%** / 区域 91.85% / 函数 92.04%；CI **真门禁** `--fail-under-lines 90`（本地实测 exit 0，余量 2.19pt ≈ 210 行） |
-| **CI 状态** | 三平台矩阵（fmt / clippy `-D warnings` / test `--workspace` / doc `-D warnings` / audit）+ 覆盖率门 + 前后端对拍门。最近绿灯 **run #34（`d3d144f`）四个 job 全 success** |
-| **✅ 本轮（09-15 ~ 09-18）** | ① 架构评估 P0×3 + P1×4 + P2-1 **全部收口** ② 覆盖率从「未度量」到真门禁并两次上调（无 → 89% → 90%）③ CI 补 `--workspace`（被测项 155 → 527）④ NCTool_V3 模板资产整合（`manifest.rs` / `variables.rs` / `derive.rs` + 25 模板 + INDEX G420 全套）⑤ server.rs 接口契约补测 10 项 |
-| **当前最大问题** | ① CHANGELOG `[未发布]` **积压 576 行**未发版，三个 crate 仍停在 0.3.2 / 0.2.2 / 0.2.2 ② 真实 Release 未触发（依赖凭据）③ `part generate` 未实现（Backlog #2）④ 工艺评审长期外部依赖 |
+| **CI 状态** | 三平台矩阵（fmt / clippy `-D warnings` / test `--workspace` / doc `-D warnings` / audit）+ 覆盖率门 + 前后端对拍门。发版提交 `3031a71`（run #37）**全绿**；此前连续多次绿灯（最近 `db8d928` / `6e5a3a7`） |
+| **✅ 本轮（09-15 ~ 09-18）** | ① 架构评估 P0×3 + P1×4 + P2-1 **全部收口** ② 覆盖率从「未度量」到真门禁并两次上调（无 → 89% → 90%）③ CI 补 `--workspace`（被测项 155 → 527）④ NCTool_V3 模板资产整合（`manifest.rs` / `variables.rs` / `derive.rs` + 25 模板 + INDEX G420 全套）⑤ server.rs 接口契约补测 10 项 ⑥ **发版**：0.4.0 / 0.3.0 / 0.3.0 上线 crates.io + 三平台 Release 二进制 |
+| **当前最大问题** | ① `part generate` 未实现（Backlog #2）② 工艺评审长期外部依赖（R1，Q2=否）③ 覆盖率洼地 `src/extract.rs` 80.53% ④ 架构评审 P2-2~P2-6 未动 ⑤ 发版遗留：`Release` 工作流的 `Publish <crate>` 步骤会红（Q11 见 §6.4） |
 
-**一句话**：地基、功能、联调、质量门全部完成且全绿，文档漂移已在本轮修正；剩下的只有「发版动作本身」和「外部工艺评审」两件事。
+**一句话**：地基、功能、联调、质量门、发版全部完成且全绿；剩下的只有「外部工艺评审」与 Backlog 里的增量功能。
 
 ---
 
@@ -38,8 +39,8 @@
 | **C** UI 服务与前端联通 | 浏览器能看真实模板库 | P1 | 5–8 | 12/12 | — | ✅ 完成 |
 | **D** 完整交互闭环 | 浏览器内能完整生成 | P2 | 8–12 | 12/12 | — | ✅ 完成 |
 | **E** 联调测试 | 让"可用"可被证明 | P1 | 4–6 | **12/12** | — | ✅ 完成（本轮勾 E2.2/E2.3） |
-| **F** 上线与迭代 | 能装上、能用、能反馈 | P0(发版) | 3–5 | 9/10 | F1.3 真实 Release 待 tag 触发 | 🚧 临门一脚 |
-| **合计** | | | **26–40** | **69/72 (96%)** | 见 §6.1 | ≈96% |
+| **F** 上线与迭代 | 能装上、能用、能反馈 | P0(发版) | 3–5 | **10/10** | — | ✅ 完成（本轮勾 F1.3） |
+| **合计** | | | **26–40** | **70/72 (97%)** | 见 §6.1 | ≈97% |
 
 ### 1.1 阶段 A — 需求与设计收口（12/13）
 
@@ -63,9 +64,9 @@ B1–B5 全部完成。**本轮新勾 B-Backlog**：CI coverage job 根因已修
 
 CLI E2E 契约、HTTP 契约、21 组 golden、错误边界、413、万行性能均已覆盖。**本轮勾选 E2.2 / E2.3**：取证为 CI run #34（`d3d144f`）的 `ubuntu-latest` 与 `macos-latest` quality job 均 conclusion = success（XDG 配置路径与 Unix 行尾由该 job 覆盖）。
 
-### 1.6 阶段 F — 上线与迭代（9/10）
+### 1.6 阶段 F — 上线与迭代（10/10，本轮收口）
 
-文档（README / CHANGELOG / 指南）、Issues 模板、迭代节奏、Backlog 排序、三平台二进制 job（release.yml）均完成。剩 **F1.3 真实 Release**：tag 推送触发 CI 构建三平台二进制 + crates.io publish（`CARGO_REGISTRY_TOKEN` 未配置时 publish 自动跳过并提示）。
+文档（README / CHANGELOG / 指南）、Issues 模板、迭代节奏、Backlog 排序均已完成。**本轮勾选 F1.3**：push 三个 tag 后 Release 工作流跑通三平台原生构建，三个 GitHub Release 各带 3 个二进制资产；三个 crate 同步发布到 crates.io。发布物已验证（下载 Windows 产物实测可运行 + `cargo install` 从 crates.io 全新安装实测可运行）。唯一遗留是 `Publish <crate>` 步骤会红，成因与处置见 §6.4。
 
 ---
 
@@ -94,7 +95,7 @@ CLI E2E 契约、HTTP 契约、21 组 golden、错误边界、413、万行性能
 
 ## 3. 本轮（2026-09-15 ~ 09-18）交付
 
-按性质分四类，全部已提交（`21b4d34` → `db8d928`，共 11 个 commit）：
+按性质分四类，全部已提交并推送（`21b4d34` → `3031a71`，共 12 个 commit；发版产物见 §0 与 §6.4）：
 
 **一、架构评估收口（`docs/ARCHITECTURE_REVIEW.md`）**
 
@@ -209,9 +210,11 @@ CLI E2E 契约、HTTP 契约、21 组 golden、错误边界、413、万行性能
 | D6 | 内置模板与机床预设未经**真实工艺评审** | ❌ 外部依赖（Q2=否） |
 | B4.2 | golden 变更保护步骤化（`NCTOOL_UPDATE_GOLDEN` 人工流程文档化） | ❌ Backlog |
 | P2-2~P2-4, P2-6 | 架构评审 P2 剩余项（数据表内联 / `model.rs` 拆分 / 扩展点 / 上下文复用） | ❌ 未动 |
-| — | F1.3 真实 GitHub Release 未触发（配置已就绪，待 tag push + CI） | 🚧 依赖凭据 |
-| — | CHANGELOG `[未发布]` 积压 **576 行**未发版（三个 crate 停在 0.3.2 / 0.2.2 / 0.2.2） | 🚧 见 §8 |
+| — | ~~F1.3 真实 GitHub Release 未触发~~ | ✅ 已清（2026-09-18，三个 Release 各带三平台二进制） |
+| — | ~~CHANGELOG `[未发布]` 积压未发版~~ | ✅ 已清（2026-09-18 转为 0.4.0 / 0.3.0 / 0.3.0 版本段并发布） |
 | — | `scripts/check_docs_links.py` 存在但**未接入 CI**（无调用点） | 🚧 工具闲置（非现存问题：09-18 对全部 tracked `.md` 实跑一遍，链接与锚点均通过；缺的是防未来漂移的门禁） |
+| — | `Release` 工作流的 `Publish <crate>` 步骤在本地先发布时会红 | 🚧 见 §6.4（发布物不受影响；下次先推 tag 即可避免） |
+| — | 发布包包含仓库级杂物（`output/` 原型 PNG、`ui/`、`scripts/`、启动脚本），tpl 包 925 KiB | 🚧 需加 `include`/`exclude`；注意 `include_str!("../ui/index.html")` 使 `ui/` 不可简单排除 |
 
 ### 6.2 风险登记册（来源 ROADMAP §6，标注当前状态）
 
@@ -233,6 +236,21 @@ CLI E2E 契约、HTTP 契约、21 组 golden、错误边界、413、万行性能
 | `docs/PROJECT_STATUS.md`（本文） | 停在 09-10：记 344 项测试（实为 527）、6 个内置模板（实为 7 + 25 文件模板）、覆盖率门未生效（已是真门禁）、§5.4 描述的绑定策略与代码相反 | ✅ 09-18 全量重写 |
 | `docs/ROADMAP.md` §8 | 3 项已完成但未勾选：`B-Backlog`（根因已修）、`E2.2`/`E2.3`（CI 矩阵已承担并绿灯） | ✅ 09-18 勾选并附 CI 取证 |
 | `docs/ROADMAP.md` §0/§8 | TL;DR「当前位置」停留 297 项测试；阶段 B 注记仍记 coverage job 非阻断 | ✅ 09-18 更新 |
+| `docs/ROADMAP.md` Q11 | 记 `CARGO_REGISTRY_TOKEN` **未配置**，与事实相反 | ✅ 09-18 更正并给出实证（见 §6.4） |
+
+### 6.4 发版遗留：`Publish <crate>` 步骤会红（Q11 实证）
+
+**现象**：三个 tag 推送后，`Release` 工作流的三个运行整体 conclusion = **failure**。查 job 明细：三个 `Build binary assets`（windows / linux / macos-arm64）**全部 success**，发布物完整；失败的是 `Publish <crate>` job 里的 publish 步骤。
+
+**成因**：`release.yml` 的 publish 步骤以 `env.CARGO_REGISTRY_TOKEN != ''` 为条件，且**确实被执行**（而非走「token 缺失则跳过」分支）—— 这反证了 GitHub Secret 里**已配置** `CARGO_REGISTRY_TOKEN`，而 ROADMAP Q11 一直记的是「未配置」。步骤失败的直接原因是该版本**已被本地先发布**：本轮按「改版本号 → 提交 → 推 tag → 本地 publish」的顺序执行，而 CI 在 tag 推送后也尝试发布同一版本，cargo 报「crate version already uploaded」。
+
+**影响**：无实质影响 —— 三个 crate 各只发布一次且内容正确，三个 Release 的二进制资产齐备（已下载实测可运行）。
+
+**下次怎么做**（二选一）：
+1. **先推 tag 交 CI 发布**（推荐）：CI 有 token，能自动 publish，且不会出现红运行 —— 本次的手动 publish 属于把 `CARGO_REGISTRY_TOKEN` 未配置当成了既定事实，是 Q11 记录错误导致的绕路。
+2. 若坚持本地先发布：接受该步骤红，或给 publish 步骤加幂等守卫（先查 crates.io 该版本是否已存在再决定是否 publish）。
+
+**附**：本机 `cargo publish` 直接不可用 —— 工作区仓库为 **reftable** 引用格式（`extensions.refstorage = reftable`，`.git/HEAD` 指向 `refs/heads/.invalid` 占位），cargo 内置 libgit2 无法解析，报 `failed to begin git status for repo`。本次改在 `git clone --ref-format=files` 的临时克隆中发布（已验证克隆内 `HEAD → refs/heads/master`）。**这是本机环境限制，与仓库内容无关，CI 不受影响。**
 
 ---
 
@@ -252,27 +270,29 @@ CLI E2E 契约、HTTP 契约、21 组 golden、错误边界、413、万行性能
 
 ## 8. 下一步建议（按优先级）
 
-**第一优先：把积压发出去（`[未发布]` 576 行）**
+**本轮已完成（09-18）**
 
-当前 `[未发布]` 段包含大量**用户可见**的已提交能力：模板整合、`derive` 查表换算、`variables.yaml` 变量库、清单元数据外部化、参数规格系统、`inspect` 展示规格、`--param` 按规格归一、角度制三角函数过滤器、INDEX G420 全套模板。而 crates.io 上仍是 0.3.2 / 0.2.2 / 0.2.2 —— 用户装到的版本与仓库能力差一大截。需要：定版本号（`[未发布]` 含破坏性变更，按 0.x 语义应为 **minor 提升**）→ 拆 CHANGELOG 到三个 crate → tag → 触发 release.yml。
+1. ✅ **发版**：tpl 0.4.0 / core 0.3.0 / cli 0.3.0 发布到 crates.io，三个 tag 与三个 GitHub Release（含三平台二进制）落地；发布物经「下载二进制实测」与「`cargo install` 从 crates.io 全新安装实测」双重验证。
+2. ✅ **F1.3 收口**：Release 三平台二进制 job 真实跑通（此前只有配置）。
+3. ✅ **文档漂移修正**：本文全量重写、ROADMAP 勾选 4 项 + Q11 更正、README 示例输出按 0.3.0 实测重写、CHANGELOG 补 `[nctool-cli 0.2.2]` 段标题 + 去重。
 
-**第二优先：F1.3 真实 Release 二进制**
+**第一优先：补覆盖率洼地**
 
-`release.yml` 的双 job（publish + 三平台 binaries）已就绪，`CARGO_REGISTRY_TOKEN` 未配置时 publish 自动跳过并提示。发版动作会顺带落地这一项。
+`src/extract.rs` 80.53% 是全项目最低，且承载「必选/可选判定」这一最微妙逻辑（判错会导致静默产出错误 G-code 或误拦用户）。其次是 `server.rs` 86.83%、`context.rs` 88.09%。补上去后可再次上调阈值门（当前 90%，基线 92.19%）。
 
-**第三优先：补覆盖率洼地**
+**第二优先：修发布流程与包内容**
 
-`src/extract.rs` 80.53% 是全项目最低，且承载「必选/可选判定」这一最微妙逻辑（判错会导致静默产出错误 G-code 或误拦用户）。其次是 `server.rs` 86.83%、`context.rs` 88.09%。补上去后可再次上调阈值门。
+① 按 §6.4 的结论，下次发版**先推 tag 交 CI 发布**；② 给三个 crate 加 `include`/`exclude` 收窄发布包（当前 tpl 包 925 KiB，含 `output/` 原型 PNG、`scripts/`、启动脚本等仓库级杂物）—— 注意 `cli` 的 `include_str!("../ui/index.html")` 意味着 `ui/` 必须保留。
 
-**第四优先：Backlog 继续**
+**第三优先：Backlog 继续**
 
-键槽铣已完成，模板扩充剩外圆车削与攻丝；`part generate` 设计已攒够输入；参数集预设成本最低（前端 localStorage）。
+内置模板扩充剩外圆车削与攻丝（`facing` / `slot_milling` 已完成）；`part generate` 设计已攒够输入（E5 走查的三处局限）；参数集预设成本最低（前端 localStorage 即可落地）。
 
 **长期外部依赖（不是代码能解决的）**
 
 外部工艺评审（R1）：工程师逐行核对 ⚠️ 项 + 机床空运行验证 21 组 golden。`nctool part` 占位需按 F4 加权结果决定是否投入。
 
-**绝不能砍的三项**（ROADMAP §7.3）：① 工艺正确性评审（A1）② 三机床 golden 基线（A2）③ 发版与安装验证（F1）。
+**绝不能砍的三项**（ROADMAP §7.3）：① 工艺正确性评审（A1）② 三机床 golden 基线（A2）③ 发版与安装验证（F1）—— 第 ③ 项本轮已完成。
 
 ---
 
