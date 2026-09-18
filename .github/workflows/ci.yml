@@ -62,18 +62,27 @@ jobs:
         run: cargo clippy --workspace --all-targets -- -D warnings
 
       - name: Test
-        run: cargo test --workspace --all-targets
+        # `--locked`：Cargo.lock 已提交，CI 必须与它一致（否则"本地能过、CI 红了"无解）
+        run: cargo test --workspace --all-targets --locked
+
+      # `--all-targets` 不跑 doctest：实测 `cargo test --workspace --all-targets`
+      # 的输出里没有 Doc-tests 段。README 声称"单元 + 集成 + 文档"全跑，故单独补一步。
+      - name: Doc tests
+        run: cargo test --workspace --doc
 
       - name: Doc check (zero warnings)
         run: cargo doc --workspace --no-deps
         env:
           RUSTDOCFLAGS: "-D warnings"
 
+      # 固定版本 + 预编译二进制：此前 `cargo install cargo-audit --locked` 要在三个
+      # runner 上各从源码编译一遍（连续两次卡在本步骤 exit 101）。
       - name: Install cargo-audit
-        run: cargo install cargo-audit --locked
+        uses: taiki-e/install-action@cargo-audit
 
+      # `--deny warnings`：默认只报漏洞（vulnerability），unmaintained / yanked 不失败
       - name: Security audit
-        run: cargo audit
+        run: cargo audit --deny warnings
 
   coverage:
     name: Coverage (Ubuntu)
@@ -107,16 +116,23 @@ jobs:
       - name: Verify cargo-llvm-cov
         run: cargo llvm-cov --version
 
-      # 阈值门与生成放在同一步：`cargo llvm-cov report` **不接受** `--all-features`
-      # （它只读已有数据），拆成两步会引入"读回的数据与生成时不一致"的风险。
+      # 生成与判定分成两步，但**判定必须用生产口径**：
       #
-      # 90% 是**有意留出余量的地板**：当前基线 91.30% 行覆盖
-      # （2026-09-17 补测 cli/src/output.rs 后实测，516 项测试）。
-      # 卡在当前值会让"新增少量未覆盖代码"也红，门禁随即被绕过；
-      # 1.3pt 余量约等于 120 行新代码，真掉这么多就是覆盖在退化，该拦。
-      # 覆盖率提升后请上调此值（只改这一个数字）。
-      - name: Generate coverage report (line gate 90%)
-        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info --fail-under-lines 90
+      # `--fail-under-lines` 不能用 —— llvm-cov 把 `src/*.rs` 内的 `#[cfg(test)]`
+      # 段本身计入分母（`src/lib.rs` 1824 行里测试段从第 64 行起占 1760 行），
+      # 于是「新增测试」会**推高**覆盖率数字，「新增未覆盖的生产代码」反而被稀释：
+      # 门禁显示 92.99%，排除测试段后的生产代码只有 88.65% —— 门禁绿 ≠ 生产代码达标。
+      # `--ignore-filename-regex` 只能按文件路径排除，管不到 `src/` 内部的测试段，
+      # 故改由 `scripts/check_coverage_caliber.py` 剔除测试段后重新统计。
+      #
+      # 88% 是**有意留出余量的地板**：当前基线 88.65%（4319/4872 生产行），
+      # 0.65pt 余量约等于 32 行未覆盖生产代码。覆盖率提升后请上调此值
+      # （只改下面 `python3` 那一行的 `--min`）。
+      - name: Generate coverage report (no gate)
+        run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+
+      - name: Check production coverage (line gate 88%)
+        run: python3 scripts/check_coverage_caliber.py lcov.info --min 88
 
       # 把覆盖率数字打进 job summary：没有数字的门禁等于没有门禁。
       # `--workspace` 不可省：漏掉它只会统计根 crate（nctool-tpl），
@@ -143,3 +159,27 @@ jobs:
           path: |
             lcov.info
             coverage-summary.txt
+
+  # `rust-version = "1.82"` 写在三个 Cargo.toml 里、README 与 CONTRIBUTING 也对外
+  # 承诺 1.82+，但此前**没有任何任务在 1.82 上编译过** —— 依赖任一 minor 抬高 MSRV
+  # 都会让这个承诺静默失真。本 job 就是为了让声明变成可验证的事实。
+  msrv:
+    name: MSRV (1.82)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Rust (1.82)
+        uses: dtolnay/rust-toolchain@1.82
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@v2
+
+      # 只 `check`、且**不带 `--all-targets`**：`rust-version` 承诺的是"下游能否
+      # 编译本 crate"，而下游构建的是 lib + bin，不会去编译本仓库的 bench/example。
+      # 带上 `--all-targets` 会把 criterion / assert_cmd 等 dev-dependencies 拉进来，
+      # 它们的 MSRV 通常高于生产依赖，属于本仓库自己的开发工具链问题，
+      # 不该让对外承诺失真。
+      - name: Check on 1.82
+        run: cargo check --workspace --locked

@@ -655,18 +655,49 @@ fn completion_requires_shell() {
 // 退出码矩阵自检：确保文档与实现不漂移
 // ---------------------------------------------------------------------------
 
+/// 守的是**文档侧**契约：README 的退出码矩阵是脚本作者判分支的依据，
+/// 漏掉或写错一个码不会让任何代码报错，只会让下游判错分支。
+///
+/// `kind → 退出码` 的映射本身由 `cli/src/output.rs` 的 `exit_code_matrix`
+/// 单元测试逐个钉住（改动即红），此处不重复；
+/// 「真实进程确实返回该码」由本文件其余用例逐条断言。
+///
+/// 本用例此前是**自证测试**：断言对象是函数内硬编码的局部数组，
+/// 与 `CliError::exit_code` 无任何链接，删掉矩阵里任一码它照样绿。
 #[test]
-fn exit_code_matrix_is_fully_covered() {
-    // 本清单必须覆盖矩阵里的每一个退出码，否则契约出现盲区
-    let covered = [
-        (0, "成功"),
-        (1, "校验未通过"),
-        (2, "参数/用法错误"),
-        (3, "IO 失败"),
-        (4, "配置错误"),
-        (5, "模板/机床未找到"),
-        (6, "渲染/注册表失败"),
-        (7, "尚未实现"),
-    ];
-    assert_eq!(covered.len(), 8, "退出码矩阵应被 8 个码完整覆盖");
+fn exit_code_matrix_in_docs_is_complete() {
+    let readme = std::fs::read_to_string(repo_root().join("README.md"))
+        .expect("应能读取仓库根目录的 README.md");
+
+    let mut codes: Vec<String> = Vec::new();
+    let mut in_matrix = false;
+    for line in readme.lines() {
+        let t = line.trim();
+        if t.starts_with("| 码 |") {
+            in_matrix = true;
+            continue;
+        }
+        if !in_matrix {
+            continue;
+        }
+        if !t.starts_with('|') {
+            break; // 表格结束
+        }
+        if t.starts_with("| ---") {
+            continue; // 分隔行
+        }
+        let first_cell = t
+            .trim_start_matches('|')
+            .split('|')
+            .next()
+            .unwrap_or("")
+            .trim();
+        codes.push(first_cell.to_string());
+    }
+
+    let want: Vec<String> = (0..=7).map(|c| c.to_string()).collect();
+    assert_eq!(
+        codes, want,
+        "README 退出码矩阵应连续覆盖 0..=7（无缺号、无多余），实际: {codes:?}"
+    );
 }

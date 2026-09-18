@@ -12,11 +12,17 @@
 
 ## [未发布]
 
-本段收录 2026-09-18 第三轮代码审查（`docs/CODE_REVIEW_2026-09-18.md`）**批次一**的修复：
-四条「不报错但产出错误数值」的静默出错路径。全部改动在 `core`，未触及公共 API 形状
-（`DeriveError` 新增变体，该枚举本就 `#[non_exhaustive]`）。
+本段收录 2026-09-18 第三轮代码审查（`docs/CODE_REVIEW_2026-09-18.md`）的修复，按报告 §3
+的批次顺序分两组：
 
-### Fixed
+- **批次一（堵住静默出错）**：五条「不报错但产出错误数值」的路径。改动全在 `core`，
+  未触及公共 API 形状（`DeriveError` 新增变体，该枚举本就 `#[non_exhaustive]`）。
+- **批次二（修好度量闭环）**：覆盖率门禁口径、自证测试、MSRV 声明、CI 卫生。
+  **不改变任何运行时行为**，只让既有的质量声明从「文档里的一句话」变成可验证的事实。
+
+### 批次一：堵住静默出错
+
+#### Fixed
 
 - **派生参数的链式依赖不再取错源值**（`core/src/derive.rs`）：`A.derive.from = B`
   且 `B` 自身也是派生参数时，A 的查表键此前取自 `with_defaults`（用户值 / 规格默认值），
@@ -48,13 +54,68 @@
   键缺失与键为空串现在同等回退默认值（新增 `non_empty_config`）；
   `validate_config_keys` 对字符串类键补「非空」校验。
 
-### 测试
+#### 测试
 
 - 新增 8 项回归测试（derive 3 / validate 2 / pipeline 2 / machine 1），
   均已**反向验证**：临时回滚实现后全部 FAILED，恢复后通过。
 - workspace 全量 **536 项**通过；`cargo fmt --all --check`、
   `cargo clippy --workspace --all-targets -- -D warnings`、
   `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` 均通过。
+
+### 批次二：修好度量闭环
+
+起因是一类不同于「代码错」的问题：**度量在骗人**。三处质量声明在当前仓库里都不成立 ——
+覆盖率门禁的数字与它声称的口径对不上，退出码矩阵的用例删掉矩阵也照样绿，MSRV 写在
+三处 `Cargo.toml` 却没有任何 CI 任务在 1.82 上编译过。本批次不修任何生产逻辑。
+
+#### Changed
+
+- **覆盖率门禁改用生产口径**（`.github/workflows/ci.yml`、新增
+  `scripts/check_coverage_caliber.py`）：`cargo llvm-cov` 把 `src/*.rs` 内的
+  `#[cfg(test)]` 段本身计入分母（`src/lib.rs` 1824 行里测试段从第 64 行起占 1760 行），
+  于是「新增测试」会**推高**覆盖率数字、「新增未覆盖的生产代码」反被稀释：门禁显示
+  92.99%，剔除测试段后的生产代码只有 88.65% —— **门禁绿 ≠ 生产代码达标**。
+  `--ignore-filename-regex` 只能按文件路径排除，管不到 `src/` 内部的测试段，
+  故改由脚本从 lcov 数据剔除测试段后重新统计。
+  阈值 `--fail-under-lines 90`（llvm-cov 口径）随之废弃，改为脚本口径的
+  `--min 88`（当前基线 88.65% / 本次实测 88.76%，余量约 32 行）。
+
+- **退出码矩阵用例不再自证**（`cli/tests/cli_e2e.rs`）：原用例断言的是函数内硬编码的
+  局部数组 `[(0, "成功"), (1, "校验未通过"), ...]`，与 `CliError::exit_code` 无任何
+  链接 —— 删掉矩阵里任一码、或改坏 `exit_code()` 的映射，它都照样绿。
+  现改为读 `README.md` 的退出码表格，断言其**连续覆盖 `0..=7`**（无缺号、无多余）。
+  守的是文档侧契约（README 那张表是脚本作者判分支的依据）；`kind → 退出码` 的映射
+  由 `cli/src/output.rs` 的 `exit_code_matrix` 单元测试逐个钉住，不在此重复。
+
+- **CI 卫生**（`.github/workflows/ci.yml`）：
+  - `Test` 步骤加 `--locked`：`Cargo.lock` 已提交，CI 必须与它一致，否则
+    「本地能过、CI 红了」无解。
+  - 新增 `Doc tests` 步骤（`cargo test --workspace --doc`）：实测
+    `--all-targets` **不跑 doctest**（输出里没有 `Doc-tests` 段），而 README 声称
+    「单元 + 集成 + 文档」全跑。
+  - `cargo-audit` 改用 `taiki-e/install-action@cargo-audit`：此前
+    `cargo install cargo-audit --locked` 要在三个 runner 上各从源码编译一遍
+    （连续两次卡在本步骤 exit 101），且未固定版本 —— 上游换新版即整条 CI 红。
+  - `cargo audit` 加 `--deny warnings`：默认只报 vulnerability，
+    unmaintained / yanked 不失败。
+
+- **新增 MSRV job**（`.github/workflows/ci.yml`）：`rust-version = "1.82"` 写在三个
+  `Cargo.toml` 里、README 与 CONTRIBUTING 也对外承诺 1.82+，但此前**没有任何任务在
+  1.82 上编译过** —— 依赖任一 minor 抬高 MSRV 都会让这个承诺静默失真。
+  该 job 只 `check` 且**不带 `--all-targets`**：`rust-version` 承诺的是「下游能否编译
+  本 crate」，而下游构建的是 lib + bin；带上 `--all-targets` 会把 criterion /
+  assert_cmd 等 dev-dependencies 拉进来，它们的 MSRV 通常高于生产依赖，
+  属于本仓库自己的开发工具链问题，不该让对外承诺失真。
+
+#### 测试
+
+- 覆盖率脚本对当前 `lcov.info` 实测：生产口径 **88.76%**（4343/4893），门禁通过；
+  同时打印 llvm-cov 原始口径 92.89%（9316 行中 6908 行位于 `#[cfg(test)]` 段）
+  与被剔除的行数，便于核对口径差异。
+- `exit_code_matrix_in_docs_is_complete` 改为读 README 断言后，对当前 README 通过；
+  删改表格任一码即红。
+- CI 变更无法在本机验证，需下一次 push 后看 run 结果（尤其 MSRV job 与
+  `install-action` 步骤）。
 
 ---
 
