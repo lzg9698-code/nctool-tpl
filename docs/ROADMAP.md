@@ -10,8 +10,8 @@
 
 | 项 | 结论 |
 | --- | --- |
-| **当前位置** | 阶段 A/B 基本收口；阶段 C 后端服务、回环安全、核心 API、真实 server mode 前端和本机 HTTP 契约测试已完成；阶段 D 主链路已接入，297 项测试、Clippy、文档、audit 全绿 |
-| **最大缺口** | ① 外部工艺评审/空运行仍不可行（Q2=否，README 已显著声明）② 真实浏览器走查、跨平台/性能验收尚未完成 ③ `part generate` 尚未实现 ④ 正式发布仍需清理工作区和发布版本 |
+| **当前位置** | （2026-09-18 更新）阶段 A–E **基本收口**，阶段 F 只差真实 Release。CLI 10 个子命令（除 `part` 占位）、Web UI 完整闭环、NCTool_V3 模板资产已整合（7 内建 + 25 文件模板 / 21 组 golden）。527 项测试全绿，行覆盖 92.19%（门禁 ≥ 90%），三平台矩阵 + coverage 均为真门禁且 CI run #34 全绿 |
+| **最大缺口** | ① 外部工艺评审/空运行仍不可行（Q2=否，README 已显著声明）② `part generate` 尚未实现 ③ CHANGELOG `[未发布]` 积压未发版 ④ 真实 Release 待 tag 触发（依赖凭据） |
 | **路线** | 6 个阶段：A 需求与设计收口 → B 基础架构稳固 → C UI 服务联通 → D 完整交互闭环 → E 联调测试 → F 上线与迭代 |
 | **工期** | 26–40 人日。1 人全职 + AI 辅助约 **6–8 周**；兼职（每周 2 天）约 **15–20 周** |
 | **MVP** | **CLI 本身就是 MVP**。若时间砍半：只做 A + B + F 发版，UI 整体推迟 |
@@ -617,6 +617,14 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 > 始终全绿，本地 Windows 复现同一命令 EXIT=0；补装 `llvm-tools-preview` 后
 > 仍红）。job 日志下载需 admin 权限无法取证，已设 `continue-on-error` 解除
 > CI 红灯——覆盖率本为 ROADMAP B4.1 的可选质量门，非阻断。根因修复见 Backlog。
+>
+> **✅ 已于 2026-09-17 修复并取消非阻断**（B-Backlog 结案）：根因是两层掩盖——
+> ①`continue-on-error: true` 把持续失败粉饰成非阻断；②安装方式不当
+> （`cargo install` 在 runner 上从源码编译，`--locked` 撞 crates.io 索引漂移）。
+> 改用官方 `taiki-e/install-action@cargo-llvm-cov` 下载预编译二进制 + 单独一步
+> `cargo llvm-cov --version` 校验后转绿。2026-09-17 起覆盖率成为**真门禁**
+> （`--fail-under-lines`，初值 89 → 09-17 上调 90），CI run #34（`d3d144f`）
+> 的 Coverage job 实测 success。
 
 - [x] **B1.1** ⚡ 提交 `ui/` 目录（完成 2026-09-03，f7cf2bd）
 - [x] **B1.2** 提交 `docs/ARCHITECTURE.md`、`docs/architecture.html`、`README.md`
@@ -669,8 +677,8 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 - [x] **E1.1** CLI E2E 清单（9 命令 × 正常/异常 × 退出码）—— `cli/tests/cli_e2e.rs`，44 用例覆盖全部 **10** 个子命令（ROADMAP 记 9，`generate` 为后加的规范入口）与 0–7 全档退出码；`ui` 为阻塞服务，仅覆盖启动前的回环守卫以免挂起
 - [x] **E1.2** UI E2E 清单（若 D 已完成）—— `docs/UI_ACCEPTANCE_CHECKLIST.md`：37 项可勾选手工验收（端到端全链路 8 / 移动端 ≤480px 11 / 校验定位 5 / 前后端逐字节一致 5 / 机床切换 4 / 主题 2 / 已知 UX 2）。CLI 端由 E1.1 守护，本清单专攻人工浏览器端到端那一层；D4.3「机床切换浏览器人工验收」的步骤见 §5。✅ 2026-09-10 走查 37/37 通过，修复 3 个前端缺陷（详见 CHANGELOG [Unreleased]）
 - [x] **E2.1** Windows 验证（开发环境即 Windows：全量 344 项测试 + 44 项 CLI E2E 全通过；路径分隔符 `\`、CRLF 检出均正常）
-- [ ] **E2.2** Linux 验证（**由 CI 三平台矩阵承担**：`.github/workflows/ci.yml` 的 `quality` job 跑 ubuntu/windows/macos-latest，含 fmt/clippy/test/doc/audit）
-- [ ] **E2.3** macOS 验证（同上，CI 矩阵覆盖；XDG 配置路径与 Unix 行尾待首次 CI 绿灯后确认）
+- [x] **E2.2** Linux 验证（**由 CI 三平台矩阵承担**：`.github/workflows/ci.yml` 的 `quality` job 跑 ubuntu/windows/macos-latest，含 fmt/clippy/test/doc/audit）—— ✅ 2026-09-18 有据勾选：CI run #34（`d3d144f`）的 `Test / Lint / Doc / Audit (ubuntu-latest)` conclusion = success
+- [x] **E2.3** macOS 验证（同上，CI 矩阵覆盖）—— ✅ 2026-09-18 有据勾选：同一 run 的 `(macos-latest)` job conclusion = success（XDG 配置路径与 Unix 行尾已由该 job 覆盖）
 - [x] **E2.4** golden 比较统一换行符（`core/tests/integration.rs` 的 `assert_golden` 比较与 `NCTOOL_UPDATE_GOLDEN` 刷新两侧均过 `normalize_newlines`，基线恒为 LF；新增 `golden_files_are_lf_only` 在落盘层把住关口）
 - [x] **E3.1** 模板目录路径守卫复核（**已由 E1.1 自动化覆盖**：`../escape` / `a/b` / `..\escape` 三种穿越写法均被 `args(2)` 拒绝；UI 侧暂无"保存模板"写 API，无需复核）
 - [x] **E3.2** 服务器回环绑定复核（**已由 E1.1 自动化覆盖**：`0.0.0.0` / `localhost` 在监听前即被 `args(2)` 拒绝；另有 `server.rs` 单测覆盖 `::1` 放行与 IPv6 URL 方括号）
@@ -690,7 +698,7 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 - [x] **F3.1** Issues 模板（`.github/ISSUE_TEMPLATE/`：bug_report.yml 含版本/组件/OS/复现命令/模板源码/期望/实际/logs 七段必填或可选；feature_request.yml 含动机/提案/替代/影响面/兼容；config.yml 关闭空 issue、链到文档/讨论/工艺核对）
 - [x] **F3.2** 迭代节奏约定（新增 `docs/RELEASE.md`：版本号策略、发布节奏、提交流程、兼容性窗口、决策与争议、Backlog 加权打分法）
 - [x] **F4** Backlog 排序（见下表：内置模板库扩充 37 / 零件级批量生成 34 / 参数预设 34 / 浏览器内模板编辑 21 / i18n 20；初始基线，外部反馈后重打分）
-- [ ] **B-Backlog** CI coverage job 根因修复：先取证 ubuntu runner 日志（浏览器打开 Actions → Coverage job → 复制错误段），疑似 `taiki-e/install-action` 装的 cargo-llvm-cov 与 runner 环境不兼容或 rust-cache 陈旧插桩产物；当前已 `continue-on-error` 非阻断
+- [x] **B-Backlog** CI coverage job 根因修复 ✅ 2026-09-17 结案（`9df4056` / `66d0cfa` / `44b36bc` / `de1472b`）：根因是**安装方式**（`cargo install` 在 runner 上从源码编译，`--locked` 撞索引漂移）叠加 `continue-on-error` 的掩盖；改用 `taiki-e/install-action@cargo-llvm-cov` 预编译二进制并移除非阻断后转绿。覆盖率自本日起成为真门禁（行 ≥ 90%），CI run #34（`d3d144f`）的 Coverage job 实测 success
 
 ---
 
