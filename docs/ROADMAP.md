@@ -10,8 +10,8 @@
 
 | 项 | 结论 |
 | --- | --- |
-| **当前位置** | （2026-09-18 更新）阶段 A–E **基本收口**，阶段 F 只差真实 Release。CLI 10 个子命令（除 `part` 占位）、Web UI 完整闭环、NCTool_V3 模板资产已整合（7 内建 + 25 文件模板 / 21 组 golden）。527 项测试全绿，行覆盖 92.19%（门禁 ≥ 90%），三平台矩阵 + coverage 均为真门禁且 CI run #34 全绿 |
-| **最大缺口** | ① 外部工艺评审/空运行仍不可行（Q2=否，README 已显著声明）② `part generate` 尚未实现 ③ CHANGELOG `[未发布]` 积压未发版 ④ 真实 Release 待 tag 触发（依赖凭据） |
+| **当前位置** | （2026-09-18 更新）阶段 A–F **全部收口**，三个 crate 已发版 crates.io（tpl 0.4.0 / core 0.3.0 / cli 0.3.0）并挂三平台 Release 二进制。CLI 10 个子命令（除 `part` 占位）、Web UI 完整闭环、NCTool_V3 模板资产已整合（7 内建 + 25 文件模板 / 21 组 golden）。536 项测试全绿；覆盖率门为**生产代码口径** ≥ 88%（当前 88.65%；llvm-cov 原始口径 92.99% 因把 `#[cfg(test)]` 段计入分母而虚高，不作门禁），另有 MSRV 1.82 job，与三平台矩阵、对拍门同为真门禁 |
+| **最大缺口** | ① 外部工艺评审/空运行仍不可行（Q2=否，README 已显著声明）② `part generate` 尚未实现 ③ 第三轮审查（`CODE_REVIEW_2026-09-18.md`）批次三/四未做，其中 Web UI 的存储型 XSS（P1-1）是剩余项里唯一的真安全问题 |
 | **路线** | 6 个阶段：A 需求与设计收口 → B 基础架构稳固 → C UI 服务联通 → D 完整交互闭环 → E 联调测试 → F 上线与迭代 |
 | **工期** | 26–40 人日。1 人全职 + AI 辅助约 **6–8 周**；兼职（每周 2 天）约 **15–20 周** |
 | **MVP** | **CLI 本身就是 MVP**。若时间砍半：只做 A + B + F 发版，UI 整体推迟 |
@@ -702,7 +702,8 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 - [x] **F3.1** Issues 模板（`.github/ISSUE_TEMPLATE/`：bug_report.yml 含版本/组件/OS/复现命令/模板源码/期望/实际/logs 七段必填或可选；feature_request.yml 含动机/提案/替代/影响面/兼容；config.yml 关闭空 issue、链到文档/讨论/工艺核对）
 - [x] **F3.2** 迭代节奏约定（新增 `docs/RELEASE.md`：版本号策略、发布节奏、提交流程、兼容性窗口、决策与争议、Backlog 加权打分法）
 - [x] **F4** Backlog 排序（见下表：内置模板库扩充 37 / 零件级批量生成 34 / 参数预设 34 / 浏览器内模板编辑 21 / i18n 20；初始基线，外部反馈后重打分）
-- [x] **B-Backlog** CI coverage job 根因修复 ✅ 2026-09-17 结案（`9df4056` / `66d0cfa` / `44b36bc` / `de1472b`）：根因是**安装方式**（`cargo install` 在 runner 上从源码编译，`--locked` 撞索引漂移）叠加 `continue-on-error` 的掩盖；改用 `taiki-e/install-action@cargo-llvm-cov` 预编译二进制并移除非阻断后转绿。覆盖率自本日起成为真门禁（行 ≥ 90%），CI run #34（`d3d144f`）的 Coverage job 实测 success
+- [x] **B-Backlog** CI coverage job 根因修复 ✅ 2026-09-17 结案（`9df4056` / `66d0cfa` / `44b36bc` / `de1472b`）：根因是**安装方式**（`cargo install` 在 runner 上从源码编译，`--locked` 撞索引漂移）叠加 `continue-on-error` 的掩盖；改用 `taiki-e/install-action@cargo-llvm-cov` 预编译二进制并移除非阻断后转绿，覆盖率自本日起成为真门禁。CI run #34（`d3d144f`）的 Coverage job 实测 success。
+  **2026-09-18 口径更正**：当时用的门禁是 `--fail-under-lines 90`，而该口径把 `src/*.rs` 内的 `#[cfg(test)]` 段本身计入分母（92.99% 的分母里 6908 行是测试代码）—— 加测试会推高数字，**门禁绿 ≠ 生产代码达标**。现改由 `scripts/check_coverage_caliber.py` 剔除测试段后判定**生产口径 ≥ 88%**（09-18 实测 88.65%）。
 
 ---
 

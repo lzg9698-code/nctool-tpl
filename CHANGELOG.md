@@ -56,7 +56,7 @@
 
 #### 测试
 
-- 新增 8 项回归测试（derive 3 / validate 2 / pipeline 2 / machine 1），
+- 新增 10 项回归测试（derive 3 / validate 4 / pipeline 2 / machine 1），
   均已**反向验证**：临时回滚实现后全部 FAILED，恢复后通过。
 - workspace 全量 **536 项**通过；`cargo fmt --all --check`、
   `cargo clippy --workspace --all-targets -- -D warnings`、
@@ -107,13 +107,39 @@
   assert_cmd 等 dev-dependencies 拉进来，它们的 MSRV 通常高于生产依赖，
   属于本仓库自己的开发工具链问题，不该让对外承诺失真。
 
+- **golden 刷新加 CI 守卫**（`core/tests/integration.rs`）：`NCTOOL_UPDATE_GOLDEN`
+  命中即写文件并 `return`，跳过该函数的**全部**断言 —— 21 组 golden 会静默退化成
+  「跑得通即通过」。当前 workflow 没有设这个变量，但 `env:`、`.cargo/config.toml`
+  或某个 runner 的默认环境都可能把它带进来，一旦带进来没有任何东西会报错。
+  现加前置守卫：`CI` 存在时直接 panic；本地刷新路径不受影响。
+
+- **覆盖率相关表述全面对齐**（`README.md`、`docs/CONTRIBUTING.md`、`docs/RELEASE.md`、
+  `docs/ROADMAP.md`、`docs/PROJECT_STATUS.md`）：此前文档与 CI 对「覆盖率是否阻断」
+  自相矛盾 —— `CONTRIBUTING.md:28` 写「非阻断」而**同一文件** `:74` 写「阻断」，
+  `README.md:589`、`RELEASE.md:37` 也写「非阻断」，而 `ci.yml` 早已移除
+  `continue-on-error`。按文档行事的人会把红的 coverage 当噪音合并，等于从语义上把
+  门禁又拆掉。现统一为「阻断」，连同上面那条口径变更一起改：
+  - 本地复现命令换成 `cargo llvm-cov ... --lcov` + `check_coverage_caliber.py` 两行；
+    「上调阈值改哪里」由 `ci.yml` 的 `--fail-under-lines` 改为脚本的 `--min`
+  - `CONTRIBUTING.md` §4 测试矩阵**去掉硬编码项数**（同一份文档曾同时存在
+    344 / 516 / 492 三个数字），指向 CI job summary；补上此前漏列的
+    `tests/extract_invariant.rs`，并标注 `--all-targets` 不跑 doctest
+  - `ROADMAP.md` §0 TL;DR 与 `PROJECT_STATUS.md` §0/§4/§8 更新到最新实测，
+    并在两处历史记录旁标注「09-18 口径更正」，避免旧数字被当现状读
+  - README 与 CONTRIBUTING 的本地质量门命令块补 `cargo test --workspace --doc`，
+    与 CI 的单列步骤一致
+
 #### 测试
 
-- 覆盖率脚本对当前 `lcov.info` 实测：生产口径 **88.76%**（4343/4893），门禁通过；
-  同时打印 llvm-cov 原始口径 92.89%（9316 行中 6908 行位于 `#[cfg(test)]` 段）
+- 覆盖率脚本对重跑后的 `lcov.info` 实测：生产口径 **88.65%**（4319/4872），门禁通过；
+  同时打印 llvm-cov 原始口径 92.99%（9538 行中 6908 行位于 `#[cfg(test)]` 段）
   与被剔除的行数，便于核对口径差异。
+- golden 守卫**反向验证**：`CI=1 NCTOOL_UPDATE_GOLDEN=1 cargo test -p nctool-core
+  --test integration` → FAILED（panic 于守卫，且在写文件之前）；去掉 `CI` 后本地
+  刷新路径仍可用，21 组基线字节未变（`git status tests/golden/` 干净）。
 - `exit_code_matrix_in_docs_is_complete` 改为读 README 断言后，对当前 README 通过；
   删改表格任一码即红。
+- `cargo audit --deny warnings` 本机实测 exit 0（cargo-audit 0.22.2，112 个依赖）。
 - CI 变更无法在本机验证，需下一次 push 后看 run 结果（尤其 MSRV job 与
   `install-action` 步骤）。
 

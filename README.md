@@ -542,7 +542,7 @@ cargo fmt --all -- --check
 git clone https://github.com/lzg9698-code/nctool-tpl.git
 cd nctool-tpl
 cargo build --workspace
-cargo test --workspace              # 492 项（2026-09-15 实测全绿）
+cargo test --workspace              # 全量测试（数量见 CI run 的 job summary）
 cargo install cargo-audit --locked  # 安全审计，CI 必查
 ```
 
@@ -552,14 +552,22 @@ cargo install cargo-audit --locked  # 安全审计，CI 必查
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --all-targets
+cargo test --workspace --doc          # --all-targets 不跑 doctest，CI 为此单列一步
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 node scripts/check_param_parity.mjs   # --param 归一规则的 Rust/前端对拍
 cargo audit
 
-# 覆盖率阈值门（与 CI 同款；需先装 rustup component add llvm-tools-preview
-# 与 cargo install cargo-llvm-cov）
-cargo llvm-cov --workspace --all-features --fail-under-lines 90
+# 覆盖率门（与 CI 同款；需先装 rustup component add llvm-tools-preview
+# 与 cargo install cargo-llvm-cov，另需 python）
+cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+python scripts/check_coverage_caliber.py lcov.info --min 88
 ```
+
+> 覆盖率门判定的是**生产代码**口径，**不是** `cargo llvm-cov` 的原始口径 ——
+> llvm-cov 把 `src/*.rs` 内的 `#[cfg(test)]` 段本身计入分母，新增测试会推高数字、
+> 新增未覆盖的生产代码反被稀释（原始口径 92.99% 而生产口径 88.65%）。
+> 故由 `scripts/check_coverage_caliber.py` 剔除测试段后重新统计，细节见
+> [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) §3。
 
 > `--workspace` 一个字都不能省：根目录**既是 workspace 根又是一个 package**，
 > 而 cargo 在没有 `default-members` 时默认只选根 package —— 漏掉它，
@@ -586,7 +594,8 @@ cargo llvm-cov --workspace --all-features --fail-under-lines 90
 - 主分支 `master`。commit message 请写清**动机**（why），每条 commit 自包含（可独立编译、独立测试通过），
   便于 `git bisect` 与 `git revert`。
 - 0.x 阶段：master 上直推 + 事后 review；1.0 后启用 PR 流程（1 个 approve + 三平台 CI 全绿），
-  详见 [docs/RELEASE.md](docs/RELEASE.md)。CI 中 `coverage` job 非阻断，其余必须绿。
+  详见 [docs/RELEASE.md](docs/RELEASE.md)。CI **全部 job 均为阻断项**（含覆盖率门与
+  MSRV 1.82 检查），没有可以当噪音忽略的红灯。
 
 ### 报告问题
 

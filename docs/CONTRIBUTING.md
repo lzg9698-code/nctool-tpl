@@ -23,9 +23,9 @@
 
 | 项目 | 要求 |
 | --- | --- |
-| Rust | **1.82+**（MSRV = workspace 各 crate 的 `rust-version`；CI 用 stable） |
+| Rust | **1.82+**（MSRV = workspace 各 crate 的 `rust-version`）。CI 在 stable 上跑质量门，另有 `msrv` job 在 1.82 上 `cargo check --workspace --locked`，让这个承诺可验证 |
 | 组件 | `rustfmt`、`clippy`（CI 用 `dtolnay/rust-toolchain@stable` 安装） |
-| 可选工具 | `cargo-audit`（安全审计）、`cargo-llvm-cov`（覆盖率，非阻断） |
+| 可选工具 | `cargo-audit`（安全审计）、`cargo-llvm-cov` + `python`（覆盖率，CI **阻断**项） |
 | 平台 | Linux / macOS / Windows 均需可用（CI 三平台矩阵） |
 
 ```bash
@@ -59,6 +59,7 @@ cargo install cargo-audit --locked           # 安全审计
 cargo fmt --all -- --check
 cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace --all-targets
+cargo test --workspace --doc          # --all-targets 不跑 doctest，CI 为此单列一步
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 node scripts/check_param_parity.mjs   # --param 归一规则的 Rust / 前端对拍
 cargo audit
@@ -71,18 +72,27 @@ cargo audit
 
 CI（`.github/workflows/ci.yml`）在 **ubuntu / windows / macos** 三平台各跑一遍上述 cargo 检查
 （对拍脚本与系统无关，只在 ubuntu 跑一次），全部必须绿灯；
-`coverage` job 同样是**阻断**项，且带**阈值门**：
+`coverage` 与 `msrv` 两个 job 同样是**阻断**项，带**阈值门**与**MSRV 门**：
 
 ```bash
 rustup component add llvm-tools-preview
-cargo install cargo-llvm-cov        # 本地复现 CI 的覆盖率门需要这两步
-cargo llvm-cov --workspace --all-features --fail-under-lines 90
+cargo install cargo-llvm-cov        # 本地复现 CI 覆盖率门需要这两步
+cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
+python scripts/check_coverage_caliber.py lcov.info --min 88
 ```
 
-阈值是 **行覆盖 ≥ 90%**，当前基线 91.30%（2026-09-17，516 项测试）。
-余量是刻意留的：卡在当前值会让"新增少量未覆盖代码"也变红，门禁随即被绕过；
-1.3pt 约等于 120 行新代码，真掉这么多就是覆盖在退化。
-**覆盖率提升后请上调这个数字**（只改 `ci.yml` 里 `--fail-under-lines` 一处）。
+阈值是**生产代码**行覆盖 ≥ 88%，当前基线 88.65%（2026-09-18，536 项测试）。
+
+> **不要用 `--fail-under-lines`。** llvm-cov 把 `src/*.rs` 内的 `#[cfg(test)]` 段本身
+> 也计入分母（本仓库 `src/lib.rs` 1824 行里测试段占 1760 行），于是「新增测试」会
+> **推高**覆盖率数字、「新增未覆盖的生产代码」反被稀释 —— 门禁显示 92.99%，而生产
+> 口径只有 88.65%，**门禁绿 ≠ 生产代码达标**。`--ignore-filename-regex` 只能按文件
+> 路径排除，管不到 `src/` 内部的测试段，故改由 `scripts/check_coverage_caliber.py`
+> 从 lcov 数据剔除测试段后重新统计。该脚本会同时打印两种口径的数字，便于核对。
+
+余量约 32 行未覆盖生产代码：卡在当前值会让"新增少量未覆盖代码"也变红，门禁随即被绕过。
+**覆盖率提升后请上调这个数字** —— 只改 `ci.yml` 里 `python3 scripts/check_coverage_caliber.py
+lcov.info --min 88` 那一行的 `--min`，一处。
 门禁失败时 job summary 与 lcov 产物仍会产出（那两步带 `if: always()`）——
 排查"覆盖为什么掉下去"正需要它们。
 
@@ -105,19 +115,22 @@ python scripts/check_docs_links.py README.md docs
 
 ## 4. 测试矩阵
 
-`cargo test --workspace` 当前 **344 项 / 0 失败**（2026-09-11 实测）：
+`cargo test --workspace` 覆盖下列目标。**具体项数不在此处硬编码** —— 它每加一个测试
+就过期一次，本文档曾因此同时漂移出 344 / 516 / 492 三个互相矛盾的版本。以 CI run 的
+job summary 为准：
 
-| 目标 | 类型 | 数量 |
-| --- | --- | --- |
-| `nctool-cli` | 单元测试（bin） | 37 |
-| `cli/tests/cli.rs` | 集成（HTTP 契约等） | 42 |
-| `cli/tests/cli_e2e.rs` | CLI 端到端（退出码契约） | 44 |
-| `nctool-core` | 单元测试 | 84 |
-| `core/tests/integration.rs` | golden 集成 | 11 |
-| `core/tests/large_program.rs` | 万行性能（2 项 `#[ignore]`） | 3 |
-| `nctool-tpl` | 单元测试 | 104 |
-| `tests/parsing.rs` | 根 crate 集成 | 18 |
-| doc-tests | 文档示例 | 1 |
+| 目标 | 类型 |
+| --- | --- |
+| `nctool-cli` | 单元测试（bin） |
+| `cli/tests/cli.rs` | 集成（HTTP 契约等） |
+| `cli/tests/cli_e2e.rs` | CLI 端到端（退出码契约） |
+| `nctool-core` | 单元测试 |
+| `core/tests/integration.rs` | golden 集成 |
+| `core/tests/large_program.rs` | 万行性能（2 项 `#[ignore]`） |
+| `nctool-tpl` | 单元测试 |
+| `tests/extract_invariant.rs` | 提取器属性测试（300 例，零依赖 LCG） |
+| `tests/parsing.rs` | 根 crate 集成 |
+| doc-tests | 文档示例（`cargo test --doc`；注意 `--all-targets` **不跑** doctest） |
 
 万行级实测（默认跳过，需 release）：
 

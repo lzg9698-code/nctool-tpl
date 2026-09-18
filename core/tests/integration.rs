@@ -34,6 +34,15 @@ fn assert_golden(name: &str, actual: &str) {
     let actual = normalize_newlines(actual);
     let path = golden_path(name);
     if std::env::var_os("NCTOOL_UPDATE_GOLDEN").is_some() {
+        // CI 下硬拦：刷新分支会写文件并 `return`，跳过本函数的**全部**断言，
+        // 21 组 golden 就静默退化成「跑得通即通过」。当前 workflow 没有设这个
+        // 变量，但 `env:`、`.cargo/config.toml` 或某个 runner 的默认环境都可能
+        // 把它带进来 —— 一旦带进来，没有任何东西会报错，只会从此全是绿的。
+        assert!(
+            std::env::var_os("CI").is_none(),
+            "CI 环境禁止刷新 golden 基线（检测到 NCTOOL_UPDATE_GOLDEN）：\
+             刷新会跳过全部 golden 断言。如需更新基线，请在本地跑并人工 diff 复核后再提交"
+        );
         std::fs::create_dir_all(path.parent().expect("golden 路径应有父目录"))
             .expect("创建 golden 目录失败");
         // 刷新时同样落 LF，避免把平台行尾固化进仓库

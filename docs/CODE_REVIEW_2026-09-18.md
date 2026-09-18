@@ -593,14 +593,14 @@ assert_eq!(covered.len(), 8, "退出码矩阵应被 8 个码完整覆盖");
 
 门禁实测（2026-09-18）：
 
-- `cargo test --workspace --all-targets`：**536 项全部通过**（新增 8 项）
+- `cargo test --workspace --all-targets`：**536 项全部通过**（新增 10 项）
 - `cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets -- -D warnings`、
   `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`：均通过
 - 改动集中在 `core/`（4 文件，+417/-54），`DeriveError` 新增 `Circular` 变体
   （该枚举本就 `#[non_exhaustive]`，非破坏性变更）
 
 > **反向验证方法**（建议固化为约定）：把实现临时回滚到 `git show HEAD:<file>`，
-> 保留新测试跑一遍，确认真红后再恢复。本批次 8 项新测试全部经此验证。
+> 保留新测试跑一遍，确认真红后再恢复。本批次 10 项新测试全部经此验证。
 
 ### 批次二：修好度量闭环（1 天）
 
