@@ -1,6 +1,6 @@
 # 模板编写指南
 
-> 适用版本：nctool-tpl ≥ 0.3.2
+> 适用版本：nctool-tpl ≥ 0.4.0
 > 模板基于 [Jinja2](https://jinja.palletsprojects.com/)（用 [minijinja](https://github.com/mitsuhiko/minijinja) 引擎）。
 > 本指南聚焦**面向 NC/G-code 的实战写法**与本项目独有的约定，**通用 Jinja 语法**请参考上游文档。
 

@@ -190,7 +190,7 @@ git diff tests/golden                         # 必须人工逐行复核
 
 ```bash
 # 推送形如下列的 tag 即触发：nctool-tpl-v* / nctool-core-v* / nctool-cli-v*
-git tag nctool-cli-v0.2.2 && git push origin nctool-cli-v0.2.2
+git tag nctool-cli-v0.3.0 && git push origin nctool-cli-v0.3.0
 ```
 
 - 会跑 `cargo test --workspace`，然后 `cargo publish -p <crate>`（需仓库 Secret `CARGO_REGISTRY_TOKEN`，

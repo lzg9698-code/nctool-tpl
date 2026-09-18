@@ -1,7 +1,7 @@
 # nctool 系统设计文档
 
-> 版本：v2.0 · 2026-09-15
-> 对应代码：`nctool-tpl` v0.3.2 / `nctool-core` v0.2.2 / `nctool-cli` v0.2.2（workspace 共 14 861 行 Rust）
+> 版本：v2.0 · 2026-09-15（版本引用 2026-09-18 同步至发版号）
+> 对应代码：`nctool-tpl` v0.4.0 / `nctool-core` v0.3.0 / `nctool-cli` v0.3.0（workspace 共 16 139 行 Rust）
 > 范围：三个 crate 的分层架构、核心模块职责、数据结构、端到端数据流与设计决策。
 > 读者：本仓库贡献者、基于本库二次开发的下游用户。
 >
@@ -53,7 +53,7 @@ P2 决定了 compute-heavy 模板（如 `machines/index_g420/` 下的同步车�
 
 ```mermaid
 graph TD
-    subgraph CLI["nctool-cli v0.2.2 · binary: nctool"]
+    subgraph CLI["nctool-cli v0.3.0 · binary: nctool"]
         C1[cli.rs<br/>clap 命令树]
         C2[config.rs<br/>全局+项目配置层叠]
         C3[context.rs<br/>注册表/机床装配]
@@ -62,7 +62,7 @@ graph TD
         C6[output.rs<br/>text/JSON 双通道 + 退出码]
     end
 
-    subgraph CORE["nctool-core v0.2.2"]
+    subgraph CORE["nctool-core v0.3.0"]
         R1[model<br/>参数 / 机床数据模型]
         R2[manifest<br/>清单 + 头部元数据 + 规格覆盖]
         R3[variables<br/>全局变量库]
@@ -73,7 +73,7 @@ graph TD
         R8[pipeline<br/>GCodeGenerator 端到端管线]
     end
 
-    subgraph TPL["nctool-tpl v0.3.2"]
+    subgraph TPL["nctool-tpl v0.4.0"]
         T1[extract<br/>AST 遍历 + 可选/必选判定]
         T2[renderer<br/>严格 / 宽松渲染]
         T3[filters<br/>nc_fixed / nc_pad / 数学]

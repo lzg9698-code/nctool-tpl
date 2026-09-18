@@ -59,7 +59,7 @@ mv nctool-x86_64-unknown-linux-gnu /usr/local/bin/nctool
 git clone https://github.com/lzg9698-code/nctool-tpl.git
 cd nctool-tpl
 cargo install --path cli --locked      # 二进制安装到 ~/.cargo/bin/nctool
-nctool --version                       # nctool 0.2.2
+nctool --version                       # nctool 0.3.0
 ```
 
 只想临时试用、不安装到全局，可直接从工作区运行：
@@ -241,7 +241,7 @@ assert_eq!(out, "G1 X21.0 F0.15");
 
 ## 使用示例
 
-以下示例的命令与输出均为**实测结果**（`nctool 0.2.2`），可逐条复制执行。
+以下示例的命令与输出均为**实测结果**（`nctool 0.3.0`），可逐条复制执行。
 命令面全貌见 [命令行工具](#命令行工具-nctoolnctool-cli)，库 API 见[快速开始](#快速开始)。
 
 ### 例 1：内置模板端到端 —— 浏览 → 查参数 → 校验 → 生成
@@ -253,13 +253,15 @@ nctool templates list
 
 ```
 模板列表（7 个）
-drill_cycle              钻孔     钻孔循环：G81 标准钻孔
-facing                   铣削     面铣：矩形区域往复行切（zigzag）
-program_footer           通用     程序尾：主轴/冷却关闭 + 取消循环 + 程序结束 + 纸带结束符
-program_header           通用     程序头：纸带起始符 + 程序号 + 注释头 + 单位/坐标系/取消态初始化
-safe_move                通用     安全移动：抬刀到安全高度 + 定位
-slot_milling             铣削     键槽铣：X 方向直槽一刀成型（下刀→切削→抬刀→返回）
-tool_change              通用     换刀：主轴停止 + 换刀 + 刀长补偿 + 启动主轴与冷却
+  drill_cycle                      钻孔   .NC   钻孔循环：G81 标准钻孔
+  facing                           铣削   .NC   面铣：矩形区域往复行切（zigzag）
+  program_footer                   通用   .NC   程序尾：主轴/冷却关闭 + 取消循环 + 程序结束 + 纸带结束符
+  program_header                   通用   .NC   程序头：纸带起始符 + 程序号 + 注释头 + 单位/坐标系/取消态初始化
+  safe_move                        通用   .NC   安全移动：抬刀到安全高度 + 定位
+  slot_milling                     铣削   .NC   键槽铣：X 方向直槽一刀成型（下刀→切削→抬刀→返回）
+  tool_change                      通用   .NC   换刀：主轴停止 + 换刀 + 刀长补偿 + 启动主轴与冷却
+
+（隐藏模板未显示；用 --all 查看全部）
 ```
 
 ```bash
@@ -269,12 +271,18 @@ nctool inspect drill_cycle
 
 ```
 模板: drill_cycle
+
 必选参数（5）:
-  x  行 1 列 24
-  y  行 1 列 47
-  r_plane  行 2 列 12
-  depth  行 2 列 41
-  feed  行 2 列 68
+  x        行 1 列 24  数值  单位 mm  孔 X 坐标
+  y        行 1 列 47  数值  单位 mm  孔 Y 坐标
+  r_plane  行 2 列 12  数值  ≥ 0；单位 mm  R 平面（安全高度，应高于工件表面）
+  depth    行 2 列 41  数值  ≤ 0；单位 mm  钻孔深度
+  feed     行 2 列 68  数值  ≥ 0.001；单位 mm/min  进给速度
+
+条件必选参数（满足条件时必填）（0）:
+
+派生参数（系统注入，无需提供）（0）:
+
 可选参数（0）:
 ```
 
@@ -289,6 +297,7 @@ echo $?   # 1
 错误 [y] 必选参数缺失（模板引用且无默认值兜底，参数集未提供）（第 1 行第 47 列引用）
 错误 [depth] 必选参数缺失（模板引用且无默认值兜底，参数集未提供）（第 2 行第 41 列引用）
 错误 [feed] 必选参数缺失（模板引用且无默认值兜底，参数集未提供）（第 2 行第 68 列引用）
+error: 参数校验未通过（详见上方报告）
 ```
 
 ```bash
@@ -358,19 +367,14 @@ fi
 echo "$out" | jq -r '.data.output' > program.nc
 ```
 
-失败时的 JSON（节选）：
+失败时的 JSON（报告走 stderr，stdout 上只有 JSON，故可直接管道给 `jq`）：
 
 ```json
 {
-  "data": {
-    "errors": 3,
-    "template": "drill_cycle",
-    "issues": [
-      { "level": "error", "param": "y",
-        "message": "必选参数缺失（模板引用且无默认值兜底，参数集未提供）（第 1 行第 47 列引用）" }
-    ]
+  "error": {
+    "kind": "validation",
+    "message": "参数校验未通过（详见上方报告）"
   },
-  "error": { "kind": "validation", "message": "错误 [y] 必选参数缺失…" },
   "ok": false
 }
 ```
