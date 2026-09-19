@@ -34,7 +34,7 @@
   - 1 个 approve（维护者本人可省）
   - CI 全绿（含 ubuntu/windows/macos 三平台）
   - 若有 `Changed` 破坏项 → 必须在 PR 描述里写迁移指南
-- **全部必须绿**：含 `coverage`（生产代码行覆盖 ≥ 88%）与 `msrv`（1.82 上 `cargo check`）两个 job —— 二者都是阻断项，没有例外
+- **全部必须绿**：含 `coverage`（生产代码行覆盖 ≥ 88%）与 `msrv`（1.85 上 `cargo check`）两个 job —— 二者都是阻断项，没有例外
 
 ## 4. 兼容性窗口
 

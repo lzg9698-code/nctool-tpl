@@ -599,6 +599,48 @@
   浏览器验证，而本机不支持 agent-browser（Windows），盲改不符合本项目"改动须实测"的标准。
 - `src/lib.rs` 1760 行内联测试迁移：需先确认它们是否只用公共 API，收益不明确。
 
+### 批次十三：修正 MSRV 声明 1.82 → 1.85（CI 长期红着的根因）
+
+#### 背景
+
+推送后核对 GitHub Actions，发现**推送前两次提交（`343d264` / `de64e32`）的 CI 都是 failure**。
+逐 job 排查：失败的只有 `MSRV (1.82)` 的 `Check on 1.82`，其余全绿
+（三平台质量矩阵、coverage、doc、audit 均通过）。也就是说 CI 的红灯已经持续了一段时间，
+而本机门禁（Windows + stable 1.98）永远看不到它。
+
+#### Fixed
+
+- **`rust-version` 由 `1.82` 改为 `1.85`**（三个 `Cargo.toml`）：本地复现后确认
+  `clap_derive 4.6.4` 的清单声明 `edition = "2024"` + `rust-version = "1.85"`，
+  是整个依赖树的最高值；Cargo 1.82 连解析它的清单都做不到：
+
+  ```
+  error: failed to download `clap_derive v4.6.4`
+  Caused by: feature `edition2024` is required
+  ```
+
+  实测 `cargo +1.85 check --workspace --locked` **通过**，故 1.85 是真实 MSRV。
+- **CI 的 `msrv` job 同步**（`.github/workflows/ci.yml`）：toolchain `@1.82` → `@1.85`，
+  job 名与步骤名一并更新；并在注释里写清"为什么是 1.85"与
+  **"抬 MSRV 前先看本 job 的红绿，别只看本机 stable"**，避免后人以为是随手抬的。
+- **对外表述全面对齐**：`README.md`、`docs/CONTRIBUTING.md`、`docs/RELEASE.md`、
+  `docs/ROADMAP.md`、`docs/TEMPLATE_INTEGRATION_PLAN.md` 的 1.82 表述全部改为 1.85。
+
+#### 说明
+
+第三轮 P1-16 指出「MSRV 1.82 是无效承诺，CI 无任何任务在 1.82 上编译」，
+当时的修复是**加上这个 job**。但 job 一上线就是红的，而没人核对它的运行结果 ——
+**job 存在 ≠ 承诺成立**。本次把声明改成了事实，并让 CI 注释承担"下次抬 MSRV 时提醒"的职责。
+
+> 另一条路是反向锁 `clap` 到 4.5.x（MSRV 1.74）以保住 1.82。本次未选：那会引入一个
+> 需要长期维护的版本锁，而 1.85（2025-02）距今已一年半，作为 MSRV 并不苛刻。
+
+#### 验证
+
+- `cargo +1.85 check --workspace --locked` 通过（独立 target 目录，未污染主缓存）
+- workspace 全量 **569 项**通过；fmt / clippy 门禁通过
+- `ci.yml` YAML 解析校验通过
+
 ### 批次十二：服务层两项的实测定性（第四轮批次 G，纯测量，无代码改动）
 
 第三轮 P1-18 / P1-19 长期以「读码推断」的形式挂在未决项里。本轮改用原始 socket 探针实测，

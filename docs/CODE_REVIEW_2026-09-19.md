@@ -377,6 +377,34 @@ golden 测试在 `core/tests/integration.rs`（core 包）。裸 `cargo test` **
 
 ---
 
+## 3.4 审查后追加发现（推送后核对 CI 时暴露）
+
+### P0-5｜CI 长期红着，`rust-version = "1.82"` 是对外承诺的假话 ✅ **已修复**
+
+- 发现经过：推送后查 GitHub Actions，发现**推送前的两次提交（`343d264` / `de64e32`）CI 均为 failure**。
+  逐 job 看，失败的只有 `MSRV (1.82)` 的 `Check on 1.82` 步骤，其余全绿
+  （三平台质量矩阵、coverage、doc、audit 都过）。
+- 本地复现（2 秒）：
+  ```
+  error: failed to download `clap_derive v4.6.4`
+  Caused by: feature `edition2024` is required
+    The package requires the Cargo feature called `edition2024`,
+    but that feature is not stabilized in this version of Cargo (1.82.0)
+  ```
+- 根因：`clap_derive 4.6.4` 自己的清单声明 `edition = "2024"` + **`rust-version = "1.85"`**，
+  是整个依赖树的最高值（次高是 `itoa` 的 1.68）。Cargo 1.82 连解析它的清单都做不到。
+  实测 `cargo +1.85 check --workspace --locked` 通过 → **真实 MSRV = 1.85**。
+- 为什么一直没被发现：本机门禁跑的是 Windows + stable（1.98），**MSRV 问题只在 1.85 以下暴露**；
+  而第三轮加了这个 job 却没核对它的运行结果 —— job 存在 ≠ 承诺成立。
+  这正是第三轮 P1-16 想解决的问题，只是当时把"加了 job"当成了"问题已解决"。
+- 影响：README / CONTRIBUTING 对外承诺 1.82+，`cargo install` 到 1.82 环境的用户会直接失败；
+  且 `master` 长期红着，CI 的"全绿"信号已经失效（红灯被当成常态）。
+- 修复：三个 `Cargo.toml` 的 `rust-version` → `1.85`；CI job 的 toolchain / 步骤名同步；
+  README / CONTRIBUTING / RELEASE / ROADMAP / TEMPLATE_INTEGRATION_PLAN 的 1.82 表述全部改掉；
+  并在 CI 注释里写清"为什么是 1.85"与"抬 MSRV 前先看本 job"，避免后人以为是随手抬的。
+
+---
+
 ## 4. 新增功能前必须优先解决的关键遗留问题
 
 排序原则：**先解决「会让新功能静默失效」的，再解决「真实缺陷」，最后解决「整洁性」**。

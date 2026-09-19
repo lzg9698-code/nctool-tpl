@@ -23,7 +23,7 @@
 
 | 项目 | 要求 |
 | --- | --- |
-| Rust | **1.82+**（MSRV = workspace 各 crate 的 `rust-version`）。CI 在 stable 上跑质量门，另有 `msrv` job 在 1.82 上 `cargo check --workspace --locked`，让这个承诺可验证 |
+| Rust | **1.85+**（MSRV = workspace 各 crate 的 `rust-version`）。CI 在 stable 上跑质量门，另有 `msrv` job 在 1.85 上 `cargo check --workspace --locked`，让这个承诺可验证。**抬 MSRV 前先看该 job**：1.82 时代它是红的（`clap_derive` 需要 `edition2024`），本机 stable 不会暴露这种问题 |
 | 组件 | `rustfmt`、`clippy`（CI 用 `dtolnay/rust-toolchain@stable` 安装） |
 | 可选工具 | `cargo-audit`（安全审计）、`cargo-llvm-cov` + `python`（覆盖率，CI **阻断**项） |
 | 平台 | Linux / macOS / Windows 均需可用（CI 三平台矩阵） |

@@ -29,7 +29,7 @@ NCtool 模板解析核心：基于 [minijinja](https://github.com/mitsuhiko/mini
 
 | 项目 | 要求 |
 | --- | --- |
-| Rust 工具链 | **1.82 及以上**（`rust-version = "1.82"`；CI 使用 stable） |
+| Rust 工具链 | **1.85 及以上**（`rust-version = "1.85"`；CI 使用 stable，另有 `msrv` job 在 1.85 上验证） |
 | 操作系统 | Linux / macOS / Windows（CI 三平台矩阵均需绿灯） |
 | 运行时依赖 | 无。CLI 是单一二进制，release 构建开启 LTO + strip |
 
@@ -595,7 +595,7 @@ python scripts/check_coverage_caliber.py lcov.info --min 88
   便于 `git bisect` 与 `git revert`。
 - 0.x 阶段：master 上直推 + 事后 review；1.0 后启用 PR 流程（1 个 approve + 三平台 CI 全绿），
   详见 [docs/RELEASE.md](docs/RELEASE.md)。CI **全部 job 均为阻断项**（含覆盖率门与
-  MSRV 1.82 检查），没有可以当噪音忽略的红灯。
+  MSRV 1.85 检查），没有可以当噪音忽略的红灯。
 
 ### 报告问题
 

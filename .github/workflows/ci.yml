@@ -175,18 +175,22 @@ jobs:
             lcov.info
             coverage-summary.txt
 
-  # `rust-version = "1.82"` 写在三个 Cargo.toml 里、README 与 CONTRIBUTING 也对外
-  # 承诺 1.82+，但此前**没有任何任务在 1.82 上编译过** —— 依赖任一 minor 抬高 MSRV
-  # 都会让这个承诺静默失真。本 job 就是为了让声明变成可验证的事实。
+  # `rust-version` 写在三个 Cargo.toml 里、README 与 CONTRIBUTING 也对外承诺，
+  # 本 job 就是为了让声明变成可验证的事实。
+  #
+  # **为什么是 1.85 而不是更早的 1.82**：本 job 一上线就是红的 —— `clap_derive`
+  # 的清单声明 `edition = "2024"` + `rust-version = "1.85"`，而 Cargo 1.82 连
+  # 解析它的清单都做不到（`feature 'edition2024' is required`）。实测 1.85.1 可
+  # 通过，故声明改为 1.85。抬 MSRV 时请先看本 job 的红绿，别只看本机 stable。
   msrv:
-    name: MSRV (1.82)
+    name: MSRV (1.85)
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
 
-      - name: Install Rust (1.82)
-        uses: dtolnay/rust-toolchain@1.82
+      - name: Install Rust (1.85)
+        uses: dtolnay/rust-toolchain@1.85
 
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
@@ -196,5 +200,5 @@ jobs:
       # 带上 `--all-targets` 会把 criterion / assert_cmd 等 dev-dependencies 拉进来，
       # 它们的 MSRV 通常高于生产依赖，属于本仓库自己的开发工具链问题，
       # 不该让对外承诺失真。
-      - name: Check on 1.82
+      - name: Check on 1.85
         run: cargo check --workspace --locked

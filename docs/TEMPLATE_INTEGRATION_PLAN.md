@@ -5,7 +5,7 @@
 >
 > 分析对象：
 > - 源仓库 `https://github.com/lzg9698-code/NCTool_V3.git`（Python 3.9+ / CustomTkinter / Jinja2 / Nuitka）
-> - 目标仓库 `nctool-tpl`（Rust 1.82+ / minijinja / workspace: `nctool-tpl` + `nctool-core` + `nctool-cli`）
+> - 目标仓库 `nctool-tpl`（Rust 1.85+ / minijinja / workspace: `nctool-tpl` + `nctool-core` + `nctool-cli`）
 >
 > 版本：v1.0 · 2026-09-12
 
