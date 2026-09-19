@@ -599,6 +599,47 @@
   浏览器验证，而本机不支持 agent-browser（Windows），盲改不符合本项目"改动须实测"的标准。
 - `src/lib.rs` 1760 行内联测试迁移：需先确认它们是否只用公共 API，收益不明确。
 
+### 批次十一：错误诊断准确性（第四轮批次 F）
+
+#### Fixed
+
+- **过滤器名不再被当成缺失变量名**（`src/error.rs::extract_undefined_var_name`）：
+  `{{ missing | upper }}` 的 `UndefinedError` span **只覆盖过滤器名** `upper`
+  （minijinja 把错误定位到过滤器上），于是消息报「未定义变量 'upper'」——把用户
+  指向一个过滤器名。现在 span 之前（跳过空白）的最后一个字符是 `|` 时不采纳该标识符。
+
+  **原报告对这一条的描述是错的**：它称 `{{ a + missing }}` 会报首个标识符 `a`。
+  实测该形态走 `InvalidOperation` → `TplError::Render`，**根本不提取变量名**。
+  真正可复现的是过滤器形态，由探针跑 16 种写法逐一定位：
+
+  | 模板 | 类别 | variable |
+  | --- | --- | --- |
+  | `{{ missing }}` | `UndefinedVariable` | `missing` ✅ |
+  | `{{ missing \| upper }}` / `{{ x \| f \| g }}` / `{% if x \| f %}` | `UndefinedVariable` | 过滤器名 ❌ |
+  | `{{ missing.attr }}` / `{{ missing[0] }}` | `UndefinedVariable` | `""` ✅ |
+  | `{{ a + missing }}` / `{{ missing + 1 }}` | `InvalidOperation` → `Render` | —（不提取） |
+  | `{{ missing ~ "x" }}` | `UndefinedVariable` | `missing` ✅ |
+
+  ⚠️ 第三轮建议的修法（"要求标识符覆盖 trim 后整个 range"）**是错的**：它挡不住
+  过滤器名（span 恰好就只有 `upper` 一个标识符），却会**误伤** `{{ missing ~ "x" }}`
+  （span 覆盖整条表达式，但首个标识符确实是变量）。这是坚持先实测、再动手的直接价值。
+
+#### 判定不修
+
+- **嵌套 include 的错误类别不细分**（第三轮 P2-12）：根因已由 ` ← ` 链修复补进消息
+  （含子模板名与行号）；`src` 之外匹配 `TplError` 细分变体的地方只有 `registry.rs`
+  的 `TemplateNotFound`，其余全部构造/透传 `Render`——改细不会让任何调用点受益；
+  且细化后要决定"用哪个模板名"，而现有测试正是把"不跨模板错位恢复变量名"写成
+  期望值的。保留现状，理由已写入报告与代码注释。
+
+#### 测试
+
+- 新增 `filter_name_is_not_reported_as_undefined_variable`：覆盖 3 种过滤器形态，
+  并显式守住两种**不属于**本缺陷、必须保持原样的情形（`InvalidOperation` 归 `Render`；
+  `{{ missing ~ "x" }}` 必须继续恢复出 `missing`）。
+- **反向验证**：移除 `|` 判据 → 报 `应留空而不是报 "upper"` → FAILED → 恢复。
+- workspace 全量 **569 项**通过；fmt / clippy 门禁均通过。
+
 #### 一处更正
 
 第四轮报告 §3.3 引用的「`src/renderer.rs:185` 多克隆一次源码」经复核**不成立**：

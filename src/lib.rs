@@ -779,6 +779,58 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
         assert_eq!(extract_undefined_var_name("{{ table[key] }}", 3..13), None);
     }
 
+    /// 回归（第四轮 P2-11）：**过滤器名不得被当成缺失变量名**。
+    ///
+    /// 实测：`{{ missing | upper }}` 的 `UndefinedError` span 只覆盖 `upper`
+    /// （minijinja 把错误定位到过滤器上），于是消息报「未定义变量 'upper'」——
+    /// 把用户指向一个过滤器名。同类形态还有 `{{ x | f | g }}` 与 `{% if x | f %}`。
+    ///
+    /// 两种**不属于**本缺陷、且必须保持原样的情形（实测确认）：
+    /// - `{{ a + missing }}` / `{{ missing + 1 }}` 走 `InvalidOperation`，
+    ///   归入 `TplError::Render`，本就不提取变量名；
+    /// - `{{ missing ~ "x" }}` 的 span 覆盖整条表达式，但首个标识符确实是变量，
+    ///   必须继续能恢复出 `missing` —— 所以不能用"标识符须覆盖整个 span"这种
+    ///   更粗的判据去修，那会误伤它。
+    #[test]
+    fn filter_name_is_not_reported_as_undefined_variable() {
+        let mut r = Renderer::new();
+        for (src, name) in [
+            ("{{ missing | upper }}", "f0.j2"),
+            ("{{ missing | upper | lower }}", "f1.j2"),
+            ("{% if missing | upper %}1{% endif %}", "f2.j2"),
+        ] {
+            r.add_template(name, src).unwrap();
+            let err = r
+                .render_template(name, &minijinja::context! {})
+                .unwrap_err();
+            match err {
+                TplError::UndefinedVariable {
+                    variable, message, ..
+                } => assert!(
+                    variable.is_empty(),
+                    "过滤器名不是变量名，应留空而不是报 {variable:?}：{message}"
+                ),
+                other => panic!("{src} 应为 UndefinedVariable，实际: {other:?}"),
+            }
+        }
+
+        // 反向：以下必须继续正确恢复，别把保护做成误伤
+        assert_eq!(
+            extract_undefined_var_name("{{ missing }}", 3..10),
+            Some("missing".to_string())
+        );
+        assert_eq!(
+            extract_undefined_var_name("{{ missing ~ \"x\" }}", 3..16),
+            Some("missing".to_string()),
+            "span 覆盖整条表达式时，首个标识符确实是变量，应继续恢复"
+        );
+        assert_eq!(
+            extract_undefined_var_name("{{ x.attr | upper }}", 11..16),
+            None,
+            "紧跟在 `|` 之后的一律不采纳"
+        );
+    }
+
     #[test]
     fn error_display_includes_subdivision() {
         let err = TplError::UndefinedVariable {

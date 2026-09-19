@@ -191,6 +191,19 @@ pub(crate) fn extract_identifier_at(source: &str, offset: usize) -> Option<Strin
 /// 仅当范围起点恰好是一个**裸标识符**（后面不紧跟 `.` / `[` 等访问符）时才
 /// 认定其为缺失变量名 —— 属性链中无法确定缺失的是基础名还是某个属性，
 /// 此时返回 `None`（宁缺毋错，避免误导）。
+///
+/// 另有两种**实测**确认的误报，各有一条判据挡住：
+///
+/// - **过滤器名不是变量名**：`{{ missing | upper }}` 的 span 只覆盖 `upper`
+///   （minijinja 把错误定位到过滤器上），不挡就会报「未定义变量 'upper'」，
+///   把用户指向一个过滤器名。判据是「span 之前的最后一个非空白字符是 `|`」，
+///   实测覆盖 `{{ x | f }}`、`{{ x | f | g }}`、`{% if x | f %}` 三种形态。
+/// - **属性/下标链**：`{{ missing.attr }}` / `{{ missing[0] }}` 的 span 覆盖
+///   整条链，无法确定缺失的是基础名还是某个属性，返回 `None`。
+///
+/// 反例（**必须继续能恢复**）：`{{ missing ~ "x" }}` 的 span 覆盖整条表达式，
+/// 但首个标识符确实是那个变量 —— 所以不能用"标识符必须覆盖整个 span"这种
+/// 更粗的判据，那会误伤它。
 pub(crate) fn extract_undefined_var_name(
     source: &str,
     range: std::ops::Range<usize>,
@@ -199,6 +212,13 @@ pub(crate) fn extract_undefined_var_name(
     let id = extract_identifier_at(rest, 0)?;
     let after = rest[id.len()..].trim_start();
     if after.starts_with('.') || after.starts_with('[') {
+        return None;
+    }
+    // 过滤器名：span 紧跟在 `|` 之后
+    if source
+        .get(..range.start)
+        .is_some_and(|before| before.trim_end().ends_with('|'))
+    {
         return None;
     }
     Some(id)
