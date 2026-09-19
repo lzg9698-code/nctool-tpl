@@ -583,7 +583,7 @@ python scripts/check_coverage_caliber.py lcov.info --min 88
 | --- | --- |
 | 公共 API / 错误类型 / 行为 | `CHANGELOG.md` 的 `Added` / `Changed` 节 + 相关文档；破坏性变更要写迁移方式 |
 | CLI 退出码或 `--format json` 字段 | `cli/tests/cli_e2e.rs`（44 个用例）+ CHANGELOG —— 这两者是对外**稳定契约** |
-| G-code 输出字节 | golden 基线（`tests/golden/`，42 个文件）：`NCTOOL_UPDATE_GOLDEN=1 cargo test` 刷新，**必须人工 diff 复核**后再提交 |
+| G-code 输出字节 | golden 基线（`tests/golden/`，45 个文件 = 21 组正向 ×2 + 3 份负向报告）：`NCTOOL_UPDATE_GOLDEN=1 cargo test --workspace` 刷新，**必须人工 diff 复核**后再提交 |
 | 架构 / 模块职责 / 数据流 | `docs/ARCHITECTURE.md` |
 | 机床配置键 | `docs/MACHINE_CONFIG_GUIDE.md`（键清单、未知键告警） |
 | 新增内置模板 | golden 用例 + `docs/PROCESS_CHECKLIST.md` 登记，并声明未经工艺评审 |

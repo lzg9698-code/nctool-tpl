@@ -344,6 +344,227 @@
   且只报未命中的那条。
 - workspace 全量 **554 项**通过（含 golden 逐字节比对 —— 无模板依赖旧的负零输出）。
 
+### 批次五：打通扩展接缝（第四轮审查 P0-1）
+
+> 依据 `docs/CODE_REVIEW_2026-09-19.md`。本批**不改变任何运行时行为**，只把
+> 「新增枚举变体时编译器是否会提醒你漏改」从事后排查变成编译期错误。
+
+#### Changed
+
+- **`ParamKind` 的类型名解析收敛到唯一入口**（`core/src/model.rs`）：新增
+  `impl FromStr for ParamKind`（接受 `aliases()` 的英文别名与 `label()` 的中文名），
+  清单解析处的那份字符串表（`core/src/manifest.rs::parse_kind_name`）改为转发。
+  原先同一套中英文类型名在两处各写一遍，新增类型漏改一处即「模板头部写了但报未知类型」。
+- **`ParamKind::matches` 去掉 `_ => false` 兜底**（`core/src/model.rs`）：原写法是
+  `match (self, value)` + 通配兜底，新增变体会**静默把新类型变成"拒绝一切取值"**，
+  编译器一声不响。现按 `self` 穷尽展开，新增变体必须逐类表态。语义与原先逐值一致。
+- **`OutputFormat` 后处理分支改 `match`**（`core/src/pipeline.rs`）：原先是
+  `if opts.format == OutputFormat::Text { return }`，新增第三种格式会静默落到
+  G-code 后处理（加行号 / 清 ASCII）里。现为穷尽 `match`。
+- **宽松模式的保留集合改由 `IssueKind::is_hard_fail()` 决定**（`core/src/validate.rs`）：
+  新增穷尽匹配的 `is_hard_fail()` 与 `ValidationReport::downgrade_soft_errors()`，
+  管线改走新路径。原 `downgrade_errors_except(&[NonFinite])` 是**白名单反向**，
+  新增问题类别会被默认降级；该方法保留但文档指向新入口。
+- **分类表收敛到 core**（`core/src/registry.rs`、`cli/src/server.rs`、`cli/src/cli.rs`）：
+  新增 `TemplateCategory::ALL` / `aliases()` / `dir_names()` / `from_dir_name()` /
+  `FromStr`。HTTP 的 `parse_category` 与清单的 `classify_by_path` 均改为转发，
+  `CategoryArg::from_core` 改为直接取 `TemplateCategory::label()`（原先是第三份中文副本）。
+  `classify_by_path` 的文档表补上此前遗漏的 `grooving` / `groove`。
+
+#### Fixed
+
+- **golden 刷新命令漏 `--workspace`**（`README.md`、`docs/CONTRIBUTING.md`）：文档写
+  `NCTOOL_UPDATE_GOLDEN=1 cargo test`，而 golden 测试在 `core` 包 —— 裸 `cargo test`
+  只跑根 crate，命令成功、**零文件变更、且不报错**，正好踩中本项目反复警告的
+  workspace 陷阱。现补 `--workspace`。
+
+#### 测试
+
+- 新增 3 项守卫：`param_kind_registry_is_complete`（`ALL` 长度与穷尽匹配的变体数对拍
+  + 中文名/全部别名可解析回自身 + 别名表非空）、
+  `downgrade_soft_errors_keeps_hard_fail_only`（`is_hard_fail` 逐类断言 + 与旧白名单
+  路径行为等价）、`category_arg_covers_every_core_category`（`CategoryArg::value_variants()`
+  与 `TemplateCategory::ALL` 对拍）。
+- **反向验证**（临时改坏实现 → 确认 FAILED → 恢复）：把 `NonFinite` 的 `is_hard_fail`
+  改成 `false` → 守卫测试报「NaN/Inf…也必须阻断」；删掉 `enum` 别名 → 既有解析测试报
+  `'enum' 既不是已知类型`；`ALL` 少登记一个变体 → 分类守卫报 `left: 6 / right: 5`。
+- workspace 全量 **557 项**通过，`cargo fmt --all -- --check` 与
+  `cargo clippy --workspace --all-targets -- -D warnings` 均通过。
+
+### 批次六：前后端接口集合对拍（第四轮审查 P0-2）
+
+> 依据 `docs/CODE_REVIEW_2026-09-19.md` §4 批次 B 第 1、2 项。
+
+#### Changed
+
+- **`runBatch` 不再直接调 `API.mock`**（`ui/index.html`、`cli/ui/index.html`）：改为走
+  `API.partGenerate` 出口。此前服务模式下会绕过后端、用前端 JS 复刻的引擎产出 G-code，
+  而后端 `/api/part/generate` 并不存在。demo 模式（`file://`）仍落到 mock，行为不变。
+  > 复核更正：该入口在服务模式本就被 `API.mode` 守卫挡住（不可达），故实际风险是
+  > 「潜伏的契约漂移」而非「静默产出假程序」；报告已相应降级为 P1。
+
+#### Added
+
+- **`scripts/api_routes.json`**：前后端接口集合的**单一来源**（7 条后端路由 + 1 条
+  `frontend_only` 显式豁免）。新增端点必须同时改三处：后端 `route()` 路由臂、本文件、
+  前端 API 封装，漏改任一处即红。
+- **`scripts/check_api_parity.mjs`**：提取两份 HTML 里所有 `/api/...` 字符串字面量，
+  断言每一个都在 fixture 中登记；`frontend_only` 豁免项必须写明 `reason`（防无限期豁免）。
+  已接入 `.github/workflows/ci.yml`，与 param 对拍并列（仅 ubuntu 跑一次）。
+- **Rust 侧守卫 `api_routes_are_routable`**（`cli/src/server.rs`）：`include_str!` 消费
+  同一份 fixture，逐条断言 `route()` 不返回「未知接口」。只看是否未知，不校验状态码
+  —— fixture 用最小请求体，400（参数不全）是正常的，404 + 未知接口才是契约漂移。
+
+#### 测试
+
+- **双向反向验证**：删掉 fixture 里的 `/api/part/generate` 豁免 → 前端门禁报
+  「前端使用了 /api/part/generate，但未登记」×2；往 fixture 加一条后端没有的接口 →
+  Rust 测试报 `route #7: GET /api/nonexistent_probe 未登记到 route()`。
+- workspace 全量 **558 项**通过；`node scripts/check_api_parity.mjs` 通过；
+  `ci.yml` YAML 解析校验通过。
+
+### 批次七：三处静默正确性（第四轮审查批次 C）
+
+> 依据 `docs/CODE_REVIEW_2026-09-19.md` §3.2 的 P1-1 / P1-2 / P1-3 / P1-11。
+
+#### Fixed
+
+- **`ParamKind::Integer` 补 i64 范围检查**（`core/src/model.rs`）：`matches` 此前只判
+  `is_finite() && fract() == 0.0`，而 `1e20` 两条都满足 —— 校验放行，但 `as_integer`
+  会把它**饱和**成 `i64::MAX`。同一文件的 `coerce_tagged` 与 `as_integer` 早已有
+  `[I64_MIN, I64_MAX)` 守卫（第三轮 P2-6 修的），唯独类型检查漏掉。现与它们同口径。
+- **宽松模式的派生失败并入硬失败**（`core/src/validate.rs`、`core/src/pipeline.rs`）：
+  `DeriveFailed` 是 Error 级，但宽松模式此前把它降级成 Warning，报告说"可以出程序"，
+  紧接着 `derive::apply` 又返回 `Err` —— 报告被丢弃、调用方一个字都拿不到，而文档
+  声称"唯一硬失败是 NaN/Inf"。现：
+  - `IssueKind::is_hard_fail()` 把 `DeriveFailed` 并入（与它自己的级别说明一致）；
+  - 新增 `ValidationReport::has_hard_fail()`，管线据此判定，不再写死 `NonFinite`
+    —— 将来新增硬失败类别不必改调用点；
+  - `generate_lenient*` 的文档承诺同步改为"两类"。
+- **清单键规范化碰撞不再静默覆盖**（`core/src/manifest.rs`、`cli/src/context.rs`）：
+  `./turning/a.j2` 与 `turning/a.j2` 归一后同键，后者覆盖前者且不报错 —— 用户以为
+  两个条目都在生效。`TemplateManifest` 现记录冲突对（`duplicate_keys()`），
+  CLI 加载时与孤儿键一并打出 warning。对照变量库对重复变量是直接报错的。
+- **有限性闸门改为 fail-closed**（`core/src/registry.rs`）：`find_non_finite` 里的
+  `try_iter().ok()?` 会把"遍历失败"折叠成"没找到非有限数"，即**防 NaN 的最后一道
+  闸门在异常路径上静默放行**。现返回 `Result<Option<String>, String>`，
+  `ensure_finite_context` 对扫描失败同样拒绝渲染。
+
+#### 测试
+
+- 新增 3 项：`integer_kind_rejects_out_of_i64_range`、
+  `generate_lenient_treats_derive_failure_as_hard_fail`、
+  `normalized_key_collision_is_reported`；并强化
+  `downgrade_soft_errors_keeps_hard_fail_only`（补 `has_hard_fail` 与
+  `is_hard_fail` 同口径断言）。
+- **反向验证**：临时还原四处实现 → 4 项测试全部 FAILED（`integer_kind_…`、
+  `downgrade_soft_errors_…`、`generate_lenient_treats_…`、`normalized_key_…`）→
+  恢复后全绿。
+- **顺带修掉一个此前潜伏的 CI 红**：`RUSTDOCFLAGS="-D warnings" cargo doc` 报
+  「links to private item」（`ParamKind::aliases`、`TemplateCategory::dir_names`、
+  `Self::aliases`）与 CLI 侧未解析链接 —— 批次五引入的文档链接问题，
+  当时只跑了 fmt/clippy/test，没跑 doc。现已修正。
+- workspace 全量 **561 项**通过；`cargo fmt --all -- --check`、
+  `cargo clippy --workspace --all-targets -- -D warnings`、
+  `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps` 均通过。
+
+### 批次八：让 golden 基线重新有信息量（第四轮审查批次 B 第 3 项）
+
+> 依据 `docs/CODE_REVIEW_2026-09-19.md` §3.1 的 P0-3。
+
+#### Added
+
+- **3 组负向 golden**（`tests/golden/neg_*.report.txt`）：`neg_missing_required`
+  （drill_cycle 只给 x）、`neg_type_mismatch`（tool_num 传字符串）、
+  `neg_out_of_range`（prog = 99999 越界），由新用例
+  `negative_cases_freeze_failure_reports` 冻结。此前 21 份报告恒为
+  「校验通过：无问题」，**报告维度只有 1 份信息量**，把 `Missing` 误标成警告或
+  把消息里的参数名写错不会有任何测试发现。现在失败路径的级别、参数名、
+  行号定位与文案全部纳入基线。
+- **`machine_dimension_is_currently_flat`**：显式守住"机床维度当前不产生差异"。
+
+#### 说明：为什么没有去"制造"机床差异
+
+复核后确认 21 份 `.nc` 只有 7 份不同内容**不是测试写错**：三个预设只在
+`max_spindle_rpm` / `machine_type` / `axes` / `vendor` / `model` 上不同，而这些键
+**没有任何内置模板引用**；模板真正用到的 `program_prefix` / `units` /
+`coordinate_system` / `feed_mode` 等全部来自共享的 `generic_config()`。
+要让输出分化只能凭空发明机床编程约定 —— 那不是测试修复，是伪造数据。
+
+故改为把这份偶然的重复变成**受守的断言**：任一预设改动模板可见的键，该用例即红
+并提示"机床维度开始分化，请改成真正分维并复核 `_wfl` / `_index` 基线"；
+它同时拦住"为了消重而删掉重复基线"——删了就没有东西能拦住预设的模板可见改动。
+
+#### Changed
+
+- 修正 `core/tests/integration.rs` 的过期注释（"6 内置模板 × 3 = 18 组"实为
+  7 × 3 = 21）与 `golden_files_are_lf_only` 的文件计数（42 → 45）。
+- 同步 `README.md` / `docs/PROJECT_STATUS.md` / `docs/ROADMAP.md` 的 golden 数量。
+
+#### 测试
+
+- **反向验证**：临时改掉校验报告里 `Missing` 的文案 → `negative_cases_freeze_failure_reports`
+  FAILED；临时把 `IndexMs40` 的 `coordinate_system` 改成 `G55` →
+  `machine_dimension_is_currently_flat` FAILED。恢复后全绿。
+- 用刷新模式重建基线后 `git status tests/golden/` 只显示 3 个**新增**文件，
+  既有 42 份**逐字节未变** —— 反向证明提交的基线是可复现的。
+- workspace 全量 **563 项**通过；fmt / clippy / doc 门禁均通过。
+
+### 批次九：去重与测试诚实性（第四轮审查批次 D 的一部分）
+
+> 依据 `docs/CODE_REVIEW_2026-09-19.md` §3.2 的 P1-7 与 §3.3 的 P2-10 / P2-14 / P2-33。
+
+#### Changed
+
+- **校验报告的 JSON 形状收敛到 core**（`core/src/validate.rs`、`cli/src/output.rs`）：
+  新增 `ValidationReportJson` / `ValidationIssueJson` 与 `ValidationLevel::as_str()`，
+  CLI 侧只保留 `output::report_json` 一个薄封装。此前
+  `cli/src/server.rs::validation_json` 与 `cli/src/commands/validate.rs::report_json`
+  **逐字段各写一遍**（连 `level` 的三分支映射都各写一份），两份漂移会让 Web UI 与
+  CLI 对同一份报告给出不同形状，而两边都没有测试能发现对方变了。
+- **机床清单枚举收敛到 core**（`core/src/machine.rs`）：新增 `MachineEntry` 与
+  `MachinePreset::entries()`，把「预设 + 配置文件自定义、按预设 id 去重」的规则
+  从 HTTP（`server.rs::machines_list`）与 CLI（`commands/machine.rs::list`）两处
+  合并为一处；展示字段仍由调用方决定（HTTP 带完整 `config`，CLI 走
+  `MachineEntry::display_line`）。
+- **删掉两处死代码**（`src/extract.rs`）：`c.declare("loop")` —— `record` 对
+  `RESERVED_NAMES`（含 `loop`）在入口即 return，早于任何 `is_local` 查询，
+  该调用可证明无任何可观察效果；以及 `Collector::new` 从未使用的 `_src` 参数。
+
+#### 测试
+
+- **`all_math_filters_render` 由弱断言改为精确断言**（`tests/parsing.rs`）：原实现把
+  9 个过滤器拼成一行再 `assert!(out.contains("2"))`，`"2"` 可由 `sqrt(4)` /
+  `log10(100)` / `ceil(1.5)` 任一个满足，最后两条还重复检查同一个 `"2"`。
+  改为逐个按数值比较后**立刻抓到 `sqrt(4)` 渲染成 `"2.0"` 而非 `"2"`** ——
+  旧断言之所以"通过"，正因为它只看子串。
+- **fuzz 补返回值不变量**（`src/lib.rs`）：`fuzz_random_parse_extract_no_panic` 此前是
+  `let _ = extract_variables(&ast);`，只验证"不 panic"，易造成"提取器已被 fuzz 验证"
+  的错觉。现补：变量名非空、`extract_variables` 按名去重、行列从 1 起、span 有序、
+  `undeclared ⊆ all`。
+- 新增 2 项守卫：`json_view_freezes_contract_fields`（冻结报告 JSON 的字段名与
+  `level` 取值，属对外契约）、`entries_lists_presets_then_custom_without_duplicates`
+  （重名的自定义机床必须被忽略，否则列表出现两个 `generic`）。
+- workspace 全量 **565 项**通过；fmt / clippy / doc / 接口对拍门禁均通过。
+
+#### 未做（附理由，不是遗漏）
+
+- **服务层读超时 + 并发上限**：tiny_http 0.12 不暴露底层 socket，根治需重做 `serve`
+  的请求循环，宜独立排期。
+- **每请求全树 `stat`**：简单改成"只 stat 目录"会**漏掉就地编辑文件内容**
+  （父目录 mtime 不变），缓存将返回过期模板；需 TTL 或显式刷新入口的设计取舍。
+- **`extract.rs` 两套并行遍历合并**：**有意不做**。该文件最安全敏感（必选参数漏检
+  = 撞刀级静默错误），合并属"改对了没收益、改错了很难发现"的重构。
+- **`derived_names` / `invalidate_analysis` 可见性收窄**：`nctool-core` 已发布到
+  crates.io，收窄 `pub` 是破坏性变更，并入下一个 minor 版本一起做。
+
+#### 一处更正
+
+第四轮报告 §3.3 引用的「`src/renderer.rs:185` 多克隆一次源码」经复核**不成立**：
+`name` 与 `source` 在紧随其后的 `.map_err(|err| from_minijinja_error(err, &name, Some(&source)))`
+里仍被借用，而 `add_template_owned` 按值接管两者，两个 `clone()` 都必需。
+报告已同步更正，**不要按原文去"修"**。
+
 ---
 
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18

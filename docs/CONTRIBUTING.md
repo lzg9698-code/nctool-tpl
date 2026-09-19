@@ -150,7 +150,7 @@ cargo bench -p nctool-core --bench pipeline   # 后处理与端到端管线
 G-code 输出是逐字节比对的（`tests/golden/`，42 个基线文件）。
 
 ```bash
-NCTOOL_UPDATE_GOLDEN=1 cargo test             # 刷新基线
+NCTOOL_UPDATE_GOLDEN=1 cargo test --workspace # 刷新基线（必须 --workspace：golden 在 core 包）
 git diff tests/golden                         # 必须人工逐行复核
 ```
 

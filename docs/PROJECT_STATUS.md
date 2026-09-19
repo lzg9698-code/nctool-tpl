@@ -46,7 +46,7 @@
 
 ### 1.1 阶段 A — 需求与设计收口（12/13）
 
-**已完成：** A0 前提假设、A1 工艺核对清单（**自动核对版**：`PROCESS_CHECKLIST.md` §1–§7 逐行核对 7 个内置模板 × 3 预设，P0 错误 0）、A2 golden 基线（现 **21 组**）、A3 1.0 API 冻结清单、A4 MachineConfig 键名 schema（20 键）、A5 确认纪要。
+**已完成：** A0 前提假设、A1 工艺核对清单（**自动核对版**：`PROCESS_CHECKLIST.md` §1–§7 逐行核对 7 个内置模板 × 3 预设，P0 错误 0）、A2 golden 基线（现 **21 组正向 + 3 组负向**）、A3 1.0 API 冻结清单、A4 MachineConfig 键名 schema（20 键）、A5 确认纪要。
 
 **唯一未完成项（外部依赖）：** 3 个机床预设键值按**手册**核对 —— 无手册资源，已按降级预案声明「仅供开发测试，待外部评审」。A1 是 AI/代码级自动核对，**非**真实工艺评审；README 显著声明。
 
@@ -64,7 +64,7 @@ B1–B5 全部完成。**本轮新勾 B-Backlog**：CI coverage job 根因已修
 
 ### 1.5 阶段 E — 联调测试（12/12，本轮收口）
 
-CLI E2E 契约、HTTP 契约、21 组 golden、错误边界、413、万行性能均已覆盖。**本轮勾选 E2.2 / E2.3**：取证为 CI run #34（`d3d144f`）的 `ubuntu-latest` 与 `macos-latest` quality job 均 conclusion = success（XDG 配置路径与 Unix 行尾由该 job 覆盖）。
+CLI E2E 契约、HTTP 契约、21 组正向 golden + 3 组负向报告、错误边界、413、万行性能均已覆盖。**本轮勾选 E2.2 / E2.3**：取证为 CI run #34（`d3d144f`）的 `ubuntu-latest` 与 `macos-latest` quality job 均 conclusion = success（XDG 配置路径与 Unix 行尾由该 job 覆盖）。
 
 ### 1.6 阶段 F — 上线与迭代（10/10，本轮收口）
 
@@ -87,7 +87,7 @@ CLI E2E 契约、HTTP 契约、21 组 golden、错误边界、413、万行性能
 | 机床预设 | `generic` / `wfl_m65` / `index_ms40` + 20 键 schema + `nctool.toml` 自定义 | ✅ |
 | CLI 全命令 | templates / inspect / validate / render / generate / machine / config / ui / completion | ✅ 除 `part` 外全通 |
 | Web UI | 服务模式全链路 + 跨站防护（Origin / Sec-Fetch-Site）+ CSP 等安全头 | ✅ 37/37 验收 |
-| golden 回归 | **21 组基线**（7 模板 × 3 预设，输出 + 校验报告） | ✅ 全绿 |
+| golden 回归 | **21 组正向**（7 模板 × 3 预设，输出 + 校验报告）+ **3 组负向**（缺参/类型/越界报告） | ✅ 全绿 |
 | **未通** | `part` 命令（占位 exit 7）、`part generate` 批量生成（Backlog #2） | ❌ |
 
 **内置模板 7 个**：`program_header`、`program_footer`、`tool_change`、`safe_move`、`drill_cycle`、`facing`、`slot_milling`。
@@ -307,7 +307,7 @@ G-code 或误拦用户）、`cli/src/commands/inspect.rs` 80.79%。补上去后�
 
 **长期外部依赖（不是代码能解决的）**
 
-外部工艺评审（R1）：工程师逐行核对 ⚠️ 项 + 机床空运行验证 21 组 golden。`nctool part` 占位需按 F4 加权结果决定是否投入。
+外部工艺评审（R1）：工程师逐行核对 ⚠️ 项 + 机床空运行验证 21 组正向 golden。`nctool part` 占位需按 F4 加权结果决定是否投入。
 
 **绝不能砍的三项**（ROADMAP §7.3）：① 工艺正确性评审（A1）② 三机床 golden 基线（A2）③ 发版与安装验证（F1）—— 第 ③ 项本轮已完成。
 
