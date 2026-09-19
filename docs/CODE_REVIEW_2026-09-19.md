@@ -1,0 +1,448 @@
+# nctool 代码审查报告（第四轮 · 面向新增功能）
+
+> 审查日期：2026-09-19
+> 审查对象：`rustjinja` workspace @ `343d264`（工作区干净，批次 1–4 已全部提交）
+> 代码规模：18 032 行 Rust（三 crate），其中生产口径 4 961 行
+> 审查方式：四路并行通读 + 关键结论逐条**回读源码复核**，不接受子代理转述
+> 历史对照：`docs/CODE_REVIEW_2026-09-18.md`（第三轮）、`CODE_REVIEW_AND_DEV_PLAN.md`（09-05）、`docs/ARCHITECTURE_REVIEW.md`（09-15）
+> **本轮定位**：第三轮解决的是「静默出错」，本轮解决的是**「新增功能会不会静默失效」**。
+> **实施状态**：§4 的**批次 A（打通扩展接缝）已于 2026-09-19 实施完毕**（见 `CHANGELOG.md`
+> 「批次五」），批次 B/C/D 仍按原优先级开放。报告正文保留审查当时的原始结论，
+> 已完成项的结论按§4 内的 ✅ 标记为准。
+
+---
+
+## 0. 本轮基线（实测）
+
+| 手段 | 结果 |
+| --- | --- |
+| `cargo test --workspace --all-targets` | **556 项**（554 通过 + 2 ignored），全绿 |
+| `cargo clippy --workspace --all-targets` | **零告警** |
+| 第三轮已修项回归 | 逐条复核通过：派生链不动点（`derive.rs:144-176`）、`required_if` 优先于 `var.optional`、`check_finite` 递归列表、空前缀回退、include 闭包就近优先、孤儿清单键、稀疏覆盖可清空 —— **确认修好，本轮不再重复** |
+| `diff ui/index.html cli/ui/index.html` | IDENTICAL |
+| `md5sum tests/golden/*.nc` | 21 份仅 **7 份不同内容**；21 份 `.report.txt` **md5 全同**（批次 B 第 3 项已处理，见 §4） |
+
+---
+
+## 1. 结论摘要
+
+| 维度 | 评分 | 一句话依据 |
+| --- | --- | --- |
+| 架构与分层 | **8.5** | 依赖严格单向、`core` 无 I/O、AST 匹配穷尽（编译器即安全网）；扣分在 `server.rs` 混合职责 |
+| **可扩展性**（本轮重点） | **6.0 → 8.0** | 审查当时：新增一个参数类型/分类/输出格式要改 5–8 个文件，**绝大多数无编译器保护**。**批次 A 实施后**四处接缝已改为穷尽匹配 + 单一来源，仅前端 `CATS` 一处手工表待纳入对拍 |
+| 可维护性 | **7.5** | 报告 DTO 两份、分类表两份、机床列表两份、UI 两份；提取器有并行两套遍历 |
+| 正确性 | **8.0** | 第三轮已堵住主要静默路径；本轮新增 3 条（整数越界、宽松模式派生、清单键碰撞） |
+| 安全性 | **7.5** | XSS/LFI/跨站/请求体上限均已修；扣分在无读超时（P1-19 未做）、CLI 侧读文件无上限 |
+| 性能 | **7.0** | 注册表缓存已加；扣分在每请求全树 `stat` 与每 generate 三次全量 clone |
+| 测试有效性 | **6.5 → 7.5** | 审查当时：数量足（556），但 golden 信息量只有名义 1/3、无负向用例。**批次 B 已补**负向报告基线 + 机床维度断言；仍开放：多处弱断言（`parsing.rs:363`、`lib.rs` fuzz） |
+| 文档一致性 | **6.0** | 测试数量/覆盖率/golden 组数四处漂移，且 golden 刷新命令踩了自家警告的 workspace 陷阱 |
+
+**总体：7.3 / 10**（审查当时；批次 A 实施后主要扣分项的「可扩展性」已由 6.0 升至 8.0）。
+与第三轮（7.4）持平，但**风险结构变了**：第三轮的风险是「现有功能静默出错」，本轮的风险是「**新功能加进去后某一环不生效，且没人会发现**」。
+
+**核心判断**：这是一个**架构健康、但扩展接缝粗糙**的项目。好消息是它的编译器兜底做得比多数项目好（提取器对 minijinja AST 的匹配**零通配符**，升级 minijinja 3.0 会直接编译失败而非静默吞节点）；坏消息是同一份严谨**没有延伸到业务层**——`ParamKind`、`OutputFormat`、`TemplateCategory`、`IssueKind` 这四个最可能被扩展的枚举，全部存在「字符串表 + 通配符兜底」的组合，新增变体时编译器一声不响。
+
+**新增功能前必须先做 §4 的批次 A 与 B**，合计约 1 人日，之后每加一个功能都会省下排查时间。
+
+---
+
+## 2. 架构与模块划分评估
+
+### 2.1 做得好的（不要在这些地方「重构」出新问题）
+
+| 项 | 结论 |
+| --- | --- |
+| 依赖方向 | `nctool-tpl`（引擎）← `nctool-core`（模型/校验/注册表/管线）← `nctool-cli`，严格单向；`core` 无 I/O（机床配置、模板清单都以「传入数据」形式消费） |
+| 提取器 AST 匹配 | `walk_stmt`（`src/extract.rs:357-499`，20 个变体）、`walk_expr`（`:509-593`，14 个变体）、`collect_template_refs_stmt`（`:150-219`）**均无 `_ =>` 兜底**。minijinja 3.0 新增 `Expr::Tuple` 时会**编译失败**——这是新增模板语法支持时最硬的保险，务必保留 |
+| 单一来源 | 参数值渲染 → `ParamValue::display`；规格 JSON → `server::spec_json`；`--param` 归一顺序 → `scripts/param_parity_cases.json` 被 Rust 测试与 `check_param_parity.mjs` **双向消费**。全仓最好的防漂移设计 |
+| 安全头 | `SECURITY_HEADERS`（`cli/src/server.rs:57-72`）全局统一附加（`:749-760`），新增端点**自动生效**，无需改 CSP |
+| 退出码 | `CliError::exit_code`（`cli/src/output.rs:45-57`）+ `main.rs:29-35` 单一出口，新增子命令返回 `CliError` 即可 |
+| CI 门禁 | 3 job 全阻断，覆盖 fmt/clippy/test/doctest/doc/audit/覆盖率/MSRV/文档链接/Node 对拍；**CI 内所有 cargo 命令均带 `--workspace`** |
+| 覆盖率口径 | 已改用 `scripts/check_coverage_caliber.py`（剔除 `#[cfg(test)]` 段）判定生产口径，第三轮的 P0-1 口径失真**已解决** |
+
+### 2.2 结构性问题
+
+**「枚举 + 字符串表 + 通配符」三重奏`：这是本轮唯一的架构级问题。
+
+新增一个 `ParamKind`（比如「角度」「长度+单位」）需要同步改：
+
+| # | 位置 | 漏改后果 | 编译器会报错吗 |
+| --- | --- | --- | --- |
+| 1 | `core/src/model.rs:405` `matches` 的 `_ => false` | 新类型**静默拒绝一切取值** | ❌ |
+| 2 | `core/src/model.rs:408` `label` | 显示空/错 | ✅（穷尽） |
+| 3 | `core/src/model.rs:172` `coerce_tagged` | 反序列化行为不一致 | 视实现 |
+| 4 | `core/src/manifest.rs:804` `parse_kind_name` | 模板头部 `{# PARAMS: #}` 写新类型 → 报「既不是已知类型」 | ❌ |
+| 5 | `cli/src/args.rs:113` `_ => heuristic` | `--param` 归一走启发式，可能把「角度」当字符串 | ❌ |
+| 6 | `cli/src/server.rs` 前端展示 | 类型筛选失效 | ❌ |
+
+**6 处里只有 1 处有编译保护。** 同样的问题存在于：
+
+- **`OutputFormat`**：`core/src/pipeline.rs:336` 是 `if opts.format == OutputFormat::Text { return }` 而非 `match` —— 新增第三种格式会**静默走 G-code 后处理**（加行号、清洗 ASCII），产出错误程序且无告警。
+- **`TemplateCategory`**：`manifest.rs:579 classify_by_path`（字符串表）+ `server.rs:227 parse_category` + `cli.rs:132 CategoryArg` + `ui/index.html:1678 CATS`，**四份分类表**。第三轮的 P1-8（漏 `grooving`）就是这个结构的直接产物。
+- **`IssueKind`**：`#[non_exhaustive]`（`validate.rs:43`）却**没有任何穷尽 match**；级别在各构造点手选（`error_kind`/`warning_kind`/`info_kind`，`:103-130`）。更危险的是 `pipeline.rs:233` 的 `downgrade_errors_except(&[NonFinite])` 是**白名单反向**——宽松模式下任何**新增的 Error 类别默认被降级**，编译器不会提醒。
+
+---
+
+## 3. 缺陷清单
+
+### 3.1 P0 —— 新增功能前必须解决
+
+---
+
+#### P0-1｜扩展点无编译器保护，新增类型/分类/格式/问题类别时漏改即静默失效　`指纹 EXT-SEAM-NOEXHAUSTIVE`
+
+- 位置：`core/src/model.rs:405`、`:804`；`core/src/pipeline.rs:336`、`:233`；`core/src/manifest.rs:579`；`cli/src/args.rs:113`；`cli/src/server.rs:227`；`cli/src/cli.rs:132`；`ui/index.html:1678`
+- 完整清单与漏改后果见 §2.2 表格
+- 影响范围：任何「新增参数类型 / 机床无关的新输出格式 / 模板分类 / 校验问题类别」的功能
+- 触发条件：新增枚举变体后只改了编译器强制的那 1–2 处
+- 修复（按性价比排序，前三条是必做）：
+  1. `ParamKind` 的字符串解析收敛为**单点** `impl FromStr for ParamKind`（`model.rs`），`manifest.rs:804` 与将来任何解析点都调它；`matches`（`:405`）去掉 `_ => false`，改穷尽匹配 → **此后新增类型编译器会逐处报错**。
+  2. `pipeline.rs:336` 改 `match opts.format { Text => …, Gcode => … }`。
+  3. `IssueKind` 增加 `fn severity(&self) -> Severity` 的**穷尽**映射；`downgrade_errors_except` 改为「按 `severity()` 保留 Error」而非白名单反向。
+  4. 分类表单一来源：core 导出 `Category::ALL` + `from_path()`，CLI/HTTP/前端共同消费（`parse_category` 与 `CategoryArg` 同源于此）。
+  5. 加一条守卫测试：遍历 `ParamKind::ALL`，断言 `from_str(label)` 与 `parse_kind_name` 双向一致；遍历 `Category::ALL` 断言 HTTP/CLI/前端三处表一致。
+
+---
+
+#### P0-2｜前后端契约无对拍：`/api/part/generate` 后端无路由，前端封装是死代码　`指纹 API-ROUTE-DRIFT`
+
+> **2026-09-19 复核更正**：本条原记为「server 模式下批量生成静默用 JS 假数据产出程序」，
+> **实测不成立** —— `runBatch` 的唯一入口 `modalBatch` 在 `ui/index.html:2571-2572` 被
+> `API.mode === "server"` 守卫挡住（`toast("服务模式暂不支持批量生成")`），
+> 服务模式下该功能**不可达**。真实风险降为「潜伏的契约漂移」，严重度由 P0 调整为 **P1**：
+> 一旦阶段 4 实现该接口、守卫随之移除，就会踩到静默用错引擎的坑。
+> 本条真正需要解决的仍是**「没有任何机制对拍前后端的接口集合」**——第三轮 P1-8
+> （分类表四份导致漏 `grooving`）是同一结构的产物。
+
+- 位置：`ui/index.html:47`（头注释）、`:1542`、`:1617`（`partGenerate` 封装）、`:2406`（`runBatch`）；`cli/src/server.rs:166-176` 路由表**无此端点**
+- 证据：
+
+```js
+// ui/index.html:2406 —— 直接调 API.mock，绕过 API.request
+const r = await API.mock.partGenerate(...)
+```
+
+- 触发条件：启动 `nctool ui`（server 模式）使用批量生成功能
+- 影响：要么 404，要么**静默用 JS 假数据产出「看起来对」的 G-code**——对机床语境这是最坏的一类失败。且这是新增端点最容易重演的漂移模式：**路由集合没有任何对拍机制**（现有的 `check_param_parity.mjs` 只对拍参数归一）。
+- 修复：
+  1. 立即：补路由或删声明（二选一，别留悬空契约）。
+  2. 长期：把路由集合抽成一份清单（如 `scripts/api_routes.json`），Rust 侧断言 `route()` 覆盖清单、JS 侧断言封装函数覆盖清单；再把「两份 `index.html` 字节相等」也加进 CI（当前只有 param 函数被对拍）。
+
+---
+
+#### P0-3｜golden 基线信息量只有名义的 1/3，新增模板/机床时防线几乎失效　`指纹 GOLDEN-LOW-ENTROPY`
+
+- 位置：`tests/golden/`（21 `.nc` + 21 `.report.txt`）、`core/tests/integration.rs:126-132`、`:207`、`:230`
+- 实测：
+
+```
+md5sum tests/golden/*.nc     → 7 个唯一值，每个出现 3 次（3 个机床预设产出逐字节相同）
+md5sum tests/golden/*.report.txt → 1 个唯一值，出现 21 次（恒为「校验通过：无问题」）
+```
+
+- 影响：42 个文件只含 **7 份 G-code + 1 份报告**。机床维度完全空转（`integration.rs:126-127` 注释自认「WFL 只覆盖通用模板键」）。新增一个机床配置或改后处理逻辑时，golden 拦不住任何回归；报告维度零信息量。
+- 修复：
+  1. 让 3 个机床预设在**行号前缀 / 程序号前缀 / 小数位**上真正有差异（当前三个预设的差异没进入所选模板的输出），或明确缩减 golden 的机床维度并在注释里写明「不覆盖」。
+  2. 补 **2 组负向 golden**（故意缺参 / 类型不符），让报告维度不再是恒等字符串——`assert_golden`（`:207`）目前只能正向冻结，无法表达失败路径。
+  3. `integration.rs:132` 注释写「6 内置模板 × 3 = 18」，实际 7×3=21，顺手改。
+
+---
+
+### 3.2 P1 —— 重要（新功能前宜清）
+
+#### P1-1｜`ParamKind::Integer` 缺 i64 范围检查，校验放行后可产出非法程序号　`指纹 KIND-INTEGER-NO-RANGE`
+
+- 位置：`core/src/model.rs:394`
+
+```rust
+(ParamKind::Integer, ParamValue::Number(v)) => v.is_finite() && v.fract() == 0.0,
+```
+
+只判有限性与整值性，**不判 `i64` 范围**。而同一文件的 `coerce_tagged`（`:186`）与 `as_integer`（`:246`）都已加了 `[I64_MIN, I64_MAX)` 守卫（第三轮 P2-6 修的）——**唯独 `matches` 漏掉**。
+- 触发条件：参数文件/清单写 `1e20` + `kind: integer`（`fract()==0.0`、`is_finite()` 均通过）
+- 后果：校验全绿 → 模板若直接插值则**静默输出 `1e20` 级程序号**；若走 `nc_pad` 则在渲染期才报「超出整数范围」（`src/filters.rs:146`）。违反项目「渲染前可发现错误」的承诺。
+- 修复：`matches` 补 `v >= i64::MIN as f64 && v < i64::MAX as f64`（注意不能复用 `2^63` 那个差一写法，见第三轮 P2-4）；补边界测试。
+
+---
+
+#### P1-2｜宽松模式 `Derive` 仍硬失败，与文档/报告层承诺不一致　`指纹 LENIENT-DERIVE-HARDLOGIC`
+
+- 位置：`core/src/pipeline.rs:189`（文档）vs `:236`（实现）
+
+```rust
+// :189 文档：「唯一仍然硬失败的情形是 NaN/Inf」
+let derived = crate::derive::apply(&entry.params, params).map_err(PipelineError::Derive)?;  // :236
+```
+
+而 `validate.rs` 把 `DeriveFailed` 归为 Error（`:66`），`pipeline.rs:233` 的 `downgrade_errors_except(&[NonFinite])` 把它降级为 Warning → 报告层说「可放行」，`:236` 随即返回 `Err` 且**报告被丢弃**。
+- 触发条件：派生规则无 `fallback` + 源参数缺失 + 调 `generate_lenient`
+- 影响：与第三轮 P0-4 同族的「报告层 vs 实际行为不一致」——用户拿到一个 Err，而文档说只有 NaN/Inf 会这样。
+- 修复（二选一，建议后者）：把 `Derive` 也纳入 `downgrade_errors_except` 的白名单并让 `:236` 在宽松模式下用 `fallback` 省略该参数；或**改文档与 `IssueKind::DeriveFailed` 的级别**，明确它是宽松模式下的第二个硬失败项。无论哪种，报告层与实际行为必须一致。
+
+---
+
+#### P1-3｜清单键规范化碰撞被静默覆盖　`指纹 MANIFEST-KEY-COLLISION`
+
+- 位置：`core/src/manifest.rs:452-459`（`collect()` 入 `BTreeMap`）、`:546`（`normalize_key`）
+- `turning\a.j2` 与 `turning/a.j2` 被归一为同键，后者**静默覆盖**前者，无告警。对照 `variables.rs:123-134` 对重复变量是**显式报错**的——设计不对称。
+- 触发条件：Windows 与 Linux 混合编辑清单，或手误写了反斜杠
+- 修复：插入前查重，命中即产出 warning（复用 `ResolvedMeta::warnings` 通道，P1-12 已建好）。
+
+---
+
+#### P1-4｜无读超时 + 无并发上限，单连接即可挂死服务　`指纹 SERVER-NO-TIMEOUT`（第三轮 P1-19 未做）
+
+- 位置：`cli/src/server.rs:675-745`（`as_reader().take(..).read_to_end` 同步读体）
+- 触发：`nc 127.0.0.1 8787` 后只发 `Content-Length: 1048576` 头、不发体 → 主循环永久阻塞
+- 说明：tiny_http 0.12 不暴露底层 socket，`set_read_timeout` 无从下手；根治需重做请求循环（把 `Request` 移入线程读取）。风险面已受限（`listen_addr` 硬拒非回环）。
+- 建议：**与 P1-5 一起做服务层改造**，别夹在别的功能提交里。
+
+---
+
+#### P1-5｜每请求全树 `stat`，模板量增长后 API 延迟线性上升　`指纹 PERF-TREE-STAT`（第三轮 P1-18 未做）
+
+- 位置：`cli/src/context.rs:326-346`（`tree_stamp`）；`server.rs:203/245/619` 每请求调用
+- 缓存已按 mtime 指纹复用注册表，但**命中前仍要遍历整棵模板树**。数百模板 = 每请求数百次 syscall。
+- 修复：指纹只取根目录 + 顶层子目录 mtime，或加显式刷新端点。
+
+---
+
+#### P1-6｜文档里的 golden 刷新命令漏 `--workspace`，刷新会静默失效　`指纹 DOC-GOLDEN-NOWORKSPACE`
+
+- 位置：`README.md:586`、`docs/CONTRIBUTING.md:153`
+
+```
+NCTOOL_UPDATE_GOLDEN=1 cargo test    # 刷新基线
+```
+
+golden 测试在 `core/tests/integration.rs`（core 包）。裸 `cargo test` **只跑根 crate**，golden 测试根本不执行——正好踩中本项目自己在文档和长期记忆里反复警告的 workspace 陷阱，且**无任何报错**（命令成功、零文件变更）。
+- 影响：新增模板后按文档刷新基线 → 以为刷新了 → CI 红。一行改动，性价比最高。
+- 修复：改 `cargo test --workspace`（两处）。
+
+---
+
+#### P1-7｜四处重复实现，新增功能时必然复制粘贴　`指纹 DUP-FOUR-SITES`
+
+| 重复内容 | 位置 | 建议 |
+| --- | --- | --- |
+| 校验报告 JSON 序列化 | `server.rs:386-409 validation_json` vs `commands/validate.rs:69-93 report_json`（**逐字段相同**） | 收敛到 core 的一个 `Serialize` DTO（`inspect` 已正确复用 `spec_json`，照它做） |
+| 机床列表组装 | `server.rs:571-595` vs `commands/machine.rs:17-45` | 收敛到 `core::machine` 的一个函数 |
+| 分类表 | `server.rs:227 parse_category` vs `cli.rs:132 CategoryArg` | 见 P0-1 第 4 条 |
+| 模板树遍历 | `src/extract.rs:150 collect_template_refs_stmt` vs `:357 walk_stmt`（**对同一棵树的两套并行遍历**） | 合并；顺带解决 P2-9（两入口重复遍历） |
+
+---
+
+#### P1-8｜嵌套 include 的错误类别丢失，且测试把这个错误期望固化了　`指纹 ERR-NESTED-KIND-LOST`（第三轮 P2-12 未做）
+
+- 位置：`src/error.rs:370`（`_ => TplError::Render`）；`src/lib.rs:473-485`（测试**明确断言** include 错误只能是 `Render`）
+- 影响：组合模板（本项目主推用法）上 `TplError` 的细分变体全失效，只剩 `Render`；更糟的是现有测试把这个现状写成了期望值，未来修好实现反而会红。
+- 修复：沿 `source()` 链取最内层错误的 `kind()`；**同时改 `:473-485` 的断言**。
+
+---
+
+#### P1-9｜未定义变量名提取会指错变量　`指纹 ERR-UNDEF-NAME-WRONG`（第三轮 P2-11 未做）
+
+- 位置：`src/error.rs:194-205`
+- 对 `{{ a + missing }}`（`a` 已提供、`missing` 缺失），错误 span 覆盖整条表达式，提取出**首个标识符 `a`** → 报「未定义变量 'a'」，把用户指向已正确提供的参数。（比第三轮推测的 `x|default(y)` 场景更常见。）
+- 影响：仅诊断误导，不产出错误 G-code。修复：要求提取出的标识符覆盖 trim 后的**整个** range 才采纳，否则回退通用文案。
+
+---
+
+#### P1-10｜CLI 侧文件读取无大小上限，与 HTTP 侧的 1 MiB 上限不对称
+
+- 位置：`cli/src/config.rs:85`、`cli/src/context.rs:199`（读全部 `.j2`）、`cli/src/args.rs:129`（`--params-file`）
+- HTTP 侧已有 `MAX_BODY`（`server.rs:40`）+ 413，CLI 侧全部 `read_to_string` 无上限。本地工具定位下风险可控，但 `--template-dir` 指向网络盘/大目录时会整体读入内存。
+- 修复：至少 `load_params_file` 加上限并给出明确的错误文案。
+
+---
+
+#### P1-11｜静默吞错与错误上下文丢失　`指纹 ERR-CONTEXT-LOST`
+
+- `core/src/registry.rs:716/725` `try_iter().ok()?` —— 迭代失败时被当作「无非有限数」返回，**安全闸门静默失效**（这是防 NaN 进 G-code 的最后一道）。
+- `core/src/registry.rs:336` `.map_err(RegistryError::Io)` 丢掉文件路径，`Display`（`:236`）只印 `{err}`；而 `ManifestError::Io{path,source}` 带路径 —— 两处口径不一致，用户看不到是哪个模板文件出错。
+- `core/src/pipeline.rs:44-50` `PipelineError::source()` 漏了 `Derive` 变体。
+- 生产 `expect`：`registry.rs:661`（`new()` 内）、`derive.rs:156`、`src/extract.rs:275`（**第三轮「unwrap/expect 仅 server.rs 3 处」的结论遗漏了这处**）。
+
+---
+
+### 3.3 P2 —— 改进项
+
+**性能**
+- `core/src/registry.rs:439`：`extract_params` 克隆 `entry.params` 传给 `collect_include_closure`，但返回值只取 `vars`，`specs` **用完即弃** —— 每次 `inspect` 白付一次全量 clone + O(n²) 合并。
+- 每次 `generate` 三次全量 `ParameterSet` clone：`derive.rs:143`、`:146`、`pipeline.rs:171`。
+- O(n²) 查找 3 处：`registry.rs:533`、`:748`、`manifest.rs:315`（参数量级下无感，列表参数变多后会显现）。
+
+**死代码 / 冗余**
+- `src/extract.rs:371` `c.declare("loop")` 永不生效（`record` 已在 `RESERVED_NAMES` 处 return）
+- `src/extract.rs:250` `Collector::new(_src)` 参数未用
+- `src/renderer.rs:185` `add_template_owned(name.clone(), source.clone())` 多克隆一次源码
+- `core/src/derive.rs:221 derived_names`、`core/src/registry.rs:175 invalidate_analysis` **无生产调用点**；`TemplateEntry::source_text` 仍为 `pub`，「改写后须调 `invalidate_analysis`」靠调用方自觉（第三轮 P2-15 未清）
+
+**注释与实现矛盾（后续开发危害大）**
+- `core/src/pipeline.rs:293-294`：称「程序号行（`O` 开头）…已有 `N` 前缀」，未反映前缀已可配置（`program_prefix`/`line_number_prefix`）及小写 `o`/`n` 特判（`:374-377`）
+- `core/src/manifest.rs:566-572`：`classify_by_path` 文档表**漏了 `grooving`**（实现 `:584` 有）—— 新增目录时照文档改会漏
+- `src/filters.rs:140-145`：称 i64 上界检查防「静默输出错误程序号」，但入参先经 `f64`，`(2^53, 2^63)` 区间整数在检查前已被舍入（NC 量级不可及，属过度承诺）
+- `core/tests/integration.rs:132`：写「6 内置模板」，实际 7
+
+**文档漂移**（实测 556 项 / 89.54% 生产口径 / 93.51% 原始口径）
+
+| 位置 | 文档写的 | 实际 |
+| --- | --- | --- |
+| `PROJECT_STATUS.md:23`、`CONTRIBUTING.md:84`、`CHANGELOG.md:61` | 536 项 | **556** |
+| `README.md:568`、`CONTRIBUTING.md:84`、`PROJECT_STATUS.md:24` | 88.65% / 92.99% | **89.54% / 93.51%** |
+| `docs/SYSTEM_DESIGN.md:43-44`、`:696` | 459 项 / 90.75% | **556 / 89.54%**（第三轮漏改这两处） |
+| `docs/ARCHITECTURE_REVIEW.md:304` | 90.75% | 同上 |
+| `docs/ROADMAP.md:182` | 15 组 golden | **21 组**（且有效仅 7） |
+
+建议：文档一律不写硬数字，改指 CI job summary。
+
+**测试质量**
+- `src/lib.rs:1609-1634`：两个 fuzz 测试 `let _ =` 丢弃返回值，只断言不 panic（易造成「提取器已被 fuzz 验证」的错觉）
+- `tests/parsing.rs:363-366`：`all_math_filters_render` 用 `assert!(out.contains("2"))`，且 `:363` 与 `:366` 重复断言同一个 `"2"`
+- `cli/tests/cli.rs:256-272`：硬编码 stdout 字符串，不读 `tests/golden/*.nc`，模板一改需手工同步两处且无测试能发现
+- 覆盖薄弱：`cli/src/commands/ui.rs` **23.08%**、`cli/src/cli.rs` 66.67%、`core/src/variables.rs` 83.70%；`commands/render.rs`、`commands/templates.rs` 各仅 2 个测试
+
+**工程化**
+- `.github/workflows/release.yml:35`、`:93`：`cargo test --workspace` 缺 `--locked` 与 `--all-targets`（CI 内已合规，发布流漏了）
+- `docs/DEV_PLAN_CLI_UI.md:149`：`cargo clippy -D warnings` 漏 `--workspace`（历史计划文档，建议标注为存档）
+- `ui/index.html`：P2-24/25/26 仍未做 —— `--open` 先于 bind（`commands/ui.rs:16-20`）、`--port 0` 时 `browser_url` 恒显示 `:0`、Bool 参数恒提交 `false`（`:1974`，而 CLI 省略该键 → 条件必选判定可能分歧）、无 `AbortController`（后端阻塞时旧请求堆积）
+- `server` 模式列表卡片只回 name/category/description（`server.rs:212-216`），缺 `builtin`/`params` → 前端恒显「示例」、必选数 0，直到 detail 拉回
+
+---
+
+## 4. 新增功能前必须优先解决的关键遗留问题
+
+排序原则：**先解决「会让新功能静默失效」的，再解决「真实缺陷」，最后解决「整洁性」**。
+
+### 批次 A：打通扩展接缝 ✅ **已完成（2026-09-19）**
+
+这一批做完，此后新增参数类型/输出格式/问题类别/分类时，**编译器会逐处报错提醒你漏改**。
+改动 9 个文件 +319/−66，**零运行时行为变化**（全量 557 项测试未改一行即全绿）。
+
+| 项 | 落地方式 | 守卫 / 反向验证 |
+| --- | --- | --- |
+| 1. `ParamKind` 解析单点化 | `impl FromStr for ParamKind`（`aliases` 穷尽 + `label`）；`manifest.rs::parse_kind_name` 改为转发 | `param_kind_registry_is_complete` |
+| 2. `matches` 去 `_` 兜底 | 改按 `self` 穷尽展开（`core/src/model.rs`） | 逐值语义与原实现一致，既有类型测试全绿 |
+| 3. `OutputFormat` 后处理 | `if == Text` → 穷尽 `match`（`core/src/pipeline.rs`） | 新增格式必须显式表态 |
+| 4. `IssueKind` 保留集合 | 新增穷尽的 `is_hard_fail()` + `downgrade_soft_errors()`；管线改走新路径，旧 `downgrade_errors_except` 保留但文档指向新入口 | `downgrade_soft_errors_keeps_hard_fail_only`（并断言与旧路径等价） |
+| 5. 分类表收敛到 core | `TemplateCategory::{ALL, aliases, dir_names, from_dir_name, FromStr}`；HTTP `parse_category`、`classify_by_path`、`CategoryArg::from_core` 全部改为转发 | `category_arg_covers_every_core_category`；`parse_category_covers_every_core_variant` 改为遍历 `ALL` |
+| 6. 顺手：golden 刷新命令 | `README.md` / `CONTRIBUTING.md` 补 `--workspace`（P1-6） | — |
+
+> **前端 `CATS`（`ui/index.html:1678`）仍是一份手工表**：两份 HTML 的字节相等已有机制可依
+> （`cli/tests/cli.rs` + `check_param_parity.mjs`），但「分类集合」尚未纳入对拍，
+> 建议与批次 B 的路由集合对拍一起做。
+
+### 批次 B：修好防线的「信息量」（约 0.5 天，必做）⚠️ **第 1、2 项已完成（2026-09-19）**
+
+新功能加进去后，现有基线拦不住回归——先让基线有牙齿。
+
+| 项 | 状态 | 落地方式 |
+| --- | --- | --- |
+| 1. 路由集合对拍 | ✅ | 新增 `scripts/api_routes.json` 作单一来源：后端 `api_routes_are_routable`（cargo test）逐条断言「不是未知接口」；前端 `scripts/check_api_parity.mjs` 断言 HTML 里每个 `/api/...` 字面量都已登记；已接入 CI（`ci.yml` 与 param 对拍并列）。`/api/part/generate` 作为**显式豁免**登记在 `frontend_only`，并写死解除条件 |
+| 2. `/api/part/generate` 悬空契约 | ✅ | 复核后确认：服务模式入口被 `API.mode` 守卫挡住，**不可达**（严重度由 P0 降为 P1）。`runBatch` 由直调 `API.mock` 改为走 `API.partGenerate` 出口 —— demo 模式行为不变，服务模式拿不到结果时明确报错而非静默用另一套引擎产出 |
+| 3. golden 信息量 | ✅ **已完成** | 见下方说明 |
+
+**关于 golden 机床维度**：复核后确认「3 个预设输出逐字节相同」**不是测试写错，而是该维度在现有模板集下不含信息** —— 三个预设只在 `max_spindle_rpm` / `machine_type` / `axes` / `vendor` / `model` 上不同，而这些键**没有任何内置模板引用**；模板真正用到的键全部来自共享的 `generic_config()`。
+
+因此没有去"制造差异"（那等于凭空发明机床编程约定），而是：
+1. 把这份偶然的重复变成**受守的断言** `machine_dimension_is_currently_flat`：任一预设改了模板可见的键就红，并提示维护者"机床维度开始分化，请改成真正分维并复核 `_wfl` / `_index` 基线"；同时拦住"为消重而删掉重复基线"这种改法（删了就没人拦得住预设改动）。
+2. 补 **3 组负向 golden**（`neg_missing_required` / `neg_type_mismatch` / `neg_out_of_range`），冻结失败路径的报告文本 —— 此前 21 份报告恒为「校验通过：无问题」，报告维度只有 1 份信息量。现在基线总数 45（21 正向 ×2 + 3 负向）。
+3. 修正过期注释（`integration.rs` 写"6 内置模板"实为 7）并同步 README / PROJECT_STATUS / ROADMAP 的 golden 数量。
+
+### 批次 C：三处静默正确性 ✅ **已完成（2026-09-19）**
+
+| 项 | 落地方式 | 守卫 / 反向验证 |
+| --- | --- | --- |
+| 1. `Integer` 补 i64 范围检查 | `matches` 与 `as_integer` 同口径（`[I64_MIN, I64_MAX)`） | `integer_kind_rejects_out_of_i64_range`（含"下界仍放行"的防误伤断言） |
+| 2. 宽松模式派生失败对齐 | `is_hard_fail()` 把 `DeriveFailed` 并入硬失败；新增 `ValidationReport::has_hard_fail()`，管线据此判定（不再写死 `NonFinite`）；文档承诺同步改为"两类" | `generate_lenient_treats_derive_failure_as_hard_fail`（断言返回 `Validation` 且**报告交给调用方**）、`downgrade_soft_errors_keeps_hard_fail_only` |
+| 3. 清单键碰撞告警 | `TemplateManifest` 增 `duplicates` 字段与 `duplicate_keys()`，`from_entries` 记录同义键冲突；`cli/src/context.rs` 与孤儿键一并提示 | `normalized_key_collision_is_reported`（含"无冲突不刷噪声"） |
+| 4. 有限性闸门 fail-closed | `find_non_finite` 返回 `Result<Option<String>, String>`，遍历失败不再被 `ok()?` 折叠成"没找到"，`ensure_finite_context` 按拒绝渲染处理 | 无法构造遍历失败场景，属**读码确认**（未反向验证） |
+
+> 四处修复均经反向验证：临时还原实现后 4 项测试全部 FAILED，恢复后全绿。
+
+### 批次 D：服务层与去重 ⚠️ **去重部分已完成（2026-09-19），服务层仍开放**
+
+**已完成**
+
+| 项 | 落地方式 | 守卫 |
+| --- | --- | --- |
+| 报告 DTO 收敛（P1-7a） | 新增 `core::validate::ValidationReportJson` + `ValidationLevel::as_str()`（形状的唯一来源），CLI 侧只留 `output::report_json` 薄封装；删掉 `server.rs::validation_json` 与 `commands/validate.rs::report_json` 两份逐字段相同的实现 | `json_view_freezes_contract_fields`（core 侧冻结字段名与 level 取值） |
+| 机床列表收敛（P1-7b） | 新增 `core::machine::MachineEntry` + `MachinePreset::entries()`（枚举与去重规则的唯一来源），HTTP 与 CLI 各自决定展示字段 | `entries_lists_presets_then_custom_without_duplicates` |
+| 死代码（P2-10） | 删掉 `extract.rs` 的 `declare("loop")`（可证明无副作用，附说明防复发）与 `Collector::new(_src)` 的未使用参数 | 既有测试全绿 |
+| 弱断言（P2-14/33） | `all_math_filters_render` 改为 9 个过滤器逐个按数值精确断言；fuzz 补提取器不变量（名字非空/去重、行列 1 起、span 有序、未声明 ⊆ 全部） | 改精确断言后立刻抓到 `sqrt(4)` 渲染成 `"2.0"` 而非 `"2"` —— 旧弱断言之所以"通过"，正因为它只看子串 |
+
+**未做，附理由**
+
+- **服务层读超时 + 并发上限（P1-4）**：tiny_http 0.12 不暴露底层 socket，`set_read_timeout` 无从下手；
+  根治要重做 `serve` 的请求循环（把 `Request` 移进读取线程并满足 `'static`，响应又必须由持有
+  `Request` 的一方发出）。风险面本已受限（非回环硬拒），宜独立排期，不夹在去重提交里。
+- **每请求全树 `stat`（P1-5）**：复核后**不建议**简单改成"只 stat 目录"—— 目录 mtime 只在
+  增删/改名时变化，**就地编辑文件内容不会改父目录 mtime**，只看目录会漏掉内容修改，
+  缓存返回过期模板。真正的解法是 TTL 或显式刷新入口，属设计取舍，需单独决定。
+- **`extract.rs` 两套并行遍历合并（P1-7d）**：**有意不做**。该文件是最安全敏感的组件
+  （必选参数漏检 = 撞刀级静默错误），合并两套遍历属于"改对了没收益、改错了很难发现"的
+  重构。现有分支覆盖尚可（第三轮已补齐 `collect_template_refs_stmt` 的嵌套体），
+  建议保持原样，把风险留给真正需要新语法支持的时候。
+- **`derived_names` / `invalidate_analysis` 可见性（P2-15）**：`nctool-core` 已发布到
+  crates.io，收窄 `pub` 属破坏性变更，宜并入下一个 minor 版本一起做。
+
+**端到端验证（真实二进制 + 真实 HTTP，2026-09-19）**
+
+单元测试只覆盖 `route()` 与各函数，查询串里的中文百分号解码、安全头、真实进程的
+退出码都不在其中。故用构建出的 `nctool.exe` 跑了一轮冒烟：
+
+| 检查 | 结果 |
+| --- | --- |
+| `machine list`（文本） | `generic / wfl_m65 / index_ms40` 三行，格式与重构前一致 |
+| `machine list --format json` | 字段仍为 `id/vendor/model/builtin`（有意不带 `config`） |
+| `validate drill_cycle --param x=21 --format json` | 报告形状与两份旧实现逐字段一致（`level/param/message`、`template/ok/errors/warnings/issues`），退出码 1 |
+| `validate` 文本 | 报告走 stdout、错误提示走 stderr |
+| `templates list --category 切槽` / `grooving` / `铣削` / `milling` / `通用` | 全部 200，中英文等价 |
+| `templates list --category 不存在` | clap 报 `invalid value` 并列出 6 个合法值 |
+| `ui --port` + `GET /health`、`/api/machines` | 正常；机床带完整 `config` |
+| `?category=切槽`（P1-8 原始 bug 场景） | **200**（修复后）；`?category=` 200；`?category=zzz` 400 |
+| `POST /api/validate`、`POST /api/render` | 报告形状一致；G-code 正常产出 |
+| 安全头 | CSP / `X-Content-Type-Options` / `Referrer-Policy` 均在对 `/health` 的响应上 |
+
+**一处更正（子代理结论为误报）**
+
+原报告 P2-10 称 `src/renderer.rs:185` 的 `add_template_owned(name.clone(), source.clone())`
+"多克隆一次源码"。复核：`name` 与 `source` 在紧随其后的 `.map_err(|err| from_minijinja_error(err, &name, Some(&source)))`
+里**仍被借用**，而 `add_template_owned` 按值接管两者 —— 两个 `clone()` 都是必需的。
+本条不成立，**不要按原报告去"修"**。
+
+### 批次 E：整洁性（可长期摊）
+
+死代码清理、注释纠错、文档数字改为指 CI、弱断言补强、UI 的 P2-24/25/26。
+
+---
+
+## 5. 已核实无问题的方面（不要在这些地方「修」出新问题）
+
+| 项 | 结论 |
+| --- | --- |
+| 提取器 AST 穷尽性 | `walk_stmt`/`walk_expr`/`collect_template_refs_stmt` **零通配符**；minijinja 3.0 新增 `Expr::Tuple` 会直接编译失败。唯一 `_ => {}` 在 `declare_locals`（`extract.rs:353`），只吞 `{% set ns.x = 1 %}` 这类写目标，忽略正确 |
+| 作用域模型 | for/with/set-block/macro/for-else 的帧管理与 VM 逐条核对一致；未见「必选误判为可选」（危险方向） |
+| 数值过滤器边界 | `filters.rs` 全部查 `is_finite`；`nc_signed` 舍入后判零正确；`nc_pad` 的 `>=` 与宽度/小数/负数检查正确 |
+| 派生链 | `derive.rs:144-176` 不动点拓扑正确，优先级「已算出的派生值 > 调用方值 > 规格默认值」，成环返回 `Circular` 且不静默取值 |
+| `core` 无 I/O | 依赖单向成立，机床/清单数据都以传入形式消费 |
+| CI 门禁 | 3 job 全阻断；CI 内所有 cargo 命令均带 `--workspace`；覆盖率口径已修正（89.54%） |
+| 安全基线 | XSS 插值点已全覆盖（`esc` 补引号）、符号链接环已断、非回环硬拒、跨站校验 `Origin`+`Sec-Fetch-Site`、请求体 1 MiB 上限、两份 `index.html` 当前字节相同 |
+| 生产 panic 面 | `src/` 0 处 `unsafe`、0 处 `panic!`；生产 `expect` 仅 4 处（见 P1-11） |
+
+---
+
+## 6. 与第三轮的关系
+
+| 第三轮项 | 本轮状态 |
+| --- | --- |
+| P0-1 覆盖率口径 | ✅ 已解决（`check_coverage_caliber.py`），仅剩文档数字未同步 |
+| P0-2 / P0-3 / P0-4 | ✅ 已修且回归通过 |
+| P1-1 ~ P1-13（除 18/19） | ✅ 已修 |
+| P1-18 全树 stat / P1-19 读超时 | ❌ 仍存在 → 本轮 P1-5 / P1-4 |
+| P1-14 文档矛盾 | ⚠️ 部分（CI/RELEASE 已改，数字仍漂移） |
+| P2-11 / P2-12 / P2-24 / P2-25 / P2-26 | ❌ 仍存在 → 本轮 P1-9 / P1-8 / P2 |
+| P2-14 / P2-31 / P2-32 / P2-33 | ❌ 仍存在 → 本轮 P2（P2-31 升级为 P0-3） |
+| P2-15 / P2-23 可见性收敛 | ❌ 仍存在 → 本轮 P2 |
+
+**本轮新增的高价值项集中在第三轮没覆盖的维度：扩展接缝（P0-1）、前后端契约漂移（P0-2）、基线的实际信息量（P0-3）。** 这三类的共同点是——它们不会让现有功能出错，但会让**下一个功能加得心惊胆战**。
