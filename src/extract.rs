@@ -812,6 +812,75 @@ mod tests {
         );
     }
 
+    /// 回归（P1-20）：`collect_template_refs_stmt` 的**嵌套语句体分支此前零覆盖**
+    /// —— lcov 显示 for-else、if 的 else 体、with / set-block、autoescape /
+    /// filter-block / block / macro / call-block 全部 `DA:...,0`；唯一被测到的
+    /// 嵌套形态是 `{% for %}…{% include %}`。
+    ///
+    /// 这不是「多测一点」：该函数是**组合模板必选参数不漏检**的入口
+    /// （`registry::extract_params` 靠它穿透 include 闭包）。漏掉一个分支 =
+    /// 用那种语法写的子模板，其必选参数**完全不参与校验**，缺参一路静默到渲染
+    /// 甚至产出缺参的 G-code。表驱动逐分支钉住，将来 minijinja 升级改了 AST
+    /// 形态（如 elif 的展开方式）也会在这里先红。
+    #[test]
+    fn template_refs_traverse_every_nested_body() {
+        let cases: &[(&str, &[&str])] = &[
+            // 顶层并列（原有覆盖，留作对照）
+            (r#"{% include "top.j2" %}"#, &["top.j2"]),
+            // if 的 true 体与 false 体
+            (
+                r#"{% if a %}{% include "t.j2" %}{% else %}{% include "f.j2" %}{% endif %}"#,
+                &["t.j2", "f.j2"],
+            ),
+            // elif 在 AST 里展开成嵌套 IfCond，三个分支都要走到
+            (
+                r#"{% if a %}{% include "t.j2" %}{% elif b %}{% include "e.j2" %}{% else %}{% include "f.j2" %}{% endif %}"#,
+                &["t.j2", "e.j2", "f.j2"],
+            ),
+            // for 的循环体与 else 体
+            (
+                r#"{% for i in xs %}{% include "body.j2" %}{% else %}{% include "empty.j2" %}{% endfor %}"#,
+                &["body.j2", "empty.j2"],
+            ),
+            // with / set 块
+            (
+                r#"{% with x = 1 %}{% include "w.j2" %}{% endwith %}"#,
+                &["w.j2"],
+            ),
+            (r#"{% set x %}{% include "s.j2" %}{% endset %}"#, &["s.j2"]),
+            // filter / autoescape / block
+            (
+                r#"{% filter upper %}{% include "filt.j2" %}{% endfilter %}"#,
+                &["filt.j2"],
+            ),
+            (
+                r#"{% autoescape true %}{% include "ae.j2" %}{% endautoescape %}"#,
+                &["ae.j2"],
+            ),
+            (
+                r#"{% block b %}{% include "blk.j2" %}{% endblock %}"#,
+                &["blk.j2"],
+            ),
+            // macro 体 / call 块
+            (
+                r#"{% macro m() %}{% include "mac.j2" %}{% endmacro %}"#,
+                &["mac.j2"],
+            ),
+            (
+                r#"{% call m() %}{% include "cb.j2" %}{% endcall %}"#,
+                &["cb.j2"],
+            ),
+        ];
+        for (src, want) in cases {
+            let ast = parse(src, "t.j2").unwrap_or_else(|e| panic!("解析失败 {src}: {e}"));
+            assert_eq!(
+                extract_template_refs(&ast),
+                want.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                "源码: {src}"
+            );
+        }
+    }
+
     // ---- 位置信息 ----
 
     /// 行/列/字节偏移准确，供上层把校验错误定位回源码。

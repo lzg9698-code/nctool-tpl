@@ -266,18 +266,42 @@
   `docs/ARCHITECTURE.md` / `docs/SYSTEM_DESIGN.md` / `docs/ARCHITECTURE_REVIEW.md`
   同步更新（原先都写作「字段全为 `Option`，能区分没写与写成默认值」）。
 
+- **数值过滤器的三处边界**（`src/filters.rs`）：
+  - `nc_fixed` / `nc_strip` 不归一负零：`-0.0 | nc_fixed(3)` → `-0.000`、
+    `-0.0 | nc_strip` → `-0`。`nc_signed` 早已归一，同一份逻辑换个过滤器就输出
+    不同字节，而控制器对负零的处理并不一致。现三个过滤器统一归一。
+  - `nc_signed` 的归一放在**舍入之前**：`-0.0001` 保留 3 位就是 `0.000`，
+    判零漏掉它，仍输出 `-0.000`，与本节「-0.0 归一到 +0.000」的承诺相悖。
+    改为按小数位定值后再判零（用字符串判零，不再做一次浮点运算 —— `-0.0005`
+    这类值在「乘再除」里会抖到另一侧）。
+  - `nc_pad` 上界检查差一：`i64::MAX as f64` 恰为 2^63（`i64::MAX` 本身在 f64
+    里不可表示），用 `>` 会让 2^63 通过检查、被 `as i64` **饱和**成 `i64::MAX` ——
+    静默输出一个错误的程序号，正是该检查要拦的东西。`>` 改 `>=`。
+  - `nc_pad` 的文档说「输入为浮点数时截断小数部分取整」，实现却是**拒绝**小数
+    （截断会让 `n=1.7` 静默产出 `N0001`）。改文档，并在 `nc_fixed` 上写明
+    **舍入模式是就近取偶**、与 minijinja `round` 的「半远离零」在 .5 附近相反 ——
+    前者是对齐源项目 Python `f"{v:.2f}"` 的有意选择，要统一语义请改模板而非改这里。
+
 #### 测试
 
-- 新增 4 项：`explicit_path_that_collides_with_registered_name_wins`（含反向用例：
+- 新增 5 项：`explicit_path_that_collides_with_registered_name_wins`（含反向用例：
   同一文件不该改名）、`include_closure_spec_precedence_is_nearest_to_main`、
-  `orphan_keys_reports_unmatched_entries`、`manifest_null_clears_inherited_field`。
-  前三项经**反向验证**（临时还原实现 → FAILED → 恢复）；第四项亦做了反向验证
-  （只把 `min` 一处改回旧语义 → `left: Some(0.0)` / `right: None`）。
-- 断管道修复用真实进程验证：`nctool ... --format json | :` 旧实现 exit 101、新实现 exit 1。
+  `orphan_keys_reports_unmatched_entries`、`manifest_null_clears_inherited_field`、
+  `template_refs_traverse_every_nested_body`（11 个分支的表驱动用例，见下）。
+- 新增 4 项数值过滤器用例（`src/filters.rs` 此前**没有测试模块**）。
+- **反向验证**：上述各项均临时还原实现后确认 FAILED 再恢复。数值过滤器三项的失败
+  输出分别是 `left: "-0.000"` / `right: "0.000"`、`left: "-0.000"` /
+  `right: "+0.000"`、以及 2^63 未报错。
+- **P1-20 覆盖缺口**：`collect_template_refs_stmt` 的嵌套语句体分支此前零覆盖
+  （lcov 显示 for-else、if 的 else 体、with / set-block、autoescape / filter-block /
+  block / macro / call-block 全部 `DA:...,0`）。该函数是**组合模板必选参数不漏检**
+  的入口，漏一个分支 = 用那种语法写的子模板参数完全不校验。补齐后 `src/extract.rs`
+  第 158–202 行已全部覆盖，生产口径从 88.65% 升至 **89.49%**。
+  实现在补齐前即为正确，本项是纯覆盖缺口。
 - 孤儿键告警用真实 CLI 验证（临时模板目录 + 清单里一条拼错的键）：
   `templates list` 打出一条 `warning: 清单条目 turning/undercut.j2 未匹配到任何模板文件…`，
   且只报未命中的那条。
-- workspace 全量 **544 项**通过。
+- workspace 全量 **549 项**通过（含 golden 逐字节比对 —— 无模板依赖旧的负零输出）。
 
 ---
 
