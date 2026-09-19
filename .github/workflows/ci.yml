@@ -43,6 +43,14 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: node scripts/check_param_parity.mjs
 
+      # 接口集合对拍：后端 route() 的路由臂与前端 API 封装天然两份，此前没有任何
+      # 机制提示「前端调的接口后端并没有」（/api/part/generate 就是这么悬空的）。
+      # fixture 同样是 scripts/api_routes.json：本步骤查前端侧，Rust 侧由
+      # cargo test 的 api_routes_are_routable 查后端侧。
+      - name: API routes parity (backend <-> UI)
+        if: matrix.os == 'ubuntu-latest'
+        run: node scripts/check_api_parity.mjs
+
       # 文档链接与锚点检查：`CONTRIBUTING.md` §3 早已文档化其用法，却始终没有调用点
       # ——「工具闲置」等于这道门不存在（PROJECT_STATUS 登记过）。脚本对坏链接 exit 1，
       # 可以直接当门禁。与对拍脚本一样与系统无关，只在 ubuntu 跑一次。

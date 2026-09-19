@@ -1,0 +1,58 @@
+{
+  "description": "前后端接口集合的单一来源。后端 cli/src/server.rs::route 的路由臂与前端 ui/index.html 的 API 封装必须覆盖同一份集合：后端侧由 cargo test（api_routes_are_routable）消费，前端侧由 scripts/check_api_parity.mjs（CI 硬门禁）消费。新增端点必须同时改三处（后端路由臂、本文件、前端封装），漏改任一处即红。",
+  "note": "path 里的 {name} 之类占位在 sample 中写成具体值；covers 用于声明「前端按拼接方式使用的路径前缀」。",
+  "routes": [
+    {
+      "method": "GET",
+      "path": "/health",
+      "query": "",
+      "body": "",
+      "note": "健康检查：非 /api/ 前缀，不进跨站校验"
+    },
+    {
+      "method": "GET",
+      "path": "/api/templates",
+      "query": "",
+      "body": ""
+    },
+    {
+      "method": "GET",
+      "path": "/api/templates/drill_cycle",
+      "query": "",
+      "body": "",
+      "covers": "/api/templates/",
+      "note": "模板详情：前端用 \"/api/templates/\" + encodeURIComponent(name) 拼接"
+    },
+    {
+      "method": "GET",
+      "path": "/api/machines",
+      "query": "",
+      "body": ""
+    },
+    {
+      "method": "POST",
+      "path": "/api/inspect",
+      "query": "",
+      "body": "{}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/validate",
+      "query": "",
+      "body": "{}"
+    },
+    {
+      "method": "POST",
+      "path": "/api/render",
+      "query": "",
+      "body": "{}"
+    }
+  ],
+  "frontend_only": [
+    {
+      "method": "POST",
+      "path": "/api/part/generate",
+      "reason": "零件级批量生成（规划于阶段 4）：后端 nctool part generate 仍是显式报 not_implemented 的占位，前端 demo 模式（file://）由本地 mock 执行，服务模式入口被 API.mode 守卫挡住。后端实现后必须把本条移入 routes，并删除这里的豁免。"
+    }
+  ]
+}

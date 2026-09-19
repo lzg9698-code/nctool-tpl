@@ -15,29 +15,21 @@ pub fn run(ctx: &Ctx, args: &MachineArgs) -> Result<(), CliError> {
 }
 
 fn list(ctx: &Ctx) -> Result<(), CliError> {
-    let mut presets: Vec<serde_json::Value> = Vec::new();
+    // 枚举规则来自 core 的单一来源（见 `MachinePreset::entries`）；
+    // 文本行由 `MachineEntry::display_line` 提供，与 HTTP 侧同源。
+    let entries = MachinePreset::entries(&ctx.loaded.merged.machine);
     let mut text = String::from("机床预设:\n");
-    for p in MachinePreset::all() {
-        let cfg = p.config();
+    let mut presets: Vec<serde_json::Value> = Vec::new();
+    for m in &entries {
+        // CLI 列表有意不带完整 config（那是 `machine show` 的职责）
         presets.push(serde_json::json!({
-            "id": p.id(),
-            "vendor": cfg.vendor,
-            "model": cfg.model,
-            "builtin": true,
+            "id": m.id,
+            "vendor": m.vendor,
+            "model": m.model,
+            "builtin": m.builtin,
         }));
-        text.push_str(&format!("  {:<12} {} {}\n", p.id(), cfg.vendor, cfg.model));
-    }
-    // 追加配置文件中的自定义机床（复用启动时缓存的一次性配置加载）
-    for (id, m) in &ctx.loaded.merged.machine {
-        if MachinePreset::from_id(id).is_none() {
-            presets.push(serde_json::json!({
-                "id": id,
-                "vendor": m.vendor,
-                "model": m.model,
-                "builtin": false,
-            }));
-            text.push_str(&format!("  {:<12} {} {} (自定义)\n", id, m.vendor, m.model));
-        }
+        text.push_str(&m.display_line());
+        text.push('\n');
     }
     let data = serde_json::json!({ "machines": presets });
     ctx.style.print_ok(&text, data);

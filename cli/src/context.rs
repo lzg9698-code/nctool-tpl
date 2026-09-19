@@ -195,6 +195,13 @@ impl Ctx {
             );
         }
 
+        // 清单键规范化碰撞（第四轮 P1-3）：`turning\a.j2` 与 `turning/a.j2` 归一后
+        // 同键，后者静默覆盖前者 —— 用户以为两个条目都在生效。与孤儿键同样只提示
+        // 不阻断。
+        for msg in manifest.duplicate_keys() {
+            eprintln!("warning: 清单键冲突：{msg}（请统一用 `/` 分隔并去掉 `./` 前缀）");
+        }
+
         for (rel_key, canonical) in found {
             let source_text = std::fs::read_to_string(&canonical).map_err(|e| {
                 CliError::new("io", format!("读取模板失败 {}: {e}", canonical.display()))

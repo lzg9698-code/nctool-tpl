@@ -7,6 +7,20 @@ use nctool_core::registry::RegistryError;
 
 use crate::cli::FormatArg;
 
+/// 校验报告的 JSON 值（HTTP API 与 `validate --format json` 共用）。
+///
+/// 形状定义在 [`nctool_core::validate::ValidationReportJson`]（单一来源），
+/// 这里只负责转成 `serde_json::Value` 以便嵌进更大的响应体 / 输出对象。
+/// 此前两份实现（`server.rs::validation_json` 与 `commands/validate.rs::report_json`）
+/// 逐字段各写一遍，是"改一处漏一处"的典型温床。
+pub fn report_json(
+    template: &str,
+    report: &nctool_core::validate::ValidationReport,
+) -> serde_json::Value {
+    serde_json::to_value(report.json_view(template))
+        .expect("校验报告视图结构固定（&str/bool/usize/Vec），序列化不会失败")
+}
+
 /// CLI 错误：所有命令失败的统一出口。
 ///
 /// `kind` 为 JSON 输出使用的错误分类；`message` 为人类可读描述。

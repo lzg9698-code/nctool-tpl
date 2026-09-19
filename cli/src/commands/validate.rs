@@ -33,7 +33,7 @@ pub fn run(ctx: &Ctx, args: &ValidateArgs) -> Result<(), CliError> {
     let report: ValidationReport = gen.registry().validate(&name, &params)?;
 
     let has_errors = report.has_errors();
-    let data = report_json(&name, &report);
+    let data = crate::output::report_json(&name, &report);
     let text = format!("模板: {name}\n{}", report.summary());
 
     if has_errors && ctx.style == OutputStyle::Json {
@@ -63,31 +63,4 @@ pub fn run(ctx: &Ctx, args: &ValidateArgs) -> Result<(), CliError> {
         ));
     }
     Ok(())
-}
-
-/// 报告转 JSON。
-fn report_json(template: &str, report: &ValidationReport) -> serde_json::Value {
-    let issues: Vec<serde_json::Value> = report
-        .issues
-        .iter()
-        .map(|i| {
-            let level = match i.level {
-                nctool_core::validate::ValidationLevel::Error => "error",
-                nctool_core::validate::ValidationLevel::Warning => "warning",
-                nctool_core::validate::ValidationLevel::Info => "info",
-            };
-            serde_json::json!({
-                "level": level,
-                "param": i.param,
-                "message": i.message,
-            })
-        })
-        .collect();
-    serde_json::json!({
-        "template": template,
-        "ok": report.is_ok(),
-        "errors": report.errors().count(),
-        "warnings": report.warnings().count(),
-        "issues": issues,
-    })
 }

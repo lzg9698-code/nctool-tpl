@@ -224,16 +224,10 @@ fn templates_list(ctx: &Ctx, query: &str) -> Resp {
 /// 必须与 `cli/src/cli.rs` 的 `CategoryArg` 保持同一套取值：少一个分支，
 /// 该分类的模板在 HTTP 侧被 **400 拒绝**，而 CLI 侧正常 —— 两侧对同一分类
 /// 给出不同答案，且前端分类栏也会缺一项、计数永远对不上。
+/// 分类名解析：规则在 `TemplateCategory` 的 `FromStr` 实现（与枚举定义同处一个文件），
+/// 此处只做转发——避免"新增分类要改多处字符串表、漏改就 400"。
 fn parse_category(s: &str) -> Option<TemplateCategory> {
-    match s {
-        "general" | "通用" => Some(TemplateCategory::General),
-        "milling" | "铣削" => Some(TemplateCategory::Milling),
-        "turning" | "车削" => Some(TemplateCategory::Turning),
-        "drilling" | "钻孔" => Some(TemplateCategory::Drilling),
-        "grooving" | "切槽" => Some(TemplateCategory::Grooving),
-        "machine" | "机床" => Some(TemplateCategory::Machine),
-        _ => None,
-    }
+    s.parse().ok()
 }
 
 // ---------------------------------------------------------------------------
@@ -383,31 +377,6 @@ fn api_machine(ctx: &Ctx, value: &serde_json::Value) -> Result<nctool_core::Mach
     })
 }
 
-fn validation_json(
-    template: &str,
-    report: &nctool_core::validate::ValidationReport,
-) -> serde_json::Value {
-    let issues: Vec<serde_json::Value> = report
-        .issues
-        .iter()
-        .map(|i| {
-            let level = match i.level {
-                nctool_core::validate::ValidationLevel::Error => "error",
-                nctool_core::validate::ValidationLevel::Warning => "warning",
-                nctool_core::validate::ValidationLevel::Info => "info",
-            };
-            serde_json::json!({ "level": level, "param": i.param, "message": i.message })
-        })
-        .collect();
-    serde_json::json!({
-        "template": template,
-        "ok": report.is_ok(),
-        "errors": report.errors().count(),
-        "warnings": report.warnings().count(),
-        "issues": issues,
-    })
-}
-
 fn validate(ctx: &Ctx, body: &[u8]) -> Resp {
     let value = match api_body(body) {
         Ok(v) => v,
@@ -425,7 +394,7 @@ fn validate(ctx: &Ctx, body: &[u8]) -> Resp {
         Ok(report) => Resp::Json(
             200,
             ok(serde_json::json!({
-                "report": validation_json(&name, &report),
+                "report": crate::output::report_json(&name, &report),
             })),
         ),
         Err(e) => Resp::Json(500, err("registry", e.to_string())),
@@ -529,7 +498,7 @@ fn render(ctx: &Ctx, body: &[u8]) -> Resp {
         Ok(v) => v,
         Err(e) => return Resp::Json(500, err("registry", e.to_string())),
     };
-    let report_json = validation_json(&name, &report);
+    let report_json = crate::output::report_json(&name, &report);
     if report.has_errors() && !lenient {
         return Resp::Json(
             200,
@@ -569,28 +538,20 @@ fn render(ctx: &Ctx, body: &[u8]) -> Resp {
 ///
 /// `nctool ui` 的前端机床切换需要它；属于 ROADMAP C2 三端点之外的必要补充。
 fn machines_list(ctx: &Ctx) -> Resp {
-    let mut machines: Vec<serde_json::Value> = Vec::new();
-    for p in MachinePreset::all() {
-        let cfg = p.config();
-        machines.push(serde_json::json!({
-            "id": p.id(),
-            "vendor": cfg.vendor,
-            "model": cfg.model,
-            "config": cfg.config,
-            "builtin": true,
-        }));
-    }
-    for (id, m) in &ctx.loaded.merged.machine {
-        if MachinePreset::from_id(id).is_none() {
-            machines.push(serde_json::json!({
-                "id": id,
+    // 枚举规则（预设 + 自定义、按预设 id 去重）来自 core 的单一来源；
+    // 此前与 `commands/machine.rs::list` 各写一遍，两份会漂移。
+    let machines: Vec<serde_json::Value> = MachinePreset::entries(&ctx.loaded.merged.machine)
+        .iter()
+        .map(|m| {
+            serde_json::json!({
+                "id": m.id,
                 "vendor": m.vendor,
                 "model": m.model,
                 "config": m.config,
-                "builtin": false,
-            }));
-        }
-    }
+                "builtin": m.builtin,
+            })
+        })
+        .collect();
     Resp::Json(200, ok(serde_json::json!({ "machines": machines })))
 }
 
@@ -926,6 +887,47 @@ mod tests {
         assert_eq!(payload["data"]["status"], "ok");
     }
 
+    /// 守卫（第四轮 P0-2）：后端必须真的路由得了 `scripts/api_routes.json`
+    /// 登记的每一条接口。
+    ///
+    /// 与 `scripts/check_api_parity.mjs`（前端侧消费同一份 fixture）合成闭环：
+    /// 新增端点漏改后端路由臂 → 本测试红；漏改前端封装或 fixture → 那边红。
+    /// 断言只看「是不是未知接口」而不看状态码：fixture 里用的是最小请求体，
+    /// 400（参数不全）是正常的，404 + "未知接口" 才是契约漂移。
+    #[test]
+    fn api_routes_are_routable() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../scripts/api_routes.json"))
+                .expect("api_routes.json 必须是合法 JSON");
+        let routes = fixture["routes"]
+            .as_array()
+            .expect("fixture 顶层必须有 routes 数组");
+        assert!(!routes.is_empty(), "fixture 的 routes 不应为空");
+
+        for (i, r) in routes.iter().enumerate() {
+            let method = r["method"]
+                .as_str()
+                .unwrap_or_else(|| panic!("route #{i}: method 缺失"));
+            let path = r["path"]
+                .as_str()
+                .unwrap_or_else(|| panic!("route #{i}: path 缺失"));
+            let query = r["query"].as_str().unwrap_or("");
+            let body = r["body"].as_str().unwrap_or("");
+
+            let Resp::Json(status, payload) =
+                route(&test_ctx(), method, path, query, body.as_bytes())
+            else {
+                panic!("{method} {path} 应返回 JSON");
+            };
+            let msg = payload["error"]["message"].as_str().unwrap_or_default();
+            assert!(
+                !msg.starts_with("未知接口"),
+                "route #{i}: {method} {path} 未登记到 route()（status={status}, msg={msg}）\n\
+                 新增端点请同时改：后端路由臂 + scripts/api_routes.json + 前端封装"
+            );
+        }
+    }
+
     #[test]
     fn route_templates_list() {
         let Resp::Json(status, payload) = route(&test_ctx(), "GET", "/api/templates", "", &[])
@@ -1043,14 +1045,8 @@ mod tests {
         // 该分类的模板只在「全部」里出现、计数永远对不上。
         // 遍历 core 的全部分类逐个断言：将来新增分类时这里先红，
         // 而不是等用户报「某个分类的模板就是不显示」。
-        for c in [
-            TemplateCategory::General,
-            TemplateCategory::Milling,
-            TemplateCategory::Turning,
-            TemplateCategory::Drilling,
-            TemplateCategory::Grooving,
-            TemplateCategory::Machine,
-        ] {
+        // 遍历 core 的 ALL（而非硬编码清单）：新增分类时这里立刻红
+        for c in TemplateCategory::ALL {
             assert_eq!(
                 parse_category(c.label()),
                 Some(c),
@@ -1303,10 +1299,10 @@ mod tests {
             .contains("必须是 JSON 对象"));
     }
 
-    /// `validation_json` 的 level 映射：前端按 level 区分展示，
+    /// 报告 JSON 的 level 映射：前端按 level 区分展示，
     /// 映射错了会把 error 显示成提示（用户就看不到"不能生成"的原因）。
     #[test]
-    fn validation_json_carries_issue_levels() {
+    fn report_json_carries_issue_levels() {
         // 缺必选 → error
         let Resp::Json(status, payload) = route(
             &test_ctx(),
