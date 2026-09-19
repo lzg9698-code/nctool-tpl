@@ -140,14 +140,18 @@ jobs:
       # `--ignore-filename-regex` 只能按文件路径排除，管不到 `src/` 内部的测试段，
       # 故改由 `scripts/check_coverage_caliber.py` 剔除测试段后重新统计。
       #
-      # 88% 是**有意留出余量的地板**：当前基线 88.65%（4319/4872 生产行），
-      # 0.65pt 余量约等于 32 行未覆盖生产代码。覆盖率提升后请上调此值
-      # （只改下面 `python3` 那一行的 `--min`）。
+      # 阈值 89% 的依据（2026-09-19 实测，从 88% 上调）：
+      # Ubuntu coverage job 生产口径 **4553/5040 = 90.34%**，余量 1.34pt
+      # ≈ 68 行未覆盖生产代码。此前只拿到本机 Windows 的数字（88.65%），
+      # 担心跨平台兑现不了；现在有 Ubuntu 实测，上调是安全的。
+      # **刻意不设 90%**：余量只剩 0.34pt ≈ 17 行，任何一次小改动都可能误触 ——
+      # 而"经常误报的门禁会被当成噪音忽略"，msrv job 长期红着没人看就是前车之鉴。
+      # 覆盖率提升后请继续上调此值（只改下面 `python3` 那一行的 `--min`）。
       - name: Generate coverage report (no gate)
         run: cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
 
-      - name: Check production coverage (line gate 88%)
-        run: python3 scripts/check_coverage_caliber.py lcov.info --min 88
+      - name: Check production coverage (line gate 89%)
+        run: python3 scripts/check_coverage_caliber.py lcov.info --min 89
 
       # 把覆盖率数字打进 job summary：没有数字的门禁等于没有门禁。
       # `--workspace` 不可省：漏掉它只会统计根 crate（nctool-tpl），

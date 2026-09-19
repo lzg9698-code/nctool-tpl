@@ -13,7 +13,7 @@
 
 ## 用法
 
-    python scripts/check_coverage_caliber.py lcov.info [--min 88] [--top 15]
+    python scripts/check_coverage_caliber.py lcov.info [--min 89] [--top 15]
 
 退出码：0 = 达标（或仅用于查看数据），1 = 未达标。
 """
@@ -195,9 +195,19 @@ def parse_lcov(path: Path) -> dict[str, dict]:
 def main() -> int:
     ap = argparse.ArgumentParser(description="按生产口径校验 lcov 行覆盖率")
     ap.add_argument("lcov", help="lcov.info 路径")
-    ap.add_argument("--min", type=float, default=88.0, help="生产口径行覆盖下限（%%）")
+    ap.add_argument("--min", type=float, default=89.0, help="生产口径行覆盖下限（%%）")
     ap.add_argument("--top", type=int, default=10, help="打印覆盖最低的前 N 个文件")
     ap.add_argument("--root", default=".", help="仓库根（用于定位源码文件）")
+    ap.add_argument(
+        "--strip-prefix",
+        default="",
+        help=(
+            "剥掉 lcov 里 SF 路径的前缀，再按 --root 定位源码。"
+            "用于分析 CI 产物：runner 上记录的是绝对路径"
+            "（如 /home/runner/work/<repo>/<repo>/cli/src/args.rs），"
+            "本地没有该路径，剥掉前缀后即可映射到本仓库。"
+        ),
+    )
     args = ap.parse_args()
 
     lcov_path = Path(args.lcov)
@@ -220,7 +230,8 @@ def main() -> int:
 
         prod: dict[int, int] = {}
         if path.endswith(".rs"):
-            src_file = root / path if not Path(path).is_absolute() else Path(path)
+            rel = path[len(args.strip_prefix):] if args.strip_prefix and path.startswith(args.strip_prefix) else path
+            src_file = root / rel if not Path(rel).is_absolute() else Path(rel)
             if not src_file.is_file():
                 # 读不到源码就无法区分生产段与测试段：此时"全算生产"会把覆盖率
                 # 算高，等于静默放行 —— 宁可硬失败让 CI 暴露路径问题。
