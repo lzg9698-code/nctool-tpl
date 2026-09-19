@@ -2398,12 +2398,20 @@ const BATCH_EXAMPLE = JSON.stringify({
   ],
 }, null, 2);
 let batchResults = [];
-function runBatch() {
+async function runBatch() {
   let part;
   try { part = JSON.parse($("batchArea").value); }
   catch (e) { toast("零件 JSON 解析失败：" + e.message, "err"); return; }
   if (!part.ops || !part.ops.length) { toast("零件需包含 ops 数组", "err"); return; }
-  const res = API.mock("/api/part/generate", "POST", { part });
+  /* 走 API 出口而不是直接调 API.mock：server 模式下 mock 是前端 JS 复刻的引擎，
+     而后端 `/api/part/generate` 尚未实现（阶段 4）—— 直接调 mock 会让人以为
+     程序是 Rust 后端生成的，实际来自另一套实现。现在 server 模式发真实请求，
+     拿不到结果就明确报错；demo 模式（file://）仍落到 mock，行为不变。 */
+  const res = await API.partGenerate(part);
+  if (!res.ok || !res.data || !res.data.results) {
+    toast("批量生成失败：" + ((res.error && res.error.message) || "后端未实现该接口"), "err");
+    return;
+  }
   batchResults = res.data.results;
   const hasErr = batchResults.some(r => r.error);
   $("batchResult").style.display = "block";
