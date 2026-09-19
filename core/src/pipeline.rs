@@ -8,7 +8,7 @@
 
 use crate::model::{apply_spec_defaults, build_render_context, MachineConfig, ParameterSet};
 use crate::registry::TemplateRegistry;
-use crate::validate::{IssueKind, ValidationReport};
+use crate::validate::ValidationReport;
 
 /// 管线错误。
 #[derive(Debug)]
@@ -184,11 +184,18 @@ impl GCodeGenerator {
     /// 与 [`Self::generate`] 的区别：规格默认值兜底、`machine` 注入与后处理
     /// （行号/头部注释/ASCII 清洗等）全部保留，仅放宽"校验阻断"。
     ///
-    /// **唯一仍然硬失败的情形是 NaN/Inf**（[`IssueKind::NonFinite`]）。
-    /// 参数缺失可以留空，但非法坐标会让机床走到错误位置——这不是"参数可
-    /// 缺省"，而是"参数值非法"，宽松模式没有放行理由。其余问题（缺失/类型/
-    /// 越界/非整数）降级为警告，由 [`Self::generate_lenient_with_report`]
-    /// 返回供调用方提示。
+    /// **仍然硬失败的只有两类**（由 [`crate::validate::IssueKind::is_hard_fail`] 穷尽定义，
+    /// 判断走 [`ValidationReport::has_hard_fail`]）：
+    ///
+    /// - [`crate::validate::IssueKind::NonFinite`]：参数缺失可以留空，但非法坐标会让机床走到
+    ///   错误位置——这不是"参数可缺省"，而是"参数值非法"，没有放行理由；
+    /// - [`crate::validate::IssueKind::DeriveFailed`]：派生值会直接进入 G-code，算不出来就没有
+    ///   "缺省"可言。宽松模式此前把它降级成警告、报告说可以出程序，紧接着
+    ///   `derive::apply` 又返回 `Err`，调用方一个字都拿不到——报告层与实际
+    ///   行为不一致，现已统一为硬失败。
+    ///
+    /// 其余问题（缺失/类型/越界/非整数）降级为警告，由
+    /// [`Self::generate_lenient_with_report`] 返回供调用方提示。
     ///
     /// 注意：经**过滤器**（如 `nc_fixed`）引用的未定义变量仍会报错——
     /// 过滤器需要具体值求值，无法以空字符串替代。
@@ -206,8 +213,9 @@ impl GCodeGenerator {
     /// 宽松生成并返回校验报告：与 [`Self::generate_lenient`] 行为一致，
     /// 额外把降级后的报告交还调用方（用于向用户提示"生成了，但有隐患"）。
     ///
-    /// 报告中所有非 [`IssueKind::NonFinite`] 的 Error 均已降级为 Warning，
-    /// 因此 `report.is_ok()` 为 `true` 时表示"除 NaN/Inf 外无阻断项"。
+    /// 报告中所有 [`crate::validate::IssueKind::is_hard_fail`] 为 `false` 的 Error 均已降级为
+    /// Warning，因此 `report.is_ok()` 为 `true` 时表示"除 NaN/Inf 与派生失败
+    /// 外无阻断项"。
     pub fn generate_lenient_with_report(
         &self,
         template: &str,
@@ -227,10 +235,14 @@ impl GCodeGenerator {
             .registry
             .validate(template, params)
             .map_err(PipelineError::Registry)?;
-        if report.has_kind(IssueKind::NonFinite) {
+        // 硬失败集合由 IssueKind::is_hard_fail 的穷尽匹配决定（NaN/Inf、派生失败），
+        // 而不是在这里写死类别 —— 新增硬失败类别不必改本函数。
+        if report.has_hard_fail() {
             return Err(PipelineError::Validation(report));
         }
-        report.downgrade_errors_except(&[IssueKind::NonFinite]);
+        // 保留集合由 IssueKind::is_hard_fail 的穷尽匹配决定，而非本处的白名单：
+        // 新增问题类别时不会被默认降级掉。
+        report.downgrade_soft_errors();
 
         // 与 generate 相同的派生 + 兜底与上下文构建（宽松只影响渲染器行为）
         let derived = crate::derive::apply(&entry.params, params).map_err(PipelineError::Derive)?;
@@ -332,10 +344,15 @@ fn postprocess(
         }
     }
 
-    // Text 格式：仅渲染，不做任何后处理
-    if opts.format == OutputFormat::Text {
-        out.push_str(rendered);
-        return out;
+    // 用 match 而非 `if == Text`：新增输出格式时编译器强制在此表态，
+    // 不会静默落到 G-code 后处理（加行号 / 清 ASCII）里产出错误程序。
+    match opts.format {
+        // Text 格式：仅渲染，不做任何后处理
+        OutputFormat::Text => {
+            out.push_str(rendered);
+            return out;
+        }
+        OutputFormat::Gcode => {}
     }
 
     // Gcode 格式：行号 + 空行清理 + trim + 可选 ASCII 清洗。
@@ -510,6 +527,62 @@ mod tests {
             )
             .unwrap();
         assert_eq!(out, "G1 X0 F\n");
+    }
+
+    /// 回归（第四轮 P1-2）：宽松模式把 `DeriveFailed` 降级成警告、报告说"可以出
+    /// 程序"，紧接着 `derive::apply` 又返回 `Err` —— 调用方一个字都拿不到，而
+    /// 文档声称"唯一硬失败是 NaN/Inf"。现已把派生失败并入硬失败集合：
+    /// 报告层与行为层一致，且**报告本身会交给调用方**（不再被丢弃）。
+    #[test]
+    fn generate_lenient_treats_derive_failure_as_hard_fail() {
+        use crate::model::DeriveRule;
+
+        let mut g = GCodeGenerator::new();
+        g.registry_mut()
+            .add_memory(
+                "derive_gate",
+                crate::registry::TemplateCategory::General,
+                "",
+                "G1 X{{ x | nc_fixed(3) }} Z{{ z | nc_fixed(3) }}",
+                vec![crate::model::ParamSpec::new(
+                    "z",
+                    crate::model::ParamKind::Number,
+                    "由 x 查表",
+                )
+                .with_derive(DeriveRule {
+                    from: "x".to_string(),
+                    table: vec![(
+                        crate::model::ParamValue::Number(1.0),
+                        crate::model::ParamValue::Number(10.0),
+                    )],
+                    // 无 fallback：源参数缺失即报错（这正是"失败不静默"的设计）
+                    fallback: None,
+                })],
+            )
+            .unwrap();
+
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", 999.0); // 源值未命中表项且无回退
+        let err = g
+            .generate_lenient(
+                "derive_gate",
+                &ps,
+                &machine(),
+                &GenerationOptions::default(),
+            )
+            .expect_err("派生算不出来时宽松模式也必须失败");
+
+        match err {
+            PipelineError::Validation(report) => {
+                assert!(
+                    report.has_kind(crate::validate::IssueKind::DeriveFailed),
+                    "报告里应能看到 DeriveFailed，供调用方提示：{}",
+                    report.summary()
+                );
+                assert!(report.has_hard_fail(), "派生失败应被认作硬失败");
+            }
+            other => panic!("应返回 Validation 并带上报告，实际：{other:?}"),
+        }
     }
 
     #[test]

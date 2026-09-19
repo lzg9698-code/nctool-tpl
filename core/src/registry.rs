@@ -44,6 +44,69 @@ impl TemplateCategory {
             TemplateCategory::Machine => "机床",
         }
     }
+
+    /// 全部分类（用于遍历式守卫测试与 UI 枚举）。
+    ///
+    /// **新增变体必须同步登记**：`aliases` / `dir_names` / `label` 是穷尽匹配
+    /// （编译器强制），`ALL` 由守卫测试与变体数对拍守住。
+    pub const ALL: [TemplateCategory; 6] = [
+        TemplateCategory::General,
+        TemplateCategory::Milling,
+        TemplateCategory::Turning,
+        TemplateCategory::Drilling,
+        TemplateCategory::Grooving,
+        TemplateCategory::Machine,
+    ];
+
+    /// 用户可见名（英文 id，大小写不敏感）。穷尽匹配——新增变体必须登记，
+    /// 否则 HTTP/CLI 侧会把新分类判为非法值。
+    fn aliases(&self) -> &'static [&'static str] {
+        match self {
+            TemplateCategory::General => &["general"],
+            TemplateCategory::Milling => &["milling"],
+            TemplateCategory::Turning => &["turning"],
+            TemplateCategory::Drilling => &["drilling"],
+            TemplateCategory::Grooving => &["grooving"],
+            TemplateCategory::Machine => &["machine"],
+        }
+    }
+
+    /// 模板目录名（大小写不敏感）。穷尽匹配——新增变体必须登记，否则
+    /// `templates/<新目录>/` 下的模板会被静默归入"通用"。
+    fn dir_names(&self) -> &'static [&'static str] {
+        match self {
+            TemplateCategory::General => &["general", "common"],
+            TemplateCategory::Milling => &["milling", "mill"],
+            TemplateCategory::Turning => &["turning", "turn"],
+            TemplateCategory::Drilling => &["drilling", "drill"],
+            TemplateCategory::Grooving => &["grooving", "groove"],
+            TemplateCategory::Machine => &["machines", "machine"],
+        }
+    }
+
+    /// 目录名 → 分类。目录归类表的**唯一入口**。
+    pub fn from_dir_name(name: &str) -> Option<Self> {
+        let lower = name.to_ascii_lowercase();
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|c| c.dir_names().iter().any(|d| *d == lower))
+    }
+}
+
+impl std::str::FromStr for TemplateCategory {
+    type Err = ();
+
+    /// 分类名解析的**唯一入口**（中英文、大小写不敏感）：英文 id 用
+    /// `aliases()`，中文显示名用 [`Self::label`]。
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let lower = s.trim().to_ascii_lowercase();
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|c| c.aliases().iter().any(|a| *a == lower) || c.label() == lower)
+            .ok_or(())
+    }
 }
 
 /// 模板源码来源。
@@ -680,49 +743,72 @@ impl Default for TemplateRegistry {
 /// 闸门放在 `render_template*` 这一层而非各个参数入口，是刻意的：它同时覆盖
 /// 参数集、机床系统变量与调用方自定义上下文，不必为每种上下文各写一遍。
 fn ensure_finite_context(name: &str, context: &Value) -> Result<(), nctool_tpl::TplError> {
-    if let Some(path) = find_non_finite(context, "", 0) {
-        return Err(nctool_tpl::TplError::Render {
+    match find_non_finite(context, "", 0) {
+        Ok(None) => Ok(()),
+        Ok(Some(path)) => Err(nctool_tpl::TplError::Render {
             name: name.to_string(),
             message: format!(
                 "上下文参数 {path} 为 NaN/Inf（非有限数），拒绝渲染：非有限数会写出非法坐标；\
                  本入口不做完整校验，但有限性必须拦截"
             ),
-        });
+        }),
+        // 扫描本身失败时**fail-closed**：宁可拒绝渲染，也不能把"没扫成"当成
+        // "没找到非有限数" —— 后者等于闸门在异常路径上静默失效。
+        Err(where_) => Err(nctool_tpl::TplError::Render {
+            name: name.to_string(),
+            message: format!(
+                "上下文参数 {where_} 无法完成有限性扫描，拒绝渲染：\
+                 扫描失败时无法保证不存在 NaN/Inf，而非法坐标的代价不可接受"
+            ),
+        }),
     }
-    Ok(())
 }
 
 /// 深度优先找出上下文里第一个非有限数，返回它的路径（如 `machine.x`、`passes[2].z`）。
 ///
 /// `depth` 是兜底：自定义对象理论上可无限嵌套，超过上限就停止下探——
 /// 宁可放过极端情况，也不能让扫描本身把渲染挂死。
-fn find_non_finite(value: &Value, path: &str, depth: usize) -> Option<String> {
+///
+/// 返回值：`Ok(None)` 未发现非有限数；`Ok(Some(path))` 发现，`path` 为定位；
+/// `Err(where_)` **扫描失败**（遍历器不可用），调用方须按"拒绝渲染"处理。
+/// 区分后两者是刻意的：`ok()?` 会把遍历失败折叠成"没找到"，让闸门在异常路径上
+/// 静默放行 —— 一个防非法坐标的闸门不该有这种失败模式。
+fn find_non_finite(value: &Value, path: &str, depth: usize) -> Result<Option<String>, String> {
     const MAX_DEPTH: usize = 32;
     if depth > MAX_DEPTH {
-        return None;
+        return Ok(None);
     }
+    let label = || {
+        if path.is_empty() {
+            "<根值>".to_string()
+        } else {
+            path.to_string()
+        }
+    };
     match value.kind() {
         // minijinja 的 `Value` 没有 `as_f64`，数值取值走 `TryFrom<Value> for f64`
         // （它会把 I64/U64/F64 统一转成 f64，整数必然有限，不会误报）
-        ValueKind::Number => match f64::try_from(value.clone()) {
-            Ok(n) if !n.is_finite() => Some(if path.is_empty() {
-                "<根值>".to_string()
-            } else {
-                path.to_string()
-            }),
+        ValueKind::Number => Ok(match f64::try_from(value.clone()) {
+            Ok(n) if !n.is_finite() => Some(label()),
             _ => None,
-        },
+        }),
         ValueKind::Seq => {
-            for (i, item) in value.try_iter().ok()?.enumerate() {
+            let items = value
+                .try_iter()
+                .map_err(|_| format!("{}（序列遍历失败）", label()))?;
+            for (i, item) in items.enumerate() {
                 let child = format!("{path}[{i}]");
-                if let Some(found) = find_non_finite(&item, &child, depth + 1) {
-                    return Some(found);
+                if let Some(found) = find_non_finite(&item, &child, depth + 1)? {
+                    return Ok(Some(found));
                 }
             }
-            None
+            Ok(None)
         }
         ValueKind::Map => {
-            for key in value.try_iter().ok()? {
+            let keys = value
+                .try_iter()
+                .map_err(|_| format!("{}（映射遍历失败）", label()))?;
+            for key in keys {
                 // 取不到值的键（如自定义对象的特殊成员）跳过，不因此拒绝渲染
                 let Ok(item) = value.get_item(&key) else {
                     continue;
@@ -732,13 +818,13 @@ fn find_non_finite(value: &Value, path: &str, depth: usize) -> Option<String> {
                 } else {
                     format!("{path}.{key}")
                 };
-                if let Some(found) = find_non_finite(&item, &child, depth + 1) {
-                    return Some(found);
+                if let Some(found) = find_non_finite(&item, &child, depth + 1)? {
+                    return Ok(Some(found));
                 }
             }
-            None
+            Ok(None)
         }
-        _ => None,
+        _ => Ok(None),
     }
 }
 

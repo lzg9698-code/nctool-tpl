@@ -386,21 +386,31 @@ impl ParamKind {
     /// `Choice` 只做"是不是标量"的粗筛，真正的白名单比较在
     /// [`ParamSpec::accepts_option`]（`matches` 拿不到 `options`）。
     pub fn matches(&self, value: &ParamValue) -> bool {
-        match (self, value) {
-            (ParamKind::Number, ParamValue::Number(_)) => true,
-            (ParamKind::Number, ParamValue::Integer(_)) => true,
-            (ParamKind::Integer, ParamValue::Integer(_)) => true,
-            // 整值浮点数视为合法整数（CLI/JSON 常把 5 解析成 5.0）
-            (ParamKind::Integer, ParamValue::Number(v)) => v.is_finite() && v.fract() == 0.0,
-            (ParamKind::String, ParamValue::String(_)) => true,
-            (ParamKind::Bool, ParamValue::Bool(_)) => true,
-            (ParamKind::List, ParamValue::List(_)) => true,
-            // 枚举：任意标量都先通过类型关，由白名单决定最终是否合法
-            (ParamKind::Choice, ParamValue::List(_)) => false,
-            (ParamKind::Choice, _) => true,
+        // 按 `self` 穷尽展开，而不是 `match (self, value)` + `_ => false`：
+        // 后者在新增变体时会**静默把新类型变成"拒绝一切取值"**，编译器不报错。
+        match self {
+            ParamKind::Number => matches!(value, ParamValue::Number(_) | ParamValue::Integer(_)),
+            ParamKind::Integer => match value {
+                ParamValue::Integer(_) => true,
+                // 整值浮点数视为合法整数（CLI/JSON 常把 5 解析成 5.0）。
+                // 范围检查与 `as_integer` 同一口径：`1e20` 的 `fract() == 0.0` 且
+                // `is_finite()`，两道检查都放行，但 `as i64` 会**饱和**成 i64::MAX。
+                // 没有这一条，校验会放行一个"看起来合法"的程序号/刀具号。
+                ParamValue::Number(v) => {
+                    v.is_finite()
+                        && v.fract() == 0.0
+                        && (I64_MIN_AS_F64..I64_MAX_AS_F64).contains(v)
+                }
+                _ => false,
+            },
+            ParamKind::String => matches!(value, ParamValue::String(_)),
+            ParamKind::Bool => matches!(value, ParamValue::Bool(_)),
+            ParamKind::List => matches!(value, ParamValue::List(_)),
+            // 枚举：任意标量都先通过类型关，由白名单决定最终是否合法。
+            // List 不在此列——列表永远不可能是扁平白名单的成员。
+            ParamKind::Choice => !matches!(value, ParamValue::List(_)),
             // 未标注类型：不做类型判断
-            (ParamKind::Any, _) => true,
-            _ => false,
+            ParamKind::Any => true,
         }
     }
 
@@ -415,6 +425,53 @@ impl ParamKind {
             ParamKind::Choice => "枚举",
             ParamKind::Any => "未标注类型",
         }
+    }
+
+    /// 全部取值（用于遍历式守卫测试、UI 枚举展示）。
+    ///
+    /// **新增变体必须同步登记**：`aliases` / `label` / `matches` 是穷尽匹配
+    /// （编译器强制），`ALL` 由测试 `param_kind_registry_is_complete` 与
+    /// 变体数对拍守住——漏登记会让新类型无法被解析出来。
+    pub const ALL: [ParamKind; 7] = [
+        ParamKind::Number,
+        ParamKind::Integer,
+        ParamKind::String,
+        ParamKind::Bool,
+        ParamKind::List,
+        ParamKind::Choice,
+        ParamKind::Any,
+    ];
+
+    /// 英文别名（大小写不敏感）。穷尽匹配——新增变体必须在此登记，否则
+    /// 模板头部 `{# PARAMS: #}` 写新类型会被判为"未知类型"。
+    fn aliases(&self) -> &'static [&'static str] {
+        match self {
+            ParamKind::Number => &["number", "numeric", "float"],
+            ParamKind::Integer => &["integer", "int"],
+            ParamKind::String => &["string", "str", "text"],
+            ParamKind::Bool => &["bool", "boolean"],
+            ParamKind::List => &["list", "array"],
+            ParamKind::Choice => &["choice", "enum"],
+            ParamKind::Any => &["any", "未标注"],
+        }
+    }
+}
+
+impl std::str::FromStr for ParamKind {
+    type Err = ();
+
+    /// 类型名解析的**唯一入口**（中英文、大小写不敏感）。
+    ///
+    /// 规则与枚举定义同处一个文件：既接受 `aliases()` 的英文别名，
+    /// 也接受 [`ParamKind::label`] 的中文名。新增变体只需在 `aliases` 登记，
+    /// 不必再到清单解析处补一份字符串表。
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        let lower = s.trim().to_ascii_lowercase();
+        Self::ALL
+            .iter()
+            .copied()
+            .find(|k| k.aliases().iter().any(|a| *a == lower) || k.label() == lower)
+            .ok_or(())
     }
 }
 
@@ -1263,5 +1320,79 @@ mod tests {
         ] {
             assert!(ParamKind::Any.matches(&v), "Any 应接受 {v:?}");
         }
+    }
+
+    /// 回归（第四轮 P1-1）：`ParamKind::Integer` 必须与 `as_integer` 同一范围口径。
+    ///
+    /// `1e20` 的 `fract() == 0.0` 且 `is_finite()`，两道检查都放行，但 `as i64`
+    /// 会**饱和**成 `i64::MAX`。校验放行这种值，等于放行一个"看起来合法"的
+    /// 程序号/刀具号；模板直接插值就会把 `1e20` 写进 G-code。
+    #[test]
+    fn integer_kind_rejects_out_of_i64_range() {
+        let kind = ParamKind::Integer;
+        assert!(kind.matches(&ParamValue::Number(5.0)));
+        assert!(kind.matches(&ParamValue::Number(-5.0)));
+        assert!(kind.matches(&ParamValue::Integer(5)));
+
+        for bad in [1e20, -1e20, I64_MAX_AS_F64, f64::INFINITY, f64::NAN] {
+            assert!(
+                !kind.matches(&ParamValue::Number(bad)),
+                "{bad} 不该通过整数类型检查（as_integer 会饱和成 i64::MAX）"
+            );
+        }
+        // 界内下界仍要放行，别把保护做成误伤
+        assert!(kind.matches(&ParamValue::Number(I64_MIN_AS_F64)));
+        assert_eq!(
+            ParamValue::Number(I64_MIN_AS_F64).as_integer(),
+            Some(i64::MIN),
+            "matches 放行的值必须真的能转成整数"
+        );
+    }
+
+    /// 守卫（第四轮 P0-1）：`ParamKind` 的登记完整性。
+    ///
+    /// 两段断言分别守住两类漏登记：
+    /// - `ALL` 漏登记新变体 → 长度与穷尽匹配的变体数对不上；
+    /// - `aliases` 漏登记 → 模板头部 `{# PARAMS: #}` 里写新类型会被判为未知。
+    #[test]
+    fn param_kind_registry_is_complete() {
+        // 穷尽匹配：新增变体必须在此加分支并把数字 +1
+        let variant_count = match ParamKind::Number {
+            ParamKind::Number
+            | ParamKind::Integer
+            | ParamKind::String
+            | ParamKind::Bool
+            | ParamKind::List
+            | ParamKind::Choice
+            | ParamKind::Any => 7,
+        };
+        assert_eq!(
+            ParamKind::ALL.len(),
+            variant_count,
+            "ParamKind::ALL 漏登记变体（新增变体须同步 ALL / aliases / label / matches）"
+        );
+
+        // 解析入口只此一处：中文名与全部英文别名都要能解析回自身。
+        // 断言别名非空，是为了挡住"登记了变体却给它一个空别名表"这种漏登记
+        // —— 反向验证过：删掉 `enum` 别名会让既有解析测试立刻变红。
+        for kind in ParamKind::ALL {
+            assert!(!kind.aliases().is_empty(), "{kind:?} 至少要有一个别名");
+            assert_eq!(
+                kind.label().parse::<ParamKind>().ok(),
+                Some(kind),
+                "中文名 {} 应能解析回自身",
+                kind.label()
+            );
+            for alias in kind.aliases() {
+                assert_eq!(
+                    alias.parse::<ParamKind>().ok(),
+                    Some(kind),
+                    "别名 {alias} 应能解析回 {kind:?}"
+                );
+            }
+        }
+
+        // 未知类型仍要报错，别把保护做成"什么都接受"
+        assert!("不存在的类型".parse::<ParamKind>().is_err());
     }
 }

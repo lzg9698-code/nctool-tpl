@@ -373,6 +373,12 @@ fn is_default_extension(s: &str) -> bool {
 #[derive(Debug, Clone, Default)]
 pub struct TemplateManifest {
     entries: BTreeMap<String, TemplateMeta>,
+    /// 规范化后互相碰撞的键（如 `turning\a.j2` 与 `turning/a.j2`）。
+    ///
+    /// 归一化会把两者变成同一个键，后读到的**静默覆盖**先读到的 —— 用户以为
+    /// 两个条目都在生效，实际只有一个。加载时记下来供调用方告警（对照
+    /// [`crate::variables`] 对重复变量是直接报错的，此处不宜更松）。
+    duplicates: Vec<String>,
 }
 
 impl TemplateManifest {
@@ -380,7 +386,13 @@ impl TemplateManifest {
     pub fn empty() -> Self {
         Self {
             entries: BTreeMap::new(),
+            duplicates: Vec::new(),
         }
+    }
+
+    /// 规范化后互相碰撞的键对（加载时记录，用于告警）。
+    pub fn duplicate_keys(&self) -> &[String] {
+        &self.duplicates
     }
 
     /// 从 YAML 文本解析清单。
@@ -449,12 +461,31 @@ impl TemplateManifest {
     }
 
     /// 规范化键后构造清单（统一分隔符为 `/`，去掉前导 `./`）。
+    ///
+    /// 归一化可能让两个不同的原始键落到同一个键上（`turning\a.j2` vs
+    /// `turning/a.j2`），此时后者覆盖前者且**不报错**。这里把冲突记进
+    /// [`Self::duplicate_keys`]，由调用方决定怎么提示。
     fn from_entries(entries: BTreeMap<String, TemplateMeta>) -> Self {
+        let mut normalized: BTreeMap<String, TemplateMeta> = BTreeMap::new();
+        let mut originals: BTreeMap<String, String> = BTreeMap::new();
+        let mut duplicates: Vec<String> = Vec::new();
+
+        for (raw_key, meta) in entries {
+            let key = normalize_key(&raw_key);
+            match originals.get(&key) {
+                Some(first) => duplicates.push(format!(
+                    "{raw_key} 与 {first} 规范化后同为 {key}（只保留其中一个）"
+                )),
+                None => {
+                    originals.insert(key.clone(), raw_key);
+                }
+            }
+            normalized.insert(key, meta);
+        }
+
         Self {
-            entries: entries
-                .into_iter()
-                .map(|(k, v)| (normalize_key(&k), v))
-                .collect(),
+            entries: normalized,
+            duplicates,
         }
     }
 
@@ -569,23 +600,20 @@ pub fn path_to_rel_key(rel: &Path) -> String {
 /// | `milling` / `mill` | [`TemplateCategory::Milling`] |
 /// | `turning` / `turn` | [`TemplateCategory::Turning`] |
 /// | `drilling` / `drill` | [`TemplateCategory::Drilling`] |
+/// | `grooving` / `groove` | [`TemplateCategory::Grooving`] |
 /// | `machines` / `machine` | [`TemplateCategory::Machine`] |
+///
+/// 真正生效的表在 `TemplateCategory::dir_names()`（穷尽匹配）——本表只是
+/// 说明，改动请以那里为准。
 ///
 /// **取路径中第一个命中的目录**，因此 `turning/machines/xx.j2` 判为车削。
 /// 未命中任何目录时归入 [`TemplateCategory::General`]。
 pub fn classify_by_path(rel: &Path) -> TemplateCategory {
     for comp in rel.components() {
         let name = comp.as_os_str().to_string_lossy().to_ascii_lowercase();
-        let hit = match name.as_str() {
-            "general" | "common" => Some(TemplateCategory::General),
-            "milling" | "mill" => Some(TemplateCategory::Milling),
-            "turning" | "turn" => Some(TemplateCategory::Turning),
-            "drilling" | "drill" => Some(TemplateCategory::Drilling),
-            "grooving" | "groove" => Some(TemplateCategory::Grooving),
-            "machines" | "machine" => Some(TemplateCategory::Machine),
-            _ => None,
-        };
-        if let Some(c) = hit {
+        // 目录名表在 TemplateCategory::dir_names（穷尽匹配），新增分类时
+        // 编译器强制登记，不会像原先那样被 `_ => None` 静默归入"通用"。
+        if let Some(c) = TemplateCategory::from_dir_name(&name) {
             return c;
         }
     }
@@ -801,17 +829,11 @@ fn parse_required_marker(token: &str) -> Option<(bool, Option<String>)> {
 }
 
 /// 类型名（中英文，大小写不敏感）。
+///
+/// 解析规则集中在 [`ParamKind::from_str`]（与枚举定义同处一个文件），此处只
+/// 做转发——避免"新增类型要改两处字符串表、漏改一处就静默不认识"。
 fn parse_kind_name(token: &str) -> Option<ParamKind> {
-    match token.to_ascii_lowercase().as_str() {
-        "number" | "numeric" | "float" | "数值" => Some(ParamKind::Number),
-        "integer" | "int" | "整数" => Some(ParamKind::Integer),
-        "string" | "str" | "text" | "字符串" => Some(ParamKind::String),
-        "bool" | "boolean" | "布尔" => Some(ParamKind::Bool),
-        "list" | "array" | "列表" => Some(ParamKind::List),
-        "choice" | "enum" | "枚举" => Some(ParamKind::Choice),
-        "any" | "未标注" => Some(ParamKind::Any),
-        _ => None,
-    }
+    token.parse().ok()
 }
 
 /// 从单行中提取 `{# MARKER: ... #}` 的值。
@@ -1029,6 +1051,47 @@ templates:
             "milling/gone.j2".to_string(),
         ]);
         assert!(m.orphan_keys(&all_present).is_empty());
+    }
+
+    /// 回归（第四轮 P1-3）：键规范化可能让两个不同的原始键落到同一个键上，
+    /// 后读到的**静默覆盖**先读到的 —— 用户以为两个条目都在生效，实际只有一个。
+    /// 对照变量库对重复变量是直接报错的，此处至少要有告警。
+    #[test]
+    fn normalized_key_collision_is_reported() {
+        let yaml = r#"
+templates:
+  "./turning/a.j2":
+    visible: false
+  "turning/a.j2":
+    visible: true
+"#;
+        let m = TemplateManifest::from_yaml(yaml, Path::new("templates.yaml")).unwrap();
+        assert_eq!(
+            m.duplicate_keys().len(),
+            1,
+            "同义键冲突应被记录：{:?}",
+            m.duplicate_keys()
+        );
+        let msg = &m.duplicate_keys()[0];
+        assert!(
+            msg.contains("./turning/a.j2") && msg.contains("turning/a.j2"),
+            "告警要点出两个原始键，便于定位：{msg}"
+        );
+        // 覆盖发生了（只留一个），但键本身仍可用
+        assert!(m.get("turning/a.j2").is_some());
+
+        // 无冲突时不应刷噪声
+        let clean = r#"
+templates:
+  "turning/a.j2": {}
+  "milling/b.j2": {}
+"#;
+        assert!(
+            TemplateManifest::from_yaml(clean, Path::new("templates.yaml"))
+                .unwrap()
+                .duplicate_keys()
+                .is_empty()
+        );
     }
 
     /// 回归（P2-19）：带 `templates:` 的形式此前**没有** `deny_unknown_fields`，

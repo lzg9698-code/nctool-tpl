@@ -164,15 +164,37 @@ impl CategoryArg {
         }
     }
 
+    /// 中文显示名。直接取 core 的 [`nctool_core::registry::TemplateCategory::label`]，不在 CLI 侧
+    /// 再抄一份中文表（第三份副本正是"改一处漏两处"的温床）。
     pub fn from_core(c: nctool_core::registry::TemplateCategory) -> &'static str {
-        use nctool_core::registry::TemplateCategory;
-        match c {
-            TemplateCategory::General => "通用",
-            TemplateCategory::Milling => "铣削",
-            TemplateCategory::Turning => "车削",
-            TemplateCategory::Drilling => "钻孔",
-            TemplateCategory::Grooving => "切槽",
-            TemplateCategory::Machine => "机床",
+        c.label()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use clap::ValueEnum;
+    use nctool_core::registry::TemplateCategory;
+
+    /// 守卫（第四轮 P0-1）：CLI 的 `CategoryArg` 必须覆盖 core 的全部分类。
+    ///
+    /// `to_core` / `from_core` 是穷尽匹配（编译器强制），但**漏一个新变体**
+    /// 只有在 `value_variants()` 与 `TemplateCategory::ALL` 对拍时才会暴露。
+    #[test]
+    fn category_arg_covers_every_core_category() {
+        let variants = CategoryArg::value_variants();
+        assert_eq!(
+            variants.len(),
+            TemplateCategory::ALL.len(),
+            "CategoryArg 与 core::TemplateCategory 数量不一致：新增分类要同步两侧"
+        );
+        for c in TemplateCategory::ALL {
+            assert!(
+                variants.iter().any(|v| v.to_core() == c),
+                "core 分类 {c:?} 在 CLI 侧没有对应项"
+            );
+            assert_eq!(CategoryArg::from_core(c), c.label());
         }
     }
 }

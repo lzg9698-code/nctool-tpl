@@ -31,6 +31,19 @@ impl ValidationLevel {
             ValidationLevel::Info => "提示",
         }
     }
+
+    /// 机器可读级别（JSON 契约里的 `level` 字段）。
+    ///
+    /// 与 `label()` 的分工：`label` 给人看（中文），本方法给程序看。
+    /// 这是**对外契约字段**，改名即破坏前后端协议 —— 此前这段映射在
+    /// `cli/src/server.rs` 与 `cli/src/commands/validate.rs` 各写一份。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            ValidationLevel::Error => "error",
+            ValidationLevel::Warning => "warning",
+            ValidationLevel::Info => "info",
+        }
+    }
 }
 
 /// 校验问题的结构化类别。
@@ -83,6 +96,40 @@ pub enum IssueKind {
     ParseError,
     /// 其他 / 未分类
     Other,
+}
+
+impl IssueKind {
+    /// 宽松生成模式下**仍然阻断**的类别（NaN/Inf 会写出非法坐标，没有放行理由）。
+    ///
+    /// 存在意义：把"哪些问题必须硬失败"从调用方的白名单（`downgrade_errors_except`）
+    /// 收敛到类别自身的**穷尽匹配**上。新增变体时编译器强制在此表态，不会像白名单
+    /// 那样把新类别默认降级掉。
+    ///
+    /// 想让某类问题在宽松模式下也阻断，就把它的分支改成 `true`——**同时**要更新
+    /// [`crate::pipeline::GCodeGenerator::generate_lenient`] 的文档承诺。
+    pub fn is_hard_fail(&self) -> bool {
+        match self {
+            // NaN/Inf 会写出非法坐标 —— 机床会走到错误位置
+            IssueKind::NonFinite => true,
+            // 派生值会直接进入 G-code，算不出来就没有"缺省"可言（与
+            // [`Self::DeriveFailed`] 自身的级别说明一致：归为 Error 而非警告）。
+            // 修这一条之前：宽松模式把它降级成 Warning，报告说"可以出程序"，
+            // 紧接着 `derive::apply` 又返回 Err 让调用方一个字都拿不到 ——
+            // 报告层与实际行为不一致。
+            IssueKind::DeriveFailed => true,
+            IssueKind::Missing
+            | IssueKind::TypeMismatch
+            | IssueKind::OutOfRange
+            | IssueKind::NotInteger
+            | IssueKind::NotInOptions
+            | IssueKind::ConditionalSkipped
+            | IssueKind::Unused
+            | IssueKind::SpecInert
+            | IssueKind::ShadowedSystemVar
+            | IssueKind::ParseError
+            | IssueKind::Other => false,
+        }
+    }
 }
 
 /// 单条校验问题。
@@ -189,6 +236,16 @@ impl ValidationReport {
             .filter(|i| i.level == ValidationLevel::Info)
     }
 
+    /// 是否含**必须阻断**的 Error 级问题（类别由 [`IssueKind::is_hard_fail`] 判定）。
+    ///
+    /// 宽松生成据此决定是否放行：比 `has_kind(IssueKind::NonFinite)` 更不易漂移
+    /// —— 新增硬失败类别只需改 `is_hard_fail`，调用点不用动。
+    pub fn has_hard_fail(&self) -> bool {
+        self.issues
+            .iter()
+            .any(|i| i.level == ValidationLevel::Error && i.kind.is_hard_fail())
+    }
+
     /// 是否包含指定类别的问题（任意级别）。
     ///
     /// 用于按类别做程序化决策，例如宽松模式拦截 NaN：
@@ -210,9 +267,26 @@ impl ValidationReport {
     ///
     /// 典型用法：`report.downgrade_errors_except(&[IssueKind::NonFinite])`
     /// —— NaN/Inf 会让机床走到非法坐标，宽松模式也必须硬失败，故保留。
+    ///
+    /// 新代码请优先用 [`Self::downgrade_soft_errors`]：本方法的 `keep` 是
+    /// **白名单反向**，新增 [`IssueKind`] 变体时若不记得把它加进 `keep`，
+    /// 新类别会被静默降级。
     pub fn downgrade_errors_except(&mut self, keep: &[IssueKind]) {
         for issue in &mut self.issues {
             if issue.level == ValidationLevel::Error && !keep.contains(&issue.kind) {
+                issue.level = ValidationLevel::Warning;
+            }
+        }
+    }
+
+    /// 把 Error 级问题降级为 Warning，**保留** [`IssueKind::is_hard_fail`]
+    /// 为 `true` 的类别（宽松生成的默认语义）。
+    ///
+    /// 与 [`Self::downgrade_errors_except`] 的区别：保留集合由 `IssueKind`
+    /// 自己的穷尽匹配决定，新增类别时编译器强制开发者表态，不会被默认降级。
+    pub fn downgrade_soft_errors(&mut self) {
+        for issue in &mut self.issues {
+            if issue.level == ValidationLevel::Error && !issue.kind.is_hard_fail() {
                 issue.level = ValidationLevel::Warning;
             }
         }
@@ -869,6 +943,61 @@ pub fn spec(
     }
 }
 
+/// 校验报告的 JSON 视图（HTTP API 与 `validate --format json` **共用**）。
+///
+/// 存在意义：报告的 JSON 形状是 core 的公共契约，但此前在
+/// `cli/src/server.rs::validation_json` 与 `cli/src/commands/validate.rs::report_json`
+/// 逐字段各写一遍（连 `level` 的三分支映射都各写一份）。两份漂移会让 Web UI 与
+/// CLI 对同一份报告给出不同形状，而两边都没有测试能发现对方变了。
+///
+/// 定义在 core 而不是 CLI：形状属于 core 的对外契约。core 不依赖 `serde_json`
+/// （它只是 dev-dependency），所以这里只 `derive(Serialize)`，由调用方决定怎么落盘。
+#[derive(Debug, serde::Serialize)]
+pub struct ValidationReportJson<'a> {
+    /// 被校验的模板名
+    pub template: &'a str,
+    /// 是否通过（无 Error 级问题）
+    pub ok: bool,
+    /// Error 级问题数
+    pub errors: usize,
+    /// Warning 级问题数
+    pub warnings: usize,
+    /// 全部问题（按出现顺序）
+    pub issues: Vec<ValidationIssueJson<'a>>,
+}
+
+/// 单条问题的 JSON 视图，见 [`ValidationReportJson`]。
+#[derive(Debug, serde::Serialize)]
+pub struct ValidationIssueJson<'a> {
+    /// 级别：`error` / `warning` / `info`（见 [`ValidationLevel::as_str`]）
+    pub level: &'static str,
+    /// 涉及的参数名（无则 `null`）
+    pub param: Option<&'a str>,
+    /// 问题描述
+    pub message: &'a str,
+}
+
+impl ValidationReport {
+    /// 构造 JSON 视图（见 [`ValidationReportJson`]）。
+    pub fn json_view<'a>(&'a self, template: &'a str) -> ValidationReportJson<'a> {
+        ValidationReportJson {
+            template,
+            ok: self.is_ok(),
+            errors: self.errors().count(),
+            warnings: self.warnings().count(),
+            issues: self
+                .issues
+                .iter()
+                .map(|i| ValidationIssueJson {
+                    level: i.level.as_str(),
+                    param: i.param.as_deref(),
+                    message: i.message.as_str(),
+                })
+                .collect(),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -894,6 +1023,58 @@ mod tests {
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].param.as_deref(), Some("z"));
         assert!(errors[0].message.contains("必选参数缺失"));
+    }
+
+    /// 守卫（第四轮批次 D）：报告的 JSON 形状是**对外契约**，在此冻结字段名、
+    /// 类型与 `level` 取值。
+    ///
+    /// 此前形状在 `cli/src/server.rs` 与 `cli/src/commands/validate.rs` 各写一遍，
+    /// 改一处漏一处不会有测试发现；现在形状只有 `ValidationReportJson` 一份，
+    /// 本用例把它钉住 —— 改名或改 `level` 取值都会红，提醒这是破坏性变更。
+    #[test]
+    fn json_view_freezes_contract_fields() {
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", 10.0); // z 缺失
+        let report = validate_template(TPL, "t.j2", &[], &ps, &[]);
+        let v = serde_json::to_value(report.json_view("t.j2")).expect("应可序列化");
+
+        assert_eq!(v["template"], "t.j2");
+        assert_eq!(v["ok"], false);
+        assert_eq!(v["errors"].as_u64(), Some(1));
+        assert_eq!(v["warnings"].as_u64(), Some(0));
+
+        let issues = v["issues"].as_array().expect("应有 issues 数组");
+        assert_eq!(issues.len(), 1);
+        assert_eq!(issues[0]["level"], "error", "level 是对外契约取值");
+        assert_eq!(issues[0]["param"], "z");
+        assert!(
+            issues[0]["message"]
+                .as_str()
+                .expect("message 应是字符串")
+                .contains("必选参数缺失"),
+            "{issues:?}"
+        );
+
+        // 通过路径：ok=true、issues 为空数组（不是 null）
+        let mut ok_ps = ParameterSet::new();
+        ok_ps.set_number("x", 10.0).set_number("z", 5.0);
+        let ok = validate_template(TPL, "t.j2", &[], &ok_ps, &[]);
+        let v = serde_json::to_value(ok.json_view("t.j2")).expect("应可序列化");
+        assert_eq!(v["ok"], true);
+        assert_eq!(v["errors"].as_u64(), Some(0));
+        assert_eq!(v["issues"].as_array().expect("应是数组").len(), 0);
+
+        // 无参问题的 param 应为 null 而不是缺字段（前端按字段存在性取值）
+        let mut unused = ParameterSet::new();
+        unused
+            .set_number("x", 10.0)
+            .set_number("z", 5.0)
+            .set_number("extra", 1.0);
+        let rep = validate_template(TPL, "t.j2", &[], &unused, &[]);
+        let v = serde_json::to_value(rep.json_view("t.j2")).expect("应可序列化");
+        let warn = &v["issues"].as_array().expect("应有 issues")[0];
+        assert_eq!(warn["level"], "warning");
+        assert_eq!(warn["param"], "extra");
     }
 
     #[test]
@@ -1153,6 +1334,67 @@ mod tests {
             report.summary()
         );
         assert!(report.has_warnings(), "降级后应变为警告");
+    }
+
+    /// 守卫（第四轮 P0-1）：宽松模式的保留集合由 [`IssueKind::is_hard_fail`] 的
+    /// **穷尽匹配**决定，而不是调用方手写的白名单——新增类别时编译器强制表态，
+    /// 不会像 `downgrade_errors_except(&[NonFinite])` 那样被默认降级。
+    #[test]
+    fn downgrade_soft_errors_keeps_hard_fail_only() {
+        assert!(
+            IssueKind::NonFinite.is_hard_fail(),
+            "NaN/Inf 会写出非法坐标，宽松模式也必须阻断"
+        );
+        assert!(
+            IssueKind::DeriveFailed.is_hard_fail(),
+            "派生值会进入 G-code，算不出来就没有缺省可言；降级会让报告层说\
+             「可以出程序」而 derive::apply 随即返回 Err"
+        );
+        for soft in [
+            IssueKind::Missing,
+            IssueKind::TypeMismatch,
+            IssueKind::OutOfRange,
+            IssueKind::NotInteger,
+            IssueKind::NotInOptions,
+            IssueKind::ConditionalSkipped,
+            IssueKind::Unused,
+            IssueKind::SpecInert,
+            IssueKind::ShadowedSystemVar,
+            IssueKind::ParseError,
+            IssueKind::Other,
+        ] {
+            assert!(
+                !soft.is_hard_fail(),
+                "{soft:?} 不应在宽松模式下硬失败（改这条需同步 generate_lenient 的文档承诺）"
+            );
+        }
+
+        // 与白名单路径行为等价（白名单写成当前全部硬失败类别）：换实现不应
+        // 改变宽松语义。若哪天 `is_hard_fail` 多了一类而这里没同步，本断言即红。
+        let mut ps = ParameterSet::new();
+        ps.set_number("z", 5.0); // x 缺失 → Missing
+        let mut by_whitelist = validate_template(TPL, "t.j2", &[], &ps, &[]);
+        let mut by_hard_fail = by_whitelist.clone();
+        by_whitelist.downgrade_errors_except(&[IssueKind::NonFinite, IssueKind::DeriveFailed]);
+        by_hard_fail.downgrade_soft_errors();
+        assert_eq!(by_whitelist, by_hard_fail, "两条降级路径必须等价");
+        assert!(by_hard_fail.has_warnings() && !by_hard_fail.has_errors());
+
+        // `has_hard_fail` 与 `is_hard_fail` 必须同一口径：降级后仍应认出保留项
+        let mut with_nan = ValidationReport::default();
+        with_nan.issues.push(ValidationIssue {
+            level: ValidationLevel::Error,
+            kind: IssueKind::NonFinite,
+            param: Some("z".to_string()),
+            message: "NaN".to_string(),
+        });
+        assert!(with_nan.has_hard_fail(), "NaN 应被认作硬失败");
+        with_nan.downgrade_soft_errors();
+        assert!(
+            with_nan.has_hard_fail() && with_nan.has_errors(),
+            "硬失败项降级后仍须保持 Error"
+        );
+        assert!(!by_hard_fail.has_hard_fail(), "只有 Missing 时不应报硬失败");
     }
 
     // -------------------------------------------------------------------

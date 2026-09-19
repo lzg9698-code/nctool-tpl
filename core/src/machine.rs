@@ -105,6 +105,70 @@ impl MachinePreset {
             },
         }
     }
+
+    /// 全部机床清单：内置预设在前，配置文件中新增的（id 不与预设重名）在后。
+    ///
+    /// 存在意义：这份「预设 + 自定义、按预设 id 去重」的枚举规则此前在
+    /// `cli/src/server.rs::machines_list`（HTTP）与
+    /// `cli/src/commands/machine.rs::list`（CLI）各写一遍。两份漂移会让 Web UI
+    /// 与 CLI 列出不同的机床集合。调用方各自决定展示哪些字段
+    /// （HTTP 多带 `config`，CLI 走文本表格）。
+    pub fn entries(custom: &BTreeMap<String, MachineConfig>) -> Vec<MachineEntry> {
+        let mut out: Vec<MachineEntry> = Self::all()
+            .into_iter()
+            .map(|p| {
+                let cfg = p.config();
+                MachineEntry {
+                    id: p.id().to_string(),
+                    vendor: cfg.vendor,
+                    model: cfg.model,
+                    config: cfg.config,
+                    builtin: true,
+                }
+            })
+            .collect();
+
+        for (id, m) in custom {
+            if Self::from_id(id).is_none() {
+                out.push(MachineEntry {
+                    id: id.clone(),
+                    vendor: m.vendor.clone(),
+                    model: m.model.clone(),
+                    config: m.config.clone(),
+                    builtin: false,
+                });
+            }
+        }
+        out
+    }
+}
+
+/// 机床清单条目，见 [`MachinePreset::entries`]。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct MachineEntry {
+    /// 机床标识（`generic` / `wfl_m65` / 配置文件里的自定义 id）
+    pub id: String,
+    /// 厂商
+    pub vendor: String,
+    /// 型号
+    pub model: String,
+    /// 完整编程约定键值
+    pub config: BTreeMap<String, String>,
+    /// 是否内置预设（`false` = 来自配置文件的自定义机床）
+    pub builtin: bool,
+}
+
+impl MachineEntry {
+    /// 展示用的一行文本（CLI `machine list` 用）。
+    ///
+    /// 自定义机床带 `(自定义)` 后缀 —— 与内置预设区分，避免用户以为它是预设。
+    pub fn display_line(&self) -> String {
+        if self.builtin {
+            format!("  {:<12} {} {}", self.id, self.vendor, self.model)
+        } else {
+            format!("  {:<12} {} {} (自定义)", self.id, self.vendor, self.model)
+        }
+    }
 }
 
 /// 机床配置键的值类型（用于 schema 校验）。
@@ -349,6 +413,36 @@ fn generic_config() -> BTreeMap<String, String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 守卫（第四轮批次 D）：机床枚举规则（预设 + 自定义、按预设 id 去重）是
+    /// CLI 与 HTTP 共用的**单一来源**，在此钉住。此前两处各写一遍。
+    #[test]
+    fn entries_lists_presets_then_custom_without_duplicates() {
+        let mk = |id: &str, vendor: &str| MachineConfig {
+            id: id.to_string(),
+            vendor: vendor.to_string(),
+            model: "M".to_string(),
+            config: BTreeMap::new(),
+        };
+        let mut custom = BTreeMap::new();
+        // 与预设重名的自定义项必须被忽略 —— 否则列表里会出现两个 `generic`
+        custom.insert("generic".to_string(), mk("generic", "影子"));
+        custom.insert("my_lathe".to_string(), mk("my_lathe", "SIEG"));
+
+        let e = MachinePreset::entries(&custom);
+        let ids: Vec<&str> = e.iter().map(|x| x.id.as_str()).collect();
+        assert_eq!(ids, vec!["generic", "wfl_m65", "index_ms40", "my_lathe"]);
+        assert!(e[..3].iter().all(|x| x.builtin), "预设应标 builtin");
+        assert!(!e[3].builtin);
+        assert_eq!(e[3].vendor, "SIEG", "自定义项应取配置里的厂商，不是影子值");
+
+        // 预设条目必须带完整 config（HTTP 侧要用它渲染机床面板）
+        assert!(e[0].config.contains_key("program_prefix"));
+
+        // 文本行：自定义项带后缀，预设不带
+        assert!(e[3].display_line().contains("(自定义)"));
+        assert!(!e[0].display_line().contains("自定义"));
+    }
 
     #[test]
     fn preset_ids_roundtrip() {
