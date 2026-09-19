@@ -32,7 +32,7 @@ jobs:
         uses: Swatinem/rust-cache@v2
 
       - name: Verify (test)
-        run: cargo test --workspace
+        run: cargo test --workspace --all-targets --locked
 
       - name: Publish nctool-tpl
         if: startsWith(github.ref_name, 'nctool-tpl-') && env.CARGO_REGISTRY_TOKEN != ''
@@ -90,7 +90,7 @@ jobs:
           key: ${{ matrix.target }}
 
       - name: Verify (cli tests on this platform)
-        run: cargo test -p nctool-cli
+        run: cargo test -p nctool-cli --locked
 
       - name: Build release binary
         run: cargo build -p nctool-cli --release --target ${{ matrix.target }}

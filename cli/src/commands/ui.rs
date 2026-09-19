@@ -14,10 +14,17 @@ use crate::server;
 /// `nctool ui`：启动本地 Web UI 服务（阻塞运行，Ctrl-C 退出）。
 pub fn run(ctx: &Ctx, args: &UiArgs) -> Result<(), CliError> {
     let addr = server::listen_addr(&args.host, args.port)?;
+    // 先绑定再开浏览器：绑定失败（如端口被占用）时不应留下一个指向死页的浏览器
+    // 标签页。`--port 0` 由内核分配端口，故一律使用回读到的实际地址。
+    let (srv, actual) = server::bind(addr)?;
+    eprintln!(
+        "nctool ui 已启动 → {}（Ctrl-C 退出）",
+        server::browser_url(actual)
+    );
     if args.open {
-        open_browser(&server::browser_url(addr));
+        open_browser(&server::browser_url(actual));
     }
-    server::serve(ctx.clone(), &args.host, args.port)
+    server::serve(srv, actual, ctx.clone())
 }
 
 /// 用系统默认浏览器打开 URL（不经过 shell，避免命令拼接）。

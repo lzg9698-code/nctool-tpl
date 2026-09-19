@@ -396,7 +396,16 @@ impl TemplateRegistry {
     ) -> Result<(), RegistryError> {
         let name = name.into();
         let path = path.as_ref().to_path_buf();
-        let source_text = std::fs::read_to_string(&path).map_err(RegistryError::Io)?;
+        let source_text = std::fs::read_to_string(&path).map_err(|e| {
+            // 把路径并进 io::Error 的消息里：`RegistryError::Io` 只装 io::Error，
+            // 不补路径时用户看到的是「文件读取失败: 系统找不到指定的文件」——
+            // 完全不知道是哪个文件。改变体形状是破坏性变更（crate 已发布），
+            // 故在构造处补，`source()` 与变体形状都不变。
+            RegistryError::Io(std::io::Error::new(
+                e.kind(),
+                format!("{}: {e}", path.display()),
+            ))
+        })?;
         self.add_entry(TemplateEntry::new(
             name,
             category,
@@ -1129,6 +1138,24 @@ fn builtin_templates() -> Vec<(
 mod tests {
     use super::*;
     use crate::model::ParameterSet;
+
+    /// 回归（第四轮 P1-11）：`RegistryError::Io` 只装 `io::Error`，不带路径时
+    /// 用户看到的是「文件读取失败: 系统找不到指定的文件」—— 完全不知道是哪个文件。
+    /// 变体形状不能改（crate 已发布），故在构造处把路径并进 io::Error 的消息。
+    #[test]
+    fn add_file_io_error_includes_the_path() {
+        let mut r = TemplateRegistry::new();
+        let missing = Path::new("/no/such/dir/definitely_missing.j2");
+        let err = r
+            .add_file("x", TemplateCategory::General, "", missing, vec![])
+            .expect_err("不存在的文件应报错");
+        assert!(matches!(err, RegistryError::Io(_)), "应是 Io 变体: {err:?}");
+        let msg = err.to_string();
+        assert!(
+            msg.contains("definitely_missing.j2"),
+            "错误消息必须带上路径，否则用户无从定位: {msg}"
+        );
+    }
 
     #[test]
     fn analysis_is_computed_once_and_matches_direct_extraction() {

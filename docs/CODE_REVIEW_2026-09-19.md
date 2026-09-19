@@ -411,9 +411,20 @@ golden 测试在 `core/tests/integration.rs`（core 包）。裸 `cargo test` **
 里**仍被借用**，而 `add_template_owned` 按值接管两者 —— 两个 `clone()` 都是必需的。
 本条不成立，**不要按原报告去"修"**。
 
-### 批次 E：整洁性（可长期摊）
+### 批次 E：收尾小项 ⚠️ **部分完成（2026-09-19）**
 
-死代码清理、注释纠错、文档数字改为指 CI、弱断言补强、UI 的 P2-24/25/26。
+| 项 | 状态 | 说明 |
+| --- | --- | --- |
+| P2-24 `--open` 先于 bind、`--port 0` 显示 `:0` | ✅ | `server::serve` 拆为 `bind` + `serve`：先绑定成功（失败即返回 `Err`）再开浏览器；`bind` 回读 `server_addr()` 拿实际端口。实测 `--port 0` 显示 `50199` 类真实端口、端口占用时退出码 3 且不弹浏览器 |
+| P2-32 CLI golden 硬编码 | ✅ | `cli/tests/cli.rs` 的 3 个 golden 测试改为读 `tests/golden/*.nc`（新增 `read_golden`）。`program_header` 的参数对齐 fixture（补 `part_name=DEMO`），另保留一条"省略可选参数走默认值"的断言。反向验证：改基线后 **CLI 与 core 两侧都红**——此前改基线 CLI 侧照样绿 |
+| P2-13 错误链截断无提示 | ✅ | 超过 `MAX_ERROR_CHAIN` 时追加 `…（错误链超过 8 层，已截断）`，避免"最后一层"被误当成根因 |
+| P1-11b `RegistryError::Io` 丢路径 | ✅ | 变体形状不变（crate 已发布），在构造处把路径并进 `io::Error` 的消息；补测试断言消息含文件名 |
+| 文档残留"15 组 golden" | ✅ | `PROCESS_CHECKLIST` / `ROADMAP`（3 处）改为 21 组正向；`DEV_PLAN_CLI_UI` 的 `cargo clippy` 补 `--workspace` |
+| `release.yml` 缺 `--locked` | ✅ | 两处 cargo test 补 `--locked` / `--all-targets` |
+
+**仍开放**：UI 的 P2-25（Bool 恒提交 `false`）与 P2-26（无 `AbortController`）—— 两者都需浏览器验证，
+而本机不支持 agent-browser（Windows），盲改不符合本项目"改动须实测"的标准；
+`src/lib.rs` 1760 行内联测试迁移（需确认是否只用公共 API，收益不明确）。
 
 ---
 

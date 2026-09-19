@@ -558,6 +558,47 @@
 - **`derived_names` / `invalidate_analysis` 可见性收窄**：`nctool-core` 已发布到
   crates.io，收窄 `pub` 是破坏性变更，并入下一个 minor 版本一起做。
 
+### 批次十：收尾小项（第四轮批次 E 的一部分）
+
+#### Fixed
+
+- **`ui --open` 不再先于绑定**（`cli/src/commands/ui.rs`、`cli/src/server.rs`）：
+  `serve` 拆成 `bind` + `serve` 两步，先绑定、失败即返回 `Err`，再打印横幅与开浏览器。
+  此前端口被占用时会先弹出一个指向死页的浏览器标签页。
+  同时 `bind` 回读 `server.server_addr()` 拿**实际**端口 —— `--port 0` 时内核分配端口，
+  旧代码的横幅与浏览器 URL 都指向 `:0`。
+  实测：`--port 0` 显示真实端口；端口占用时退出码 3 且不弹浏览器。
+- **错误链截断留痕**（`src/error.rs`）：超过 `MAX_ERROR_CHAIN`（8 层）时追加
+  `…（错误链超过 8 层，已截断）`。静默丢弃根因会让"最后一层"看起来就是原因，
+  而它其实只是第 8 层。
+- **`RegistryError::Io` 带上路径**（`core/src/registry.rs`）：该变体只装 `io::Error`，
+  用户此前只看到「文件读取失败: 系统找不到指定的文件」，不知道是哪个文件。
+  变体形状是已发布 API 不能改，故在构造处把路径并进 `io::Error` 的消息。
+- **`release.yml` 补 `--locked` / `--all-targets`**：与 `ci.yml` 对齐。
+- **文档残留的"15 组 golden"**（`PROCESS_CHECKLIST` / `ROADMAP` 共 3 处）改为 21 组正向；
+  `DEV_PLAN_CLI_UI` 的 `cargo clippy` 补 `--workspace`。
+
+#### Changed
+
+- **CLI 的 golden 测试改为读共享基线**（`cli/tests/cli.rs`）：3 个测试此前各自硬编码
+  一份期望输出，测试名却声称"与 nctool-core 管线逐字节一致"—— 模板一改要手工同步
+  两处，且没有任何测试能发现两份已经不一致。现新增 `read_golden()` 直读
+  `tests/golden/*.nc`；`program_header` 的参数对齐 fixture（补 `part_name=DEMO`），
+  另保留一条"省略可选参数走规格默认值"的断言。
+  **反向验证**：改动 golden 基线后 CLI 侧与 core 侧**同时变红**；此前 CLI 侧照样绿。
+
+#### 测试
+
+- 新增 3 项：`bind_with_port_zero_reports_actual_port`、
+  `bind_reports_error_instead_of_panicking`、`add_file_io_error_includes_the_path`。
+- workspace 全量 **568 项**通过；fmt / clippy / doc 门禁均通过。
+
+#### 仍开放
+
+- UI 的 P2-25（Bool 参数恒提交 `false`）与 P2-26（缺 `AbortController`）：两者都需
+  浏览器验证，而本机不支持 agent-browser（Windows），盲改不符合本项目"改动须实测"的标准。
+- `src/lib.rs` 1760 行内联测试迁移：需先确认它们是否只用公共 API，收益不明确。
+
 #### 一处更正
 
 第四轮报告 §3.3 引用的「`src/renderer.rs:185` 多克隆一次源码」经复核**不成立**：

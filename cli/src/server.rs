@@ -625,12 +625,24 @@ pub fn browser_url(addr: SocketAddr) -> String {
     format!("http://{addr}")
 }
 
-/// 启动服务并阻塞处理请求（Ctrl-C 终止进程退出）。
-pub fn serve(ctx: Ctx, host: &str, port: u16) -> Result<(), CliError> {
-    let addr = listen_addr(host, port)?;
+/// 绑定监听地址，返回服务实例与**实际生效的地址**。
+///
+/// 与 [`serve`] 分开是刻意的：调用方必须先确认绑定成功，再去开浏览器 ——
+/// 端口被占用时先弹浏览器只会打开一个死页（P2-24）。另外 `--port 0` 时端口由
+/// 内核分配，必须回读 `server_addr()`，否则横幅与浏览器都会指向 `:0`。
+pub fn bind(addr: SocketAddr) -> Result<(tiny_http::Server, SocketAddr), CliError> {
     let server = tiny_http::Server::http(addr)
         .map_err(|e| CliError::new("io", format!("绑定 {addr} 失败: {e}")))?;
-    eprintln!("nctool ui 已启动 → {}（Ctrl-C 退出）", browser_url(addr));
+    let actual = server.server_addr().to_ip().unwrap_or(addr);
+    Ok((server, actual))
+}
+
+/// 处理请求直到进程退出（Ctrl-C 终止）。
+///
+/// 接收**已绑定**的实例与它的实际地址：本函数不打印启动横幅（那要等回读端口
+/// 之后才准确），也不负责开浏览器，两者都由 [`crate::commands::ui`] 在绑定
+/// 成功之后完成。
+pub fn serve(server: tiny_http::Server, addr: SocketAddr, ctx: Ctx) -> Result<(), CliError> {
     let allowed = allowed_origins(&addr);
 
     for mut request in server.incoming_requests() {
@@ -926,6 +938,34 @@ mod tests {
                  新增端点请同时改：后端路由臂 + scripts/api_routes.json + 前端封装"
             );
         }
+    }
+
+    /// 回归（第四轮 P2-24）：`--port 0` 时端口由内核分配，`bind` 必须回读**实际**
+    /// 地址 —— 否则启动横幅与 `--open` 打开的浏览器都会指向 `:0`。
+    #[test]
+    fn bind_with_port_zero_reports_actual_port() {
+        let (srv, actual) = bind("127.0.0.1:0".parse().unwrap()).expect("绑定回环应成功");
+        assert_ne!(actual.port(), 0, "应回读内核分配的实际端口");
+        assert_eq!(actual.ip().to_string(), "127.0.0.1");
+        drop(srv);
+    }
+
+    /// 回归（第四轮 P2-24）：绑定失败必须返回 `Err` 而不是 panic，且错误可读 ——
+    /// `ui::run` 依赖它在**开浏览器之前**暴露端口占用。
+    #[test]
+    fn bind_reports_error_instead_of_panicking() {
+        // 192.0.2.0/24 是 TEST-NET-1，本机不可绑定，用于稳定触发失败路径
+        // 不用 `expect_err`：`tiny_http::Server` 未实现 Debug，`Ok` 分支无法打印
+        let err = match bind("192.0.2.1:8787".parse().unwrap()) {
+            Err(e) => e,
+            Ok(_) => panic!("不可绑定的地址应返回 Err"),
+        };
+        assert_eq!(err.kind, "io");
+        assert!(
+            err.message.contains("绑定"),
+            "错误应说明是绑定失败: {}",
+            err.message
+        );
     }
 
     #[test]

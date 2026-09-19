@@ -224,6 +224,9 @@ fn nested_error_chain(err: &minijinja::Error) -> Vec<String> {
     let mut cur: Option<&(dyn std::error::Error + 'static)> = std::error::Error::source(err);
     while let Some(e) = cur {
         if out.len() >= MAX_ERROR_CHAIN {
+            // 截断必须留痕：静默丢掉根因会让"最后一层"看起来就是原因，而它其实
+            // 只是第 8 层。上限本身只是防环的兜底（正常模板远到不了）。
+            out.push(format!("…（错误链超过 {MAX_ERROR_CHAIN} 层，已截断）"));
             break;
         }
         // minijinja 内层错误的 `Display` 自带 `(in <模板>:<行>)` 定位，

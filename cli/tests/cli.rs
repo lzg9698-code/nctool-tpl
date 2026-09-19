@@ -16,6 +16,22 @@ fn nctool() -> Command {
     Command::cargo_bin("nctool").unwrap()
 }
 
+/// 读取 core 的 golden 基线（`tests/golden/<stem>.nc`）。
+///
+/// CLI 的渲染测试必须**读同一份基线**，而不是各自硬编码一份期望输出：硬编码时
+/// 模板一改就要手工同步两处，而没有任何测试能发现两份已经不一致 —— 测试名却
+/// 声称"与 nctool-core 管线逐字节一致"（第四轮 P2-32）。
+fn read_golden(stem: &str) -> String {
+    let path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("tests")
+        .join("golden")
+        .join(format!("{stem}.nc"));
+    std::fs::read_to_string(&path)
+        .unwrap_or_else(|e| panic!("读取 golden 失败 {}: {e}", path.display()))
+        .replace("\r\n", "\n")
+}
+
 fn tmp_dir(tag: &str) -> PathBuf {
     let dir = std::env::temp_dir().join(format!("nctool_cli_test_{tag}_{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&dir);
@@ -269,7 +285,7 @@ fn render_drill_cycle_golden() {
         ])
         .assert()
         .success()
-        .stdout("G0 X21.000 Y15.000\nG98 G81 R5.000 Z-10.000 F100.000\nG80 (取消循环)\n");
+        .stdout(read_golden("drill_cycle_generic"));
 }
 
 #[test]
@@ -298,15 +314,29 @@ fn render_with_line_numbers_and_header() {
 
 #[test]
 fn render_program_header_golden() {
-    // 程序头：规格默认值兜底 + machine 注入；字节级 golden
-    // （坐标系/进给模式直接输出配置值 G54/G94，不重复 G 前缀）
+    // 程序头：machine 注入（坐标系/进给模式直接输出配置值 G54/G94，不重复 G 前缀）。
+    // 参数与 golden fixture 对齐（`program_header_generic` 用 part_name=DEMO），
+    // 期望值直接读同一份基线。
+    nctool()
+        .args([
+            "render",
+            "program_header",
+            "--param",
+            "prog=1",
+            "--param",
+            "part_name=DEMO",
+        ])
+        .assert()
+        .success()
+        .stdout(read_golden("program_header_generic"));
+
+    // 省略可选参数时走规格默认值（`part_name` 默认空串）—— 与上面共用同一模板，
+    // 但期望值不能来自 golden（那份带了 DEMO），故单独断言注释头为空。
     nctool()
         .args(["render", "program_header", "--param", "prog=1"])
         .assert()
         .success()
-        .stdout(
-            "%\nO0001\n(  )\n(  )\nG21 (metric)\nG90 G17 (绝对坐标 / XY 平面)\nG40 G49 G80 (取消刀补 / 刀长补偿 / 固定循环)\nG54\nG94\nM5\nM9\n",
-        );
+        .stdout(predicate::str::contains("(  )\n(  )"));
 }
 
 #[test]
@@ -325,9 +355,7 @@ fn render_tool_change_golden() {
         ])
         .assert()
         .success()
-        .stdout(
-            "M5\nM9\nM6 T5\nG40 (取消刀补)\nG43 H5 (刀长补偿)\nM3 S3000 (主轴正转)\nM8 (冷却开)\n",
-        );
+        .stdout(read_golden("tool_change_generic"));
 }
 
 #[test]

@@ -146,7 +146,7 @@ nctool
 - 目标：命令树全貌可用，工程化基线建立。
 - 任务：新增 `cli/` crate 并接入 workspace；clap 命令树骨架；全局选项（`--machine`/`--format`/`--param`/`--params-file`/`--template-dir`）；统一错误输出（text/JSON）；`version` 子命令；CI 扩展新 crate；参数解析单元测试。
 - 产出：`nctool --help` 展示完整命令树。
-- 验收：参数解析单测通过；CI 五道门对新 crate 全绿；`cargo clippy -D warnings` 零告警。
+- 验收：参数解析单测通过；CI 五道门对新 crate 全绿；`cargo clippy --workspace -D warnings` 零告警。
 - 依赖：`nctool-core` v0.1.0（不改其代码）。
 - **完成情况**：全部达成。clap 命令树含 9 个子命令；19 项参数/配置单元测试；fmt/clippy/test/doc 全绿。
 
