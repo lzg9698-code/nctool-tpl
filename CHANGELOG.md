@@ -222,6 +222,39 @@
 - `cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`
   干净；workspace 全量通过：**540 项**（Windows，2 项 `#[cfg(unix)]` 不参与）/ 542 项（unix）。
 
+### 批次四：一致性清理
+
+#### Fixed
+
+- **同名文件模板被静默替换为注册表模板**（`cli/src/commands/render.rs`）：模板目录里
+  已有 `a.j2` 时，`nctool --template-dir templates render /tmp/other/a.j2` 会**渲染
+  `templates/a.j2` 的 G-code** —— 用户以为渲染的是自己给的文件。原因：命中同名时
+  直接 `return` 复用注册表条目，而注册表里那个是**另一个文件**。不报错、不告警，
+  只是产出另一份程序。现改为：路径指向的就是注册表里那个文件时照旧复用；
+  否则把用户给的文件注册进去，注册名退化为完整路径（不可能与目录模板名冲突）。
+  反向验证：还原旧逻辑后新测试 FAILED。
+
+- **`validate --format json` 遇断管道 panic**（`cli/src/commands/validate.rs`）：该分支
+  用 `println!` 输出，是全仓**唯一**绕过 `write_stdout_quiet` 的地方。下游提前关管道
+  （`nctool validate <大模板> --format json | :`）时 `println!` 以 panic 收场 ——
+  实测退出码 **101**，而退出码矩阵承诺的是 1。现走 `write_stdout_quiet`
+  （已改为 `pub(crate)`），实测退出码 **1**。
+
+- **include 闭包的同名规格取了最远的那份**（`core/src/registry.rs`）：
+  `collect_include_closure` 先递归进被引用模板、再并入它自己的规格，而合并策略是
+  「先到先得」—— 于是 `main → child → grandchild` 且 child 与 grandchild 对同名参数
+  声明了不同 `options` 时，采用 **grandchild** 的，与文档承诺的「更接近主模板的声明
+  优先」相反。不报错，只是静默按另一套约束校验。现改为先入表、后递归。
+  反向验证：还原旧顺序后新测试报 `left: [grandchild]`，确认复现报告所述。
+
+#### 测试
+
+- 新增 2 项：`explicit_path_that_collides_with_registered_name_wins`（含反向用例：
+  同一文件不该改名）、`include_closure_spec_precedence_is_nearest_to_main`。
+  两项均经**反向验证**（临时还原实现 → FAILED → 恢复）。
+- 断管道修复用真实进程验证：`nctool ... --format json | :` 旧实现 exit 101、新实现 exit 1。
+- workspace 全量 **542 项**通过。
+
 ---
 
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18

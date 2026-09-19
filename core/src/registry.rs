@@ -521,13 +521,20 @@ impl TemplateRegistry {
                 for v in &sub_analysis.variables {
                     merge_var(vars, v.clone());
                 }
-                self.collect_include_closure(sub, vars, specs, visited);
             }
+            // 先并入**本层**被引用模板的规格，再递归进它引用的模板。
+            //
+            // 合并策略是「先到先得」（见下方 `any` 判断），所以先入表者优先。
+            // 顺序写反 —— 先递归再入表 —— 会让**离主模板最远**的那份声明胜出：
+            // `main → child → grandchild` 且 child 与 grandchild 对同名参数声明了
+            // 不同 `options` 时，采用 grandchild 的，与文档承诺的「更接近主模板的
+            // 声明优先」相反。不报错，只是静默按另一套约束校验。
             for spec in &sub.params {
                 if !specs.iter().any(|s| s.name == spec.name) {
                     specs.push(spec.clone());
                 }
             }
+            self.collect_include_closure(sub, vars, specs, visited);
         }
     }
 
@@ -1500,6 +1507,63 @@ mod tests {
         assert!(
             names.contains(&"FRAG_Z"),
             "应并入 include 片段的变量: {names:?}"
+        );
+    }
+
+    /// 回归（P1-11）：include 闭包里同名参数的规格是「先访问者优先」，
+    /// 而遍历顺序此前是「先递归进被引用模板、再并入它自己的规格」——
+    /// 于是**离主模板最远**的声明胜出，与文档承诺的「更接近主模板的声明优先」相反。
+    ///
+    /// 后果不是报错而是静默按另一套约束校验：白名单/区间被换成孙模板那份，
+    /// 用户填的值可能被拒或被放行，看的是他没见过的声明。
+    #[test]
+    fn include_closure_spec_precedence_is_nearest_to_main() {
+        use crate::model::{ParamKind, ParamValue};
+
+        let spec = |val: &str| {
+            ParamSpec::new("P", ParamKind::String, "同名参数")
+                .with_options(vec![ParamValue::String(val.to_string())])
+        };
+        let mut r = TemplateRegistry::new();
+        r.add_memory(
+            "grandchild",
+            TemplateCategory::General,
+            "孙",
+            "G0 Z{{ P }}\n",
+            vec![spec("grandchild")],
+        )
+        .unwrap();
+        r.add_memory(
+            "child",
+            TemplateCategory::General,
+            "子",
+            "{% include \"grandchild\" %}\nG0 Y{{ P }}\n",
+            vec![spec("child")],
+        )
+        .unwrap();
+        r.add_memory(
+            "main",
+            TemplateCategory::General,
+            "主",
+            "{% include \"child\" %}\n",
+            vec![],
+        )
+        .unwrap();
+
+        let entry = r.get("main").unwrap();
+        let mut vars = Vec::new();
+        let mut specs = entry.params.clone();
+        let mut visited = std::collections::BTreeSet::from(["main".to_string()]);
+        r.collect_include_closure(entry, &mut vars, &mut specs, &mut visited);
+
+        let p = specs
+            .iter()
+            .find(|s| s.name == "P")
+            .expect("应并入 P 的规格");
+        assert_eq!(
+            p.options,
+            Some(vec![ParamValue::String("child".into())]),
+            "child 比 grandchild 更接近 main，其声明必须优先"
         );
     }
 

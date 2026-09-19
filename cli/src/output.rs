@@ -127,7 +127,11 @@ impl From<&FormatArg> for OutputStyle {
 ///
 /// 断管道（`BrokenPipe`，如 `nctool ... | head`）静默忽略、进程正常退出；
 /// 其余写入错误打印到 stderr。避免 `println!` 在管道下游提前关闭时以 panic 收场。
-fn write_stdout_quiet(text: &str) {
+///
+/// `pub(crate)`：命令层需要**自行拼装**完整载荷（如 `validate --format json`
+/// 的失败包络）时直接调它 —— 否则会退回到 `println!`，而 `println!` 遇到断管道
+/// 是 panic（退出码 101），偏离本模块的错误码契约。
+pub(crate) fn write_stdout_quiet(text: &str) {
     use std::io::Write;
     let stdout = std::io::stdout();
     let mut lock = stdout.lock();

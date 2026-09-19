@@ -162,18 +162,42 @@ pub fn resolve_registry(
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_default();
-        if !fname.is_empty() && gen.registry().get(&fname).is_none() {
-            let mut fresh = ctx.build_registry_fresh()?;
-            fresh.registry_mut().add_file(
-                fname.clone(),
-                TemplateCategory::General,
-                format!("文件模板: {}", path.display()),
-                &path,
-                vec![],
-            )?;
-            return Ok((Rc::new(fresh), fname, Some(path)));
+        if fname.is_empty() {
+            return Err(CliError::new(
+                "args",
+                format!("无法从路径取文件名: {}", path.display()),
+            ));
         }
-        return Ok((gen, fname, Some(path)));
+        // 注册名：默认用文件名；**与注册表里另一个文件同名时**退化为完整路径。
+        //
+        // 此前这里只判断"同名的已存在"，然后直接 `return Ok((gen, fname, ...))` ——
+        // 即命中冲突就改用注册表里那一份。于是
+        // `nctool --template-dir templates render /tmp/other/a.j2`（模板目录里恰好也有
+        // `a.j2`）会渲染出 `templates/a.j2` 的 G-code，用户以为渲染的是自己给的文件。
+        // 不报错、不告警，只是产出另一份程序。
+        //
+        // 用路径作注册名而非报错：用户显式给了路径，诉求很明确，不该被挡回来；
+        // 完整路径不可能与目录模板名冲突，且一眼能看出是个文件。
+        let key = match gen.registry().get(&fname) {
+            // 同名**且就是本文件**：复用注册表里那份 —— 用户显式写出模板目录内的
+            // 路径时是最常见的情形，不必重复注册。
+            Some(entry) => match &entry.source {
+                TemplateSource::File(p) if same_path(p, &path) => {
+                    return Ok((gen, fname, Some(path)));
+                }
+                _ => path.display().to_string(),
+            },
+            None => fname,
+        };
+        let mut fresh = ctx.build_registry_fresh()?;
+        fresh.registry_mut().add_file(
+            key.clone(),
+            TemplateCategory::General,
+            format!("文件模板: {}", path.display()),
+            &path,
+            vec![],
+        )?;
+        return Ok((Rc::new(fresh), key, Some(path)));
     }
 
     Err(CliError::new(
@@ -184,7 +208,8 @@ pub fn resolve_registry(
 
 #[cfg(test)]
 mod tests {
-    use super::same_path;
+    use super::{resolve_registry, same_path};
+    use crate::context::Ctx;
 
     #[test]
     fn same_path_detects_self_and_case_insensitive() {
@@ -201,5 +226,53 @@ mod tests {
         assert!(!same_path(&src, &dir.join("other.j2")));
 
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 回归（P1-7）：模板目录里已有 `a.j2` 时，`render <别的目录>/a.j2` 此前
+    /// **静默渲染成模板目录里那一份** —— 用户以为渲染的是自己给的文件，
+    /// 拿到的是另一份程序，且不报错、不告警。
+    #[test]
+    fn explicit_path_that_collides_with_registered_name_wins() {
+        let base = std::env::temp_dir().join(format!("nctool_collide_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&base);
+        let tpl_dir = base.join("templates");
+        let elsewhere = base.join("elsewhere");
+        std::fs::create_dir_all(&tpl_dir).unwrap();
+        std::fs::create_dir_all(&elsewhere).unwrap();
+        // 两份同名文件的内容必须可区分，否则断言证明不了渲染的是哪一份
+        std::fs::write(tpl_dir.join("a.j2"), "REGISTERED G0 X1\n").unwrap();
+        let explicit = elsewhere.join("a.j2");
+        std::fs::write(&explicit, "EXPLICIT G0 X2\n").unwrap();
+
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(tpl_dir.clone());
+
+        let (gen, name, src) = resolve_registry(&ctx, explicit.to_str().unwrap()).unwrap();
+        assert_eq!(
+            src.as_deref(),
+            Some(explicit.as_path()),
+            "源路径应是用户显式给的那个文件"
+        );
+        assert_ne!(name, "a.j2", "同名冲突时注册名应退化为路径: {name}");
+        let entry = gen.registry().get(&name).expect("应能取到刚注册的模板");
+        assert!(
+            entry.source_text.contains("EXPLICIT"),
+            "渲染的必须是用户指定的文件，而不是模板目录里的同名模板: {}",
+            entry.source_text
+        );
+
+        // 反向：路径指向的**就是**模板目录里那个文件时，仍复用注册表条目，
+        // 注册名保持可读的 `a.j2`（常见情形，不该被上面的退化牵连）
+        let (gen2, name2, _) =
+            resolve_registry(&ctx, tpl_dir.join("a.j2").to_str().unwrap()).unwrap();
+        assert_eq!(name2, "a.j2", "同一文件不该改名");
+        assert!(gen2
+            .registry()
+            .get("a.j2")
+            .unwrap()
+            .source_text
+            .contains("REGISTERED"));
+
+        let _ = std::fs::remove_dir_all(&base);
     }
 }

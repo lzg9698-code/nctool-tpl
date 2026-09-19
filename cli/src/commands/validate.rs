@@ -4,7 +4,7 @@ use nctool_core::validate::ValidationReport;
 
 use crate::cli::ValidateArgs;
 use crate::context::Ctx;
-use crate::output::{CliError, OutputStyle};
+use crate::output::{write_stdout_quiet, CliError, OutputStyle};
 
 use super::render::resolve_registry;
 
@@ -44,7 +44,13 @@ pub fn run(ctx: &Ctx, args: &ValidateArgs) -> Result<(), CliError> {
             "data": data,
             "error": { "kind": "validation", "message": report.summary() },
         });
-        println!("{}", serde_json::to_string_pretty(&obj).unwrap_or_default());
+        // 走 write_stdout_quiet 而非 println!：报告体量大时下游 `| head -1` 会提前
+        // 关管道，println! 遇 BrokenPipe 是 **panic**（退出码 101），而退出码契约
+        // 写的是 1。此处曾是全仓唯一绕过点（其余输出都走 OutputStyle）。
+        write_stdout_quiet(&format!(
+            "{}\n",
+            serde_json::to_string_pretty(&obj).unwrap_or_default()
+        ));
         return Err(CliError::new("validation", "参数校验未通过").silent());
     }
 
