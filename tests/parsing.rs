@@ -354,14 +354,33 @@ fn parse_error_multiline_line_number() {
 }
 
 /// 所有数学过滤器在正常值下可渲染。
+///
+/// 逐过滤器**精确**断言。此前把 9 个过滤器拼成一行再 `assert!(out.contains("2"))`
+/// —— `"2"` 可由 `sqrt(4)` / `log10(100)` / `ceil(1.5)` 任一个满足，最后两条断言
+/// 甚至重复检查同一个 `"2"`，等于没测。
 #[test]
 fn all_math_filters_render() {
-    let src = "{{ 4 | sqrt }} {{ 2 | exp }} {{ 10 | ln }} {{ 100 | log10 }} {{ 2 | pow(3) }} {{ 1.5 | floor }} {{ 1.5 | ceil }} {{ 0 | sin }} {{ 0 | cos }}";
     let r = Renderer::new();
     let ctx = minijinja::context! {};
-    let out = r.render(src, "math.j2", &ctx).unwrap();
-    assert!(out.contains("2")); // sqrt(4)
-    assert!(out.contains("8")); // pow(2,3)
-    assert!(out.contains("1")); // floor(1.5)
-    assert!(out.contains("2")); // ceil(1.5)
+
+    // 统一按**数值**比较：这些过滤器返回的是浮点（`sqrt(4)` 渲染成 `"2.0"`），
+    // 逐字符比对会把平台相关的浮点格式化文本写进断言。
+    for (src, want) in [
+        ("{{ 4 | sqrt }}", 2.0),
+        ("{{ 100 | log10 }}", 2.0),
+        ("{{ 2 | pow(3) }}", 8.0),
+        ("{{ 1.5 | floor }}", 1.0),
+        ("{{ 1.5 | ceil }}", 2.0),
+        ("{{ 0 | sin }}", 0.0),
+        ("{{ 0 | cos }}", 1.0),
+        ("{{ 2 | exp }}", std::f64::consts::E.powi(2)),
+        ("{{ 10 | ln }}", 10f64.ln()),
+    ] {
+        let out = r.render(src, "math.j2", &ctx).unwrap();
+        let got: f64 = out
+            .trim()
+            .parse()
+            .unwrap_or_else(|e| panic!("{src} 输出不是数值 {out:?}: {e}"));
+        assert!((got - want).abs() < 1e-9, "{src}: got {got}, want {want}");
+    }
 }

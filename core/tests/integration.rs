@@ -78,9 +78,10 @@ fn golden_files_are_lf_only() {
         );
         checked += 1;
     }
+    // 21 组正向（`.nc` + `.report.txt` 各 21）+ 3 份负向报告 = 45
     assert!(
-        checked >= 42,
-        "golden 目录应有 42 个文件，实际 {checked} 个"
+        checked >= 45,
+        "golden 目录应有 45 个文件（21 正向 ×2 + 3 负向），实际 {checked} 个"
     );
 }
 
@@ -129,10 +130,18 @@ fn builtin_program_header_with_wfl_machine() {
     assert!(out.contains("O0042"));
 }
 
-/// golden 基线矩阵：6 内置模板 × 3 机床预设 = 18 组。
+/// golden 基线矩阵：7 内置模板 × 3 机床预设 = 21 组。
 ///
 /// 每组返回：模板名、文件茎名（`<模板>_<机床id>`）、机床预设、参数集。
 /// 参数集与机床无关（模板引用的都是加工参数 + machine 系统变量）。
+///
+/// **机床维度当前是"平的"**：三个预设只在 `max_spindle_rpm` / `machine_type` /
+/// `axes` / `vendor` / `model` 上有差异，而这些键**没有任何内置模板引用**；
+/// 模板真正用到的 `program_prefix` / `units` / `coordinate_system` / `feed_mode`
+/// 等来自共享的 `generic_config()`，三个预设完全一致。因此 21 份 `.nc` 实际只有
+/// 7 份不同内容 —— 这不是测试写错，而是该维度在现有模板集下不含信息。
+/// 保留 3 份的理由：任一预设改动**模板可见**的键时，对应的 `_wfl` / `_index`
+/// 基线会立刻红。该性质由 `machine_dimension_is_currently_flat` 显式守住。
 fn golden_cases() -> Vec<(&'static str, String, MachinePreset, ParameterSet)> {
     let presets = [
         MachinePreset::Generic,
@@ -218,7 +227,7 @@ fn builtin_templates_match_golden_matrix() {
 
 #[test]
 fn golden_matrix_covers_all_builtin_templates() {
-    // 防漏项：矩阵必须覆盖全部 6 个内置模板 × 全部 3 个预设
+    // 防漏项：矩阵必须覆盖全部 7 个内置模板 × 全部 3 个预设
     let g = GCodeGenerator::new();
     let builtin: Vec<String> = g
         .registry()
@@ -232,6 +241,106 @@ fn golden_matrix_covers_all_builtin_templates() {
     covered.sort();
     covered.dedup();
     assert_eq!(covered, builtin, "golden 矩阵未覆盖全部内置模板");
+}
+
+/// 守卫（第四轮批次 B）：机床维度当前**不产生差异**，这一点必须是显式事实。
+///
+/// 三个预设只在 `max_spindle_rpm` / `machine_type` / `axes` / `vendor` / `model`
+/// 上不同，而内置模板只引用 `generic_config()` 里的共享键 —— 于是同一模板在三个
+/// 预设下逐字节相同（实测 21 份 `.nc` 只有 7 份内容）。本用例把这份"偶然的重复"
+/// 变成受守的断言：
+///
+/// - 若某预设改了**模板可见**的键（如 INDEX 的 `coordinate_system` 改成 `G55`），
+///   本用例会红并提示"机床维度开始分化"—— 而不是让 21 份文件里悄悄多出差异、
+///   无人复核；
+/// - 它也拦住"为了消重而删掉 `_wfl` / `_index` 基线"这种改法：删了就没有东西
+///   能拦住预设的模板可见改动。
+#[test]
+fn machine_dimension_is_currently_flat() {
+    let g = GCodeGenerator::new();
+    let presets = [
+        ("Generic", MachinePreset::Generic),
+        ("WFL", MachinePreset::WflM65),
+        ("INDEX", MachinePreset::IndexMs40),
+    ];
+    let mut seen = std::collections::BTreeSet::new();
+
+    for (template, _, _, params) in golden_cases() {
+        if !seen.insert(template) {
+            continue; // 每个模板只验一次（golden_cases 里出现 3 次）
+        }
+        let outputs: Vec<(&str, String)> = presets
+            .iter()
+            .map(|(label, preset)| {
+                let out = g
+                    .generate(
+                        template,
+                        &params,
+                        &preset.config(),
+                        &GenerationOptions::default(),
+                    )
+                    .expect("golden 用例应能生成");
+                (*label, out)
+            })
+            .collect();
+        for (label, out) in &outputs[1..] {
+            assert_eq!(
+                &outputs[0].1, out,
+                "{template}: Generic 与 {label} 的输出开始分化。\
+                 这说明机床维度已含信息 —— 请把 golden 矩阵改成真正按机床分维，\
+                 人工复核 `_wfl` / `_index` 基线后删除本断言"
+            );
+        }
+    }
+}
+
+/// 负向 golden 用例：故意让校验失败，冻结**失败路径的报告文本**。
+///
+/// 21 组正向基线的报告恒为「校验通过：无问题」，报告维度只有 1 份信息量；失败
+/// 路径的级别 / 参数名 / 文案此前**完全没有基线** —— 把 `Missing` 误标成警告、
+/// 或消息里的参数名写错，不会有任何测试发现。
+///
+/// 返回：(文件茎名, 模板名, 参数集)；期望报告见 `tests/golden/<茎名>.report.txt`。
+fn negative_cases() -> Vec<(&'static str, &'static str, ParameterSet)> {
+    // 1) 必选参数缺失：drill_cycle 需要 x / y / depth / feed
+    let mut missing = ParameterSet::new();
+    missing.set_number("x", 21.0);
+
+    // 2) 类型不符：tool_num 声明为整数，传字符串
+    let mut wrong_type = ParameterSet::new();
+    wrong_type
+        .set_string("tool_num", "T5")
+        .set_integer("spindle_speed", 3000);
+
+    // 3) 越界：program_header 的 prog 声明区间 [1, 9999]
+    let mut out_of_range = ParameterSet::new();
+    out_of_range.set_integer("prog", 99999);
+
+    vec![
+        ("neg_missing_required", "drill_cycle", missing),
+        ("neg_type_mismatch", "tool_change", wrong_type),
+        ("neg_out_of_range", "program_header", out_of_range),
+    ]
+}
+
+#[test]
+fn negative_cases_freeze_failure_reports() {
+    let g = GCodeGenerator::new();
+    for (stem, template, params) in negative_cases() {
+        let report = g
+            .registry()
+            .validate(template, &params)
+            .unwrap_or_else(|e| panic!("{stem}: 校验本身不应失败: {e:?}"));
+        assert!(
+            report.has_errors(),
+            "{stem}: 负向用例必须报 Error，否则这份基线没有意义: {}",
+            report.summary()
+        );
+        assert_golden(
+            &format!("{stem}.report.txt"),
+            &format!("{}\n", report.summary()),
+        );
+    }
 }
 
 #[test]

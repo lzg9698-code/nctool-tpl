@@ -1604,13 +1604,35 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
             }
 
             let name = format!("fuzz_{iteration}.j2");
-            // 核心断言：parse 和 extract 绝不 panic
+            // 断言分两层：① 绝不 panic（本测试的底线）；② **返回值仍满足提取器
+            // 自己的契约** —— 此前是 `let _ = ...`，只验证了第一层，容易造成
+            // "提取器已被 fuzz 验证" 的错觉。
             if let Ok(ast) = parse(&s, &name) {
-                let _ = extract_variables(&ast);
-                let _ = extract_undeclared(&ast);
+                let all = extract_variables(&ast);
+                let undeclared = extract_undeclared(&ast);
+
+                let mut seen = std::collections::HashSet::new();
+                for v in &all {
+                    assert!(!v.name.is_empty(), "变量名不应为空，输入 {s:?}");
+                    assert!(
+                        seen.insert(v.name.as_str()),
+                        "`extract_variables` 应按名字去重，出现重复: {v:?}"
+                    );
+                    assert!(v.line >= 1 && v.col >= 1, "行列应 1 起，输入 {s:?}");
+                    assert!(v.start <= v.end, "span 应有序，输入 {s:?}");
+                }
+                // 未声明集合必须是"全部引用"的子集
+                let all_names: std::collections::HashSet<&str> =
+                    all.iter().map(|v| v.name.as_str()).collect();
+                for v in &undeclared {
+                    assert!(
+                        all_names.contains(v.name.as_str()),
+                        "未声明项必须出现在全集中: {v:?}，输入 {s:?}"
+                    );
+                }
             }
         }
-        // 如果到达这里，说明 5000 次迭代均无 panic
+        // 如果到达这里，说明 5000 次迭代均无 panic 且不变量成立
     }
 
     #[test]

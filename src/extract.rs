@@ -116,7 +116,7 @@ pub fn parse<'a>(source: &'a str, name: &'a str) -> Result<Ast<'a>, TplError> {
 /// 结果按首次出现顺序去重，排除引擎内置名（`loop`/`self`/`super`/`caller`）。
 /// 每个变量的 [`Variable::optional`] 表示其全部引用是否都处于兜底上下文。
 pub fn extract_variables<'a>(ast: &Ast<'a>) -> Vec<Variable> {
-    let mut c = Collector::new(ast.source());
+    let mut c = Collector::new();
     walk_stmt(&ast.stmt, &mut c, false);
     c.finalize();
     c.all
@@ -128,7 +128,7 @@ pub fn extract_variables<'a>(ast: &Ast<'a>) -> Vec<Variable> {
 /// 每个变量的 [`Variable::optional`]：`true` = 可选参数（全部引用均有 `default`/`defined`
 /// 兜底，缺失时模板仍可渲染）；`false` = 必选参数。
 pub fn extract_undeclared<'a>(ast: &Ast<'a>) -> Vec<Variable> {
-    let mut c = Collector::new(ast.source());
+    let mut c = Collector::new();
     walk_stmt(&ast.stmt, &mut c, false);
     c.finalize();
     c.undeclared
@@ -247,7 +247,11 @@ struct Collector<'a> {
 }
 
 impl<'a> Collector<'a> {
-    fn new(_src: &'a str) -> Self {
+    /// 构造空的收集器（单层全局作用域）。
+    ///
+    /// 此前带一个 `_src: &'a str` 参数但从未使用 —— 调用方无从判断它到底
+    /// 影响什么，删掉后签名即文档。
+    fn new() -> Self {
         Collector {
             scopes: vec![HashSet::new()],
             all: Vec::new(),
@@ -368,7 +372,9 @@ fn walk_stmt<'a>(stmt: &Stmt<'a>, c: &mut Collector<'a>, opt: bool) {
             walk_expr(&s.iter, c, opt);
             c.push_scope();
             declare_locals(&s.target, c);
-            c.declare("loop");
+            // 这里**不需要** `declare("loop")`：`record` 对 RESERVED_NAMES（含
+            // `loop`）在入口就 return，早于任何 `is_local` 查询 —— 即使把 `loop`
+            // 塞进作用域，也不会有任何代码路径读到它。此前那行是死代码。
             // 过滤表达式与循环体可引用循环变量（Jinja2 语义）
             if let Some(f) = &s.filter_expr {
                 walk_expr(f, c, opt);
