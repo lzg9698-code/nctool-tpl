@@ -17,18 +17,16 @@ const RESERVED_NAMES: &[&str] = &["loop", "self", "super", "caller"];
 /// Jinja 自动注入的内置全局（函数/构造器），同样不算“需要外部提供的参数”。
 /// 与 `jinja2.meta` 一致：无参数使用的这些全局名不进入未声明集合。
 ///
+/// **只列 minijinja 真正提供的全局**。`lipsum` / `cycler` / `joiner` 是 Jinja2
+/// （Python）侧的东西，minijinja 不提供（本库也没有 `add_global` 注册它们）——
+/// 把它们列进来会让**恰好叫这些名字的模板参数**被静默排除出必选与类型校验：
+/// 参数写错了没人报，缺参也不拦。而真去写 `{{ lipsum() }}` 的模板在渲染期照样
+/// 报"未定义"，名单一点忙也帮不上。
+///
 /// 注意：`debug` 是 minijinja 启用 `debug` feature 后才注入的全局。本库依赖
 /// `debug` feature（用于解析错误的字节范围定位），故必须在此列出，否则
 /// `{{ debug() }}` 会被误报为必选参数。
-const BUILTIN_GLOBALS: &[&str] = &[
-    "range",
-    "dict",
-    "lipsum",
-    "cycler",
-    "joiner",
-    "namespace",
-    "debug",
-];
+const BUILTIN_GLOBALS: &[&str] = &["range", "dict", "namespace", "debug"];
 
 /// 模板中出现的一个变量及其在源码中的位置。
 ///
@@ -63,7 +61,13 @@ pub struct Variable {
 
 /// 解析结果：持有模板 AST，同时保留源码与文件名引用。
 ///
-/// 变量提取只读这个结构；渲染可复用同源文本（minijinja 内部自带 JIT 编译缓存）。
+/// 变量提取只读这个结构；渲染路径（`renderer::Renderer::render`）另行把**同一份**
+/// `source` 交给 minijinja 从头编译。两条路径共用同一份源码文本，不会出现
+/// 「提取看的是新源码、渲染用的还是旧 AST」这类错位。
+///
+/// 不要在这里断言 minijinja 的编译缓存行为 —— 那是上游实现细节，本注释此前
+/// 声称「内部自带 JIT 编译缓存」，与 `render` 每次都走一遍
+/// `template_from_named_str` 的实际调用形式对不上，属无据的说法。
 ///
 /// 字段均为私有，通过 [`name`](Self::name) / [`source`](Self::source) 访问，
 /// 以便未来改变内部存储而不破坏公共 API。
@@ -878,6 +882,34 @@ mod tests {
                 want.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
                 "源码: {src}"
             );
+        }
+    }
+
+    /// 回归（P2-7）：`BUILTIN_GLOBALS` 只应列 **minijinja 真正提供**的全局。
+    /// 它此前含 `lipsum` / `cycler` / `joiner` —— 那是 Jinja2（Python）侧的东西，
+    /// minijinja 不提供，本库也没有 `add_global` 注册它们。
+    ///
+    /// 后果不是"多排除了几个名字"，而是：**恰好叫这些名字的模板参数**被静默排除
+    /// 出未声明集合，必选与类型校验一起失效（参数写错没人报、缺参也不拦）；
+    /// 而真去写 `{{ lipsum() }}` 的模板在渲染期照样报未定义，名单一点忙没帮上。
+    #[test]
+    fn builtin_globals_are_exactly_what_minijinja_provides() {
+        // 实证：minijinja 环境里这三个名字是未定义的
+        let env = minijinja::Environment::new();
+        for name in ["lipsum", "cycler", "joiner"] {
+            let src = format!("{{{{ {name}() }}}}");
+            assert!(
+                env.render_str(&src, minijinja::context!()).is_err(),
+                "minijinja 不该提供 {name}"
+            );
+            assert!(
+                !BUILTIN_GLOBALS.contains(&name),
+                "{name} 不是 minijinja 全局，不该在名单里"
+            );
+        }
+        // 真实存在的全局仍在（删过头会让 {{ range(3) }} 被误报为必选参数）
+        for name in ["range", "dict", "namespace", "debug"] {
+            assert!(BUILTIN_GLOBALS.contains(&name), "{name} 是 minijinja 全局");
         }
     }
 

@@ -151,6 +151,16 @@ impl<'de> Deserialize<'de> for ParamValue {
     }
 }
 
+/// `i64` 在 f64 侧的合法边界：闭区间 `[I64_MIN_AS_F64, I64_MAX_AS_F64)`。
+///
+/// `i64::MAX as f64` 恰为 2^63（`i64::MAX` 本身在 f64 里不可表示），
+/// `i64::MIN as f64` 则精确等于 -2^63。两者的存在只为一件事：**别让 `as i64`
+/// 静默饱和**。`as` 转换对超范围值返回 `i64::MAX`/`i64::MIN` 而不是回绕或报错，
+/// 于是 `1e20` 会被换成一个完全不同的数（9223372036854775807），
+/// 而调用方拿到的是一个"看起来正常"的整数。
+const I64_MAX_AS_F64: f64 = i64::MAX as f64;
+const I64_MIN_AS_F64: f64 = i64::MIN as f64;
+
 /// 带标签形式的类型自洽校验：把 `value` 归一为 `kind` 声明的类型。
 ///
 /// `Number` / `Integer` 之间允许无损互转（`{type: number, value: 8}`、
@@ -172,6 +182,10 @@ fn coerce_tagged(kind: &str, value: ParamValue) -> Result<ParamValue, String> {
         "integer" => match value {
             ParamValue::Integer(_) => Ok(value),
             ParamValue::Number(n) if n.is_finite() && n.fract() == 0.0 => {
+                // 过界的整数报错，而不是交给 `as i64` 饱和成 i64::MAX
+                if !(I64_MIN_AS_F64..I64_MAX_AS_F64).contains(&n) {
+                    return Err(mismatch("i64 范围内的整数", &value));
+                }
                 Ok(ParamValue::Integer(n as i64))
             }
             other => Err(mismatch("整数", &other)),
@@ -220,11 +234,19 @@ impl ParamValue {
     /// 整数视图：`Integer` 返回其值；`Number` 为整值时也返回（如 `5.0` → `5`）。
     ///
     /// 非整值的 `Number`（如 `5.5`）返回 `None` —— 调用方可据此区分
-    /// "整数值" 与 "恰好写成浮点的整数"。
+    /// "整数值" 与 "恰好写成浮点的整数"。**超出 `i64` 范围的 `Number` 同样返回
+    /// `None`**，而不是 `as i64` 饱和后的 `i64::MAX`：后者会被调用方当成一个
+    /// 真实取值用下去。
     pub fn as_integer(&self) -> Option<i64> {
         match self {
             ParamValue::Integer(v) => Some(*v),
-            ParamValue::Number(v) if v.is_finite() && v.fract() == 0.0 => Some(*v as i64),
+            ParamValue::Number(v)
+                if v.is_finite()
+                    && v.fract() == 0.0
+                    && (I64_MIN_AS_F64..I64_MAX_AS_F64).contains(v) =>
+            {
+                Some(*v as i64)
+            }
             _ => None,
         }
     }
@@ -928,6 +950,34 @@ mod tests {
         assert_eq!(s.as_str(), Some("D12"));
         assert_eq!(b.as_bool(), Some(true));
         assert_eq!(s.as_number(), None);
+    }
+
+    /// 回归（P2-6）：`as i64` 对超范围值是**饱和**的 —— `1e20` 会被换成
+    /// `i64::MAX`（一个完全不同的数），而 `is_finite() && fract() == 0.0` 两道
+    /// 检查都放行。调用方拿到的是一个"看起来正常"的整数，看不出被换过。
+    #[test]
+    fn oversized_integer_is_rejected_not_saturated() {
+        // 带标签解析路径：`{type: integer, value: 1e20}` 必须报错
+        let err = serde_yaml::from_str::<ParamValue>("{type: integer, value: 1e20}")
+            .expect_err("1e20 不该被静默饱和成 i64::MAX");
+        assert!(
+            err.to_string().contains("范围"),
+            "错误应说明是范围问题而不是类型不符: {err}"
+        );
+
+        // 视图路径：超界的 Number 返回 None，而不是饱和值
+        assert_eq!(ParamValue::Number(1e20).as_integer(), None);
+        assert_eq!(ParamValue::Number(-1e20).as_integer(), None);
+        assert_eq!(ParamValue::Number(I64_MAX_AS_F64).as_integer(), None);
+
+        // 界内仍正常（别把保护做成误伤）
+        assert_eq!(ParamValue::Number(5.0).as_integer(), Some(5));
+        assert_eq!(ParamValue::Number(-5.0).as_integer(), Some(-5));
+        assert_eq!(ParamValue::Integer(i64::MAX).as_integer(), Some(i64::MAX));
+        assert_eq!(
+            serde_yaml::from_str::<ParamValue>("{type: integer, value: 42}").unwrap(),
+            ParamValue::Integer(42)
+        );
     }
 
     #[test]

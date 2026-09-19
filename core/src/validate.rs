@@ -711,7 +711,13 @@ fn check_value_constraints(
     // 整数约束：规格要求整数但值带小数。
     // 缺失此检查时 prog=1.7 → nc_pad 静默截断为 O0001、tool_num=5.5 → T5.5，
     // 两者都不报错，产出的 G-code 却是错的。
-    if spec.integer && n.fract() != 0.0 {
+    //
+    // `is_finite` 前置于 `fract()`：NaN 的 `fract()` 仍是 NaN，而 `NaN != 0.0`
+    // 为真 —— 不挡住就会给同一个 NaN 再刷一条 NotInteger，而它已经被
+    // `check_finite` 报过 NonFinite 了。同一条 NaN 出两条错误既是噪声，
+    // 也把「宽松模式唯一硬失败项 = NonFinite」这个承诺搅浑。
+    // （区间检查不需要这层保护：NaN 与任何数的比较都是 false，本就不会命中。）
+    if spec.integer && n.is_finite() && n.fract() != 0.0 {
         report.issues.push(ValidationIssue::error_kind(
             IssueKind::NotInteger,
             &spec.name,
@@ -1056,6 +1062,37 @@ mod tests {
             issue.message.contains("[1][0]"),
             "应带元素下标路径: {}",
             issue.message
+        );
+    }
+
+    /// 回归（P2-17）：NaN 不该额外刷一条 `NotInteger`。
+    ///
+    /// `NaN.fract()` 仍是 NaN，而 `NaN != 0.0` 为真 —— 整数约束照样命中，于是同一个
+    /// 值报两条错（NonFinite + NotInteger）。宽松模式「唯一硬失败项 = NonFinite」
+    /// 的承诺要求这条噪声不存在。
+    #[test]
+    fn nan_does_not_also_report_not_integer() {
+        let specs = [ParamSpec::new("x", ParamKind::Number, "整数坐标").require_integer()];
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", f64::NAN).set_number("z", 5.0);
+        let report = validate_template(TPL, "t.j2", &specs, &ps, &[]);
+        assert!(
+            report.has_kind(IssueKind::NonFinite),
+            "NaN 必须报 NonFinite: {}",
+            report.summary()
+        );
+        assert!(
+            !report.has_kind(IssueKind::NotInteger),
+            "NaN 不该再刷一条 NotInteger（噪声）: {}",
+            report.summary()
+        );
+
+        // 真带小数的值仍要报 —— 别把整数检查一起关掉
+        let mut ps2 = ParameterSet::new();
+        ps2.set_number("x", 1.7).set_number("z", 5.0);
+        assert!(
+            validate_template(TPL, "t.j2", &specs, &ps2, &[]).has_kind(IssueKind::NotInteger),
+            "1.7 仍必须报 NotInteger"
         );
     }
 

@@ -43,6 +43,13 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: node scripts/check_param_parity.mjs
 
+      # 文档链接与锚点检查：`CONTRIBUTING.md` §3 早已文档化其用法，却始终没有调用点
+      # ——「工具闲置」等于这道门不存在（PROJECT_STATUS 登记过）。脚本对坏链接 exit 1，
+      # 可以直接当门禁。与对拍脚本一样与系统无关，只在 ubuntu 跑一次。
+      - name: Docs links & anchors
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 scripts/check_docs_links.py README.md docs templates/README.md
+
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:

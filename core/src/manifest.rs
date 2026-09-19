@@ -527,7 +527,13 @@ impl TemplateManifest {
 }
 
 /// `templates.yaml` 的文档结构（带 `templates` 键的推荐写法）。
+///
+/// `deny_unknown_fields`：带 `templates:` 的形式只有这一个合法顶层键，拼错
+/// （`template:` / `templats:`）或写下多余键必须报错。否则那一行被静默忽略，
+/// 用户以为改的是清单、实际什么也没改 —— `from_yaml` 的注释一直声称有这条
+/// 保护，但结构体上没有，属"文档说有、代码没有"。
 #[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
 struct ManifestFile {
     #[serde(default)]
     templates: BTreeMap<String, TemplateMeta>,
@@ -646,8 +652,13 @@ pub fn extract_header_meta(source: &str) -> HeaderMeta {
 fn extract_params_block(source: &str) -> (Vec<ParamSpec>, Vec<String>) {
     let mut body: Vec<String> = Vec::new();
     let mut in_block = false;
+    let mut truncated = false;
     for (idx, line) in source.lines().enumerate() {
         if idx >= PARAMS_SCAN_LINES {
+            // 块还没闭合就撞上扫描上限：后面写的参数声明会被**静默丢弃**，
+            // 而调用方看到的是"一切正常、只是少了几条约束"。记下来交给调用方提示
+            // ——静默丢一行等于静默少一条参数约束，与本节开头那条约定同源。
+            truncated = in_block;
             break;
         }
         if !in_block {
@@ -688,6 +699,12 @@ fn extract_params_block(source: &str) -> (Vec<ParamSpec>, Vec<String>) {
 
     let mut specs = Vec::new();
     let mut warnings = Vec::new();
+    if truncated {
+        warnings.push(format!(
+            "{{# PARAMS: #}} 块在第 {PARAMS_SCAN_LINES} 行仍未闭合，其后的参数声明全部被忽略\
+             （类型/白名单/条件必选都不会生效；请把参数表前移或拆短）"
+        ));
+    }
     for (n, raw) in body.iter().enumerate() {
         let line = raw.trim();
         if line.is_empty() {
@@ -1012,6 +1029,52 @@ templates:
             "milling/gone.j2".to_string(),
         ]);
         assert!(m.orphan_keys(&all_present).is_empty());
+    }
+
+    /// 回归（P2-19）：带 `templates:` 的形式此前**没有** `deny_unknown_fields`，
+    /// 多写或拼错一个顶层键会被静默忽略 —— 用户以为改的是清单、实际什么也没改。
+    /// `from_yaml` 的注释一直声称有这条保护，但结构体上没有。
+    #[test]
+    fn manifest_rejects_unknown_top_level_key() {
+        let yaml = "templates:\n  \"a.j2\": {}\nextra: 1\n";
+        let err = TemplateManifest::from_yaml(yaml, Path::new("templates.yaml")).unwrap_err();
+        assert!(
+            err.to_string().contains("extra"),
+            "多余的顶层键必须报错而不是忽略: {err}"
+        );
+
+        // 正确的形式仍可解析（别把保护做成误伤）
+        let ok = "templates:\n  \"a.j2\": {}\n";
+        assert!(TemplateManifest::from_yaml(ok, Path::new("templates.yaml")).is_ok());
+    }
+
+    /// 回归（P2-18）：`{# PARAMS: #}` 块超出扫描上限（[`PARAMS_SCAN_LINES`]）时，
+    /// 其后的参数声明此前被**静默丢弃** —— 类型 / 白名单 / 条件必选全部不生效，
+    /// 而用户看不到任何提示，只当模板本来就没写这些约束。
+    #[test]
+    fn params_block_beyond_scan_limit_warns() {
+        let mut src = String::from("{# PARAMS:\n");
+        for i in 0..(PARAMS_SCAN_LINES + 10) {
+            src.push_str(&format!("     P{i}  number  必选  参数 {i}\n"));
+        }
+        src.push_str("#}\nG1 X1\n");
+
+        let meta = extract_header_meta(&src);
+        assert!(
+            meta.warnings.iter().any(|w| w.contains("仍未闭合")),
+            "超限截断必须告警，否则静默少一批参数约束: {:?}",
+            meta.warnings
+        );
+
+        // 界内正常闭合的块不刷这条告警（别把正常模板也变成噪声）
+        let ok = "{# PARAMS:\n     X  number  必选  坐标\n#}\nG1 X1\n";
+        assert!(
+            !extract_header_meta(ok)
+                .warnings
+                .iter()
+                .any(|w| w.contains("仍未闭合")),
+            "界内闭合的块不该报截断"
+        );
     }
 
     #[test]

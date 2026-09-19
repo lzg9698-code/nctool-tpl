@@ -282,6 +282,44 @@
     **舍入模式是就近取偶**、与 minijinja `round` 的「半远离零」在 .5 附近相反 ——
     前者是对齐源项目 Python `f"{v:.2f}"` 的有意选择，要统一语义请改模板而非改这里。
 
+#### Changed
+
+- **`BUILTIN_GLOBALS` 只列 minijinja 真正提供的全局**（`src/extract.rs`）：名单里此前
+  有 `lipsum` / `cycler` / `joiner` —— 那是 Jinja2（Python）侧的东西，minijinja
+  不提供，本库也没有 `add_global` 注册它们。后果不是「多排除几个名字」，而是
+  **恰好叫这些名字的模板参数**被静默排除出未声明集合，必选与类型校验一起失效；
+  而真去写 `{{ lipsum() }}` 的模板在渲染期照样报未定义，名单一点忙没帮上。
+  新增测试用 `minijinja::Environment` 实证这三个名字渲染即报错。
+
+- **`{type: integer}` 的超范围值不再静默饱和**（`core/src/model.rs`）：`as i64` 对
+  超范围值返回 `i64::MAX` 而不是报错，于是 `{type: integer, value: 1e20}` 被换成
+  9223372036854775807 —— 一个完全不同的数，而 `is_finite() && fract() == 0.0`
+  两道检查都放行。现过界报错；`ParamValue::as_integer` 对超界 `Number` 返回 `None`
+  而不是饱和值。（`i64::MAX as f64` 恰为 2^63，合法区间是 `[-2^63, 2^63)`。）
+
+- **NaN 不再额外刷一条 `NotInteger`**（`core/src/validate.rs`）：`NaN.fract()` 仍是
+  NaN，而 `NaN != 0.0` 为真，整数约束照样命中 —— 同一个值报两条错
+  （NonFinite + NotInteger）。既是噪声，也把宽松模式「唯一硬失败项 = NonFinite」
+  这个承诺搅浑。区间检查不需要这层保护（NaN 与任何数比较都是 false）。
+
+- **`{# PARAMS: #}` 块超限不再静默截断**（`core/src/manifest.rs`）：块在第 200 行
+  仍未闭合时，其后的参数声明被**静默丢弃** —— 类型/白名单/条件必选全不生效，
+  而用户只当模板本来就没写。现产出一条告警。
+
+- **`ManifestFile` 补 `deny_unknown_fields`**（`core/src/manifest.rs`）：带 `templates:`
+  的形式只有这一个合法顶层键，此前多写/拼错会被静默忽略 —— 用户以为改的是清单、
+  实际什么也没改。`from_yaml` 的注释一直声称有这条保护，但结构体上没有。
+
+- **`check_docs_links.py` 接入 CI**（`.github/workflows/ci.yml`）：`CONTRIBUTING` §3
+  早已文档化其用法，却始终没有调用点 ——「工具闲置」等于这道门不存在。脚本对坏链接
+  exit 1（已实测），可直接当门禁；与对拍脚本一样只在 ubuntu 跑一次。
+
+- **两处与实现不符的注释**（`src/extract.rs`、`cli/tests/cli_e2e.rs`）：前者断言
+  「minijinja 内部自带 JIT 编译缓存」，与 `render` 每次都走一遍
+  `template_from_named_str` 的实际调用形式对不上，属无据的说法，改为陈述本项目
+  自己的不变量；后者写「本仓库根目录下唯一的临时目录」而实现用 `std::env::temp_dir()`，
+  且同一段注释的下一句就在说「不污染仓库」。
+
 #### 测试
 
 - 新增 5 项：`explicit_path_that_collides_with_registered_name_wins`（含反向用例：
@@ -289,6 +327,9 @@
   `orphan_keys_reports_unmatched_entries`、`manifest_null_clears_inherited_field`、
   `template_refs_traverse_every_nested_body`（11 个分支的表驱动用例，见下）。
 - 新增 4 项数值过滤器用例（`src/filters.rs` 此前**没有测试模块**）。
+- 新增 5 项：`builtin_globals_are_exactly_what_minijinja_provides`（含 minijinja 实证）、
+  `oversized_integer_is_rejected_not_saturated`、`nan_does_not_also_report_not_integer`、
+  `manifest_rejects_unknown_top_level_key`、`params_block_beyond_scan_limit_warns`。
 - **反向验证**：上述各项均临时还原实现后确认 FAILED 再恢复。数值过滤器三项的失败
   输出分别是 `left: "-0.000"` / `right: "0.000"`、`left: "-0.000"` /
   `right: "+0.000"`、以及 2^63 未报错。
@@ -301,7 +342,7 @@
 - 孤儿键告警用真实 CLI 验证（临时模板目录 + 清单里一条拼错的键）：
   `templates list` 打出一条 `warning: 清单条目 turning/undercut.j2 未匹配到任何模板文件…`，
   且只报未命中的那条。
-- workspace 全量 **549 项**通过（含 golden 逐字节比对 —— 无模板依赖旧的负零输出）。
+- workspace 全量 **554 项**通过（含 golden 逐字节比对 —— 无模板依赖旧的负零输出）。
 
 ---
 

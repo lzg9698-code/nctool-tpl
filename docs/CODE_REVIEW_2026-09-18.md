@@ -656,22 +656,61 @@ assert_eq!(covered.len(), 8, "退出码矩阵应被 8 个码完整覆盖");
 | 渲染仍正常 | ✅（`G0 X0 Z0`，状态「就绪」） |
 
 
-### 批次四：一致性清理（可与功能迭代并行）
+### 批次四：一致性清理 ⚠️ **P1 全清，P2 部分完成（2026-09-18）**
 
-- P1-7（同名模板）、P1-11（include 优先级）、P1-12（孤儿清单键）、P1-13（稀疏覆盖清空语义）。
-- P2 全表按文件归并处理，其中 P2-1~P2-5（数值过滤器）建议与模板文档同步更新。
+**P1（全部完成）**
 
-**本批次追加两条（原 §3 未归批，2026-09-18 核对时发现漏排）**
+| 项 | 修复 | 回归测试 |
+| --- | --- | --- |
+| P1-7 同名模板静默替换 | `resolve_registry` 命中同名且**不是同一文件**时，改用路径作注册名把用户给的文件注册进去（原先是直接复用注册表条目 → 渲染出另一份程序） | `explicit_path_that_collides_with_registered_name_wins` |
+| P1-10 断管道 panic | 该分支的 `println!` 改走 `write_stdout_quiet`（提为 `pub(crate)`）；实测退出码 101 → 1 | 真实进程 `--format json \| :` |
+| P1-11 include 闭包规格优先级 | 先并入本层 `params` 再递归（原顺序让离主模板最远的声明胜出，与文档相反） | `include_closure_spec_precedence_is_nearest_to_main` |
+| P1-12 孤儿清单键 | 新增 `TemplateManifest::orphan_keys`，加载时对未命中键打 warning | `orphan_keys_reports_unmatched_entries` |
+| P1-13 稀疏覆盖无法清空 | 约束字段改 `Option<Option<T>>` + `double_option`，`null` = 清空 | `manifest_null_clears_inherited_field` |
+| P1-20 引用遍历分支零覆盖 | 补 11 个分支的表驱动用例；实现在补测前即为正确，本项是纯覆盖缺口 | `template_refs_traverse_every_nested_body` |
 
-- **P1-10**（`validate --format json` 绕过断管道保护 → panic 退出码 101）：小修，随手可做。
-- **P1-20**（`extract_template_refs` 嵌套语句体分支零覆盖）：与 §8「补 `extract.rs`
-  覆盖率洼地」是同一件事，合并做 —— 该函数正是组合模板必选参数漏检的入口，
-  属「静默产出错误 G-code」的同类。
+**P2（本轮完成 12 条，余者仍开放）**
 
-**另两条不并入批次四，单独排期**
+已完成：P2-2 负零泄漏、P2-3 `nc_signed` 归一位置、P2-4 `nc_pad` 上界差一、
+P2-5 `nc_pad` 文档与实现矛盾、P2-1 舍入模式文档化、P2-6 `as i64` 静默饱和、
+P2-7 `BUILTIN_GLOBALS` 含非 minijinja 全局、P2-17 NaN 额外报 `NotInteger`、
+P2-18 `PARAMS` 块超限静默截断、P2-19 `ManifestFile` 缺 `deny_unknown_fields`、
+P2-21 模块注释与实现矛盾、P2-27 的「补 `deny.toml`」（**见下**）、
+P2-36 `check_docs_links.py` 接入 CI。
+
+> **P2-27 的「补 deny.toml」是误记，未照做**：`deny.toml` 是 `cargo-deny` 的配置，
+> 而 CI 用的是 `cargo audit`（读 `.cargo/audit.toml`）。建一个没人读的文件正是
+> 本报告 P2-36 批评的「工具闲置」。`cargo audit --deny warnings` 已实测有效，
+> 该条视为不成立；若确要 license/source 策略，应单独评估引入 `cargo-deny`。
+
+仍开放（按文件归并，未做）：
+
+- **P2-8 / P2-10 / P2-9 同族**（`src/extract.rs`）：注释已改（不再断言 minijinja 的
+  缓存行为），但 `extract_both` 与死代码清理未做 —— 属性能/整洁，无正确性影响。
+- **P2-11 / P2-12**（`src/error.rs`）：原报告标 `[待验证]`，需先构造用例确认是否
+  真存在，不宜照单改。
+- **P2-16 / P2-24**（`validate_with_vars` 的名字参数、`ui --open` 与 `--port 0`）：
+  可用性问题，改动面比看起来大。
+- **P2-14 / P2-31 / P2-32 / P2-33**（测试质量：fuzz 返回值断言、负向 golden、
+  CLI 改读同一份 golden、`all_math_filters_render` 弱断言）：价值明确，单独一批做。
+- **P2-25 / P2-26**（UI 的 Bool 恒提交 `false`、缺 `AbortController`）：与 Web UI
+  同批。
+- **P2-34**（`output/` 等仓库杂物、发布包收窄）：与发版流程一起做（`PROJECT_STATUS`
+  §8 第二/三优先）。
+- **P2-35 的剩余位点**：`CONTRIBUTING` §4 与 README 已改为不硬编码项数，
+  其余散落处待清。
+
+**不并入批次四，单独排期**
 
 - **P1-18**（每请求全树 `stat`）与 **P1-19**（无读超时 / 无并发上限）：同属 `serve`
   请求循环的服务层改造，放一起做才划算，且都不宜夹在安全修复里。
+- **P1-1 的 CSP 收紧**（去掉 `'unsafe-inline'`）：需把内联 `<script>`/`<style>`
+  外置，与上面两项同属服务层。
+
+**关于覆盖率门**：生产口径已从 88.65% 升至 **89.49%**（P1-20 补齐了一批零覆盖分支）。
+**未上调阈值门**（仍 88%）：89.49% 是本机 Windows 实测，CI 在 Ubuntu 上跑，
+余量 1.49pt 未必能跨平台兑现 —— 建议先看一次 Ubuntu 的实测数字再定。
+
 
 ---
 

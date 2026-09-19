@@ -94,10 +94,9 @@ fn run_isolated(tag: &str, args: &[&str]) -> (Run, PathBuf) {
     (r, dir)
 }
 
-/// 创建本仓库根目录下唯一的临时目录。
+/// 建一个唯一的临时目录（位于系统临时区，**不**是仓库根目录）。
 ///
 /// `tag` 区分用例；`std::process::id()` + 原子序号避免并发用例互相踩踏。
-/// 目录位于 `std::env::temp_dir()`，不污染仓库。
 fn temp_dir(tag: &str) -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
