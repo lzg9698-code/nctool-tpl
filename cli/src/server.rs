@@ -1,10 +1,14 @@
 //! 本地 Web UI 服务（阶段 C）：tiny_http + 只读 API + 内嵌单文件前端。
 //!
 //! 安全约定（ROADMAP C1.3 / R5）：
-//! - 默认仅绑定回环地址 `127.0.0.1`；显式 `--host` 指定非回环时由命令层
-//!   打印安全警告（本模块不做判断，保持单一职责）
+//! - **仅回环**：`--host` 传非回环地址时 [`listen_addr`] **直接拒绝**，而不是
+//!   打印警告后放行。本服务能读模板目录并驱动渲染，暴露到局域网没有任何使用
+//!   场景，只剩攻击面。（此处曾写"由命令层打印警告、本模块不做判断"，那是更早
+//!   的实现；照那句话改回去会把这个决定悄悄撤销。）
 //! - 不执行任何 shell 命令；不提供任何写操作
 //! - 请求体读取设 1 MiB 上限，防异常载荷
+//! - **失败响应不回显内部正文**：500 只给泛化文案，详情写 stderr —— 内部错误的
+//!   正文含模板文件的绝对路径（见 [`internal_error`]）
 //! - **跨站请求防护**：`/api/` 下的请求校验 `Origin` / `Sec-Fetch-Site`
 //!   （见 [`cross_site_guard`]）——只绑回环并不够，浏览器里的任意页面都能向
 //!   `127.0.0.1:<port>` 发请求（DNS rebinding / CSRF）；本服务无状态、不落盘，
@@ -41,8 +45,15 @@ const MAX_BODY_BYTES: usize = 1024 * 1024;
 /// `style-src` 仍需 `'unsafe-inline'`（**已知取舍**）。它挡不住"页面里被注入
 /// `<script>`"，但能挡住外链加载、`object` / `frame` 嵌入与表单外发
 /// ——把"本地工具页面"的攻击面收回到页面自身。
-/// 若要去掉 `'unsafe-inline'`，需要给 `<script>`/`<style>` 注入每响应 nonce，
-/// 属于后续加固项。
+///
+/// **当前依赖**：这条取舍成立的前提是页面里**不存在**可注入的插值点。
+/// 2026-09-18 之前不成立 —— `esc()` 不转引号，模板文件名 / 参数名里的 `"` 就能
+/// 加出 `onerror=`，而 `unsafe-inline` 恰好放行属性事件处理器（P1-1）。
+/// 现已补全转义（见 `ui/index.html` 的 `esc` / `selEsc`），并逐点核对过全部
+/// `innerHTML` 插值位。**改动前端插值时必须一并复核**：CSP 在这里不是兜底。
+///
+/// 若要去掉 `'unsafe-inline'`，需要把内联 `<script>`/`<style>` 外置成同源文件
+/// （或每响应注入 nonce）。属独立改造，未随本轮进行。
 const SECURITY_HEADERS: &[(&str, &str)] = &[
     (
         "Content-Security-Policy",
@@ -173,7 +184,10 @@ fn templates_list(ctx: &Ctx, query: &str) -> Resp {
     let category = parse_query(query)
         .into_iter()
         .find(|(k, _)| k == "category")
-        .map(|(_, v)| v);
+        .map(|(_, v)| v)
+        /* `?category=` 表示「不筛选」，不是非法值：前端清空分类选择时会发出这种请求，
+        此前一律 400，等于把「清空筛选」变成错误。 */
+        .filter(|v| !v.trim().is_empty());
     if category
         .as_deref()
         .is_some_and(|value| parse_category(value).is_none())
@@ -182,7 +196,7 @@ fn templates_list(ctx: &Ctx, query: &str) -> Resp {
             400,
             err(
                 "bad_request",
-                "无效的模板分类，可选值为 general/milling/turning/drilling/machine",
+                "无效的模板分类，可选值为 general/milling/turning/drilling/grooving/machine",
             ),
         );
     }
@@ -206,12 +220,17 @@ fn templates_list(ctx: &Ctx, query: &str) -> Resp {
 }
 
 /// 分类字符串 → core 枚举（接受英文 id 与中文显示名，宽松匹配）。
+///
+/// 必须与 `cli/src/cli.rs` 的 `CategoryArg` 保持同一套取值：少一个分支，
+/// 该分类的模板在 HTTP 侧被 **400 拒绝**，而 CLI 侧正常 —— 两侧对同一分类
+/// 给出不同答案，且前端分类栏也会缺一项、计数永远对不上。
 fn parse_category(s: &str) -> Option<TemplateCategory> {
     match s {
         "general" | "通用" => Some(TemplateCategory::General),
         "milling" | "铣削" => Some(TemplateCategory::Milling),
         "turning" | "车削" => Some(TemplateCategory::Turning),
         "drilling" | "钻孔" => Some(TemplateCategory::Drilling),
+        "grooving" | "切槽" => Some(TemplateCategory::Grooving),
         "machine" | "机床" => Some(TemplateCategory::Machine),
         _ => None,
     }
@@ -447,13 +466,26 @@ fn generation_options(value: &serde_json::Value) -> Result<(GenerationOptions, b
             })
             .unwrap_or(Ok(default))
     };
-    let format = match opts.get("format").and_then(|v| v.as_str()) {
-        None | Some("gcode") => OutputFormat::Gcode,
-        Some("text") => OutputFormat::Text,
-        Some(other) => {
+    // 必须把「键缺失」与「类型错误」分开：`and_then(as_str)` 对
+    // `{"format": 1}` / `true` / `[]` 同样返回 `None`，合并处理就会**静默按
+    // gcode 生成**，调用方以为选项生效。同函数的 get_bool / get_u32 已对类型错误
+    // 返回 400，此处是唯一漏网（09-05 OPTIONS-SILENT-FALLBACK-001 的残留）。
+    let format = match opts.get("format") {
+        None => OutputFormat::Gcode,
+        Some(serde_json::Value::String(s)) => match s.as_str() {
+            "gcode" => OutputFormat::Gcode,
+            "text" => OutputFormat::Text,
+            other => {
+                return Err(Resp::Json(
+                    400,
+                    err("bad_request", format!("不支持的输出格式: {other}")),
+                ))
+            }
+        },
+        Some(_) => {
             return Err(Resp::Json(
                 400,
-                err("bad_request", format!("不支持的输出格式: {other}")),
+                err("bad_request", "options.format 必须是字符串"),
             ))
         }
     };
@@ -728,11 +760,24 @@ fn with_security_headers<R: std::io::Read>(
 }
 
 /// 内部错误（注册表构建失败等）：映射为 500 + CLI 错误信息。
+/// 500：**不回显内部错误正文**。
+///
+/// `build_registry` 的失败消息里含模板文件的绝对路径（形如
+/// `读取模板失败 \\?\C:\Users\<用户名>\Desktop\...\a.j2: …`），原样回给浏览器
+/// 等于把用户名与目录结构一并泄露，而这也不是调用方能处理的信息（P1-17）。
+/// 详情写 stderr —— 本服务是本地工具，用户就坐在启动它的那个终端前面，看得到。
 fn internal_error(e: CliError) -> Resp {
-    Resp::Json(500, err("internal", e.message))
+    eprintln!("error: {e}");
+    Resp::Json(
+        500,
+        err("internal", "服务内部错误，详情见运行 nctool ui 的终端输出"),
+    )
 }
 
 /// 业务校验错误（模板解析失败等）：400 + CLI 错误信息。
+///
+/// 与 500 不同，这里回显正文：消息描述的是**调用方传进来的模板**哪里有问题
+/// （语法错误、行列号），是调用方能据以修正的信息，且不含磁盘路径。
 fn cli_error(e: CliError) -> Resp {
     Resp::Json(400, err(e.kind, e.message))
 }
@@ -988,6 +1033,73 @@ mod tests {
         };
         assert_eq!(status, 400);
         assert_eq!(payload["error"]["kind"], "bad_request");
+    }
+
+    #[test]
+    fn parse_category_covers_every_core_variant() {
+        // 回归（P1-8）：`parse_category` 曾缺 `grooving` / `切槽`，而
+        // `cli/src/cli.rs::CategoryArg` 有 —— HTTP 侧把「切槽」当非法值 400，
+        // CLI 侧正常，两侧对同一分类给出不同答案；前端分类栏也缺一项，
+        // 该分类的模板只在「全部」里出现、计数永远对不上。
+        // 遍历 core 的全部分类逐个断言：将来新增分类时这里先红，
+        // 而不是等用户报「某个分类的模板就是不显示」。
+        for c in [
+            TemplateCategory::General,
+            TemplateCategory::Milling,
+            TemplateCategory::Turning,
+            TemplateCategory::Drilling,
+            TemplateCategory::Grooving,
+            TemplateCategory::Machine,
+        ] {
+            assert_eq!(
+                parse_category(c.label()),
+                Some(c),
+                "中文显示名必须可解析：{}",
+                c.label()
+            );
+        }
+        // 英文 id 同样要通
+        assert_eq!(parse_category("grooving"), Some(TemplateCategory::Grooving));
+    }
+
+    #[test]
+    fn empty_category_query_means_no_filter() {
+        // 回归（P1-8）：`?category=`（空值）此前被判为非法分类返回 400，
+        // 前端清空分类筛选就会撞上 —— 「不筛选」被当成了「筛一个不存在的分类」。
+        let Resp::Json(status, payload) =
+            route(&test_ctx(), "GET", "/api/templates", "category=", &[])
+        else {
+            panic!("空分类应返回 JSON")
+        };
+        assert_eq!(status, 200, "空分类应视为不筛选：{payload}");
+    }
+
+    #[test]
+    fn render_options_format_must_be_string() {
+        // 回归（P1-9）：`and_then(as_str)` 把「键缺失」与「类型错误」混为一谈，
+        // `{"format": 1}` / `true` / `[]` 都落到 None 分支被**静默按 gcode 生成**，
+        // 调用方以为选项生效。同函数的 get_bool / get_u32 已对类型错误返回 400，
+        // 此处是唯一漏网（09-05 OPTIONS-SILENT-FALLBACK-001 的残留）。
+        for bad in ["1", "true", "[]", "{}"] {
+            let body = format!(
+                r#"{{"template":"drill_cycle","params":{{}},"options":{{"format":{bad}}}}}"#
+            );
+            let Resp::Json(status, payload) =
+                route(&test_ctx(), "POST", "/api/render", "", body.as_bytes())
+            else {
+                panic!("类型错误的 format 应返回 JSON")
+            };
+            assert_eq!(
+                status, 400,
+                "format={bad} 必须被拒绝而非静默回退：{payload}"
+            );
+        }
+        // 合法的 format 不受影响
+        let ok_body = br#"{"template":"drill_cycle","params":{},"options":{"format":"text"}}"#;
+        let Resp::Json(status, _) = route(&test_ctx(), "POST", "/api/render", "", ok_body) else {
+            panic!("应返回 JSON")
+        };
+        assert_ne!(status, 400, "合法的 format 不应被拒绝");
     }
 
     #[test]
@@ -1259,14 +1371,29 @@ mod tests {
     #[test]
     fn internal_and_cli_errors_map_status() {
         // 500 一律归 "internal"：原始分类（registry / io / …）会被替换掉，
-        // 因为对调用方而言"服务端内部炸了"才是可操作的信息
-        let Resp::Json(status, payload) = internal_error(CliError::new("registry", "boom")) else {
+        // 因为对调用方而言"服务端内部炸了"才是可操作的信息。
+        //
+        // 正文同样不回显（P1-17）：内部错误的正文含模板文件的绝对路径，
+        // 原样回给浏览器等于泄露用户名与目录结构，而这不是调用方能处理的信息。
+        let leaked = CliError::new(
+            "io",
+            r"读取模板失败 \\?\C:\Users\someone\Desktop\proj\turning\a.j2: 拒绝访问",
+        );
+        let Resp::Json(status, payload) = internal_error(leaked) else {
             panic!("应返回 JSON")
         };
         assert_eq!(status, 500);
         assert_eq!(payload["error"]["kind"], "internal");
-        assert_eq!(payload["error"]["message"], "boom");
+        let msg = payload["error"]["message"]
+            .as_str()
+            .expect("message 应为字符串");
+        assert!(
+            !msg.contains("Users") && !msg.contains("a.j2") && !msg.contains("Desktop"),
+            "500 正文不得包含磁盘路径: {msg}"
+        );
 
+        // 400 仍回显正文：描述的是调用方传进来的模板哪里有问题（语法/行列号），
+        // 是调用方能据以修正的信息，且不含磁盘路径。
         let Resp::Json(status, payload) = cli_error(CliError::new("render", "坏模板")) else {
             panic!("应返回 JSON")
         };

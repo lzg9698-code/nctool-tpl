@@ -143,6 +143,85 @@
 - CI 变更无法在本机验证，需下一次 push 后看 run 结果（尤其 MSRV job 与
   `install-action` 步骤）。
 
+### 批次三：Web UI 加固
+
+#### Fixed
+
+- **UI 存储型 XSS**（`ui/index.html` + `cli/ui/index.html`，两份同步）：`esc()` 只转
+  `&` `<` `>`，**不转引号**，而 `tplCardHtml` / `fieldHtml` / `renderMachineSel` 等处的
+  插值点连 `esc()` 都没调。于是模板文件名、`{# PARAMS: #}` 里的参数名、机床 TOML 的
+  vendor/model 中只要有一个 `"`，就能逃出属性边界加出事件处理器
+  （`data-tpl="a"onerror=alert(1) x="`）—— 打开 `nctool ui` 即执行。
+  `esc()` 补 `"` `'`，并逐点补全全部插值位置（属性值与文本两处都要）。
+  另新增 `selEsc()`：`querySelector('[data-param="…"]')` 的转义规则与 HTML 不同
+  （要转 `\` 和 `"`，不是转成 `&quot;`），写入侧用 `esc`、回读侧用 `selEsc`，
+  两侧才指向同一个 DOM 属性值 —— 否则「名字带引号的参数」会静默收集不到。
+
+- **目录符号链接的逃逸与成环**（`cli/src/context.rs`）：`Path::is_dir()` 跟随符号
+  链接，而逃逸校验（`canonicalize` + `starts_with(root)`）此前**只在文件分支**执行，
+  目录层既无校验也无 visited 集合。现目录分支同样校验，并用 `BTreeSet<PathBuf>`
+  记录已进入的规范化目录以断开环。
+
+- **server 模式数字选项发成字符串**（`ui/index.html`）：`input.value` 是字符串，
+  `normalizeOpts` 此前只在 demo 分支被调用，server 分支直接 `JSON.stringify` 发出，
+  而后端按 `as_u64()` 取值 → 在「步进」框里改一个数字就「渲染失败」。
+  输入处理器改存 `Number`，`API.render` 出口再统一过一次 `normalizeOpts`。
+
+- **清单未提及的模板被静默隐藏**（`core/src/manifest.rs`）：`TemplateMeta` 用
+  `#[derive(Default)]`，给出 `visible = false` / `output_extension = ""`，而 serde
+  路径（`default_true` / `default_extension`）给出 `true` / `".NC"` —— 同一个「缺省」
+  两处含义不同。`resolve` 对清单未提及的模板走 `unwrap_or_default()`，拿到的正是
+  派生那版：往 `templates/` 放一个新 `.j2` 而不加清单条目，用户列表里看不到它，
+  输出文件名还丢扩展名，且全程不报错。改手写 `impl Default`，与 serde 对齐。
+  （报告把它归在 P1-4、未指定批次；因与批次一「静默出错」同类，随本批次一起做。）
+
+- **HTTP 分类过滤缺「切槽」**（`cli/src/server.rs`）：`parse_category` 只有五个分支，
+  而 `cli/src/cli.rs::CategoryArg` 有 `Grooving` —— `?category=grooving` / `?category=切槽`
+  被 **400 拒绝**，CLI 侧却正常；前端 `CATS` 也缺这一项，切槽模板只在「全部」里出现、
+  分类计数永远对不上。补齐分支，并遍历 core 全部分类加测试防再漏。
+  另：`?category=`（空值）此前同样 400 —— 前端清空分类筛选就会撞上，现视为「不筛选」。
+
+- **`options.format` 类型错误静默回退**（`cli/src/server.rs`）：`and_then(as_str)` 把
+  「键缺失」与「类型错误」混为一谈，`{"format": 1}` / `true` / `[]` 都落到 None 分支
+  被**静默按 gcode 生成**，调用方以为选项生效。同函数的 `get_bool` / `get_u32` 早已
+  对类型错误返回 400，此处是唯一漏网。现区分二者，类型错误 400。
+
+- **API 响应与错误体泄露绝对路径**（`cli/src/context.rs`、`cli/src/server.rs`）：
+  文件模板的兜底描述是 `format!("文件模板: {}", canonical.display())`，经
+  `/api/templates` 原样返回给浏览器 —— `curl` 一次就拿到全部模板的绝对路径（含用户名
+  与项目结构）。现改用**相对键**（也正是用户要传给 CLI 的那个名字，比路径更有用）。
+  500 响应同样不再回显内部正文（`build_registry` 的失败消息含绝对路径），改为泛化
+  文案 + 详情写 stderr；400 仍回显（那是调用方能据以修正的模板语法/行列号，且无路径）。
+
+#### Changed
+
+- **`cli/src/server.rs` 模块头与 CSP 注释同步**：模块头仍写「非回环由命令层打印警告
+  （本模块不做判断）」，而 `listen_addr` 早已**直接拒绝**非回环地址 —— 照那句话改回去
+  会把这个决定悄悄撤销，故更正并写明沿革。CSP 注释补上「`'unsafe-inline'` 这条取舍
+  成立的前提是页面里没有可注入的插值点」，以及改前端插值时必须一并复核。
+
+#### 未做（附理由，非遗漏）
+
+- **CSP 去掉 `'unsafe-inline'`**：内联 `<script>`/`<style>` 需外置为同源文件
+  （或每响应注入 nonce），属独立改造。本轮先消除注入点本身。
+- **body 读超时 / 并发上限（P1-19）`、每请求全树 `stat`（P1-18）**：tiny_http 0.12
+  不暴露底层 socket，`set_read_timeout` 无从下手；换独立线程读又要把 `Request` 移进
+  线程才满足 `'static`，而响应必须由持有 `Request` 的一方发出 —— 得重做 `serve`
+  的请求循环。两者同属服务层改造，宜单独排期，不夹在安全修复里。
+
+#### 测试
+
+- 新增 6 项测试：`core` 1（清单缺省与 serde 对齐）、`cli` 3（分类覆盖全 core 变体 /
+  空分类不筛选 / format 类型错误）、`cli` 2 项 `#[cfg(unix)]`（目录链接成环被断开、
+  逃逸目标被跳过）。
+- **浏览器实测**（非仅单测）：起 `nctool ui` 后在真实页面验证 ——
+  ① 参数名含 `x"onmouseover="window.__XSS_ATTR=1` 的模板：无注入元素、属性回读
+  与原名一致、`querySelector` 能回找到该输入框并收走其值；同页面用**旧** `esc()` 拼
+  同样的 HTML 则确实注入 → 证明漏洞真实且已修。② 「步进」改 25 → `N0025/N0050/N0075`，
+  渲染成功（此前 400 渲染失败）。③ 32 个模板正常列出、参数表单与校验提示正常。
+- `cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`
+  干净；workspace 全量通过：**540 项**（Windows，2 项 `#[cfg(unix)]` 不参与）/ 542 项（unix）。
+
 ---
 
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18

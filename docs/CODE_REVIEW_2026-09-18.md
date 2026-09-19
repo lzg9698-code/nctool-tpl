@@ -239,9 +239,16 @@ if path.is_dir() {
 - 触发条件：模板目录内建一个指向上级的符号链接 / Windows junction 形成环
   （如 `ln -s .. t/a/loop`）。
 - 影响：`nctool templates list` 或 `nctool ui` 后**任意一个 API 请求**（每次 `build_registry`
-  都会走这里）→ 栈溢出 → 进程 abort。不是可捕获错误，服务直接消失。
+  都会走这里）都会白走这棵环形树。
+  > **2026-09-18 实测更正**：本条原记为「栈溢出 → 进程 abort」，实测**不成立** ——
+  > 路径每层增长一段，`is_dir()` 最终在平台路径长度上限处失败并返回 `false`，该层被
+  > 当作普通文件跳过，递归因此有界（Windows 用 junction 造环实测：66 层后正常结束，
+  > 无崩溃、无报错）。真实代价是每次构建注册表白走几十（Linux 更高）层目录，
+  > Web UI 下每个请求重走一遍。仍须显式断环：路径长度兜底是平台偶然属性，
+  > Windows 启用长路径或加 `\\?\` 前缀后即失效，那时才是真正无界递归。
 - 修复：递归前对目录同样 `canonicalize` + `starts_with(root)` 校验，并维护
   `HashSet<PathBuf>` 已访问集合；或直接用 `entry.file_type()?.is_symlink()` 跳过目录链接。
+  ✅ 已实施（`BTreeSet<PathBuf>` + 目录层逃逸校验，见 `cli/src/context.rs::collect_templates`）。
 
 ---
 
@@ -611,18 +618,60 @@ assert_eq!(covered.len(), 8, "退出码矩阵应被 8 个码完整覆盖");
    `cargo test --doc`（P2-28）。
 4. `NCTOOL_UPDATE_GOLDEN` 加 CI 守卫（P2-30）。
 
-### 批次三：Web UI 加固（1–2 天）
+### 批次三：Web UI 加固 ✅ **已完成（2026-09-18）**
 
-1. `esc()` 补引号 + 所有插值点加转义 + CSP 去 `'unsafe-inline'`（P1-1）。
-2. `collect_templates` 目录层加 canonicalize + visited 集合（P1-2）。
-3. `state.options` 统一过 `normalizeOpts`（P1-3）。
-4. `parse_category` 补 grooving/切槽，两份 `index.html` 同步（P1-8）。
-5. `format` 类型错误返回 400（P1-9）；500 响应去路径（P1-17）；body 读超时（P1-19）。
+| 项 | 修复 | 回归测试 |
+| --- | --- | --- |
+| P1-1 Web UI XSS | `esc()` 补 `"` `'`；`tplCardHtml` / `fieldHtml` / `optionsHtml` / `renderMachineSel` / crumb 逐点补转义；新增 `selEsc` 让 `querySelector` 侧的属性值与 `esc` 写入侧配对 | 浏览器实测（见下） |
+| P1-2 目录链接环 | `collect_templates` 目录分支补 `canonicalize` + `starts_with(root)` 校验与 `BTreeSet<PathBuf>` visited 集合 | `symlink_cycle_is_broken_and_templates_still_collected`、`symlink_escaping_root_is_skipped`（`#[cfg(unix)]`） |
+| P1-3 选项类型 | 输入处理器存 `Number`；`API.render` 出口统一过 `normalizeOpts` | 浏览器实测（步进改 25 → `N0025/N0050/N0075`） |
+| P1-4 清单默认值分歧 | 手写 `impl Default for TemplateMeta`（`visible: true` / `output_extension: ".NC"`），与 serde 路径对齐 | `template_absent_from_manifest_is_visible_with_default_extension`（同时断言两条路径一致） |
+| P1-8 分类缺口 | `parse_category` 补 `grooving`/`切槽`；空 query 视为不筛选；前端 `CATS` 同步（两份 `index.html`） | `parse_category_covers_every_core_variant`（遍历 core 全部分类）、`empty_category_query_means_no_filter` |
+| P1-9 format 类型 | 区分「键缺失」与「类型错误」，后者 400 | `render_options_format_must_be_string` |
+| P1-17 路径泄露 | 兜底描述改用相对键而非绝对路径；500 只回泛化文案、详情写 stderr | `internal_and_cli_errors_map_status`（断言 500 正文不含路径） |
+| P2-21 过期注释 | 模块头「非回环由命令层警告」与实际（`listen_addr` 直接拒绝）矛盾，已同步 | — |
+
+**未做（附理由，不是遗漏）**
+
+- **P1-1 的 CSP 收紧**：去掉 `'unsafe-inline'` 要把内联 `<script>`/`<style>` 外置为
+  同源文件（或每响应注入 nonce），属独立改造。本轮先消除**注入点本身**，
+  并在 CSP 注释里写明「转义是这条取舍成立的前提、改插值必须一并复核」。
+- **P1-19 body 读超时**：tiny_http 0.12 不暴露底层 socket，`set_read_timeout` 无从下手；
+  改用独立线程读也要把 `Request` 移进线程才能满足 `'static`，而响应又必须由持有
+  `Request` 的一方发出 —— 得重做 `serve` 的请求循环。风险面本已受限（非回环直接拒绝，
+  只有本机进程可达），宜作独立一项，不塞进安全修复提交。
+- **P1-18 每请求全树 `stat`**：与 P1-19 同属服务层，一并留待。
+
+**XSS 反向验证（浏览器实测，2026-09-18）**
+
+临时模板目录放一个 `{# PARAMS: #}` 参数名为 `x"onmouseover="window.__XSS_ATTR=1`
+的模板（Windows 文件名不允许 `<`，故走参数名这条注入路径），启 `nctool ui` 后：
+
+| 检查 | 结果 |
+| --- | --- |
+| 页面内出现 `[onmouseover]` / `<img>` 注入元素 | **无** |
+| `data-param` 属性回读 == 原始参数名 | ✅（`&quot;` 解析后与原名一致） |
+| `querySelector` 能回找到该输入框、值被 `collectParams` 收走 | ✅（转义/回读两侧配对） |
+| 用**旧** `esc()` 拼同样 HTML | 确实注入 `onmouseover="window.__XSS_ATTR=1"` —— **证明漏洞真实存在** |
+| 渲染仍正常 | ✅（`G0 X0 Z0`，状态「就绪」） |
+
 
 ### 批次四：一致性清理（可与功能迭代并行）
 
 - P1-7（同名模板）、P1-11（include 优先级）、P1-12（孤儿清单键）、P1-13（稀疏覆盖清空语义）。
 - P2 全表按文件归并处理，其中 P2-1~P2-5（数值过滤器）建议与模板文档同步更新。
+
+**本批次追加两条（原 §3 未归批，2026-09-18 核对时发现漏排）**
+
+- **P1-10**（`validate --format json` 绕过断管道保护 → panic 退出码 101）：小修，随手可做。
+- **P1-20**（`extract_template_refs` 嵌套语句体分支零覆盖）：与 §8「补 `extract.rs`
+  覆盖率洼地」是同一件事，合并做 —— 该函数正是组合模板必选参数漏检的入口，
+  属「静默产出错误 G-code」的同类。
+
+**另两条不并入批次四，单独排期**
+
+- **P1-18**（每请求全树 `stat`）与 **P1-19**（无读超时 / 无并发上限）：同属 `serve`
+  请求循环的服务层改造，放一起做才划算，且都不宜夹在安全修复里。
 
 ---
 

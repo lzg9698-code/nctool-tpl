@@ -1,6 +1,7 @@
 //! 命令执行上下文：解析全局选项、构建模板注册表、解析机床配置。
 
 use std::cell::RefCell;
+use std::collections::BTreeSet;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::time::SystemTime;
@@ -176,7 +177,7 @@ impl Ctx {
         // 收集待注册模板：先完成整目录遍历再注册，避免遍历中途发现重名时报错
         // 而留下半成品注册表。
         let mut found: Vec<(String, std::path::PathBuf)> = Vec::new();
-        collect_templates(root, root, &mut found)?;
+        collect_templates(root, root, &mut found, &mut BTreeSet::new())?;
         // 按路径排序，保证列表输出稳定（BTreeMap 只保证注册顺序后的键序，
         // 而注册顺序取决于文件系统返回顺序）
         found.sort_by(|a, b| a.0.cmp(&b.0));
@@ -195,9 +196,13 @@ impl Ctx {
                 eprintln!("warning: {rel_key}: {warning}");
             }
 
-            // 描述为空时补上来源路径，避免列表里出现空白描述
+            // 描述为空时补上来源，避免列表里出现空白描述。
+            //
+            // 用**相对键**而不是绝对磁盘路径：这个字符串会经 `/api/templates`
+            // 原样返回给浏览器，绝对路径等于把用户名与项目目录结构一并送出去
+            // （P1-17）。相对键也正是用户要传给 CLI 的那个名字，比路径更有用。
             let description = if meta.description.is_empty() {
-                format!("文件模板: {}", canonical.display())
+                format!("文件模板: {rel_key}")
             } else {
                 meta.description.clone()
             };
@@ -339,10 +344,28 @@ fn tree_stamp(root: &Path) -> Option<SystemTime> {
 /// - **非 `*.j2` 文件**：模板扩展名约定
 ///
 /// 输出 `(相对路径键, 规范化绝对路径)`；相对路径键统一用 `/` 分隔。
+///
+/// `visited` 记录**已进入的规范化目录**，用于断开目录环。**目录同样要过逃逸校验
+/// 与环检测，缺一不可**：`Path::is_dir()` 跟随符号链接，而逃逸校验此前只在文件
+/// 分支执行 —— 目录链接既不会被跳过，也没有任何东西阻止重入。只校验逃逸挡不住
+/// 指向根**内部**的环（`ta/loop -> ta`），故还需 `visited`。
+///
+/// # 环的实测行为（2026-09-18，更正审查报告的推断）
+///
+/// 报告记为「栈溢出 → 进程 abort」。实测**不成立**：路径每层增长一段，`is_dir()`
+/// 最终会在平台路径长度上限处失败并返回 `false`，该层被当成普通文件跳过，递归
+/// 因此有界（Windows 上用 junction 造环实测：走 66 层后正常结束，无崩溃、无报错）。
+/// 真实代价是每次构建注册表都白走这几十层（Linux 上限更高，量级更大），
+/// 而 Web UI 下**每个请求**都会重走一遍。
+///
+/// 之所以仍然要显式断环，而不是依赖这个「路径长度兜底」：那是平台的偶然属性，
+/// 不是设计。Windows 一旦启用长路径、或在路径前加 `\\?\` 前缀，兜底即失效，
+/// 递归变成真正无界 —— 到那时才是报告描述的栈溢出。显式 `visited` 与平台无关。
 fn collect_templates(
     root: &Path,
     dir: &Path,
     out: &mut Vec<(String, PathBuf)>,
+    visited: &mut BTreeSet<PathBuf>,
 ) -> Result<(), CliError> {
     let entries = std::fs::read_dir(dir)
         .map_err(|e| CliError::new("io", format!("读取目录失败 {}: {e}", dir.display())))?;
@@ -361,7 +384,16 @@ fn collect_templates(
         }
 
         if path.is_dir() {
-            collect_templates(root, &path, out)?;
+            // 目录也先 canonicalize 再决定是否进入：逃逸校验原本只覆盖文件分支
+            let real = match std::fs::canonicalize(&path) {
+                Ok(p) if p.starts_with(root) && p.is_dir() => p,
+                _ => continue,
+            };
+            // 已进过的目录不再进 —— 符号链接成环时这是唯一的终止条件
+            if !visited.insert(real.clone()) {
+                continue;
+            }
+            collect_templates(root, &real, out, visited)?;
             continue;
         }
 
@@ -434,6 +466,68 @@ mod tests {
             .expect("打开文件");
         f.set_modified(SystemTime::now() + std::time::Duration::from_secs(secs))
             .expect("设置 mtime");
+    }
+
+    /// 回归（P1-2）：目录符号链接**成环**时必须断开，不能无限重入。
+    /// `Path::is_dir()` 跟随符号链接，而逃逸校验原先只在文件分支执行，目录层
+    /// 既无校验也无 visited 集合。
+    ///
+    /// 环指向根**内部**（`turning/a/loop -> turning/a`）：逃逸校验拦不住它
+    /// （目标确实在 root 之内），只有 visited 集合能终止递归。
+    ///
+    /// 注：在路径长度受限的平台上，`is_dir()` 会先在上限处失败而「碰巧」终止
+    /// （见 `collect_templates` 的实测注记），所以本用例断言的是**结果正确**
+    /// 而非「原本会崩」——它锁住的是「环不产生重复收集、也不吞掉正常模板」。
+    ///
+    /// 仅 unix 跑：Windows 建目录符号链接需要管理员或开发者模式，放进三平台 CI
+    /// 会变成「看环境的偶发红」。Windows 的等价情形已用 junction 手工验证过。
+    #[cfg(unix)]
+    #[test]
+    fn symlink_cycle_is_broken_and_templates_still_collected() {
+        let (dir, _tpl) = temp_template_dir("symlink_cycle");
+        let a = dir.join("turning").join("a");
+        std::fs::create_dir_all(&a).expect("建子目录");
+        std::os::unix::fs::symlink(&a, a.join("loop")).expect("建目录符号链接");
+
+        let root = std::fs::canonicalize(&dir).expect("规范化临时目录");
+        let mut out = Vec::new();
+        // 能返回即说明环被断开；溢出会直接 abort，连断言都到不了
+        collect_templates(&root, &root, &mut out, &mut BTreeSet::new()).expect("遍历应正常返回");
+        assert!(
+            out.iter().any(|(k, _)| k == "turning/a.j2"),
+            "环之外的模板仍应被收集到: {out:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 目录符号链接**逃逸到根之外**时必须跳过。
+    ///
+    /// 此前目录层完全不校验，逃逸目录会被照常递归 —— 修 P1-2 时给目录补上了
+    /// 与文件分支同一套 `canonicalize` + `starts_with(root)`，此用例把新口径钉住。
+    #[cfg(unix)]
+    #[test]
+    fn symlink_escaping_root_is_skipped() {
+        let outside = std::env::temp_dir().join(format!("nctool_outside_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&outside);
+        std::fs::create_dir_all(&outside).expect("建根外目录");
+        let leaked = outside.join("leaked.j2");
+        std::fs::write(&leaked, "; 不应被收集\n").expect("写根外模板");
+
+        let (dir, _tpl) = temp_template_dir("symlink_escape");
+        std::os::unix::fs::symlink(&outside, dir.join("turning").join("out"))
+            .expect("建目录符号链接");
+
+        let root = std::fs::canonicalize(&dir).expect("规范化临时目录");
+        let mut out = Vec::new();
+        collect_templates(&root, &root, &mut out, &mut BTreeSet::new()).expect("遍历应正常返回");
+        assert!(
+            !out.iter().any(|(k, _)| k.contains("leaked")),
+            "逃逸到根之外的模板不得被收集: {out:?}"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 
     #[test]

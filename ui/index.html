@@ -1606,7 +1606,14 @@ const API = {
   async getTemplate(name) { return this.request("/api/templates/" + encodeURIComponent(name), "GET"); },
   async listMachines() { return this.request("/api/machines", "GET"); },
   async validate(template, params, body) { return this.request("/api/validate", "POST", { template, params, ...body }); },
-  async render(template, params, machine, options) { return this.request("/api/render", "POST", { template, params, machine, options }); },
+  /* 出口统一归一：state.options 的数字字段可能被写回字符串（表单输入天然是字符串），
+     后端按 as_u64() 取值，字符串会 400。demo 分支本来就在消费侧归一，server 分支
+     此前直接 JSON.stringify 发出去 —— 于是「在步进框里改一个数字」就渲染失败。
+     在唯一出口拦一次，将来再加数字字段也不会重犯。 */
+  async render(template, params, machine, options) {
+    return this.request("/api/render", "POST",
+      { template, params, machine, options: normalizeOpts(options || {}) });
+  },
   async partGenerate(part) { return this.request("/api/part/generate", "POST", { part }); },
 };
 
@@ -1666,7 +1673,9 @@ const state = {
    6. 渲染函数
    ═══════════════════════════════════════════════════════════════ */
 const $ = id => document.getElementById(id);
-const CATS = ["全部", "通用", "铣削", "车削", "钻孔", "机床"];
+/* 分类栏。必须与 `cli/src/server.rs::parse_category` 和 `cli/src/cli.rs::CategoryArg`
+   的取值集合一致：少一项，该分类的模板就只在「全部」里出现、计数永远对不上。 */
+const CATS = ["全部", "通用", "铣削", "车削", "钻孔", "切槽", "机床"];
 
 /* localStorage 安全访问：Chrome 在 file:// 下会抛 SecurityError，
    隐私模式同样可能拒绝写入。界面是只读工具，存取失败一律降级为「无持久化」，
@@ -1677,8 +1686,25 @@ const LS = {
   del(k) { try { localStorage.removeItem(k); } catch { /* 忽略 */ } },
 };
 
+/* HTML 转义（文本上下文与属性上下文通用）。
+   引号**必须**转 —— 属性值用双引号包裹时，一个 `"` 就能逃出属性边界并注入事件
+   处理器（`data-tpl="a"onerror=alert(1) x="`）。此前只转 `&` `<` `>`，漏了引号，
+   于是「模板文件名里有引号」直接等于「打开 nctool ui 即执行脚本」；
+   `'` 一并转掉，免得将来有人改用单引号包裹属性时又漏一个口子。 */
 function esc(s) {
-  return String(s).replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/* 属性**选择器**里的转义规则与 HTML 不同：`querySelector('[data-param="…"]')` 里
+   要转的是 `\` 与 `"`，转成 `&quot;` 反而匹配不到。与 esc 配对使用：
+   写入用 esc，回读用本函数，两边才指向同一个 DOM 属性值。 */
+function selEsc(v) {
+  return String(v).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
 }
 
 /* —— 最近使用（v2：复用路径前移，刷新后仍保留） —— */
@@ -1704,11 +1730,13 @@ function tplCardHtml(t) {
   const presets = Object.keys(all).filter(k => (all[k] || {}).template === t.name).slice(0, 2);
   const chips = presets.map(k =>
     `<button class="chip act" data-preset="${esc(k)}" title="载入预设「${esc(k)}」">${esc(k)}</button>`).join("");
-  return `<div class="tpl-item ${state.selected === t.name ? "active" : ""}" data-tpl="${t.name}">
-    <div class="row1"><span class="name">${t.name}</span>
+  /* t.name / t.category 对目录模板就是**磁盘文件名与目录名**，可含 `<` `"`。
+     属性与文本两处都要转：漏掉属性那处，一个 `"` 就能加出 onerror。 */
+  return `<div class="tpl-item ${state.selected === t.name ? "active" : ""}" data-tpl="${esc(t.name)}">
+    <div class="row1"><span class="name">${esc(t.name)}</span>
       <span class="badge ${t.builtin ? "builtin" : "demo"}">${t.builtin ? "内置" : "示例"}</span></div>
     <div class="desc">${esc(t.description || "")}</div>
-    <div class="meta"><span>${t.category}</span><span>必选 ${reqN}</span><span>可选 ${optN}</span></div>
+    <div class="meta"><span>${esc(t.category)}</span><span>必选 ${reqN}</span><span>可选 ${optN}</span></div>
     ${chips ? `<div class="tpl-presets">${chips}</div>` : ""}
   </div>`;
 }
@@ -1798,7 +1826,13 @@ function renderForm() {
     inp.addEventListener("change", () => { state.options[inp.dataset.opt] = inp.checked; scheduleRender(); });
   });
   $("formBody").querySelectorAll("input[data-opt-num]").forEach(inp => {
-    inp.addEventListener("input", () => { state.options[inp.dataset.optNum] = inp.value; scheduleRender(); });
+    /* 存数字而不是 `input.value` 的字符串：后端按 `as_u64()` 取值，字符串一律
+       400「必须是非负整数」。输入框清空时保留原样，交给发送前的 normalizeOpts 兜底。 */
+    inp.addEventListener("input", () => {
+      const n = Number(inp.value);
+      state.options[inp.dataset.optNum] = inp.value !== "" && Number.isFinite(n) ? n : inp.value;
+      scheduleRender();
+    });
   });
   $("formBody").querySelectorAll("button[data-seg]").forEach(btn => {
     btn.addEventListener("click", () => {
@@ -1862,35 +1896,40 @@ function coerceParamValue(s, raw) {
   return heur;
 }
 
+/* 参数名与取值全部来自模板（`{# PARAMS: #}` 按空白分词，不校验字符集）或用户输入，
+   因此**每一处插值都要转**：属性值的引号会逃出属性边界，文本里的 `<` 会开新标签。
+   `name` 是转义后的参数名，DOM 属性值与文本都取它 —— 浏览器解析 `&quot;` 后得到
+   的还是原名，所以 `id="field-…"` 与 `applyInlineErrors` 的 `field-` 查找仍然对得上。 */
 function fieldHtml(t, s) {
   const cur = state.params[s.name];
   const has = cur !== undefined && cur !== "";
+  const name = esc(s.name);
   let input = "";
-  const range = [s.min, s.max].filter(x => x !== undefined).map(x => `${x}`).join(" ~ ");
+  const range = [s.min, s.max].filter(x => x !== undefined).map(x => `${esc(x)}`).join(" ~ ");
   if (s.kind === "Bool") {
-    input = `<label class="switch"><input type="checkbox" data-param="${s.name}" ${cur ? "checked" : ""}><span class="slider"></span></label>`;
+    input = `<label class="switch"><input type="checkbox" data-param="${name}" ${cur ? "checked" : ""}><span class="slider"></span></label>`;
   } else if (optionValues(s).length) {
     /* 白名单参数用下拉框：后端会拒绝白名单外的取值，让用户在这里就选对 */
     const vals = optionValues(s);
-    input = `<select data-param="${s.name}">
+    input = `<select data-param="${name}">
       <option value="">— 请选择 —</option>
       ${vals.map(v => `<option value="${esc(String(v))}" ${has && String(cur) === String(v) ? "selected" : ""}>${esc(String(v))}</option>`).join("")}
     </select>`;
   } else if (s.kind === "Number" || s.kind === "Integer") {
-    input = `<input type="number" data-param="${s.name}" step="${s.kind === "Integer" ? "1" : "any"}"
-      placeholder="${paramDefault(s) !== undefined ? paramDefault(s) : "—"}" value="${has ? cur : ""}">
-      ${s.unit ? `<span class="suffix">${s.unit}</span>` : ""}`;
+    input = `<input type="number" data-param="${name}" step="${s.kind === "Integer" ? "1" : "any"}"
+      placeholder="${esc(paramDefault(s) !== undefined ? paramDefault(s) : "—")}" value="${has ? esc(cur) : ""}">
+      ${s.unit ? `<span class="suffix">${esc(s.unit)}</span>` : ""}`;
   } else {
-    input = `<input type="text" data-param="${s.name}" placeholder="${paramDefault(s) !== undefined ? paramDefault(s) : ""}" value="${has ? esc(cur) : ""}">`;
+    input = `<input type="text" data-param="${name}" placeholder="${esc(paramDefault(s) !== undefined ? paramDefault(s) : "")}" value="${has ? esc(cur) : ""}">`;
   }
   const req = s.required && paramDefault(s) === undefined;
   const rif = s.requiredIf;
   const tag = req ? `<span class="req-tag">*必填</span>`
     : rif ? `<span class="opt-tag">条件必选</span>`
     : `<span class="opt-tag">可选</span>`;
-  return `<div class="param-field ${req ? "req" : "opt"}" id="field-${s.name}">
+  return `<div class="param-field ${req ? "req" : "opt"}" id="field-${name}">
     <div class="param-top">
-      <label>${s.name}</label>
+      <label>${name}</label>
       ${tag}
       ${range ? `<span class="range">范围 ${range}</span>` : ""}
     </div>
@@ -1903,12 +1942,14 @@ function fieldHtml(t, s) {
 
 function optionsHtml() {
   const o = state.options;
+  /* 当前调用点传的都是字面量，但仍在此转义：这是一个通用 HTML 构造器，
+     将来有人传进模板名或用户输入时不该再回头补一遍。 */
   const chk = (key, label, sub) =>
-    `<label class="opt-item"><input type="checkbox" data-opt="${key}" ${o[key] ? "checked" : ""}><span>${label}</span>${sub ? `<span class="sub">${sub}</span>` : ""}</label>`;
+    `<label class="opt-item"><input type="checkbox" data-opt="${esc(key)}" ${o[key] ? "checked" : ""}><span>${esc(label)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ""}</label>`;
   return `
     <div class="opts">
       ${chk("lineNumbers", "行号", "N0010 N0020…")}
-      <label class="opt-inline">步进<input type="number" data-opt-num="lineStep" value="${o.lineStep}" min="1"></label>
+      <label class="opt-inline">步进<input type="number" data-opt-num="lineStep" value="${esc(o.lineStep)}" min="1"></label>
       ${chk("addHeader", "头部注释", "nctool generated")}
       ${chk("stripBlank", "删除空行", "")}
       ${chk("ascii", "ASCII 清洗", "开启后非 ASCII → ?")}
@@ -1928,7 +1969,7 @@ function collectParams(t) {
   const p = {};
   (t.params || []).forEach(s => {
     if (s.derive) return; /* 派生参数由系统注入，不由表单提供 */
-    const inp = $("formBody").querySelector(`[data-param="${s.name}"]`);
+    const inp = $("formBody").querySelector(`[data-param="${selEsc(s.name)}"]`);
     if (!inp) return;
     if (s.kind === "Bool") { p[s.name] = inp.checked; return; }
     /* 空值统一记为 undefined（"未提供"，交给后端默认值/条件必选判定） */
@@ -2235,7 +2276,7 @@ async function selectTemplate(name, opts) {
     else if (def !== undefined) state.params[s.name] = def;
     else state.params[s.name] = undefined;
   });
-  $("crumb").innerHTML = `· <b>${t.category}</b>`;
+  $("crumb").innerHTML = `· <b>${esc(t.category)}</b>`;
   $("panelTitle").textContent = t.name;
   pushRecent(name);
   $("resetBtn").hidden = false;
@@ -2275,9 +2316,10 @@ function renderMachineSel() {
   const custom = loadCustomMachine();
   const sel = $("machineSel");
   const machines = state.machines.length ? state.machines : Object.values(MACHINE_PRESETS);
+  /* 机床来自用户 TOML / 服务端注册表，同样按不可信处理 */
   sel.innerHTML = machines.map(m =>
-    `<option value="${m.id}">${m.vendor} ${m.model} (${m.id})</option>`
-  ).join("") + (API.mode === "demo" && custom ? `<option value="custom">自定义 ${custom.model}</option>` : "");
+    `<option value="${esc(m.id)}">${esc(m.vendor || "")} ${esc(m.model || "")} (${esc(m.id)})</option>`
+  ).join("") + (API.mode === "demo" && custom ? `<option value="custom">自定义 ${esc(custom.model || "")}</option>` : "");
   sel.value = state.machine;
 }
 

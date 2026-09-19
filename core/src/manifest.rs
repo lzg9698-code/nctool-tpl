@@ -46,7 +46,7 @@ pub const MANIFEST_FILE: &str = "templates.yaml";
 ///
 /// 所有字段都是**可选**的：未声明时回退到模板头部注释或文件名，
 /// 因此清单只需描述"与默认值不同"的模板。
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TemplateMeta {
     /// 显示名。
@@ -135,6 +135,30 @@ pub struct TemplateMeta {
     /// [`ParamKind::Any`]）。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub params: Option<Vec<ParamOverride>>,
+}
+
+/// **必须手写**，不能用 `#[derive(Default)]`。
+///
+/// 派生出来的 `Default` 给出 `visible = false` / `output_extension = ""`，而 serde
+/// 路径（`#[serde(default = "default_true")]` / `default_extension`）给出
+/// `true` / `".NC"` —— 同一个「缺省」在两处含义不同。`TemplateMeta::resolve` 对
+/// **清单未提及**的模板走 `unwrap_or_default()`，拿到的就是派生那个版本：
+/// 往 `templates/` 里放一个新 `.j2` 而不加清单条目，用户列表里看不到它
+/// （`list_visible` 过滤掉），输出文件名还丢扩展名。且全程不报错。
+impl Default for TemplateMeta {
+    fn default() -> Self {
+        Self {
+            name: None,
+            description: None,
+            visible: true,
+            output_filename: None,
+            output_extension: default_extension(),
+            category: None,
+            machine: None,
+            status: None,
+            params: None,
+        }
+    }
 }
 
 /// 参数规格的**稀疏覆盖**声明（清单 `params` 列表项）。
@@ -885,6 +909,43 @@ templates:
         assert_eq!(meta.name.as_deref(), Some("越程槽加工"));
         assert!(meta.visible);
         assert_eq!(meta.output_extension, ".NC");
+    }
+
+    #[test]
+    fn template_absent_from_manifest_is_visible_with_default_extension() {
+        // 回归（P1-4）：`TemplateMeta` 此前 `#[derive(Default)]`，给出
+        // visible=false + output_extension=""，而 serde 路径
+        // （`#[serde(default = "default_true")]` / `default_extension`）给出
+        // true/".NC"。`resolve` 对**清单未提及**的模板走 `unwrap_or_default()`，
+        // 拿到的正是派生那个版本 —— 于是「往 templates/ 放一个新 .j2 而不加清单
+        // 条目」= 用户列表里看不到它、输出文件名丢扩展名，且全程不报错。
+        let r = ResolvedMeta::resolve(
+            Path::new("milling/new_part.j2"),
+            "; 新模板，清单里没有\n",
+            None,
+            &no_lib(),
+        );
+        assert!(r.visible, "清单未提及的模板缺省必须可见");
+        assert_eq!(r.output_extension, ".NC", "缺省扩展名必须与 serde 路径一致");
+
+        // 两条路径必须给出同一套缺省；不等就是「同一个缺省有两个含义」，
+        // 正是本缺陷的成因，别只修一半。
+        let m = TemplateManifest::from_yaml(
+            "templates:\n  \"milling/new_part.j2\": {}\n",
+            Path::new("templates.yaml"),
+        )
+        .unwrap();
+        let from_serde = m.get("milling/new_part.j2").unwrap();
+        assert_eq!(
+            from_serde.visible,
+            TemplateMeta::default().visible,
+            "serde 缺省与 Default::default() 必须一致（visible）"
+        );
+        assert_eq!(
+            from_serde.output_extension,
+            TemplateMeta::default().output_extension,
+            "serde 缺省与 Default::default() 必须一致（output_extension）"
+        );
     }
 
     #[test]
