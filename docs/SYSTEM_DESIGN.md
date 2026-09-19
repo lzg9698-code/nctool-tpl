@@ -264,8 +264,12 @@ undefined 参与运算或取属性会直接报错，`default` 来不及兜底。
 - 收尾行的 `-#}` 要 `trim_matches('-')` 后再判空，否则会解析出名为 `-` 的假参数。
 - **`{# MACHINE: #}` / `{# OUTPUT: #}` 从未实现**，要设机床与输出后缀请用清单字段。
 
-`ParamOverride` + `merge_params` 是**稀疏覆盖机制**：字段全为 `Option`，
-能区分「没写」与「写成默认值」；`deny_unknown_fields` 让拼错的字段名直接报错。
+`ParamOverride` + `merge_params` 是**稀疏覆盖机制**：约束字段为 `Option<Option<T>>`，
+能区分「没写 → 沿用继承值」「写 `null` → 清空该条继承」「写成值 → 设值」三种意图
+（`options` 上 `[]` 与 `null` 等价）；`deny_unknown_fields` 让拼错的字段名直接报错。
+少一层 `Option` 就分不出「不改」与「清空」，继承来的 `min` / 白名单 / `derive`
+便在**所有**模板上生效且无从解除——某模板确实需要负值或不要派生时只能去改变量库，
+那会波及全部模板。
 
 #### `variables.rs` —— 全局变量库（按名生效）
 

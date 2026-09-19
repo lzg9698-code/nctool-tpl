@@ -232,8 +232,18 @@ variables:
         assert_eq!(l.len(), 2);
         let u_q = l.get("U_Q").unwrap();
         assert_eq!(u_q.kind, Some(ParamKind::Choice));
-        assert_eq!(u_q.options.as_ref().unwrap().len(), 4);
-        assert!(l.get("U_FX").unwrap().options.as_ref().unwrap().len() == 3);
+        assert_eq!(u_q.options.as_ref().unwrap().as_ref().unwrap().len(), 4);
+        assert!(
+            l.get("U_FX")
+                .unwrap()
+                .options
+                .as_ref()
+                .unwrap()
+                .as_ref()
+                .unwrap()
+                .len()
+                == 3
+        );
         assert!(l.get("missing").is_none());
     }
 

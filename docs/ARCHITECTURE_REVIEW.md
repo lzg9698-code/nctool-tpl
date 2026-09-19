@@ -107,7 +107,7 @@
   这是本架构最有价值的扩展性设计。
 - **`derive` 规则声明式**：查表换算（如 `tip_model → tip_depth`）以数据形式声明，
   引擎实现一次、复用无限次。
-- **稀疏覆盖机制**（`ParamOverride` 全字段 `Option` + `deny_unknown_fields`）：
+- **稀疏覆盖机制**（`ParamOverride` 约束字段为 `Option<Option<T>>`，区分「没写 / 写 `null` 清空 / 写值」+ `deny_unknown_fields`）：
   三个层级共享同一套合并语义，扩展新约束字段只改一处结构体。
 - **前向兼容标注**：`IssueKind` 与 `TplError` 均 `#[non_exhaustive]`，新增变体不破坏下游。
 - **机床配置键 schema**（`KNOWN_CONFIG_KEYS` + `validate_config_keys`）：新增配置键有登记处与校验。

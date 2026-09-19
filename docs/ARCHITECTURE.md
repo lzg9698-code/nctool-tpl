@@ -294,7 +294,7 @@ flowchart LR
 | --- | --- | --- | --- |
 | 头部 `{# PARAMS: #}` | 本模板 | 名字、类型、必选性、描述 | 两种写法：`name 必选 描述` 与 `name type required 描述`；类型可省（记为 `Any`） |
 | `variables.yaml` | **全局（按变量名）** | 类型、候选值、`min`/`max`/`integer` | 同一变量在多模板含义一致时只写一次；**只对模板确实引用了的变量生效** |
-| 清单 `params` | 本模板 | 全部约束 | **稀疏覆盖**：只写要改的字段（`ParamOverride` 字段全为 `Option`，能区分"没写"与"写成默认值"） |
+| 清单 `params` | 本模板 | 全部约束 | **稀疏覆盖**：只写要改的字段。`ParamOverride` 的约束字段是 `Option<Option<T>>` —— **没写** = 沿用继承值，**写 `null`** = 清空该条继承（`options` 上 `[]` 与 `null` 等价），**写值** = 设值 |
 
 **优先级：清单 `params` > `variables.yaml` > 头部 `{# PARAMS: #}`**（越靠后越具体）。
 三者都复用同一套稀疏覆盖机制（`ParamOverride` + `merge_params`），因此"只写要改的字段"

@@ -182,6 +182,19 @@ impl Ctx {
         // 而注册顺序取决于文件系统返回顺序）
         found.sort_by(|a, b| a.0.cmp(&b.0));
 
+        // 清单孤儿条目（P1-12）：清单里写了、但没有任何模板文件对得上的键。
+        // 它们的 `params` / `visible` / `machine` / `output_extension` 全部静默失效 ——
+        // 看起来约束齐全，实际一条都没上（`undercut.j2` vs `undercut_fs.j2` 这类
+        // 笔误尤其容易发生）。提示而不阻断：清单是可选文件，为它挡住整个注册表
+        // 得不偿失。
+        let present: BTreeSet<String> = found.iter().map(|(k, _)| k.clone()).collect();
+        for key in manifest.orphan_keys(&present) {
+            eprintln!(
+                "warning: 清单条目 {key} 未匹配到任何模板文件\
+                 （其 params / visible / machine / output_extension 均不会生效，请核对拼写）"
+            );
+        }
+
         for (rel_key, canonical) in found {
             let source_text = std::fs::read_to_string(&canonical).map_err(|e| {
                 CliError::new("io", format!("读取模板失败 {}: {e}", canonical.display()))

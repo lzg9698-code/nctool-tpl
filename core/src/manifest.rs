@@ -18,10 +18,10 @@
 //!
 //! [NCTool_V3]: https://github.com/lzg9698-code/NCTool_V3
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::Path;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 
 use crate::model::{ParamKind, ParamSpec, ParamValue, RequiredIf};
 use crate::registry::TemplateCategory;
@@ -161,6 +161,23 @@ impl Default for TemplateMeta {
     }
 }
 
+/// `Option<Option<T>>` 的反序列化：区分「键未写」与「键写成 `null`」。
+///
+/// 必须显式写出来：serde 对 `Option<Option<T>>` 的默认行为是把**缺失和 `null`
+/// 都变成外层 `None`**，那样就分不出「不改」与「清空」—— 正是本类型要解决的问题。
+/// 配合 `#[serde(default)]`（缺失 → `None`）后：
+///
+/// - 键未写 → `None`（沿用被覆盖的既有值）
+/// - `键: null` → `Some(None)`（**清空**该字段）
+/// - `键: 值` → `Some(Some(值))`（设值）
+fn double_option<'de, T, D>(de: D) -> Result<Option<Option<T>>, D::Error>
+where
+    T: Deserialize<'de>,
+    D: Deserializer<'de>,
+{
+    Deserialize::deserialize(de).map(Some)
+}
+
 /// 参数规格的**稀疏覆盖**声明（清单 `params` 列表项）。
 ///
 /// 与 [`ParamSpec`] 的区别：本类型的字段**全部可选**，因此能区分
@@ -179,37 +196,71 @@ pub struct ParamOverride {
     /// 是否必选（文档性声明）
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub required: Option<bool>,
-    /// 默认值
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub default: Option<ParamValue>,
-    /// 数值下界（含）
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub min: Option<f64>,
-    /// 数值上界（含）
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub max: Option<f64>,
+    /// 默认值。**写 `null` 表示清空**（取消继承来的默认值）
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub default: Option<Option<ParamValue>>,
+    /// 数值下界（含）。**写 `null` 表示清空**
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub min: Option<Option<f64>>,
+    /// 数值上界（含）。**写 `null` 表示清空**
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub max: Option<Option<f64>>,
     /// 是否要求整数值
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub integer: Option<bool>,
-    /// 计量单位（仅文档与错误提示用）
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub unit: Option<String>,
-    /// 候选项白名单
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub options: Option<Vec<ParamValue>>,
-    /// 条件必选
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub required_if: Option<RequiredIf>,
-    /// 派生规则（由 Rust 侧查表算好注入，见 [`crate::derive`]）
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub derive: Option<crate::model::DeriveRule>,
+    /// 计量单位（仅文档与错误提示用）。**写 `null` 表示清空**
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub unit: Option<Option<String>>,
+    /// 候选项白名单。**写 `[]` 或 `null` 表示清空**（取消继承来的白名单）
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub options: Option<Option<Vec<ParamValue>>>,
+    /// 条件必选。**写 `null` 表示清空**
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub required_if: Option<Option<RequiredIf>>,
+    /// 派生规则（由 Rust 侧查表算好注入，见 [`crate::derive`]）。**写 `null` 表示清空**
+    #[serde(
+        default,
+        deserialize_with = "double_option",
+        skip_serializing_if = "Option::is_none"
+    )]
+    pub derive: Option<Option<crate::model::DeriveRule>>,
     /// 用途说明
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub description: Option<String>,
 }
 
 impl ParamOverride {
-    /// 覆盖到既有规格上（未写的字段保持原值）。
+    /// 覆盖到既有规格上。
+    ///
+    /// 可清空的字段是 `Option<Option<T>>`：**外层 `Some` = 清单里写了这个键**，
+    /// 内层 `Some(v)` 设值、`None`（YAML `null`）清空。不这样分层就分不出
+    /// 「没写 → 沿用继承值」和「写了 null → 解除继承」——`Option<T>` 只能设不能清，
+    /// 于是变量库里给 `U_Q` 声明的 `min: 0` 能在**所有**模板上生效且无从解除，
+    /// 哪怕某模板确实需要负值；继承来的 `derive` 同理，想关掉只能改变量库。
     fn apply_to(self, spec: &mut ParamSpec) {
         if let Some(kind) = self.kind {
             spec.kind = kind;
@@ -218,33 +269,33 @@ impl ParamOverride {
             spec.required = required;
         }
         if let Some(default) = self.default {
-            spec.default = Some(default);
+            spec.default = default;
         }
         if let Some(min) = self.min {
-            spec.min = Some(min);
+            spec.min = min;
         }
         if let Some(max) = self.max {
-            spec.max = Some(max);
+            spec.max = max;
         }
         if let Some(integer) = self.integer {
             spec.integer = integer;
         }
         if let Some(unit) = self.unit {
-            spec.unit = Some(unit);
+            spec.unit = unit;
         }
         if let Some(options) = self.options {
-            // 空列表等同于"不声明"（与 `with_options` 语义一致）
-            spec.options = if options.is_empty() {
-                None
-            } else {
-                Some(options)
+            // `[]` 与 `null` 等价：都是「不要白名单」。
+            // 空列表**不能**当成"没写" —— 那样就永远无法解除继承来的白名单。
+            spec.options = match options {
+                Some(v) if !v.is_empty() => Some(v),
+                _ => None,
             };
         }
         if let Some(required_if) = self.required_if {
-            spec.required_if = Some(required_if);
+            spec.required_if = required_if;
         }
         if let Some(derive) = self.derive {
-            spec.derive = Some(derive);
+            spec.derive = derive;
         }
         if let Some(description) = self.description {
             spec.description = description;
@@ -443,6 +494,23 @@ impl TemplateManifest {
     /// 遍历清单条目（`相对路径 → 元数据`）。
     pub fn iter(&self) -> impl Iterator<Item = (&String, &TemplateMeta)> {
         self.entries.iter()
+    }
+
+    /// 清单里**没有匹配到任何模板文件**的键（孤儿条目），按字典序返回。
+    ///
+    /// 孤儿条目是纯静默失效：`params`（白名单/区间）、`visible`、`machine`、
+    /// `output_extension` 全部不生效 —— 参数失去约束、模板被隐藏，而没有任何提示。
+    /// 写成 `undercut.j2`（实际是 `undercut_fs.j2`）这类笔误尤其危险：
+    /// 看起来约束齐全，实际一条都没上。项目已为「规格写了个不存在的参数」设了
+    /// `SpecInert` 警告，此处是对称的补口。
+    ///
+    /// `present` 是**实际存在**的模板键集合（调用方遍历模板目录后提供）。
+    pub fn orphan_keys<'a>(&'a self, present: &BTreeSet<String>) -> Vec<&'a str> {
+        self.entries
+            .keys()
+            .filter(|k| !present.contains(k.as_str()))
+            .map(String::as_str)
+            .collect()
     }
 
     /// 收集清单中声明的全部机床方案包 id（去重、有序）。
@@ -911,6 +979,41 @@ templates:
         assert_eq!(meta.output_extension, ".NC");
     }
 
+    /// 回归（P1-12）：清单里写了却不存在的键此前**零检测** —— 该条目的
+    /// `params`（白名单/区间）、`visible`、`machine`、`output_extension` 全部静默
+    /// 失效，看起来约束齐全、实际一条都没上。写成 `undercut.j2`（实际是
+    /// `undercut_fs.j2`）这类笔误最容易发生。
+    #[test]
+    fn orphan_keys_reports_unmatched_entries() {
+        let yaml = r#"
+templates:
+  "turning/undercut_fs.j2":
+    visible: false
+  "turning/undercut.j2":
+    params:
+      - name: X
+  "milling/gone.j2": {}
+"#;
+        let m = TemplateManifest::from_yaml(yaml, Path::new("templates.yaml")).unwrap();
+        let present = BTreeSet::from([
+            "turning/undercut_fs.j2".to_string(),
+            "milling/facing.j2".to_string(),
+        ]);
+        assert_eq!(
+            m.orphan_keys(&present),
+            vec!["milling/gone.j2", "turning/undercut.j2"],
+            "应报出全部未命中键，且按字典序"
+        );
+
+        // 全部命中时无告警（别把正常清单也刷成噪声）
+        let all_present = BTreeSet::from([
+            "turning/undercut_fs.j2".to_string(),
+            "turning/undercut.j2".to_string(),
+            "milling/gone.j2".to_string(),
+        ]);
+        assert!(m.orphan_keys(&all_present).is_empty());
+    }
+
     #[test]
     fn template_absent_from_manifest_is_visible_with_default_extension() {
         // 回归（P1-4）：`TemplateMeta` 此前 `#[derive(Default)]`，给出
@@ -1277,10 +1380,10 @@ G1 X1
         let meta = TemplateMeta {
             params: Some(vec![ParamOverride {
                 name: "U_FX".into(),
-                options: Some(vec![
+                options: Some(Some(vec![
                     ParamValue::String("闭口".into()),
                     ParamValue::String("左开口".into()),
-                ]),
+                ])),
                 ..Default::default()
             }]),
             ..Default::default()
@@ -1309,8 +1412,8 @@ G1 X1
             params: Some(vec![ParamOverride {
                 name: "U_ID".into(),
                 kind: Some(ParamKind::Choice),
-                options: Some(vec![ParamValue::Integer(41), ParamValue::Integer(42)]),
-                unit: Some("号".into()),
+                options: Some(Some(vec![ParamValue::Integer(41), ParamValue::Integer(42)])),
+                unit: Some(Some("号".into())),
                 ..Default::default()
             }]),
             ..Default::default()
@@ -1375,15 +1478,16 @@ templates:
             .as_ref()
             .unwrap();
         assert_eq!(params.len(), 2);
-        let rif = params[0].required_if.as_ref().unwrap();
+        // 外层 `Some` = 键写了；内层 `Some` = 写的是值（写 null 则内层为 None）
+        let rif = params[0].required_if.as_ref().unwrap().as_ref().unwrap();
         assert_eq!(rif.param, "side");
         assert!(rif.triggered_by(&ParamValue::String("Right".into())));
         assert!(!rif.triggered_by(&ParamValue::String("Left".into())));
         // `[0, 8, 12.5]` → 前两个是整数、第三个是浮点，与 YAML 标量类型一致
-        let opts = params[1].options.as_ref().unwrap();
+        let opts = params[1].options.as_ref().unwrap().as_ref().unwrap();
         assert_eq!(opts[0], ParamValue::Integer(0));
         assert_eq!(opts[2], ParamValue::Number(12.5));
-        assert_eq!(params[1].unit.as_deref(), Some("mm"));
+        assert_eq!(params[1].unit.as_ref().unwrap().as_deref(), Some("mm"));
         // 序列化仍走带标签形式（无歧义）
         let back = serde_yaml::to_string(&params[1]).unwrap();
         assert!(back.contains("type: integer"), "{back}");
@@ -1496,6 +1600,60 @@ templates:
         .unwrap()
     }
 
+    /// 回归（P1-13）：清单覆盖此前只能**设**继承来的字段、不能**清** ——
+    /// `Option<T>` 一旦有值就回不到 `None`。后果：变量库给 `U_Q` 声明了
+    /// `min` / 白名单 / `unit` 之后，**所有**模板都被套上，某个确实需要负值
+    /// （或不想带白名单）的模板在清单里写什么都解不掉。继承来的 `derive` 同理，
+    /// 想关掉只能改变量库 —— 那会波及所有模板。
+    ///
+    /// 现在 `键: null` 表示清空；白名单上 `[]` 与 `null` 等价。
+    #[test]
+    fn manifest_null_clears_inherited_field() {
+        let lib = crate::variables::VariableLibrary::from_yaml(
+            "variables:\n  - name: U_Q\n    kind: number\n    min: 0\n    unit: mm\n    options: [0, 8]\n",
+            Path::new("variables.yaml"),
+        )
+        .unwrap();
+        let src = "{# PARAMS:\n     U_Q   number  必选  槽宽\n   #}\nX{{ U_Q }}\n";
+
+        // 基线：清单没提及 → 三样都从变量库继承
+        let r = ResolvedMeta::resolve(Path::new("a.j2"), src, None, &lib);
+        assert_eq!(r.params[0].min, Some(0.0));
+        assert_eq!(r.params[0].unit.as_deref(), Some("mm"));
+        assert!(r.params[0].options.is_some());
+
+        // 写 null → 逐项清空
+        let yaml = r#"
+templates:
+  "a.j2":
+    params:
+      - name: U_Q
+        min: null
+        unit: null
+        options: null
+"#;
+        let m = TemplateManifest::from_yaml(yaml, Path::new("templates.yaml")).unwrap();
+        let r = ResolvedMeta::resolve(Path::new("a.j2"), src, m.get("a.j2"), &lib);
+        assert_eq!(r.params[0].min, None, "min: null 必须解除继承的下界");
+        assert_eq!(r.params[0].unit, None, "unit: null 必须解除继承的单位");
+        assert_eq!(
+            r.params[0].options, None,
+            "options: null 必须解除继承的白名单"
+        );
+        assert_eq!(
+            r.params[0].kind,
+            ParamKind::Number,
+            "没写的字段不该被牵连（类型仍来自变量库）"
+        );
+
+        // `options: []` 与 `null` 等价；未写的字段保持继承
+        let yaml = "templates:\n  \"a.j2\":\n    params:\n      - name: U_Q\n        options: []\n";
+        let m = TemplateManifest::from_yaml(yaml, Path::new("templates.yaml")).unwrap();
+        let r = ResolvedMeta::resolve(Path::new("a.j2"), src, m.get("a.j2"), &lib);
+        assert_eq!(r.params[0].options, None, "options: [] 也必须解除白名单");
+        assert_eq!(r.params[0].min, Some(0.0), "未写的 min 应保持继承值");
+    }
+
     #[test]
     fn variable_library_beats_header_declaration() {
         // 头部只写了 `U_Q number 必选 槽宽`（迁移模板的常见形态），
@@ -1523,7 +1681,7 @@ templates:
         let meta = TemplateMeta {
             params: Some(vec![ParamOverride {
                 name: "U_Q".into(),
-                options: Some(vec![ParamValue::Number(0.0), ParamValue::Number(6.0)]),
+                options: Some(Some(vec![ParamValue::Number(0.0), ParamValue::Number(6.0)])),
                 ..Default::default()
             }]),
             ..Default::default()

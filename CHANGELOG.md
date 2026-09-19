@@ -247,13 +247,37 @@
   优先」相反。不报错，只是静默按另一套约束校验。现改为先入表、后递归。
   反向验证：还原旧顺序后新测试报 `left: [grandchild]`，确认复现报告所述。
 
+- **清单孤儿条目零检测**（`core/src/manifest.rs`、`cli/src/context.rs`）：清单里写了、
+  但没有对应模板文件的键，其 `params`（白名单/区间）、`visible`、`machine`、
+  `output_extension` 全部**静默失效** —— 看起来约束齐全，实际一条都没上。写成
+  `turning/undercut.j2`（实际是 `undercut_fs.j2`）这类笔误尤其容易发生。
+  项目已为「规格写了个不存在的参数」设了 `SpecInert` 警告，此处是对称的补口：
+  新增 `TemplateManifest::orphan_keys`，注册表加载时对未命中键打 `warning:`（不阻断）。
+  本仓库自身的清单实测无告警。
+
+- **稀疏覆盖只能设、不能清**（`core/src/manifest.rs`）：`ParamOverride` 的约束字段
+  是 `Option<T>`，一旦从 `variables.yaml` 或头部继承到值就回不到 `None`——变量库给
+  `U_Q` 声明 `min: 0` 后，**所有**模板都被套上，某模板确实需要负值也只能去改变量库，
+  那会波及全部模板；继承来的 `derive` 同理，想关掉没有别的办法。
+  现把 `default` / `min` / `max` / `unit` / `options` / `required_if` / `derive`
+  改为 `Option<Option<T>>`（配 `double_option` 反序列化），三种写法语义区分开：
+  **没写** = 沿用继承值、**写 `null`** = 清空该条继承、**写值** = 设值；
+  `options: []` 与 `options: null` 等价。`templates/README.md` 与
+  `docs/ARCHITECTURE.md` / `docs/SYSTEM_DESIGN.md` / `docs/ARCHITECTURE_REVIEW.md`
+  同步更新（原先都写作「字段全为 `Option`，能区分没写与写成默认值」）。
+
 #### 测试
 
-- 新增 2 项：`explicit_path_that_collides_with_registered_name_wins`（含反向用例：
-  同一文件不该改名）、`include_closure_spec_precedence_is_nearest_to_main`。
-  两项均经**反向验证**（临时还原实现 → FAILED → 恢复）。
+- 新增 4 项：`explicit_path_that_collides_with_registered_name_wins`（含反向用例：
+  同一文件不该改名）、`include_closure_spec_precedence_is_nearest_to_main`、
+  `orphan_keys_reports_unmatched_entries`、`manifest_null_clears_inherited_field`。
+  前三项经**反向验证**（临时还原实现 → FAILED → 恢复）；第四项亦做了反向验证
+  （只把 `min` 一处改回旧语义 → `left: Some(0.0)` / `right: None`）。
 - 断管道修复用真实进程验证：`nctool ... --format json | :` 旧实现 exit 101、新实现 exit 1。
-- workspace 全量 **542 项**通过。
+- 孤儿键告警用真实 CLI 验证（临时模板目录 + 清单里一条拼错的键）：
+  `templates list` 打出一条 `warning: 清单条目 turning/undercut.j2 未匹配到任何模板文件…`，
+  且只报未命中的那条。
+- workspace 全量 **544 项**通过。
 
 ---
 

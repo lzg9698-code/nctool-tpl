@@ -122,12 +122,26 @@ templates:
       - name: U_Q
         kind: number
         options: [0, 8, 10, 12.5]
+
+  "turning/<你的模板>.j2":
+    params:
+      # 变量库给 U_Q 限定了 [0, 8, 10, 12.5]，本模板要走别的槽宽 ——
+      # 写 null 解除继承来的白名单（**只对模板确实引用了的变量生效**）
+      - name: U_Q
+        options: null
 ```
 
 - 可覆盖的字段：`kind` / `required` / `default` / `min` / `max` / `integer` /
-  `unit` / `options` / `required_if` / `description`。
+  `unit` / `options` / `required_if` / `derive` / `description`。
+- **写 `null` 表示「清空」**，即解除从 `variables.yaml` / 头部继承来的那一条：
+  `min: null` 去掉下界、`options: null` 去掉白名单、`derive: null` 取消派生
+  （`options: []` 与 `options: null` 等价）。**不写**该键才是「沿用继承值」——
+  三种写法语义各不相同，别把「没写」当成「清空」。
 - 头部没声明的参数也能在这里新增（`kind` 缺省为 `any`）。
 - 拼错字段名会**直接报错**（`deny_unknown_fields`），不会静默忽略。
+- 清单里写了、但**没有对应模板文件**的键会在加载时告警
+  （`warning: 清单条目 … 未匹配到任何模板文件`）—— 这类条目的约束一条都不会生效，
+  最常见的原因是路径拼错（`undercut.j2` vs `undercut_fs.j2`）。
 - 候选值/触发值直接写裸标量即可（`options: [0, 8, 12.5]`、
   `values: ["Right"]`），不必写 `{type, value}` 带标签形式。
 
