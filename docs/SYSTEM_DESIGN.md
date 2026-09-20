@@ -1,7 +1,8 @@
 # nctool 系统设计文档
 
-> 版本：v2.0 · 2026-09-15（版本引用 2026-09-18 同步至发版号）
-> 对应代码：`nctool-tpl` v0.4.0 / `nctool-core` v0.3.0 / `nctool-cli` v0.3.0（workspace 共 16 139 行 Rust）
+> 版本：v2.1 · 2026-09-20（**架构性变更记档**：`nctool-core` 首次承担资产写入职责）
+> **v2.1 修订说明**：依据 T01「共用写盘底座」落地并通过独立验证，记档一项**架构性变更** —— `nctool-core` **首次承担资产写入职责**（新增 `core::asset` 写内核：原子写 / 乐观锁 / 路径防护）。本次修订 §2.1（依赖图补 `core::asset`）、§2.2（crate 职责矩阵两行）、§2.3（补 `core::asset` 模块）、§6（新增 D19）、§7（补"新增写操作"扩展点）、§8（补 T01 已登记边界）；另据编辑模块（T02）定案，§3.2 记 `core::validate` 新增 `check_spec_consistency`（保存前 L2，须复用 `check_spec_defaults`）与 `check_param_values`（保存前 L3，值级、不查缺失）两个入口。**（v2.1 收准）** D19 例外改为**分类全枚举**——交付层生产口径 `fs::write` 共 3 处、全部非资产写（`config init` / `render --out` / `$EDITOR` 临时副本）；**资产写全部经 `core::asset`，D19 规则成立**。**仅改文档，未改源码/测试**。
+> 对应代码：`nctool-tpl` v0.4.0 / `nctool-core` v0.3.0 / `nctool-cli` v0.3.0（crate 版本号经查 `Cargo.toml` **未变**；**规模数字为 v2.0 快照，T01 新增 `core::asset` 后待重新实测**，见 §2.3 注）
 > 范围：三个 crate 的分层架构、核心模块职责、数据结构、端到端数据流与设计决策。
 > 读者：本仓库贡献者、基于本库二次开发的下游用户。
 >
@@ -71,6 +72,7 @@ graph TD
         R6[registry<br/>模板注册表 + include 闭包]
         R7[machine<br/>机床预设 + 配置键 schema]
         R8[pipeline<br/>GCodeGenerator 端到端管线]
+        R9[asset<br/>写内核：原子写 / 乐观锁 / 路径防护]
     end
 
     subgraph TPL["nctool-tpl v0.4.0"]
@@ -93,13 +95,19 @@ graph TD
 CLI 与 Web UI 只是**两个输入/展示面**，不复制任何业务逻辑 ——
 这是保证 `nctool render` 与 Web UI 渲染结果**逐字节一致**的前提。
 
+> **（v2.1 修订）** `core::asset`（图中 `R9`）是 `nctool-core` 内的**新增写内核子模块**：原子写 / 乐观锁 / 路径防护 / 模板·机床·预设的落盘。它是 `core` 的**内部**模块（依赖既有 core 模块与 `nctool-tpl`），**不新增任何跨 crate 边**，`cli → core → tpl → minijinja` 的单向依赖不变。自本次起，**`nctool-core` 承担资产写入职责**（此前 core 只读不写）——这是本版记档的架构性变更，详见 §2.2 与 D19。
+
 ### 2.2 Crate 职责矩阵
 
 | Crate | 定位 | 对外承诺 | 明确不负责 |
 | --- | --- | --- | --- |
 | `nctool-tpl` | 通用模板引擎封装 | Jinja2 解析、变量提取、NC 数值过滤器、严格/宽松渲染 | 不懂 G-code 语义、不做参数校验、不读文件 |
-| `nctool-core` | G-code 领域层 | 参数模型、规格解析与合并、校验引擎、模板注册表、机床适配、派生计算、生成管线 | 不感知命令行、不感知终端输出、不起 HTTP 服务 |
-| `nctool-cli` | 交付面 | 命令解析、配置层叠、参数归一、结果渲染、退出码、本地 Web 服务 | 不含任何校验/渲染/后处理逻辑 |
+| `nctool-core` | G-code 领域层 | 参数模型、规格解析与合并、校验引擎、模板注册表、机床适配、派生计算、生成管线、**资产写入内核（原子写 / 乐观锁 / 路径防护 / 模板·机床·预设的落盘）** | 不感知命令行、不感知终端输出、不起 HTTP 服务、**不决定写盘目标路径策略（由交付层传入已解析路径与安全根）**、**不打印面向用户的报告** |
+| `nctool-cli` | 交付面 | 命令解析、配置层叠、参数归一、结果渲染、退出码、本地 Web 服务、**编辑命令的参数编排与结果/报告呈现** | 不含任何校验/渲染/后处理逻辑、**不持有任何资产（模板 / 机床 / 预设）的文件写入原语** |
+
+> **（v2.1 修订）** 上表 `nctool-core` 与 `nctool-cli` 两行已按"资产写入内核下沉到领域层"修订（见 D19）。关键边界：core 提供**写内核**但**不决定写盘目标路径策略**（目标路径与安全根由交付层解析后传入）；cli **不持有任何资产（模板 / 机床 / 预设）的文件写入原语**——三类资产的落盘一律经 `core::asset`。**注意：D19 的作用域是"资产写"、不是"一切文件写"** —— 交付层生产口径的 `fs::write` 共 **3 处、全部非资产写**（`config init` 配置引导、`render --out` 渲染产物、`$EDITOR` 临时副本），均为**已知例外**、不在 D19 管辖内（全枚举见 D19 行与 `docs/ARCH_DESIGN_EDIT_MODULES.md` §9.1）。
+>
+> ⚠️ **目标态 vs 当前态**：上表 `nctool-cli` 行"**不持有任何资产文件写入原语**"是**迁移目标态**；当前 `templates new` 仍残留 `std::fs::write` 直写路径（风险 R-11），须在 **T02 迁移到 `write_guarded`** 后此承诺方完全成立（详见 §8）。此外 `nctool config init` 的配置引导写为**登记在案的例外**、不在 D19 管辖内（见 D19 行与 `docs/ARCH_DESIGN_EDIT_MODULES.md` §9.1）。
 
 ### 2.3 源码规模分布
 
@@ -118,6 +126,7 @@ CLI 与 Web UI 只是**两个输入/展示面**，不复制任何业务逻辑 �
 | | `machine.rs` | 455 | 机床预设 + 配置键 schema |
 | | `variables.rs` | 379 | 变量库（`variables.yaml`，全局按名定义） |
 | | `derive.rs` | 317 | 参数派生（Rust 侧查表计算后注入） |
+| | `asset/*`（`mod` / `atomic` / `guard` / `path` / `spec_fingerprint`） | 1138 | **新增写内核**（原子写 / 乐观锁 / 路径防护 / 指纹）；T01 落地，T02 续加 `template` / `machine` / `preset` 编辑策略 |
 | `nctool-cli` | `server.rs` | 848 | HTTP API（Web UI 后端）+ `spec_json` 单一来源 |
 | | `args.rs` | 445 | `--param k=v` 按规格归一（先白名单后类型） |
 | | `cli.rs` | 341 | clap 命令树 |
@@ -129,6 +138,8 @@ CLI 与 Web UI 只是**两个输入/展示面**，不复制任何业务逻辑 �
 | | `output.rs` | 181 | 统一错误 + 双通道输出 + 退出码 |
 | | 其余（`core/src/lib.rs` + `main` / `machine` / `config_cmd` / `validate` / `ui` / `part` / `completion` / `mod`） | 469 | 再导出与子命令分发 |
 | **合计** | | **14 861** | |
+
+> **（v2.1 注）** 上表规模为 **v2.0（T01 之前）快照**，尚未把 T01 新增的 `core::asset`（表中已补入 1138 行）计入"合计"，且 T02 正在为 `core::asset` 增补 `template`/`machine`/`preset` 策略、并在 `cli` 侧扩展编辑命令 —— **待 T02 落地后统一重新实测**。此外，原文件头的"workspace 共 16 139 行 Rust"与本节"合计 14 861"口径不一（前者疑含测试/基准），本次一并标注为**待重测**，不再沿用旧数。
 
 ---
 
@@ -314,6 +325,10 @@ undefined 参与运算或取属性会直接报错，`default` 来不及兜底。
 
 对外入口三个：`validate_template`（从源码）、`validate_with_vars`（复用已提取变量）、
 `spec`（构造规格）。共享核心是 `check_vars`。
+
+> **（v2.1 追加）** 编辑模块（见 `docs/ARCH_DESIGN_EDIT_MODULES.md` §7.15 / §3.2）将新增**两个对外入口**，**归属均在 `core::validate`**（不在写模块 `core::asset`），均进 1.0 冻结清单：
+> - **`check_spec_consistency(specs) -> ValidationReport`** —— **不依赖参数值**的规格自洽校验（`spec.default` 判定 + `required_if` 控制参数 / `derive` 源参数的存在性），供"保存前 L2 校验"用。**必须复用**既有私有 `check_spec_defaults`（`default` 判定），**禁止重写**；须有"两路一致"测试防漂移（P4：同一判定不得两处各写一份）。
+> - **`check_param_values(specs, params) -> ValidationReport`** —— 只对**已提供**参数做值级校验、**不查缺失**，供"保存前 L3 校验"用。**正向集合**入口（遍历已提供参数逐个检查）；**不得**用"完整 `validate` + 降级 `Missing`"——那要依赖 `downgrade_errors_except` 的**白名单反向** `keep`，新增 `IssueKind` 会被静默降级。
 
 `IssueKind` 结构化类别（**调用方据此做程序化决策，禁止依赖 `message` 文本**）：
 
@@ -655,6 +670,7 @@ HTTP API 与 `inspect --format json` 共用 —— 新增规格字段只改这�
 | **D16** | 派生用 `derive` 规则建模，而非给 `ParamSpec` 加 `read_only` 字段 | 不产生行为的字段只会误导；`read_only` 的两类语义已分别落到 `derive` 与普通必选 |
 | **D17** | 白名单检查独立于约束检查 | `check_value_constraints` 对非数值类型提前 return，塞进去等于永不执行 |
 | **D18** | 参数值渲染 / 规格 JSON 形状 / 取值归一顺序各自单一来源 | 三处若各写一份必然漂移，表现为 CLI 与 UI 行为不一致 |
+| **D19** | **资产写入内核下沉到领域层，交付层不持有"资产（模板 / 机床 / 预设）"的文件写入原语。** 写内核 `core::asset`（原子写 / 乐观锁 / 路径防护 / 落盘）归 `nctool-core`；`nctool-cli` 只做参数编排与结果呈现，**不持有三类资产的写入原语** —— 三类资产落盘一律经 `core::asset`。**作用域是"资产写"、不是"一切文件写"**：交付层生产口径的 `fs::write` 共 **3 处、全部非资产写** —— ① `config init` 配置引导（`config.rs::init_config`，仅目标不存在时创建）；② `render --out` 渲染产物（`render.rs`）；③ `$EDITOR` 临时副本（`templates.rs`，写系统临时目录）。另有 `create_dir_all`（建目录）与 `remove_file`（清临时文件），均非文件写。**结论：生产代码确无写模板 / 清单的 `fs::write` 旁路 —— 资产写全部经 `core::asset`，D19 规则成立**（全枚举见 `docs/ARCH_DESIGN_EDIT_MODULES.md` §9.1）。 | 写前校验编排、冲突判定、路径防护、完整性检查都是**领域逻辑**；若放交付层，会与"CLI 不含校验逻辑"的既有承诺（§2.2 / D12）直接冲突。代价是 **core 首次承担写职责、对外面扩大**，故须显式记档（本版 v2.1 即为此）。**（v2.1 收准）** 原措辞"不 `fs::write` / `File::create`"是**绝对句**、与 `config init` 等代码不符；绝对化表述会误导后来者以为"扫一遍 `fs::write` 即可证明交付层干净"，故收准到"资产写"并**分类枚举全部例外** |
 
 ---
 
@@ -670,6 +686,7 @@ HTTP API 与 `inspect --format json` 共用 —— 新增规格字段只改这�
 | 新增校验规则 | `core/src/validate.rs`，并新增 `IssueKind` 类别（勿复用语义不同的类别） |
 | 新增 HTTP 端点 | `cli/src/server.rs::route`；规格字段形状统一走 `spec_json` |
 | 新增子命令 | `cli/src/cli.rs` 命令树 + `cli/src/commands/` + `Command::run` 分发 |
+| 新增写操作（新的资产类型 / 新的落盘目标） | `core/src/asset/`（复用 `WriteKernel` 与 `SafePath`，**不得在交付层新起文件写入**）；CLI 侧仅在 `commands/` 做参数编排与结果呈现，落盘一律经内核（D19） |
 
 ---
 
@@ -684,6 +701,8 @@ HTTP API 与 `inspect --format json` 共用 —— 新增规格字段只改这�
 - **Web 服务仅绑定回环地址**，定位是本地开发工具，未做鉴权与并发压测。
 - **`nctool part`（零件级批量生成）仍是占位**，规划于后续阶段。
 - **源项目变量库（62 个变量）的类型/候选值已导入 58 条**，剩余条目按需补齐。
+- **（v2.1 补）`templates new` 遗留直写路径须迁移到 `write_guarded`**：该路径当前是 `path.exists()` 后 `std::fs::write` 的 check-then-write，**非原子、无乐观锁**，且 **`fs::write` 会跟随符号链接** —— 而 `SafePath::resolve` 在**悬空（dangling）符号链接**（`exists()` 返回 false，故跳过 canonicalize）这一情形下会**放行**该路径。对比：`WriteKernel::write_atomic` 是"同目录临时文件 + `rename`"，而 `rename` 替换的是**目录项本身、不跟随目标符号链接**，故**不受该向量影响**。**换言之：内核是安全的，遗留的直写路径才是缺口**，须在 T02 随迁移一并闭合并补"行为钉住"用例（`PROJECT_PLAN_EDIT_MODULES.md` §6.7 / 风险 R-11）。
+- **（v2.1 补）悬空符号链接向量未实测**：本机（Windows）**无法创建真正的文件符号链接**（`symlink_dir` 返回 `Ok(())` 却不创建；无开发者模式/特权），故"悬空链接逃逸"场景**未实测**，上述结论系**代码推演**；已改用 junction 验证"指向根外**已存在**目标"的逃逸被正确拒绝（通过）。后续若在具备权限的环境（Linux CI）复验，应补此用例（风险 R-13）。
 
 ---
 

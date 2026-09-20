@@ -715,16 +715,36 @@ h1, h2, h3 { font-weight: 500; margin: 0; letter-spacing: -.2px; }
         <input type="text" id="srcName" readonly>
       </div>
       <div class="field">
-        <label>Jinja2 源码（演示模式下可直接编辑并保存到内存，重启后还原）</label>
-        <textarea id="srcArea" spellcheck="false"></textarea>
+        <label>Jinja2 源码（只读预览；编辑请在外部编辑器中完成）</label>
+        <textarea id="srcArea" spellcheck="false" readonly></textarea>
+      </div>
+      <div class="field">
+        <label>在外部编辑器中打开（复制命令到终端执行；保存前会做分级校验）</label>
+        <input type="text" id="srcCmd" readonly>
       </div>
       <div class="tip">支持 <code>{% set %}</code> <code>{% for %}</code> <code>{% if %}</code> <code>{% include %}</code>、
         过滤器 <code>nc_fixed</code> <code>nc_strip</code> <code>nc_pad</code> <code>default</code> <code>round</code> <code>int</code> 等，
-        以及 <code>machine.xxx</code> 机床变量。保存后立即重渲染。</div>
+        以及 <code>machine.xxx</code> 机床变量。浏览器内不写盘，改完用命令落盘并重新加载预览。</div>
     </div>
     <div class="modal-foot">
-      <button class="btn ghost" data-close="modalSrc">取消</button>
-      <button class="btn primary" id="srcSaveBtn">保存并应用</button>
+      <button class="btn ghost" data-close="modalSrc">关闭</button>
+      <button class="btn" id="srcReloadBtn">重新加载预览</button>
+      <button class="btn primary" id="srcCopyCmdBtn">复制编辑命令</button>
+    </div>
+  </div>
+</div>
+
+<!-- 派生模板命名 -->
+<div class="modal-mask" id="modalDerive">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-head"><h3>派生新模板</h3><button class="close" data-close="modalDerive">×</button></div>
+    <div class="modal-body">
+      <div class="field"><label>新模板名</label><input type="text" id="deriveName" placeholder="如 drill_deep"></div>
+      <div class="tip">源模板：<code id="deriveSrc"></code>。浏览器内不写盘；复制命令到终端执行，派生会复制源码与清单条目。</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" data-close="modalDerive">取消</button>
+      <button class="btn primary" id="deriveCopyBtn">复制派生命令</button>
     </div>
   </div>
 </div>
@@ -1734,7 +1754,8 @@ function tplCardHtml(t) {
      属性与文本两处都要转：漏掉属性那处，一个 `"` 就能加出 onerror。 */
   return `<div class="tpl-item ${state.selected === t.name ? "active" : ""}" data-tpl="${esc(t.name)}">
     <div class="row1"><span class="name">${esc(t.name)}</span>
-      <span class="badge ${t.builtin ? "builtin" : "demo"}">${t.builtin ? "内置" : "示例"}</span></div>
+      <span class="badge ${t.builtin ? "builtin" : "demo"}">${t.builtin ? "内置" : "示例"}</span>
+      <button class="chip" data-derive="${esc(t.name)}" title="以该模板为蓝本派生新模板">派生</button></div>
     <div class="desc">${esc(t.description || "")}</div>
     <div class="meta"><span>${esc(t.category)}</span><span>必选 ${reqN}</span><span>可选 ${optN}</span></div>
     ${chips ? `<div class="tpl-presets">${chips}</div>` : ""}
@@ -2528,8 +2549,16 @@ function init() {
   });
   $("searchInput").addEventListener("input", e => { state.query = e.target.value; renderSidebar(); });
   $("tplList").addEventListener("click", e => {
+    const dv = e.target.closest("[data-derive]");
+    if (dv) { $("deriveSrc").textContent = dv.dataset.derive; $("deriveName").value = ""; openModal("modalDerive"); $("deriveName").focus(); return; }
     const item = e.target.closest(".tpl-item"); if (!item) return;
     selectTemplate(item.dataset.tpl);
+  });
+  $("deriveCopyBtn").addEventListener("click", () => {
+    const name = $("deriveName").value.trim();
+    if (!name) { toast("请输入新模板名", "warn"); return; }
+    const cmd = `nctool templates derive ${$("deriveSrc").textContent} ${name}`;
+    navigator.clipboard.writeText(cmd).then(() => toast("派生命令已复制")).catch(() => toast("复制失败", "err"));
   });
 
   /* 顶栏 */
@@ -2542,16 +2571,18 @@ function init() {
     if (!t) return;
     $("srcName").value = t.name;
     $("srcArea").value = t.source || (API_REGISTRY[t.name] && API_REGISTRY[t.name].source) || "";
+    $("srcCmd").value = `nctool templates edit ${t.name}`;
     openModal("modalSrc");
   });
-  $("srcSaveBtn").addEventListener("click", () => {
-    if (API.mode === "server") { toast("服务模式暂不支持浏览器内保存模板", "warn"); return; }
+  $("srcReloadBtn").addEventListener("click", async () => {
     const name = $("srcName").value;
-    API_REGISTRY[name] = { source: $("srcArea").value };
-    renderSource();
-    closeModal("modalSrc");
-    doRender();
-    toast("模板已更新（演示内存）");
+    if (API.mode !== "server") { toast("演示模式：源码来自内存，无外部改动", "warn"); return; }
+    const res = await API.getTemplate(name);
+    if (res.ok) { $("srcArea").value = (res.data.template && res.data.template.source) || ""; toast("已重新加载预览"); }
+    else toast("重新加载失败", "err");
+  });
+  $("srcCopyCmdBtn").addEventListener("click", () => {
+    navigator.clipboard.writeText($("srcCmd").value).then(() => toast("编辑命令已复制")).catch(() => toast("复制失败", "err"));
   });
   $("copyBtn").addEventListener("click", copyGcode);
   $("downloadBtn").addEventListener("click", downloadGcode);

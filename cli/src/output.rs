@@ -54,7 +54,8 @@ impl CliError {
     /// 命令失败对应的进程退出码。
     ///
     /// 矩阵：`0` 成功；`1` 参数校验未通过；`2` 参数/用法错误（与 clap 一致）；
-    /// `3` IO 失败；`4` 配置错误；`5` 模板/机床未找到；`6` 渲染/注册表失败；
+    /// `3` IO 失败；`4` 配置错误；`5` 模板/机床未找到；`6` 渲染/注册表/写冲突失败
+    /// （含 `write_conflict` 乐观锁冲突、`name_conflict` 名称已存在）；
     /// `7` 功能尚未实现；未知分类兜底归 `1`。
     pub fn exit_code(&self) -> u8 {
         match self.kind {
@@ -64,7 +65,7 @@ impl CliError {
             "config" => 4,
             "template_not_found" | "machine_not_found" => 5,
             "render" | "pipeline" | "registry" | "template_duplicate" | "template_empty"
-            | "template_compile" => 6,
+            | "template_compile" | "write_conflict" | "name_conflict" => 6,
             "not_implemented" => 7,
             _ => 1,
         }
@@ -246,6 +247,8 @@ mod tests {
             ("template_duplicate", 6),
             ("template_empty", 6),
             ("template_compile", 6),
+            ("write_conflict", 6),
+            ("name_conflict", 6),
             ("not_implemented", 7),
         ] {
             assert_eq!(CliError::new(kind, "x").exit_code(), want, "kind={kind}");

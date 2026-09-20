@@ -13,6 +13,7 @@
 
 #![warn(missing_docs)]
 
+pub mod asset;
 pub mod derive;
 pub mod machine;
 pub mod manifest;
@@ -22,6 +23,11 @@ pub mod registry;
 pub mod validate;
 pub mod variables;
 
+// 资产写入内核（原子写 / 乐观锁 / 路径防护 / 规格指纹）
+pub use asset::{
+    validate_asset_name, FileFingerprint, SafePath, SpecFingerprint, WriteAction, WriteError,
+    WriteKernel, WriteOutcome,
+};
 // 数据模型根导出
 pub use model::{
     DeriveRule, MachineConfig, ParamKind, ParamSpec, ParamValue, ParameterSet, RequiredIf,

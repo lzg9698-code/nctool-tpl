@@ -495,6 +495,59 @@ fn check_spec_defaults(specs: &[ParamSpec], report: &mut ValidationReport) {
     }
 }
 
+/// **不依赖参数值**的规格自洽校验（供 `templates edit` 保存前 L2 级使用）。
+///
+/// **复用 `check_spec_defaults`**：`spec.default` 的类型/有限性/区间/整数/
+/// 白名单判定**只有那一份实现**，本函数**不得**另写一遍——否则同一份规格在
+/// `nctool validate` 与 `templates edit` 下可能被判出不同结果（漂移），
+/// 违反"单一来源"（P4）。`check_spec_consistency_agrees_with_validate_template_on_defaults`
+/// 是钉住这条复用的闸门。
+///
+/// 在 `default` 判定之外，本函数额外检查两项**规格内部引用**的一致性
+/// （`check_spec_defaults` 不管这两项，因为它们不涉及 `default` 取值）：
+/// - `required_if` 的控制参数**未在本规格中声明** → Error（悬空控制参数，
+///   条件必选永不生效）；
+/// - `derive` 的源参数**未在本规格中声明** → Error（派生永远算不出）。
+///
+/// 返回的报告可能含 Error 级问题；调用方据 [`ValidationReport::has_errors`]
+/// 决定是否阻断。
+pub fn check_spec_consistency(specs: &[ParamSpec]) -> ValidationReport {
+    let names: BTreeSet<&str> = specs.iter().map(|s| s.name.as_str()).collect();
+    let mut report = ValidationReport::default();
+
+    // 复用唯一的 default 判定实现（不得另起一份）
+    check_spec_defaults(specs, &mut report);
+
+    for spec in specs {
+        if let Some(ri) = &spec.required_if {
+            if !names.contains(ri.param.as_str()) {
+                report.issues.push(ValidationIssue::error_kind(
+                    IssueKind::Other,
+                    &spec.name,
+                    format!(
+                        "条件必选的控制参数 '{}' 未在本模板规格中声明（条件永不生效）",
+                        ri.param
+                    ),
+                ));
+            }
+        }
+        if let Some(d) = &spec.derive {
+            if !names.contains(d.from.as_str()) {
+                report.issues.push(ValidationIssue::error_kind(
+                    IssueKind::Other,
+                    &spec.name,
+                    format!(
+                        "派生源参数 '{}' 未在本模板规格中声明（派生无法计算）",
+                        d.from
+                    ),
+                ));
+            }
+        }
+    }
+
+    report
+}
+
 /// 规格声明**自身**的两类静默失效（与取值无关，只看规格与模板的对应关系）。
 ///
 /// 1. 声明了模板未引用的参数 → 该规格永远不会被执行（类型/区间/白名单全部
@@ -594,6 +647,56 @@ fn check_var_values(
         check_value_options(spec, value, report, &at);
         check_value_constraints(spec, value, report, &at);
     }
+}
+
+/// **正向集合**的值级校验：只对 `params` 中**实际提供**的参数跑值级检查
+/// （有限性 → 类型 → 白名单 → 区间/整数），**不检查缺失**。
+///
+/// # 与 [`validate_template`] 的关键差异
+///
+/// **不查 [`IssueKind::Missing`]**。"缺参数"是**使用期**问题（这次没填），
+/// 不是模板缺陷；`templates edit` 保存模板时不该因为"没给全参数"而阻断——
+/// 否则用户只传 `--param x=21` 时，模板其余必选参数会全报缺失而阻断，
+/// `--param` 形同不可用，用户会学会永远不传参数，L3 等于不存在。
+///
+/// # 实现要求（勿违反）
+///
+/// **必须复用** `check_finite_value` / `check_value_options` /
+/// `check_value_constraints`（本模块内私有函数，不对外链接），**不得**重写这些判定。
+///
+/// **不得**用 [`ValidationReport::downgrade_errors_except`] 之类"先全量校验、
+/// 再把 `Missing` 剔除"的实现：那是**白名单反向**，新增 [`IssueKind`] 变体时
+/// 若没人记得更新白名单，新类别会被**静默放行**——本项目正是为此引入
+/// [`IssueKind::is_hard_fail`] 的穷尽匹配范式。
+pub fn check_param_values(specs: &[ParamSpec], params: &ParameterSet) -> ValidationReport {
+    let spec_map: std::collections::HashMap<&str, &ParamSpec> =
+        specs.iter().map(|s| (s.name.as_str(), s)).collect();
+    let mut report = ValidationReport::default();
+
+    for (name, value) in &params.values {
+        // 有限性优先：NaN/Inf 会写入非法坐标，与有无规格无关。
+        check_finite_value(name, value, "", "", &mut report, 0);
+        let Some(spec) = spec_map.get(name.as_str()).copied() else {
+            continue; // 无规格：只做有限性检查，其余无从判断
+        };
+        if !spec.kind.matches(value) {
+            report.issues.push(ValidationIssue::error_kind(
+                IssueKind::TypeMismatch,
+                name,
+                format!(
+                    "类型不匹配：规格要求 {}, 实际提供 {}",
+                    spec.kind.label(),
+                    value_kind_label(value)
+                ),
+            ));
+            continue;
+        }
+        // 白名单先于区间/整数：后两者对字符串枚举在 `as_f64()` 处提前返回。
+        check_value_options(spec, value, &mut report, "");
+        check_value_constraints(spec, value, &mut report, "");
+    }
+
+    report
 }
 
 /// 有限性：数值参数必须有限（NaN/Inf 会写入非法坐标）。
@@ -1150,6 +1253,211 @@ mod tests {
         let r1 = validate_template(TPL, "t.j2", &[], &ps, &[]);
         let r2 = validate_with_vars(&vars, &[], &ps, &[]);
         assert_eq!(r1.issues.len(), r2.issues.len());
+    }
+
+    // -------------------------------------------------------------------
+    // check_spec_consistency：规格自洽（保存前 L2，复用 check_spec_defaults）
+    // -------------------------------------------------------------------
+
+    /// **守卫**：`check_spec_consistency` 必须**复用** `check_spec_defaults`。
+    ///
+    /// 同一份规格，经 `validate_template`（内部走 `check_spec_defaults`）与经
+    /// `check_spec_consistency`，对 `default` 的判定（哪些 `IssueKind`、Error/Warning
+    /// 级别、归属参数）**必须逐条一致**。没有这条闸门，"复用"下次就会被无意破坏
+    /// （各写一份 → 漂移 → 同一模板在 `validate` 与 `templates edit` 下结果不同）。
+    #[test]
+    fn check_spec_consistency_agrees_with_validate_template_on_defaults() {
+        // 五类 default 问题各一：类型不符 / 越界 / 非整数 / 非白名单 / NaN
+        let specs = [
+            ParamSpec::new("x", ParamKind::Number, "X")
+                .with_default(ParamValue::String("abc".into())),
+            ParamSpec::new("y", ParamKind::Number, "Y")
+                .with_min(0.0)
+                .with_default(ParamValue::Number(-1.0)),
+            ParamSpec::new("w", ParamKind::Number, "W")
+                .require_integer()
+                .with_default(ParamValue::Number(1.5)),
+            ParamSpec::new("v", ParamKind::Choice, "V")
+                .with_options([ParamValue::String("A".into())])
+                .with_default(ParamValue::String("B".into())),
+            ParamSpec::new("u", ParamKind::Number, "U").with_default(ParamValue::Number(f64::NAN)),
+        ];
+        // 模板引用全部参数、且全部提供类型正确的值 → validate 侧只剩 default 问题
+        let tpl = "{{ x }}{{ y }}{{ w }}{{ v }}{{ u }}";
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", 1.0)
+            .set_number("y", 1.0)
+            .set_number("w", 2.0)
+            .set_string("v", "A")
+            .set_number("u", 1.0);
+
+        let via_validate = validate_template(tpl, "t.j2", &specs, &ps, &[]);
+        let via_consistency = check_spec_consistency(&specs);
+
+        // 只比对 default 相关问题。**按结构化条件筛选**（参数名 ∈ 规格集合 +
+        // 类别 ∈ default 相关 IssueKind），**不依赖 message 文本**——按文本决策
+        // 违反 D7，且统一改文案会造成"假失败"，修的人很可能顺手放宽断言、把闸门
+        // 自己拆了。
+        const DEFAULT_KINDS: [IssueKind; 5] = [
+            IssueKind::TypeMismatch,
+            IssueKind::NonFinite,
+            IssueKind::OutOfRange,
+            IssueKind::NotInteger,
+            IssueKind::NotInOptions,
+        ];
+        let spec_names = ["x", "y", "w", "v", "u"];
+        let defaults_of =
+            |r: &ValidationReport| -> Vec<(IssueKind, ValidationLevel, Option<String>)> {
+                r.issues
+                    .iter()
+                    .filter(|i| {
+                        i.param.as_deref().is_some_and(|p| spec_names.contains(&p))
+                            && DEFAULT_KINDS.contains(&i.kind)
+                    })
+                    .map(|i| (i.kind, i.level, i.param.clone()))
+                    .collect()
+            };
+        let a = defaults_of(&via_validate);
+        let b = defaults_of(&via_consistency);
+        assert!(
+            !a.is_empty(),
+            "应产出 default 问题: {}",
+            via_validate.summary()
+        );
+        assert_eq!(
+            a, b,
+            "两路对 default 的判定必须一致（check_spec_consistency 必须复用 check_spec_defaults）"
+        );
+    }
+
+    #[test]
+    fn check_spec_consistency_flags_bad_default_type() {
+        let s = ParamSpec::new("x", ParamKind::Number, "")
+            .with_default(ParamValue::String("abc".into()));
+        let r = check_spec_consistency(&[s]);
+        assert!(r.has_kind(IssueKind::TypeMismatch), "{}", r.summary());
+    }
+
+    #[test]
+    fn check_spec_consistency_flags_out_of_range_default() {
+        let mut s =
+            ParamSpec::new("x", ParamKind::Number, "").with_default(ParamValue::Number(-1.0));
+        s.min = Some(0.0);
+        let r = check_spec_consistency(&[s]);
+        assert!(r.has_kind(IssueKind::OutOfRange), "{}", r.summary());
+    }
+
+    #[test]
+    fn check_spec_consistency_flags_default_above_max() {
+        let mut s =
+            ParamSpec::new("x", ParamKind::Number, "").with_default(ParamValue::Number(99.0));
+        s.max = Some(10.0);
+        let r = check_spec_consistency(&[s]);
+        assert!(r.has_kind(IssueKind::OutOfRange), "{}", r.summary());
+    }
+
+    #[test]
+    fn check_spec_consistency_flags_non_integer_default() {
+        let mut s =
+            ParamSpec::new("x", ParamKind::Number, "").with_default(ParamValue::Number(1.5));
+        s.integer = true;
+        let r = check_spec_consistency(&[s]);
+        assert!(r.has_kind(IssueKind::NotInteger), "{}", r.summary());
+    }
+
+    #[test]
+    fn check_spec_consistency_flags_default_not_in_options() {
+        let s = ParamSpec::new("x", ParamKind::Choice, "")
+            .with_options([ParamValue::String("闭口".into())])
+            .with_default(ParamValue::String("上开口".into()));
+        let r = check_spec_consistency(&[s]);
+        assert!(r.has_kind(IssueKind::NotInOptions), "{}", r.summary());
+    }
+
+    #[test]
+    fn check_spec_consistency_flags_nan_default() {
+        let s =
+            ParamSpec::new("x", ParamKind::Number, "").with_default(ParamValue::Number(f64::NAN));
+        let r = check_spec_consistency(&[s]);
+        assert!(r.has_kind(IssueKind::NonFinite), "{}", r.summary());
+    }
+
+    #[test]
+    fn check_spec_consistency_flags_dangling_required_if_and_derive() {
+        let mut a = ParamSpec::new("a", ParamKind::Number, "");
+        a.required_if = Some(crate::model::RequiredIf::new(
+            "missing_ctrl",
+            vec![ParamValue::String("Right".into())],
+        ));
+        let mut b = ParamSpec::new("b", ParamKind::Number, "");
+        b.derive = Some(crate::model::DeriveRule {
+            from: "missing_src".into(),
+            table: vec![],
+            fallback: None,
+        });
+        let r = check_spec_consistency(&[a, b]);
+        assert_eq!(r.errors().count(), 2, "{}", r.summary());
+    }
+
+    #[test]
+    fn check_spec_consistency_passes_for_consistent_specs() {
+        let ctrl = ParamSpec::new("side", ParamKind::Choice, "").with_options([
+            ParamValue::String("Left".into()),
+            ParamValue::String("Right".into()),
+        ]);
+        let mut dep = ParamSpec::new("z", ParamKind::Number, "");
+        dep.required_if = Some(crate::model::RequiredIf::new(
+            "side",
+            vec![ParamValue::String("Left".into())],
+        ));
+        let good = ParamSpec::new("x", ParamKind::Number, "").with_default(ParamValue::Number(1.0));
+        let r = check_spec_consistency(&[ctrl, dep, good]);
+        assert!(!r.has_errors(), "{}", r.summary());
+    }
+
+    // -------------------------------------------------------------------
+    // check_param_values：正向集合值级校验（保存前 L3，不查缺失）
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn check_param_values_flags_illegal_provided_value() {
+        let specs = [u_fx_spec()];
+        let mut ps = ParameterSet::new();
+        ps.set_string("x", "上开口");
+        let r = check_param_values(&specs, &ps);
+        assert!(
+            r.has_kind(IssueKind::NotInOptions),
+            "已提供但非法的值应报错: {}",
+            r.summary()
+        );
+        assert!(r.has_errors());
+    }
+
+    /// **关键差异**：`check_param_values` **不查缺失**——只提供部分必选参数
+    /// 也不得报 `Missing`。这正是 L3 与 `validate_template` 的分水岭。
+    #[test]
+    fn check_param_values_ignores_missing_required() {
+        let specs = [
+            ParamSpec::new("x", ParamKind::Number, "X"),
+            ParamSpec::new("z", ParamKind::Number, "Z"),
+        ];
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", 1.0); // z 缺失
+        let r = check_param_values(&specs, &ps);
+        assert!(
+            !r.has_kind(IssueKind::Missing),
+            "不得报缺失（这是 L3 与 validate 的关键差异）: {}",
+            r.summary()
+        );
+        assert!(!r.has_errors(), "{}", r.summary());
+    }
+
+    #[test]
+    fn check_param_values_empty_is_ok() {
+        let specs = [ParamSpec::new("x", ParamKind::Number, "X")];
+        let r = check_param_values(&specs, &ParameterSet::new());
+        assert!(!r.has_errors(), "{}", r.summary());
+        assert!(r.issues.is_empty(), "空参数集不应产出任何问题");
     }
 
     #[test]

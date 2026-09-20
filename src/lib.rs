@@ -40,7 +40,8 @@ mod renderer;
 // 公共 API 再导出
 pub use error::TplError;
 pub use extract::{
-    extract_template_refs, extract_undeclared, extract_variables, parse, Ast, Variable,
+    extract_member_accesses, extract_template_refs, extract_undeclared, extract_variables, parse,
+    Ast, Variable,
 };
 pub use renderer::Renderer;
 

@@ -95,6 +95,12 @@ pub enum TemplatesCommand {
     Show(TemplatesShowArgs),
     /// 新建模板骨架
     New(TemplatesNewArgs),
+    /// 修改并保存模板源码（保存前强制分级校验 + 乐观锁）
+    Edit(TemplatesEditArgs),
+    /// 以现有模板为蓝本派生新模板（复制源码 + 清单条目）
+    Derive(TemplatesDeriveArgs),
+    /// 重命名模板（同步清单键 + 警告 include 引用）
+    Rename(TemplatesRenameArgs),
 }
 
 #[derive(Debug, Args)]
@@ -126,6 +132,52 @@ pub struct TemplatesNewArgs {
     /// 输出目录（默认：配置的 template_dir，未配置时 ./templates）
     #[arg(long)]
     pub dir: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct TemplatesEditArgs {
+    /// 模板名（须为磁盘上的目录模板，如 turning/demo_gcode.j2）
+    pub template: String,
+
+    /// 从文件读取新源码（与 --editor 二选一；未提供参数时只做 L1/L2 校验）
+    #[arg(long, value_name = "FILE")]
+    pub from_file: Option<PathBuf>,
+
+    /// 外部编辑器命令（默认取 $EDITOR / $VISUAL）
+    #[arg(long, value_name = "CMD")]
+    pub editor: Option<String>,
+
+    /// 期望的当前指纹（`fnv1a64:<16 hex>`）；不一致即判为并发冲突
+    #[arg(long, value_name = "HASH")]
+    pub expect_hash: Option<String>,
+
+    #[command(flatten)]
+    pub params: ParamInputArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct TemplatesDeriveArgs {
+    /// 源模板名（须为磁盘上的目录模板）
+    pub src: String,
+
+    /// 新模板名
+    pub new: String,
+
+    /// 不写入"派生自 X"头部注释
+    #[arg(long)]
+    pub no_derive_note: bool,
+
+    #[command(flatten)]
+    pub params: ParamInputArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct TemplatesRenameArgs {
+    /// 旧模板名
+    pub old: String,
+
+    /// 新模板名（与旧模板同目录）
+    pub new: String,
 }
 
 /// 模板分类（CLI 侧枚举，映射到 core 的 TemplateCategory）。

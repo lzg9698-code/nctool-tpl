@@ -10,6 +10,9 @@
 *.swo
 .idea/
 .vscode/
+# AI 编程助手的本地配置（含 settings.local.json）——与 .vscode/ 同类，
+# 属本地环境而非仓库内容；不忽略会被 `git add -A` 顺手提交。
+.claude/
 .DS_Store
 Thumbs.db
 

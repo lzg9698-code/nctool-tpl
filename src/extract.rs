@@ -146,6 +146,227 @@ pub fn extract_template_refs(ast: &Ast) -> Vec<String> {
     refs
 }
 
+/// 提取模板中对 `root.<key>`（点访问）与 `root["<key>"]`（**常量字符串下标**）
+/// 形式的成员引用键，按出现顺序去重。
+///
+/// 用途：机床完整性校验需要知道"模板引用了哪些 `machine.*` 键"，以便与机床
+/// 配置的键集合做差集（见架构设计 §7.10）。`root` 由调用方传入——系统注入变量名
+/// 以注册表 `system_vars()` 为单一来源，本函数不硬编码 `"machine"` 字面量。
+///
+/// **已知边界**：
+/// - 动态下标（`root[key]`，`key` 为变量或表达式）无法静态确定，**不收集**；
+/// - 属性链只取紧邻 `root` 的第一段（`root.a.b` 收集 `a`）；
+/// - 仅收集成员访问，`root` 作为裸变量出现（无成员访问）不产生任何键。
+pub fn extract_member_accesses(ast: &Ast, root: &str) -> Vec<String> {
+    let mut keys = Vec::new();
+    collect_member_keys_stmt(&ast.stmt, root, &mut keys);
+    keys
+}
+
+/// 按出现顺序去重地记录一个成员键（空键忽略）。
+fn push_member_key(keys: &mut Vec<String>, key: &str) {
+    if !key.is_empty() && !keys.iter().any(|k| k == key) {
+        keys.push(key.to_string());
+    }
+}
+
+/// 表达式是否为对 `root` 的裸变量引用（成员访问的根）。
+fn is_root_var(expr: &Expr, root: &str) -> bool {
+    matches!(expr, Expr::Var(v) if v.id == root)
+}
+
+/// 遍历语句树收集成员访问键（覆盖所有携带语句体/表达式的分支）。
+fn collect_member_keys_stmt<'a>(stmt: &Stmt<'a>, root: &str, keys: &mut Vec<String>) {
+    match stmt {
+        Stmt::Template(s) => {
+            for child in &s.children {
+                collect_member_keys_stmt(child, root, keys);
+            }
+        }
+        Stmt::EmitExpr(s) => collect_member_keys_expr(&s.expr, root, keys),
+        Stmt::EmitRaw(_) => {}
+        Stmt::ForLoop(s) => {
+            collect_member_keys_expr(&s.iter, root, keys);
+            if let Some(f) = &s.filter_expr {
+                collect_member_keys_expr(f, root, keys);
+            }
+            for child in &s.body {
+                collect_member_keys_stmt(child, root, keys);
+            }
+            for child in &s.else_body {
+                collect_member_keys_stmt(child, root, keys);
+            }
+        }
+        Stmt::IfCond(s) => {
+            collect_member_keys_expr(&s.expr, root, keys);
+            for child in &s.true_body {
+                collect_member_keys_stmt(child, root, keys);
+            }
+            for child in &s.false_body {
+                collect_member_keys_stmt(child, root, keys);
+            }
+        }
+        Stmt::WithBlock(s) => {
+            for (_, value) in &s.assignments {
+                collect_member_keys_expr(value, root, keys);
+            }
+            for child in &s.body {
+                collect_member_keys_stmt(child, root, keys);
+            }
+        }
+        Stmt::Set(s) => collect_member_keys_expr(&s.expr, root, keys),
+        Stmt::SetBlock(s) => {
+            if let Some(f) = &s.filter {
+                collect_member_keys_expr(f, root, keys);
+            }
+            for child in &s.body {
+                collect_member_keys_stmt(child, root, keys);
+            }
+        }
+        Stmt::AutoEscape(s) => {
+            collect_member_keys_expr(&s.enabled, root, keys);
+            for child in &s.body {
+                collect_member_keys_stmt(child, root, keys);
+            }
+        }
+        Stmt::FilterBlock(s) => {
+            collect_member_keys_expr(&s.filter, root, keys);
+            for child in &s.body {
+                collect_member_keys_stmt(child, root, keys);
+            }
+        }
+        Stmt::Block(s) => {
+            for child in &s.body {
+                collect_member_keys_stmt(child, root, keys);
+            }
+        }
+        Stmt::Import(s) => collect_member_keys_expr(&s.expr, root, keys),
+        Stmt::FromImport(s) => collect_member_keys_expr(&s.expr, root, keys),
+        Stmt::Extends(s) => collect_member_keys_expr(&s.name, root, keys),
+        Stmt::Include(s) => collect_member_keys_expr(&s.name, root, keys),
+        Stmt::Macro(s) => {
+            for d in &s.defaults {
+                collect_member_keys_expr(d, root, keys);
+            }
+            for child in &s.body {
+                collect_member_keys_stmt(child, root, keys);
+            }
+        }
+        Stmt::CallBlock(s) => {
+            collect_member_keys_call(&s.call, root, keys);
+            for d in &s.macro_decl.defaults {
+                collect_member_keys_expr(d, root, keys);
+            }
+            for child in &s.macro_decl.body {
+                collect_member_keys_stmt(child, root, keys);
+            }
+        }
+        Stmt::Continue(_) | Stmt::Break(_) => {}
+        Stmt::Do(s) => collect_member_keys_call(&s.call, root, keys),
+    }
+}
+
+/// 遍历表达式收集成员访问键。
+fn collect_member_keys_expr<'a>(expr: &Expr<'a>, root: &str, keys: &mut Vec<String>) {
+    match expr {
+        Expr::Var(_) | Expr::Const(_) => {}
+        Expr::GetAttr(s) => {
+            if is_root_var(&s.expr, root) {
+                push_member_key(keys, s.name);
+            }
+            collect_member_keys_expr(&s.expr, root, keys);
+        }
+        Expr::GetItem(s) => {
+            // 仅收集常量字符串下标；动态下标（变量/表达式）无法静态确定，跳过。
+            if is_root_var(&s.expr, root) {
+                if let Expr::Const(c) = &s.subscript_expr {
+                    if let Some(k) = c.value.as_str() {
+                        push_member_key(keys, k);
+                    }
+                }
+            }
+            collect_member_keys_expr(&s.expr, root, keys);
+            collect_member_keys_expr(&s.subscript_expr, root, keys);
+        }
+        Expr::Slice(s) => {
+            collect_member_keys_expr(&s.expr, root, keys);
+            if let Some(e) = &s.start {
+                collect_member_keys_expr(e, root, keys);
+            }
+            if let Some(e) = &s.stop {
+                collect_member_keys_expr(e, root, keys);
+            }
+            if let Some(e) = &s.step {
+                collect_member_keys_expr(e, root, keys);
+            }
+        }
+        Expr::UnaryOp(s) => collect_member_keys_expr(&s.expr, root, keys),
+        Expr::BinOp(s) => {
+            collect_member_keys_expr(&s.left, root, keys);
+            collect_member_keys_expr(&s.right, root, keys);
+        }
+        Expr::Compare(s) => {
+            collect_member_keys_expr(&s.expr, root, keys);
+            for op in &s.ops {
+                collect_member_keys_expr(&op.expr, root, keys);
+            }
+        }
+        Expr::IfExpr(s) => {
+            collect_member_keys_expr(&s.test_expr, root, keys);
+            collect_member_keys_expr(&s.true_expr, root, keys);
+            if let Some(f) = &s.false_expr {
+                collect_member_keys_expr(f, root, keys);
+            }
+        }
+        Expr::Filter(s) => {
+            if let Some(e) = &s.expr {
+                collect_member_keys_expr(e, root, keys);
+            }
+            for arg in &s.args {
+                collect_member_keys_arg(arg, root, keys);
+            }
+        }
+        Expr::Test(s) => {
+            collect_member_keys_expr(&s.expr, root, keys);
+            for arg in &s.args {
+                collect_member_keys_arg(arg, root, keys);
+            }
+        }
+        Expr::Call(s) => collect_member_keys_call(s, root, keys),
+        Expr::List(s) => {
+            for item in &s.items {
+                collect_member_keys_expr(item, root, keys);
+            }
+        }
+        Expr::Map(s) => {
+            for k in &s.keys {
+                collect_member_keys_expr(k, root, keys);
+            }
+            for v in &s.values {
+                collect_member_keys_expr(v, root, keys);
+            }
+        }
+    }
+}
+
+/// 遍历一次函数调用的被调表达式与全部实参。
+fn collect_member_keys_call<'a>(call: &Spanned<ast::Call<'a>>, root: &str, keys: &mut Vec<String>) {
+    collect_member_keys_expr(&call.expr, root, keys);
+    for arg in &call.args {
+        collect_member_keys_arg(arg, root, keys);
+    }
+}
+
+/// 遍历一个调用实参（位置/关键字/展开形式统一处理）。
+fn collect_member_keys_arg<'a>(arg: &ast::CallArg<'a>, root: &str, keys: &mut Vec<String>) {
+    match arg {
+        ast::CallArg::Pos(e) | ast::CallArg::PosSplat(e) | ast::CallArg::KwargSplat(e) => {
+            collect_member_keys_expr(e, root, keys);
+        }
+        ast::CallArg::Kwarg(_, e) => collect_member_keys_expr(e, root, keys),
+    }
+}
+
 /// 遍历语句树收集静态模板引用名（只需覆盖所有携带语句体的分支）。
 fn collect_template_refs_stmt<'a>(stmt: &Stmt<'a>, refs: &mut Vec<String>) {
     match stmt {
@@ -933,5 +1154,66 @@ mod tests {
         // 列号按 lexer token 计，而非按字节：`{{` 整体占一列。
         // 故第 2 行 `G1 X{{ dia }}` 的列为：G(1) 1(2) ␠(3) X(4) `{{`(5) ␠(6) d(7)。
         assert_eq!(v.col, 7);
+    }
+
+    // ---- 成员访问键提取（machine.* 完整性校验的输入）----
+
+    /// 点访问与**常量字符串下标**都收集；动态下标不收集。
+    #[test]
+    fn member_accesses_dot_and_const_subscript_only() {
+        let ast = parse(
+            r#"{{ machine.rapid }} {{ machine["linear"] }} {{ machine[key] }} {{ machine[1] }}"#,
+            "m.j2",
+        )
+        .unwrap();
+        assert_eq!(
+            extract_member_accesses(&ast, "machine"),
+            vec!["rapid", "linear"],
+            "动态下标/非字符串下标不得收集"
+        );
+    }
+
+    /// 按出现顺序去重，且穿透嵌套语句体（for / if / macro 等）。
+    #[test]
+    fn member_accesses_dedup_and_traverse_bodies() {
+        let src = "{% for i in xs %}{{ machine.rapid }}{% endfor %}\
+                   {% if machine.units %}{{ machine.rapid }}{% endif %}\
+                   {% macro m() %}{{ machine.tool_change }}{% endmacro %}";
+        let ast = parse(src, "m.j2").unwrap();
+        assert_eq!(
+            extract_member_accesses(&ast, "machine"),
+            vec!["rapid", "units", "tool_change"]
+        );
+    }
+
+    /// 只认指定根：其它根的点访问、以及裸 `machine` 引用都不产生键。
+    #[test]
+    fn member_accesses_respects_root() {
+        let ast = parse("{{ other.rapid }} {{ machine }} {{ x }}", "m.j2").unwrap();
+        assert!(
+            extract_member_accesses(&ast, "machine").is_empty(),
+            "非 machine 根或裸引用不应产生键"
+        );
+    }
+
+    /// 属性链只取紧邻根的第一段：`machine.a.b` 收集 `a`。
+    #[test]
+    fn member_accesses_take_first_segment_of_chain() {
+        let ast = parse("{{ machine.a.b.c }}", "m.j2").unwrap();
+        assert_eq!(extract_member_accesses(&ast, "machine"), vec!["a"]);
+    }
+
+    /// 表达式各处（运算、过滤器、调用实参）中的成员访问都要被找到。
+    #[test]
+    fn member_accesses_in_nested_expressions() {
+        let ast = parse(
+            r#"{{ machine.program_prefix ~ (machine.program_digits | int) }}{{ f(machine.spindle_on) }}"#,
+            "m.j2",
+        )
+        .unwrap();
+        assert_eq!(
+            extract_member_accesses(&ast, "machine"),
+            vec!["program_prefix", "program_digits", "spindle_on"]
+        );
     }
 }
