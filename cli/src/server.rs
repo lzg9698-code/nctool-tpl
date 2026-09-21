@@ -22,6 +22,7 @@ use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
 use std::rc::Rc;
 
+use nctool_core::asset::{now_iso8601, Preset, PresetStore, SpecFingerprint, WriteError};
 use nctool_core::machine::MachinePreset;
 use nctool_core::pipeline::{GCodeGenerator, GenerationOptions, OutputFormat};
 use nctool_core::registry::{TemplateCategory, TemplateSource};
@@ -165,6 +166,9 @@ pub fn route(ctx: &Ctx, method: &str, path: &str, query: &str, body: &[u8]) -> R
         ),
         ("GET", "/api/templates") => templates_list(ctx, query),
         ("GET", "/api/machines") => machines_list(ctx),
+        ("GET", "/api/presets") => presets_list(ctx, query),
+        ("POST", "/api/presets") => presets_save(ctx, body),
+        ("POST", "/api/presets/delete") => presets_delete(ctx, body),
         ("POST", "/api/inspect") => inspect(ctx, body),
         ("POST", "/api/validate") => validate(ctx, body),
         ("POST", "/api/render") => render(ctx, body),
@@ -556,6 +560,233 @@ fn machines_list(ctx: &Ctx) -> Resp {
 }
 
 // ---------------------------------------------------------------------------
+// GET/POST /api/presets
+// ---------------------------------------------------------------------------
+
+/// 预设文件路径（含红线 9 约束）。
+///
+/// **复用 `commands::preset::preset_path` 而不是自己拼**：R-9（预设文件不得落在
+/// 模板根内）在 CLI 侧是无条件强制的，HTTP 侧若另写一份判据，两边必然漂移，
+/// 而漂移的方向恰好是"HTTP 忘了查"→ 把 `presets.yaml` 写进模板根被当模板扫描。
+fn presets_path(ctx: &Ctx) -> Result<std::path::PathBuf, CliError> {
+    crate::commands::preset::preset_path(ctx, &crate::cli::PresetFileArgs { file: None })
+}
+
+/// `GET /api/presets`：预设列表（含结构化陈旧字段）。`?template=<名>` 过滤。
+///
+/// 文件损坏 / 版本未知时**降级为警告**并继续（只读命令不被坏文件拦住，D13），
+/// 警告随响应返回给前端，而不是静默丢掉。
+fn presets_list(ctx: &Ctx, query: &str) -> Resp {
+    let template = parse_query(query)
+        .into_iter()
+        .find(|(k, _)| k == "template")
+        .map(|(_, v)| v)
+        .filter(|v| !v.trim().is_empty());
+    let path = match presets_path(ctx) {
+        Ok(p) => p,
+        Err(e) => return cli_error(e),
+    };
+    let got = match PresetStore::load(&path) {
+        Ok(g) => g,
+        Err(e) => return write_error_resp(e),
+    };
+    let items: Vec<serde_json::Value> = got
+        .file
+        .presets
+        .iter()
+        .filter(|p| template.as_deref().is_none_or(|t| p.template == t))
+        .map(|p| {
+            // 模板不可解析 → `stale = null`、`resolvable = false`。
+            // **不**退回"新鲜"：那是静默误报（与 CLI 侧 `stale_of` 同一口径）。
+            let stale = crate::commands::preset::stale_of(ctx, p);
+            serde_json::json!({
+                "name": p.name,
+                "template": p.template,
+                "paramCount": p.params.len(),
+                "createdAt": p.created_at,
+                "specFingerprint": p.spec_fingerprint,
+                "resolvable": stale.is_some(),
+                "stale": stale.as_ref().map(|r| r.is_stale()),
+                "staleParams": stale.as_ref().map(|r| r.stale_params.clone()),
+                "missingRequired": stale.as_ref().map(|r| r.missing_required.clone()),
+            })
+        })
+        .collect();
+    Resp::Json(
+        200,
+        ok(serde_json::json!({
+            "path": path.display().to_string(),
+            "presets": items,
+            "warnings": got.warnings,
+        })),
+    )
+}
+
+/// `POST /api/presets`：保存 / 覆盖一个预设。
+///
+/// 请求体：`{"name","template","params":{...},"force":bool}`。
+/// 校验链路与 `preset save` **逐条一致**（参数归属 → L3 值校验 → 同名拒绝），
+/// 否则同一份数据 CLI 能存、HTTP 不能存（或反之），是典型的两套口径。
+fn presets_save(ctx: &Ctx, body: &[u8]) -> Resp {
+    let parsed: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return Resp::Json(400, err("bad_request", format!("请求体不是合法 JSON: {e}"))),
+    };
+    let name = match parsed.get("name").and_then(|t| t.as_str()) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => return Resp::Json(400, err("bad_request", "请求体需要非空字符串字段 \"name\"")),
+    };
+    let template = match parsed.get("template").and_then(|t| t.as_str()) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => {
+            return Resp::Json(
+                400,
+                err("bad_request", "请求体需要非空字符串字段 \"template\""),
+            )
+        }
+    };
+    let force = parsed
+        .get("force")
+        .and_then(|f| f.as_bool())
+        .unwrap_or(false);
+
+    // 参数：复用 CLI 的扁平解析器（`{"x":21.0}`），与 `--params-file` 同形。
+    let empty = serde_json::json!({});
+    let raw_params = parsed.get("params").unwrap_or(&empty);
+    let params = match parameter_set_from_json(raw_params) {
+        Ok(p) => p,
+        Err(e) => return cli_error(e),
+    };
+    if params.is_empty() {
+        return Resp::Json(400, err("bad_request", "未提供任何参数；空预设无意义"));
+    }
+
+    let path = match presets_path(ctx) {
+        Ok(p) => p,
+        Err(e) => return cli_error(e),
+    };
+    // ① 参数归属：必须是模板真正引用的变量（不能只看规格表——规格是可选层）
+    let specs = match crate::commands::preset::specs_of(ctx, &template) {
+        Ok(s) => s,
+        Err(e) => return cli_error_mapped(e),
+    };
+    let (known, _required) = match crate::commands::preset::template_vars(ctx, &template) {
+        Ok(v) => v,
+        Err(e) => return cli_error_mapped(e),
+    };
+    let unknown: Vec<&str> = params
+        .values
+        .keys()
+        .filter(|k| !known.contains(k.as_str()))
+        .map(String::as_str)
+        .collect();
+    if !unknown.is_empty() {
+        let mut hint: Vec<&str> = known.iter().map(String::as_str).collect();
+        hint.sort_unstable();
+        return Resp::Json(
+            400,
+            err(
+                "bad_request",
+                format!(
+                    "参数不属于模板 {}：{}\n该模板使用的变量：{}",
+                    template,
+                    unknown.join(", "),
+                    if hint.is_empty() {
+                        "（无）".to_string()
+                    } else {
+                        hint.join(", ")
+                    }
+                ),
+            ),
+        );
+    }
+    // ② L3 值级校验（与手填值同规，AC-3.9）
+    let report = nctool_core::validate::check_param_values(&specs, &params);
+    if report.has_errors() {
+        return Resp::Json(
+            400,
+            err(
+                "validation",
+                format!("参数值校验失败：\n{}", report.summary()),
+            ),
+        );
+    }
+    // ③ 同名：默认拒绝，不静默覆盖用户既有预设
+    let existing = match crate::commands::preset::load_lenient(&path) {
+        Ok(f) => f,
+        Err(e) => return cli_error(e),
+    };
+    if existing.get(&name).is_some() && !force {
+        return Resp::Json(
+            409,
+            err(
+                "name_conflict",
+                format!("同名预设已存在：{name}。需要覆盖请带 force: true"),
+            ),
+        );
+    }
+
+    let spec_fingerprint = SpecFingerprint::of(&specs);
+    let preset = Preset {
+        name: name.clone(),
+        template: template.clone(),
+        params: params.clone(),
+        created_at: now_iso8601(),
+        spec_fingerprint: spec_fingerprint.clone(),
+    };
+    let outcome = match PresetStore::upsert(&path, preset) {
+        Ok(o) => o,
+        Err(e) => return write_error_resp(e),
+    };
+    Resp::Json(
+        200,
+        ok(serde_json::json!({
+            "name": name,
+            "template": template,
+            "paramCount": params.len(),
+            "path": path.display().to_string(),
+            "action": outcome.action,
+            "specFingerprint": spec_fingerprint,
+            "fileFingerprint": outcome.fingerprint,
+        })),
+    )
+}
+
+/// `POST /api/presets/delete`：删除一个预设。请求体 `{"name"}`。
+///
+/// 走 **POST 而非 DELETE + 路径段**：预设名允许 `.`/`-` 等字符，放进路径段要
+/// 额外处理编码与 `..` 语义；更要紧的是前端 `API` 封装目前只做 GET/POST，
+/// 引入新方法会让三处同步面扩大。删除属于**有副作用**的操作，与保存一样
+/// 必须经 `PresetStore`（乐观锁 + 原子写），不能直接删文件。
+fn presets_delete(ctx: &Ctx, body: &[u8]) -> Resp {
+    let parsed: serde_json::Value = match serde_json::from_slice(body) {
+        Ok(v) => v,
+        Err(e) => return Resp::Json(400, err("bad_request", format!("请求体不是合法 JSON: {e}"))),
+    };
+    let name = match parsed.get("name").and_then(|t| t.as_str()) {
+        Some(s) if !s.is_empty() => s.to_string(),
+        _ => return Resp::Json(400, err("bad_request", "请求体需要非空字符串字段 \"name\"")),
+    };
+    let path = match presets_path(ctx) {
+        Ok(p) => p,
+        Err(e) => return cli_error(e),
+    };
+    let outcome = match PresetStore::remove(&path, &name) {
+        Ok(o) => o,
+        Err(e) => return write_error_resp(e),
+    };
+    Resp::Json(
+        200,
+        ok(serde_json::json!({
+            "name": name,
+            "path": path.display().to_string(),
+            "action": outcome.action,
+            "fileFingerprint": outcome.fingerprint,
+        })),
+    )
+}
+
+// ---------------------------------------------------------------------------
 // POST /api/inspect
 // ---------------------------------------------------------------------------
 
@@ -755,6 +986,67 @@ fn cli_error(e: CliError) -> Resp {
     Resp::Json(400, err(e.kind, e.message))
 }
 
+/// CLI 错误 → HTTP 响应，且**按 kind 校正状态码**。
+///
+/// `cli_error` 一律给 400；但 `template_not_found` 在服务端其它三处
+/// （`template_detail` / `registered_template` / `inspect`）都是 **404**。
+/// 若 `/api/presets` 走 `cli_error`，同一个 kind 会因端点不同而给出两种状态码
+/// —— 前端按状态码分支时必然错判。这里只为需要的 kind 做纠正，其余仍是 400。
+fn cli_error_mapped(e: CliError) -> Resp {
+    match e.kind {
+        "template_not_found" | "machine_not_found" | "preset_not_found" => {
+            Resp::Json(404, err(e.kind, e.message))
+        }
+        _ => cli_error(e),
+    }
+}
+
+/// 写内核错误 → HTTP 响应。
+///
+/// 状态码按**语义**而非一律 400：乐观锁冲突是 409（可重试），越界 / 名称非法是
+/// 400（调用方能改），IO / 内容损坏是 500（本地环境或磁盘问题，调用方无从修正，
+/// 且正文可能含绝对路径，按 [`internal_error`] 的口径不回显细节）。
+///
+/// `WriteError` 是 `#[non_exhaustive]`：兜底归 500，不静默降级成 400。
+fn write_error_resp(e: WriteError) -> Resp {
+    match e {
+        WriteError::Conflict { path, .. } => Resp::Json(
+            409,
+            err(
+                "write_conflict",
+                format!("写入冲突：{} 已被外部修改，未覆盖。请重试", path.display()),
+            ),
+        ),
+        WriteError::PathEscape { rel, reason } => {
+            if reason.contains("已存在") {
+                Resp::Json(409, err("name_conflict", format!("{reason}：{rel}")))
+            } else {
+                Resp::Json(
+                    400,
+                    err("bad_request", format!("预设名非法：{rel}（{reason}）")),
+                )
+            }
+        }
+        WriteError::ReadOnly { path } => {
+            eprintln!("error: 预设文件只读或无写入权限: {}", path.display());
+            Resp::Json(500, err("internal", "目标文件只读或无写入权限"))
+        }
+        // "预设不存在"：调用方问题，404（**不是** 500 —— 早期因为它被塞进
+        // `Corrupt` 分支而报成服务端内部错误）
+        WriteError::NotFound(m) => Resp::Json(404, err("preset_not_found", m)),
+        WriteError::Corrupt(m) => {
+            eprintln!("error: 预设文件损坏: {m}");
+            Resp::Json(500, err("internal", "预设文件内容损坏，详情见服务终端输出"))
+        }
+        WriteError::Io(e) => {
+            eprintln!("error: 预设文件读写失败: {e}");
+            Resp::Json(500, err("internal", "预设文件读写失败"))
+        }
+        // `#[non_exhaustive]`：新增变体一律归 500（服务端问题），不猜 400。
+        _ => Resp::Json(500, err("internal", "预设文件读写失败")),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // URL 工具
 // ---------------------------------------------------------------------------
@@ -814,6 +1106,8 @@ fn percent_decode(input: &str, plus_as_space: bool) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    use std::path::PathBuf;
 
     fn test_ctx() -> Ctx {
         Ctx::for_test()
@@ -887,6 +1181,317 @@ mod tests {
                 "缺少 {want}: {allowed:?}"
             );
         }
+    }
+
+    // -----------------------------------------------------------------------
+    // /api/presets
+    // -----------------------------------------------------------------------
+
+    /// 预设端点的隔离环境：模板目录与配置目录都指向临时区。
+    ///
+    /// **必须**把配置目录也隔离掉：`default_preset_path()` 读的是 `APPDATA`
+    /// （见 core::asset::preset），不隔离的话测试会写进用户真实的
+    /// `%APPDATA%\nctool\presets.yaml` —— 跑一次测试毁一次用户的预设。
+    ///
+    /// # 为什么要串行
+    ///
+    /// `APPDATA` 是**进程级**变量，而 cargo 默认让同一 target 的测试**并行**跑在
+    /// 多个线程里。于是 A 测试设的 `APPDATA` 会被 B 测试覆盖，而 A 后续的写盘就
+    /// 落进了 B 的临时目录 —— 表现为断言拿到"另一个环境的数据"。
+    ///
+    /// 实测踩到：坏文件测试写完坏内容后 `warnings` 为空，因为它的写落到了
+    /// 另一测试的 `..._list_empty_2` 目录里。修法是**持锁跑完整个测试体**
+    /// （不是只在建环境时持锁），见 [`preset_endpoint_test`]。
+    struct PresetEnv {
+        work: PathBuf,
+        _guard: std::sync::MutexGuard<'static, ()>,
+    }
+
+    /// 全局串行锁：所有改动 `APPDATA` 的测试都必须经此获取环境。
+    static PRESET_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+
+    /// 取锁 + 建隔离环境，返回的 `PresetEnv` 在 drop 时释放锁。
+    ///
+    /// **所有**触碰预设端点的测试都必须走这个入口，不要直接 `PresetEnv::new`
+    /// —— `new` 只负责建目录，本身不持锁，单独用会在并行测试下相互踩 env。
+    fn preset_endpoint_test(tag: &str) -> PresetEnv {
+        // 锁中毒（前一个测试 panic）时照样继续：宁可后续断言失败，
+        // 也不要让所有用例一起挂掉而看不见真正的原因。
+        let guard = PRESET_ENV_LOCK
+            .lock()
+            .unwrap_or_else(|poisoned| poisoned.into_inner());
+        PresetEnv::new_locked(tag, guard)
+    }
+
+    impl PresetEnv {
+        /// 建目录 + 改 env。`guard` 由调用方持有，保证整个测试体串行。
+        fn new_locked(tag: &str, guard: std::sync::MutexGuard<'static, ()>) -> Self {
+            static COUNTER: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(0);
+            let n = COUNTER.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            let work = std::env::temp_dir().join(format!(
+                "nctool_apitest_{}_{}_{}",
+                std::process::id(),
+                tag,
+                n
+            ));
+            let _ = std::fs::remove_dir_all(&work);
+            let root = work.join("templates");
+            std::fs::create_dir_all(&root).expect("建模板目录");
+            std::fs::write(
+                root.join("t.j2"),
+                "G0 X{{ x | nc_fixed(3) }} Y{{ y | nc_fixed(3) }} F{{ feed | default(100) }}\nM30\n",
+            )
+            .expect("写模板");
+            // 配置目录隔离：APPDATA（Windows）/ XDG_CONFIG_HOME（其它）
+            let cfg = work.join("config");
+            std::fs::create_dir_all(&cfg).expect("建配置目录");
+            std::env::set_var("APPDATA", &cfg);
+            std::env::set_var("XDG_CONFIG_HOME", &cfg);
+            std::env::set_var("HOME", &cfg);
+            std::env::set_var("USERPROFILE", &cfg);
+            PresetEnv {
+                work,
+                _guard: guard,
+            }
+        }
+
+        /// 建一个 `template_dir` 指向临时模板根的 ctx。
+        fn ctx(&self) -> Ctx {
+            let mut ctx = Ctx::for_test();
+            ctx.template_dir = Some(self.work.join("templates"));
+            ctx
+        }
+
+        fn body(&self, name: &str, params: &str, force: bool) -> String {
+            format!(r#"{{"name":"{name}","template":"t.j2","params":{params},"force":{force}}}"#)
+        }
+    }
+
+    fn json_body(v: &serde_json::Value) -> Vec<u8> {
+        serde_json::to_vec(v).unwrap()
+    }
+
+    /// GET 空文件：合法返回空列表，不是错误。
+    #[test]
+    fn presets_list_empty_is_ok() {
+        let env = preset_endpoint_test("list_empty");
+        let Resp::Json(status, payload) = route(&env.ctx(), "GET", "/api/presets", "", &[]) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200);
+        assert_eq!(payload["ok"], true);
+        assert_eq!(payload["data"]["presets"].as_array().unwrap().len(), 0);
+        assert!(payload["data"]["warnings"].as_array().unwrap().is_empty());
+    }
+
+    /// 保存 → 列表：**结构化陈旧字段**必须齐备（D7：消费方不解析文本）。
+    #[test]
+    fn presets_save_then_list_has_structured_stale_fields() {
+        let env = preset_endpoint_test("save_list");
+        let ctx = env.ctx();
+        let body = env.body("p1", r#"{"x":21.0,"y":15.0}"#, false);
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/presets", "", body.as_bytes())
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "{payload}");
+        assert_eq!(payload["data"]["name"], "p1");
+        assert_eq!(payload["data"]["paramCount"], 2);
+        // `WriteAction` 派生 `#[serde(rename_all = "lowercase")]`：契约是小写，
+        // 与 camelCase 的 `specFingerprint` 并存（前者是 core 的既有契约，不动它）
+        assert_eq!(payload["data"]["action"], "created");
+        // 两个指纹必须都给出且语义不同（规格基线 vs 文件乐观锁）
+        assert!(payload["data"]["specFingerprint"]
+            .as_str()
+            .unwrap()
+            .starts_with("fnv1a64:"));
+        assert!(payload["data"]["fileFingerprint"].as_str().is_some());
+
+        let Resp::Json(status, payload) = route(&ctx, "GET", "/api/presets", "", &[]) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200);
+        let one = &payload["data"]["presets"][0];
+        assert_eq!(one["name"], "p1");
+        assert_eq!(one["paramCount"], 2);
+        assert_eq!(one["resolvable"], true);
+        assert_eq!(one["stale"], false);
+        assert!(one["staleParams"].is_array());
+        assert!(one["missingRequired"].is_array());
+    }
+
+    /// 未带 force 的同名保存 → 409 + `name_conflict`（不静默覆盖）。
+    #[test]
+    fn presets_save_duplicate_is_409() {
+        let env = preset_endpoint_test("dup");
+        let ctx = env.ctx();
+        let body = env.body("p1", r#"{"x":21.0,"y":15.0}"#, false);
+        let _ = route(&ctx, "POST", "/api/presets", "", body.as_bytes());
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/presets", "", body.as_bytes())
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 409);
+        assert_eq!(payload["error"]["kind"], "name_conflict");
+        // force=true 才覆盖
+        let forced = env.body("p1", r#"{"x":30.0,"y":15.0}"#, true);
+        let Resp::Json(status, payload) =
+            route(&ctx, "POST", "/api/presets", "", forced.as_bytes())
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "{payload}");
+        assert_eq!(payload["data"]["action"], "updated");
+    }
+
+    /// 参数不属于模板 → 400（与 CLI 同一判据：模板引用变量，不是规格表）。
+    #[test]
+    fn presets_save_rejects_unknown_param() {
+        let env = preset_endpoint_test("unknown");
+        let body = env.body("bad", r#"{"x":21.0,"nope":1.0}"#, false);
+        let Resp::Json(status, payload) =
+            route(&env.ctx(), "POST", "/api/presets", "", body.as_bytes())
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 400);
+        assert_eq!(payload["error"]["kind"], "bad_request");
+        assert!(
+            payload["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("nope"),
+            "{payload}"
+        );
+    }
+
+    /// 空参数 → 400；模板不存在 → 404。
+    #[test]
+    fn presets_save_rejects_empty_params_and_missing_template() {
+        let env = preset_endpoint_test("empty");
+        let ctx = env.ctx();
+        let body = env.body("e", "{}", false);
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/presets", "", body.as_bytes())
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 400, "{payload}");
+
+        let missing = r#"{"name":"m","template":"no_such.j2","params":{"x":1.0},"force":false}"#;
+        let Resp::Json(status, payload) =
+            route(&ctx, "POST", "/api/presets", "", missing.as_bytes())
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 404, "{payload}");
+        assert_eq!(payload["error"]["kind"], "template_not_found");
+    }
+
+    /// 删除：存在则 200，不存在则报错（不静默成功）。
+    ///
+    /// **每个场景各用一个隔离环境**：`PresetEnv` 改的是进程级 env（APPDATA），
+    /// 同一测试里复用一个环境会让"上一步写坏的文件"影响下一步。此前正是在一个
+    /// 环境里连做多步，第二步的 500 来自第一步留下的坏文件，把真正的断言带偏。
+    #[test]
+    fn presets_delete_roundtrip() {
+        let env = preset_endpoint_test("del");
+        let ctx = env.ctx();
+        let body = env.body("doomed", r#"{"x":21.0,"y":15.0}"#, false);
+        let _ = route(&ctx, "POST", "/api/presets", "", body.as_bytes());
+
+        let del = json_body(&serde_json::json!({ "name": "doomed" }));
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/presets/delete", "", &del)
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "{payload}");
+        assert_eq!(payload["data"]["action"], "deleted");
+
+        // 再删一次：404 preset_not_found（**不是** 500 —— 这是调用方问题）
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/presets/delete", "", &del)
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 404, "删不存在的预设应为 404: {payload}");
+        assert_eq!(payload["error"]["kind"], "preset_not_found");
+
+        // 列表确认为空
+        let Resp::Json(_, payload) = route(&ctx, "GET", "/api/presets", "", &[]) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(payload["data"]["presets"].as_array().unwrap().len(), 0);
+    }
+
+    /// `?template=` 过滤生效。
+    #[test]
+    fn presets_list_filters_by_template() {
+        let env = preset_endpoint_test("filter");
+        let ctx = env.ctx();
+        let body = env.body("p1", r#"{"x":21.0,"y":15.0}"#, false);
+        let _ = route(&ctx, "POST", "/api/presets", "", body.as_bytes());
+
+        let Resp::Json(_, payload) = route(&ctx, "GET", "/api/presets", "template=t.j2", &[])
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(payload["data"]["presets"].as_array().unwrap().len(), 1);
+
+        let Resp::Json(_, other) = route(&ctx, "GET", "/api/presets", "template=u.j2", &[]) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(other["data"]["presets"].as_array().unwrap().len(), 0);
+    }
+
+    /// 红线 9：预设文件**不得**落进模板根 —— HTTP 侧与 CLI 侧同一判据。
+    ///
+    /// 这条是回归守卫：当年 `preset_path` 的条件式校验让红线静默失效过一次。
+    #[test]
+    fn presets_path_refuses_inside_template_root() {
+        let env = preset_endpoint_test("r9");
+        let mut ctx = env.ctx();
+        // 让配置目录本身就落在模板根内 → 默认预设路径必然命中红线
+        ctx.template_dir = Some(env.work.join("config"));
+        let Resp::Json(status, payload) = route(&ctx, "GET", "/api/presets", "", &[]) else {
+            panic!("应返回 JSON")
+        };
+        assert_ne!(status, 200, "预设文件落在模板根内应被拒");
+        assert!(
+            payload["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("不得落在模板目录内"),
+            "{payload}"
+        );
+    }
+
+    /// 坏文件降级：只读命令给警告 + 空列表，**不是** 500（D13）。
+    #[test]
+    fn presets_corrupt_file_degrades_read_but_refuses_write() {
+        let env = preset_endpoint_test("corrupt");
+        let ctx = env.ctx();
+        let path = nctool_core::asset::default_preset_path();
+        // 父目录此时可能还不存在（预设文件尚未被创建过）——先建再写坏内容
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        std::fs::write(&path, "version: 1\npresets: [ {unclosed").unwrap();
+
+        let Resp::Json(status, payload) = route(&ctx, "GET", "/api/presets", "", &[]) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "只读命令不应被坏文件拦住: {payload}");
+        assert!(payload["data"]["presets"].as_array().unwrap().is_empty());
+        assert!(
+            !payload["data"]["warnings"].as_array().unwrap().is_empty(),
+            "降级必须带警告，不能静默丢: {payload}"
+        );
+
+        let body = env.body("w", r#"{"x":21.0,"y":15.0}"#, false);
+        let Resp::Json(status, _payload) = route(&ctx, "POST", "/api/presets", "", body.as_bytes())
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_ne!(status, 200, "坏文件上不得写入（会毁掉用户数据）");
     }
 
     #[test]

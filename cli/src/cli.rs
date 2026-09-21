@@ -67,6 +67,8 @@ pub enum Command {
     Generate(RenderArgs),
     /// 机床配置：列表 / 查看
     Machine(MachineArgs),
+    /// 参数预设：保存 / 列出 / 查看 / 重命名 / 删除 / 导入导出 / 应用
+    Preset(PresetArgs),
     /// 配置管理：初始化示例配置 / 查看生效配置
     Config(ConfigArgs),
     /// 启动本地 Web UI（模板浏览 + 只读 API，阶段 C）
@@ -338,6 +340,155 @@ pub enum MachineCommand {
 pub struct MachineShowArgs {
     /// 机床标识（内置或自定义）
     pub id: String,
+}
+
+// ---------------------------------------------------------------------------
+// preset（参数预设）
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Args)]
+pub struct PresetArgs {
+    #[command(subcommand)]
+    pub command: PresetCommand,
+}
+
+#[derive(Debug, Subcommand)]
+pub enum PresetCommand {
+    /// 保存当前参数为命名预设（保存前校验参数值，只存有效参数）
+    Save(PresetSaveArgs),
+    /// 列出预设（含陈旧标记与失效参数）
+    List(PresetListArgs),
+    /// 查看单个预设的完整内容与陈旧报告
+    Show(PresetShowArgs),
+    /// 重命名预设（保留模板绑定与参数）
+    Rename(PresetRenameArgs),
+    /// 删除预设
+    Rm(PresetRmArgs),
+    /// 导出预设为独立 YAML（默认全部，可指定单个）
+    Export(PresetExportArgs),
+    /// 从导出文件导入预设（含重名与非法值校验）
+    Import(PresetImportArgs),
+    /// 应用预设：按当前模板规格校验并输出生效参数（可选直接渲染）
+    Apply(PresetApplyArgs),
+}
+
+/// 预设子命令共用的文件位置参数。
+#[derive(Debug, Args)]
+pub struct PresetFileArgs {
+    /// 预设文件路径（默认：配置目录下的 presets.yaml）
+    #[arg(long, value_name = "FILE")]
+    pub file: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct PresetSaveArgs {
+    /// 预设名称
+    pub name: String,
+
+    /// 绑定的模板名（须能在注册表中解析）
+    pub template: String,
+
+    /// 覆盖已有同名预设（默认拒绝，避免静默丢参数）
+    #[arg(long)]
+    pub force: bool,
+
+    #[command(flatten)]
+    pub params: ParamInputArgs,
+
+    #[command(flatten)]
+    pub file: PresetFileArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct PresetListArgs {
+    /// 仅列出绑定到该模板的预设
+    #[arg(long, value_name = "TEMPLATE")]
+    pub template: Option<String>,
+
+    /// 显示每个预设的失效参数明细
+    #[arg(long)]
+    pub verbose: bool,
+
+    #[command(flatten)]
+    pub file: PresetFileArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct PresetShowArgs {
+    /// 预设名称
+    pub name: String,
+
+    #[command(flatten)]
+    pub file: PresetFileArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct PresetRenameArgs {
+    /// 旧名称
+    pub old: String,
+
+    /// 新名称
+    pub new: String,
+
+    #[command(flatten)]
+    pub file: PresetFileArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct PresetRmArgs {
+    /// 预设名称
+    pub name: String,
+
+    /// 跳过二次确认（脚本场景）
+    #[arg(long)]
+    pub yes: bool,
+
+    #[command(flatten)]
+    pub file: PresetFileArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct PresetExportArgs {
+    /// 只导出该预设（默认导出全部）
+    #[arg(value_name = "NAME")]
+    pub name: Option<String>,
+
+    /// 输出文件（默认写 stdout）
+    #[arg(long, short, value_name = "FILE")]
+    pub out: Option<PathBuf>,
+
+    #[command(flatten)]
+    pub file: PresetFileArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct PresetImportArgs {
+    /// 导入源文件（`-` 表示 stdin）
+    pub input: String,
+
+    /// 遇到同名预设时覆盖（默认拒绝并列出冲突项）
+    #[arg(long)]
+    pub force: bool,
+
+    #[command(flatten)]
+    pub file: PresetFileArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct PresetApplyArgs {
+    /// 预设名称
+    pub name: String,
+
+    /// 目标模板（默认用预设自身绑定的模板；指定即走跨模板复用路径）
+    #[arg(long, value_name = "TEMPLATE")]
+    pub template: Option<String>,
+
+    /// 确认跨模板应用（列出差异后需显式确认）
+    #[arg(long)]
+    pub confirm: bool,
+
+    #[command(flatten)]
+    pub file: PresetFileArgs,
 }
 
 // ---------------------------------------------------------------------------

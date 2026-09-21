@@ -30,6 +30,27 @@
       "body": ""
     },
     {
+      "method": "GET",
+      "path": "/api/presets",
+      "query": "",
+      "body": "",
+      "note": "参数预设列表（含结构化陈旧字段 stale/staleParams/missingRequired 与 degradations 警告）；?template=<名> 过滤。损坏文件降级为警告而非报错（D13）"
+    },
+    {
+      "method": "POST",
+      "path": "/api/presets",
+      "query": "",
+      "body": "{}",
+      "note": "保存/覆盖预设，体 {\"name\",\"template\",\"params\",\"force\"}；校验链与 preset save 逐条一致"
+    },
+    {
+      "method": "POST",
+      "path": "/api/presets/delete",
+      "query": "",
+      "body": "{}",
+      "note": "删除预设，体 {\"name\"}。用 POST 而非 DELETE+路径段：预设名可含 . 与 -，放路径段需额外编码处理，且前端 API 封装只做 GET/POST"
+    },
+    {
       "method": "POST",
       "path": "/api/inspect",
       "query": "",

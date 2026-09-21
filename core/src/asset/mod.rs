@@ -17,6 +17,7 @@
 mod atomic;
 mod guard;
 mod path;
+pub mod preset;
 mod spec_fingerprint;
 pub mod template;
 
@@ -24,6 +25,11 @@ use std::path::{Path, PathBuf};
 
 pub use guard::FileFingerprint;
 pub use path::{validate_asset_name, SafePath};
+pub use preset::{
+    default_preset_path, ensure_outside_template_root, iso8601_from_unix, now_iso8601,
+    CrossTemplateReport, LoadOutcome, Preset, PresetFile, PresetStore, PresetView, StaleReport,
+    PRESET_FILE, PRESET_SCHEMA_VERSION,
+};
 pub use spec_fingerprint::SpecFingerprint;
 pub use template::{
     build_derived_source, last_component, manifest_append_entry, manifest_contains_key,
@@ -102,6 +108,15 @@ pub enum WriteAction {
     Updated,
     /// 目标文件内容与新内容一致，未改动。
     Unchanged,
+    /// 目标条目被移除（文件内容因此变化）。
+    ///
+    /// # 为什么要独立于 [`WriteAction::Updated`]
+    ///
+    /// `remove()` 内部走的是"改完内容再落盘"，若直接透传 `save` 的动作，
+    /// 调用方拿到的就是 `updated` —— 一个**删除**被报成**更新**。
+    /// CLI 与 HTTP 都把这个值直接给了消费方，于是"按 action 分支"的逻辑
+    /// 永远走不到删除分支。这是静默的语义错误（值合法、不报错、只是错）。
+    Deleted,
 }
 
 /// 一次写操作的结果。
@@ -145,6 +160,15 @@ pub enum WriteError {
     },
     /// 其余 IO 失败。
     Io(std::io::Error),
+    /// 操作的目标条目不存在（如 `rename` / `remove` 指定的预设名不在文件里）。
+    ///
+    /// # 为什么要独立于 [`WriteError::Corrupt`]
+    ///
+    /// 早期把"预设不存在"塞进 `Corrupt`，于是下游只能靠**匹配消息文本**里有没有
+    /// `"不存在"` 来分类（CLI 与 HTTP 各写一遍）。那是 D7 明令禁止的做法：
+    /// 文案一改，分类就静默错位——HTTP 侧会把"删一个不存在的预设"报成
+    /// **500 内部错误**（本该是 4xx 的调用方问题）。结构化字段是唯一可靠判据。
+    NotFound(String),
     /// 写入目标不可用（路径存在但不是普通文件，如目录占位）。
     ///
     /// 注意：**并非**"数据损坏"——通常是目标位置被同名目录占用，改名或移除即可。
@@ -164,6 +188,7 @@ impl std::fmt::Display for WriteError {
                 write!(f, "目标只读或无写入权限：{}", path.display())
             }
             WriteError::Io(err) => write!(f, "IO 错误：{err}"),
+            WriteError::NotFound(msg) => write!(f, "{msg}"),
             WriteError::Corrupt(msg) => write!(f, "写入目标不可用：{msg}"),
         }
     }

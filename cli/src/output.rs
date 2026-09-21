@@ -54,7 +54,7 @@ impl CliError {
     /// 命令失败对应的进程退出码。
     ///
     /// 矩阵：`0` 成功；`1` 参数校验未通过；`2` 参数/用法错误（与 clap 一致）；
-    /// `3` IO 失败；`4` 配置错误；`5` 模板/机床未找到；`6` 渲染/注册表/写冲突失败
+    /// `3` IO 失败；`4` 配置错误；`5` 模板/机床/**预设**未找到；`6` 渲染/注册表/写冲突失败
     /// （含 `write_conflict` 乐观锁冲突、`name_conflict` 名称已存在）；
     /// `7` 功能尚未实现；未知分类兜底归 `1`。
     pub fn exit_code(&self) -> u8 {
@@ -63,7 +63,9 @@ impl CliError {
             "args" => 2,
             "io" => 3,
             "config" => 4,
-            "template_not_found" | "machine_not_found" => 5,
+            // `preset_not_found` 归这里（而非 2）：语义是"你点的东西不存在"，
+            // 与 `template_not_found` 同类。CLI 侧由 `WriteError::NotFound` 产生。
+            "template_not_found" | "machine_not_found" | "preset_not_found" => 5,
             "render" | "pipeline" | "registry" | "template_duplicate" | "template_empty"
             | "template_compile" | "write_conflict" | "name_conflict" => 6,
             "not_implemented" => 7,
@@ -83,6 +85,41 @@ impl std::error::Error for CliError {}
 impl From<std::io::Error> for CliError {
     fn from(err: std::io::Error) -> Self {
         CliError::new("io", err.to_string())
+    }
+}
+
+/// 写内核错误 → CLI 错误。
+///
+/// **单一来源**：`templates` / `preset`（后续 `machine`）的写路径共用此实现，
+/// 避免各命令族各写一份映射导致同一错误在不同命令下退出码不同。
+///
+/// 分类口径：乐观锁冲突 → `write_conflict`(6)；目标只读 / 一般 IO → `io`(3)；
+/// 路径越界与名称非法 → `args`(2)；"目标不可用" → `io`(3)。
+/// `WriteError` 为 `#[non_exhaustive]`，新增变体走 `_` 臂归 `io`，
+/// 因此**必须**同步检查本函数的分类是否需要细分（编译器不会报错）。
+impl From<nctool_core::asset::WriteError> for CliError {
+    fn from(err: nctool_core::asset::WriteError) -> Self {
+        use nctool_core::asset::WriteError;
+        match err {
+            WriteError::Conflict { path, .. } => CliError::new(
+                "write_conflict",
+                format!(
+                    "写入冲突：{} 已被外部修改，未覆盖。可选：① 重试以当前内容为基线 \
+                     ② 放弃 ③ 另存为其它名称",
+                    path.display()
+                ),
+            ),
+            WriteError::PathEscape { rel, reason } => {
+                CliError::new("args", format!("路径越界被拒绝：{rel}（{reason}）"))
+            }
+            WriteError::ReadOnly { path } => {
+                CliError::new("io", format!("目标只读或无写入权限：{}", path.display()))
+            }
+            // 目标不可用（如同名目录占位）≠ "数据损坏"：payload 已自述。
+            WriteError::Corrupt(m) => CliError::new("io", m),
+            WriteError::Io(e) => CliError::new("io", format!("写入失败：{e}")),
+            _ => CliError::new("io", "写入失败"),
+        }
     }
 }
 

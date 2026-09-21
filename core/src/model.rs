@@ -820,6 +820,11 @@ impl ParamSpec {
 #[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
 pub struct ParameterSet {
     /// 参数名 → 参数值
+    ///
+    /// `#[serde(default)]`：允许手写配置里的空集写 `params: {}` 而非
+    /// `params: {values: {}}`——后者是内部表示泄漏到用户面前，会让"没有参数的
+    /// 预设"必须写成一坨机器码。缺省字段时按空集处理。
+    #[serde(default)]
     pub values: BTreeMap<String, ParamValue>,
 }
 

@@ -5,6 +5,7 @@ pub mod config_cmd;
 pub mod inspect;
 pub mod machine;
 pub mod part;
+pub mod preset;
 pub mod render;
 pub mod templates;
 pub mod ui;
@@ -33,6 +34,7 @@ impl Command {
             Command::Validate(a) => validate::run(&ctx, a),
             Command::Render(a) | Command::Generate(a) => render::run(&ctx, a),
             Command::Machine(a) => machine::run(&ctx, a),
+            Command::Preset(a) => preset::run(&ctx, a),
             Command::Config(a) => config_cmd::run(&ctx, a),
             Command::Ui(a) => ui::run(&ctx, a),
             // 已在上方无配置分发（此臂仅满足穷尽性）

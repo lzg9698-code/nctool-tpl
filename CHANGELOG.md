@@ -776,6 +776,82 @@ CI 转绿后从 run 的 `rust-coverage-lcov` 产物里取到 lcov，用项目自
 
 ---
 
+### 批次十五：参数预设编辑（编辑模块三，T03）
+
+「三个编辑模块」的第三个：把一组参数落成**命名预设**，可跨会话复用、可导出导入、
+并在模板规格变化后给出**陈旧提示**。三处入口共用同一份数据（`presets.yaml`）：
+CLI `nctool preset ...`、HTTP `/api/presets`、Web UI 预设面板。
+
+走的是与 `templates.yaml` 相反的编辑策略：预设文件是**工具自有**的新建文件，
+没有人工注释需要保全，因此直接 serde 全量往返，不做定点文本编辑。
+
+#### Added
+
+- **`core::asset::preset`**：预设存储内核。模型（`Preset` / `PresetFile`）、
+  后端（`PresetStore::{load,save,upsert,rename,remove}`，全部经 `WriteKernel`
+  的原子写 + 乐观锁）、导出导入（`export_preset` / `import_presets`）、
+  陈旧检测（`StaleReport`）与跨模板交集报告（`CrossTemplateReport`）。
+  schema `version: 1`；文件默认落配置目录（`%APPDATA%\nctool\presets.yaml`）。
+
+- **`nctool preset` 子命令族**：`save` / `list` / `show` / `rename` / `rm` /
+  `export` / `import` / `apply`。`apply` 支持跨模板并强制显式确认（`--confirm`）。
+
+- **`/api/presets`（GET / POST）与 `/api/presets/delete`（POST）**：
+  与 CLI 逐条同规的校验链。`GET` 返回**结构化**陈旧字段
+  （`resolvable` / `stale` / `staleParams` / `missingRequired`），
+  消费方无需解析文本（D7）。
+
+- **Web UI 预设面板**：顶部 chips 带陈旧角标（失效参数 / 缺失必选逐项列出），
+  弹窗内可见陈旧详情。**替换**了原先只落 `localStorage` 的本机实现 —— 那套实现
+  与 CLI/HTTP 的 `presets.yaml` 是两个互不相干的仓库（UI 存的 `nctool preset list`
+  看不见，反之亦然）。现在 demo 模式由 API 层仍落 `localStorage`，服务模式落
+  `presets.yaml`，但**接口与语义完全一致**。
+
+- **退出码 5 的语义扩展**：`preset_not_found` 归入 5（原 5 只含模板/机床未找到），
+  退出码冻结区间 `0..=7` 不变。
+
+#### Fixed
+
+修掉四个**静默错误**（值合法、不报错、只是错），均带回归测试：
+
+- **红线 R-9 的条件性失效**：预设文件"不得落在模板根内"的校验此前写成
+  `if let Some(root) = &ctx.template_dir { ... }`，未配置模板目录时**整条红线被跳过**。
+  实测把 `./templates/presets.yaml` 写进了模板根（会被注册表当模板扫描）。
+  现改为**无条件**取全部候选模板根（显式配置的 + 默认 `./templates` + 注册表发现的）
+  逐个比对；且 `normalize()` 先绝对化再比较，修掉"相对路径 vs 绝对路径恒不相等"
+  的第二个缺口。
+
+- **新鲜预设被误报为陈旧**：`stale_report` 只拿 `specs` 判"参数还在不在模板里"，
+  对**没有声明规格**的模板（`specs` 为空表）会把**每个**参数都判成失效 ——
+  狼来了，真正的失效反而被淹没。现引入 `stale_report_full`，判定改为
+  "参数既不在规格中、**也不被模板引用**"才算失效；"新增必选"在规格表为空时
+  回退到模板的必选变量（`!Variable::optional`）。
+
+- **删除被报成更新**：`PresetStore::remove` 内部是"改完内容再落盘"，
+  直接透传了 `save` 的动作 → `action` 返回 `updated`。消费方按 `action` 分支时
+  **永远走不到删除分支**。新增 `WriteAction::Deleted` 并让 `remove` 显式置位。
+
+- **"不存在"靠匹配消息文本分类**（D7 禁止）：预设不存在被塞进 `WriteError::Corrupt`，
+  下游只能靠 `msg.contains("不存在")` 分流，文案一改就静默归错 ——
+  HTTP 侧把"删一个不存在的预设"报成 **500 内部错误**。新增
+  `WriteError::NotFound` 结构化变体；CLI 归 `preset_not_found`(5)，
+  HTTP 归 404。
+
+- **`/api/presets` 的 `template_not_found` 状态码与其它端点不一致**：
+  经 `cli_error` 一律给 400，而 `template_detail` / `registered_template` /
+  `inspect` 三处都是 404。同一 kind 因端点不同给出两种状态码，前端按状态码
+  分支必然错判。新增 `cli_error_mapped` 按 kind 校正。
+
+#### 测试
+
+- `core` 新增 21 项单元测试（往返 / 陈旧 / 跨模板 / 导入导出 / 降级 / 红线）。
+- `cli/tests/cli_preset_e2e.rs`：22 项 E2E，覆盖 PRD AC-3.1 ~ AC-3.10。
+- `cli/src/server.rs` 新增 9 项端点测试（含退化行为与红线守卫）；
+  因 `default_preset_path()` 读**进程级** `APPDATA`，这批测试用全局互斥锁**串行**，
+  否则并行测试会互相覆盖 env、把文件写进彼此的临时目录。
+
+---
+
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18
 
 「NCTool_V3 模板资产整合 + 参数规格系统 + 架构评估 P0/P1 收口」
