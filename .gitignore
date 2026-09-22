@@ -16,6 +16,11 @@ Thumbs.db
 # 日志与临时输出
 *.log
 
+# Python 字节码缓存（运行 scripts/*.py 或 py_compile 会生成；
+# 属生成物，误提交会污染仓库）
+__pycache__/
+*.pyc
+
 # 覆盖率产物（CI 的 coverage job 与本地 `cargo llvm-cov` 都在仓库根生成，
 # 属生成物而非源文件；漏了这行会让 `git add -A` 顺手把它们提交进去）
 /lcov.info
