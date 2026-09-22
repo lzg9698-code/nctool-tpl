@@ -1,0 +1,686 @@
+<script>
+"use strict";
+/* ═══════════════════════════════════════════════════════════════
+   1. 数据：内置模板库 + 机床预设
+   （内置 5 个与 core/src/registry.rs 逐字节一致；其余为演示模板，展示各分类能力）
+   ═══════════════════════════════════════════════════════════════ */
+const TEMPLATES = [
+  // ── 内置（来自 core/src/registry.rs）──
+  { name:"program_header", category:"通用", builtin:true,
+    desc:"程序头：纸带起始符 + 程序号 + 注释头 + 单位/坐标系/取消态初始化",
+    source:
+      "%\n" +
+      "{{ machine.program_prefix | default('O') }}{{ prog | nc_pad(machine.program_digits | default(4) | int) }}\n" +
+      "( {{ part_name | default('') }} )\n" +
+      "( {{ op_name | default('') }} )\n" +
+      "{{ 'G20' if machine.units | default('metric') == 'imperial' else 'G21' }} ({{ machine.units | default('metric') }})\n" +
+      "G90 G17 (绝对坐标 / XY 平面)\n" +
+      "G40 G49 G80 (取消刀补 / 刀长补偿 / 固定循环)\n" +
+      "{{ machine.coordinate_system }}\n" +
+      "{{ machine.feed_mode }}\n" +
+      "M5\nM9\n",
+    params:[
+      { name:"prog", kind:"Integer", required:true, min:1, max:9999, unit:"号", desc:"程序号（前导零填充 4 位）" },
+      { name:"part_name", kind:"String", required:false, default:"", desc:"零件名称（注释）" },
+      { name:"op_name", kind:"String", required:false, default:"", desc:"工序名称（注释）" },
+    ]},
+  { name:"program_footer", category:"通用", builtin:true,
+    desc:"程序尾：主轴/冷却关闭 + 取消循环 + 程序结束 + 纸带结束符",
+    source:
+      "M5\nM9\n" +
+      "G80 (取消固定循环)\n" +
+      "{{ machine.program_end }}\n" +
+      "%\n",
+    params:[]},
+  { name:"tool_change", category:"通用", builtin:true,
+    desc:"换刀：主轴停止 + 换刀 + 刀长补偿 + 启动主轴与冷却",
+    source:
+      "M5\nM9\n" +
+      "{{ machine.tool_change }} T{{ tool_num | nc_strip }}\n" +
+      "G40 (取消刀补)\n" +
+      "G43 H{{ tool_num | nc_strip }} (刀长补偿)\n" +
+      "{{ machine.spindle_on }} S{{ spindle_speed | nc_strip }} (主轴正转)\n" +
+      "{{ machine.coolant_on }} (冷却开)\n",
+    params:[
+      { name:"tool_num", kind:"Integer", required:true, min:1, max:999, unit:"号", desc:"刀具号" },
+      { name:"spindle_speed", kind:"Integer", required:true, min:1, max:6000, unit:"r/min", desc:"主轴转速（S 值，正整数）" },
+    ]},
+  { name:"safe_move", category:"通用", builtin:true,
+    desc:"安全移动：抬刀到安全高度 + 定位",
+    source:
+      "{{ machine.rapid }} G90 Z{{ safe_z | default(100) | nc_fixed(3) }}\n" +
+      "{{ machine.rapid }} X{{ x | nc_fixed(3) }} Y{{ y | nc_fixed(3) }}\n",
+    params:[
+      { name:"x", kind:"Number", required:true, desc:"目标 X 坐标" },
+      { name:"y", kind:"Number", required:true, desc:"目标 Y 坐标" },
+      { name:"safe_z", kind:"Number", required:false, default:100, min:0, unit:"mm", desc:"安全高度 Z" },
+    ]},
+  { name:"drill_cycle", category:"钻孔", builtin:true,
+    desc:"钻孔循环：G81 标准钻孔",
+    source:
+      "{{ machine.rapid }} X{{ x | nc_fixed(3) }} Y{{ y | nc_fixed(3) }}\n" +
+      "G98 G81 R{{ r_plane | nc_fixed(3) }} Z{{ depth | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "G80 (取消循环)\n",
+    params:[
+      { name:"x", kind:"Number", required:true, unit:"mm", desc:"孔 X 坐标" },
+      { name:"y", kind:"Number", required:true, unit:"mm", desc:"孔 Y 坐标" },
+      { name:"r_plane", kind:"Number", required:false, default:5, min:0, unit:"mm", desc:"R 平面（安全高度）" },
+      { name:"depth", kind:"Number", required:true, max:0, unit:"mm", desc:"钻孔深度（负值）" },
+      { name:"feed", kind:"Number", required:true, min:0.001, unit:"mm/min", desc:"进给速度" },
+    ]},
+  // ── 演示模板（展示各分类与进阶语法）──
+  { name:"face_mill", category:"铣削", builtin:false,
+    desc:"端面铣削 · 面驱动热前加工示例（for 循环 + set 局部变量）",
+    source:
+      "( 端面铣削 - 面驱动热前加工 )\n" +
+      "{{ machine.rapid }} X{{ x0 | nc_fixed(3) }} Y{{ y0 | nc_fixed(3) }}\n" +
+      "{{ machine.spindle_on }} S{{ spindle_speed | nc_strip }} (主轴正转)\n" +
+      "{{ machine.coolant_on }} (冷却开)\n" +
+      "{% set step = cutter_d * 0.8 %}\n" +
+      "{{ machine.linear }} Z{{ depth | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "{% for i in range(passes) %}\n" +
+      "{{ machine.linear }} X{{ (x0 + i * step) | nc_fixed(3) }} Y{{ y0 | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "{% endfor %}\n" +
+      "{{ machine.spindle_off }}\n{{ machine.coolant_off }}\n",
+    params:[
+      { name:"tool_num", kind:"Integer", required:true, min:1, max:999, unit:"号", desc:"刀具号" },
+      { name:"spindle_speed", kind:"Integer", required:true, min:1, max:6000, unit:"r/min", desc:"主轴转速" },
+      { name:"x0", kind:"Number", required:true, unit:"mm", desc:"起点 X" },
+      { name:"y0", kind:"Number", required:true, unit:"mm", desc:"起点 Y" },
+      { name:"depth", kind:"Number", required:true, max:0, unit:"mm", desc:"铣削深度（负值）" },
+      { name:"feed", kind:"Number", required:true, min:0.001, unit:"mm/min", desc:"进给速度" },
+      { name:"cutter_d", kind:"Number", required:true, min:1, unit:"mm", desc:"刀具直径（决定行距 = 0.8×D）" },
+      { name:"passes", kind:"Integer", required:false, default:3, min:1, desc:"走刀次数" },
+    ]},
+  { name:"keyway_mill", category:"铣削", builtin:false,
+    desc:"键槽铣削示例（分层下刀 + 往复）",
+    source:
+      "( 键槽铣削 )\n" +
+      "{{ machine.rapid }} X{{ start_x | nc_fixed(3) }} Y{{ start_y | nc_fixed(3) }}\n" +
+      "{{ machine.spindle_on }} S{{ spindle_speed | nc_strip }}\n{{ machine.coolant_on }}\n" +
+      "{% for i in range(n_passes) %}\n" +
+      "{{ machine.linear }} Z{{ (key_depth * (i + 1) / n_passes) | nc_fixed(3) }} F{{ plunge_feed | nc_fixed(3) }}\n" +
+      "{{ machine.linear }} X{{ (start_x + key_length) | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "{{ machine.linear }} X{{ start_x | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "{% endfor %}\n" +
+      "{{ machine.rapid }} Z{{ safe_z | default(100) | nc_fixed(3) }}\n" +
+      "{{ machine.spindle_off }}\n{{ machine.coolant_off }}\n",
+    params:[
+      { name:"tool_num", kind:"Integer", required:true, min:1, max:999, unit:"号", desc:"键槽铣刀号" },
+      { name:"spindle_speed", kind:"Integer", required:true, min:1, max:6000, unit:"r/min", desc:"主轴转速" },
+      { name:"start_x", kind:"Number", required:true, unit:"mm", desc:"槽起点 X" },
+      { name:"start_y", kind:"Number", required:true, unit:"mm", desc:"槽起点 Y" },
+      { name:"key_length", kind:"Number", required:true, min:0.1, unit:"mm", desc:"槽长" },
+      { name:"key_depth", kind:"Number", required:true, max:0, unit:"mm", desc:"槽深（负值）" },
+      { name:"plunge_feed", kind:"Number", required:true, min:0.001, unit:"mm/min", desc:"下刀进给" },
+      { name:"feed", kind:"Number", required:true, min:0.001, unit:"mm/min", desc:"走刀进给" },
+      { name:"n_passes", kind:"Integer", required:false, default:2, min:1, desc:"分层次数" },
+      { name:"safe_z", kind:"Number", required:false, default:100, min:0, unit:"mm", desc:"安全高度" },
+    ]},
+  { name:"turn_rough", category:"车削", builtin:false,
+    desc:"外圆车削粗加工示例（循环分层）",
+    source:
+      "( 车削粗加工 - 外圆 )\n" +
+      "{{ machine.rapid }} X{{ (diameter / 2) | nc_fixed(3) }} Z{{ start_z | nc_fixed(3) }}\n" +
+      "{{ machine.spindle_on }} S{{ spindle_speed | nc_strip }} (主轴正转)\n{{ machine.coolant_on }}\n" +
+      "{% for i in range(passes) %}\n" +
+      "{% set cut = diameter / 2 - (i + 1) * depth_per_pass %}\n" +
+      "{{ machine.linear }} X{{ cut | nc_fixed(3) }} Z{{ (start_z + length) | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "{{ machine.linear }} X{{ cut | nc_fixed(3) }} Z{{ start_z | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "{% endfor %}\n" +
+      "{{ machine.rapid }} X{{ (diameter / 2 + 2) | nc_fixed(3) }} Z{{ safe_z | default(100) | nc_fixed(3) }}\n" +
+      "{{ machine.spindle_off }}\n{{ machine.coolant_off }}\n",
+    params:[
+      { name:"diameter", kind:"Number", required:true, min:1, unit:"mm", desc:"毛坯直径" },
+      { name:"length", kind:"Number", required:true, min:0.1, unit:"mm", desc:"加工长度" },
+      { name:"start_z", kind:"Number", required:true, unit:"mm", desc:"起刀 Z" },
+      { name:"depth_per_pass", kind:"Number", required:true, min:0.001, unit:"mm", desc:"每刀切深" },
+      { name:"passes", kind:"Integer", required:false, default:3, min:1, desc:"走刀次数" },
+      { name:"spindle_speed", kind:"Integer", required:true, min:1, max:6000, unit:"r/min", desc:"主轴转速" },
+      { name:"feed", kind:"Number", required:true, min:0.001, unit:"mm/min", desc:"进给速度" },
+      { name:"safe_z", kind:"Number", required:false, default:100, min:0, unit:"mm", desc:"退刀安全高度" },
+    ]},
+  { name:"drill_multi", category:"钻孔", builtin:false,
+    desc:"多孔阵列钻孔示例（循环内 set 计算孔位）",
+    source:
+      "( 多孔阵列钻孔 )\n" +
+      "{% for i in range(n_holes) %}\n" +
+      "{% set px = x0 + i * pitch_x %}\n" +
+      "{% set py = y0 + i * pitch_y %}\n" +
+      "{{ machine.rapid }} X{{ px | nc_fixed(3) }} Y{{ py | nc_fixed(3) }}\n" +
+      "G98 G81 R{{ r_plane | default(5) | nc_fixed(3) }} Z{{ depth | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "{% endfor %}\n" +
+      "G80 (取消循环)\n",
+    params:[
+      { name:"x0", kind:"Number", required:true, unit:"mm", desc:"首孔 X" },
+      { name:"y0", kind:"Number", required:true, unit:"mm", desc:"首孔 Y" },
+      { name:"pitch_x", kind:"Number", required:true, unit:"mm", desc:"X 方向孔距" },
+      { name:"pitch_y", kind:"Number", required:true, unit:"mm", desc:"Y 方向孔距" },
+      { name:"n_holes", kind:"Integer", required:true, min:1, max:999, desc:"孔数" },
+      { name:"depth", kind:"Number", required:true, max:0, unit:"mm", desc:"钻孔深度（负值）" },
+      { name:"feed", kind:"Number", required:true, min:0.001, unit:"mm/min", desc:"进给速度" },
+      { name:"r_plane", kind:"Number", required:false, default:5, min:0, unit:"mm", desc:"R 平面（安全高度）" },
+    ]},
+  { name:"wfl_face_drive", category:"机床", builtin:false,
+    desc:"面驱动热前加工 · WFL M65 特定（按机床类型分支）",
+    source:
+      "( 面驱动热前加工 - 车铣复合 )\n" +
+      "{{ machine.rapid }} X{{ x | nc_fixed(3) }} Z{{ z | nc_fixed(3) }}\n" +
+      "{% if machine.machine_type == 'mill_turn_multitask' %}\n" +
+      "( 车铣复合：C 轴锁紧 + 主轴定向 )\n" +
+      "{{ machine.spindle_on }} S{{ spindle_speed | nc_strip }} (C 轴定向)\n" +
+      "{% else %}\n" +
+      "{{ machine.spindle_on }} S{{ spindle_speed | nc_strip }}\n" +
+      "{% endif %}\n" +
+      "{{ machine.coolant_on }}\n" +
+      "{{ machine.linear }} X{{ x | nc_fixed(3) }} Z{{ z | nc_fixed(3) }} F{{ feed | nc_fixed(3) }}\n" +
+      "{{ machine.spindle_off }}\n{{ machine.coolant_off }}\n",
+    params:[
+      { name:"tool_num", kind:"Integer", required:true, min:1, max:999, unit:"号", desc:"面驱动刀具号" },
+      { name:"spindle_speed", kind:"Integer", required:true, min:1, max:6000, unit:"r/min", desc:"主轴转速" },
+      { name:"x", kind:"Number", required:true, unit:"mm", desc:"定位 X" },
+      { name:"z", kind:"Number", required:true, unit:"mm", desc:"定位 Z" },
+      { name:"feed", kind:"Number", required:true, min:0.001, unit:"mm/min", desc:"进给速度" },
+    ]},
+  { name:"demo_program", category:"通用", builtin:false,
+    desc:"程序装配示例：header + 换刀 + 安全移动 + 钻孔 + footer（include 闭包）",
+    source:
+      "{% include \"program_header\" %}\n" +
+      "{% include \"tool_change\" %}\n" +
+      "{% include \"safe_move\" %}\n" +
+      "{% include \"drill_cycle\" %}\n" +
+      "{% include \"program_footer\" %}\n",
+    params:[
+      { name:"prog", kind:"Integer", required:true, min:1, max:9999, unit:"号", desc:"程序号" },
+      { name:"part_name", kind:"String", required:false, default:"", desc:"零件名称（注释）" },
+      { name:"op_name", kind:"String", required:false, default:"", desc:"工序名称（注释）" },
+      { name:"tool_num", kind:"Integer", required:true, min:1, max:999, unit:"号", desc:"刀具号" },
+      { name:"spindle_speed", kind:"Integer", required:true, min:1, max:6000, unit:"r/min", desc:"主轴转速" },
+      { name:"x", kind:"Number", required:true, unit:"mm", desc:"孔 X 坐标" },
+      { name:"y", kind:"Number", required:true, unit:"mm", desc:"孔 Y 坐标" },
+      { name:"safe_z", kind:"Number", required:false, default:100, min:0, unit:"mm", desc:"安全高度" },
+      { name:"r_plane", kind:"Number", required:false, default:5, min:0, unit:"mm", desc:"R 平面" },
+      { name:"depth", kind:"Number", required:true, max:0, unit:"mm", desc:"钻孔深度（负值）" },
+      { name:"feed", kind:"Number", required:true, min:0.001, unit:"mm/min", desc:"进给速度" },
+    ]},
+];
+
+/* 机床预设：与 core/src/machine.rs 一致 */
+const BASE_CONFIG = {
+  program_prefix:"O", program_digits:"4", line_number_prefix:"N", line_number_digits:"4",
+  coordinate_system:"G54", units:"metric", feed_mode:"G94", rapid:"G0", linear:"G1",
+  clockwise_arc:"G2", ccw_arc:"G3", spindle_on:"M3", spindle_off:"M5",
+  coolant_on:"M8", coolant_off:"M9", program_end:"M30", tool_change:"M6",
+  max_spindle_rpm:"6000", machine_type:"generic",
+};
+const MACHINE_PRESETS = {
+  generic:   { id:"generic",   vendor:"Generic", model:"CNC", config:{...BASE_CONFIG} },
+  wfl_m65:   { id:"wfl_m65",   vendor:"WFL", model:"M65",
+    config:{...BASE_CONFIG, max_spindle_rpm:"3500", machine_type:"mill_turn_multitask",
+      axes:"X Z C (turning) / X Y Z B C (milling)"} },
+  index_ms40:{ id:"index_ms40",vendor:"INDEX", model:"MS40",
+    config:{...BASE_CONFIG, max_spindle_rpm:"5000", machine_type:"mill_turn_twin_spindle",
+      axes:"X1 Z1 C1 / X2 Z2 C2 / Y B"} },
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   2. 迷你 Jinja 渲染器（演示模式；严格模式语义近似 minijinja）
+   ═══════════════════════════════════════════════════════════════ */
+const UNDEF = Symbol("undefined");
+const isUndef = v => v === UNDEF || v === undefined;
+const truthy = v => !isUndef(v) && !!v;
+
+/* —— 表达式词法 —— */
+function tokenizeExpr(src) {
+  const toks = []; let i = 0;
+  const ws = /\s/;
+  const numRe = /^[0-9]*\.?[0-9]+(?:[eE][+-]?[0-9]+)?/;
+  while (i < src.length) {
+    const c = src[i];
+    if (ws.test(c)) { i++; continue; }
+    if (c === "'" || c === '"') {
+      let j = i + 1, s = "";
+      while (j < src.length && src[j] !== c) {
+        if (src[j] === "\\" && j + 1 < src.length) { s += src[j + 1]; j += 2; }
+        else { s += src[j]; j++; }
+      }
+      toks.push({ t: "str", v: s }); i = j + 1; continue;
+    }
+    const rest = src.slice(i);
+    const num = numRe.exec(rest);
+    if (num && num[0].length > 0 && (/[0-9]/.test(c) || (c === "." && /[0-9]/.test(rest[1] || "")))) {
+      toks.push({ t: "num", v: parseFloat(num[0]) }); i += num[0].length; continue;
+    }
+    if (/[A-Za-z_]/.test(c)) {
+      let j = i; while (j < src.length && /[A-Za-z0-9_]/.test(src[j])) j++;
+      toks.push({ t: "id", v: src.slice(i, j) }); i = j; continue;
+    }
+    const two = src.slice(i, i + 2);
+    if (["==", "!=", "<=", ">="].includes(two)) { toks.push({ t: "op", v: two }); i += 2; continue; }
+    if ("+-*/%|(),.[]:".includes(c) || c === "<" || c === ">") { toks.push({ t: "op", v: c }); i++; continue; }
+    i++;
+  }
+  toks.push({ t: "eof" });
+  return toks;
+}
+
+/* —— 表达式解析（递归下降）—— */
+class ExprParser {
+  constructor(src) { this.toks = tokenizeExpr(src); this.p = 0; }
+  peek() { return this.toks[this.p]; }
+  next() { return this.toks[this.p++]; }
+  expectOp(op) { const t = this.next(); if (t.t === "op" && t.v === op) return; throw new Error(`表达式语法错误：期望 ${op}`); }
+  parse() { return this.parseTernary(); }
+  parseTernary() {
+    const v = this.parseOr();
+    const t = this.peek();
+    if (t.t === "id" && t.v === "if") {
+      this.next();
+      const c = this.parseOr();
+      const e2 = this.next();
+      if (!(e2.t === "id" && e2.v === "else")) throw new Error("三元表达式缺少 else");
+      const e = this.parseTernary();
+      return { k: "tern", v, c, e };
+    }
+    return v;
+  }
+  parseOr() {
+    let l = this.parseAnd();
+    while (this.peek().t === "id" && this.peek().v === "or") { this.next(); const r = this.parseAnd(); l = { k: "bin", op: "or", l, r }; }
+    return l;
+  }
+  parseAnd() {
+    let l = this.parseNot();
+    while (this.peek().t === "id" && this.peek().v === "and") { this.next(); const r = this.parseNot(); l = { k: "bin", op: "and", l, r }; }
+    return l;
+  }
+  parseNot() {
+    if (this.peek().t === "id" && this.peek().v === "not") { this.next(); return { k: "un", op: "not", e: this.parseNot() }; }
+    return this.parseCmp();
+  }
+  parseCmp() {
+    let l = this.parseAdd();
+    for (;;) {
+      const t = this.peek();
+      if (t.t === "op" && ["==", "!=", "<", ">", "<=", ">="].includes(t.v)) {
+        this.next(); const r = this.parseAdd(); l = { k: "bin", op: t.v, l, r };
+      } else if (t.t === "id" && t.v === "is") {
+        this.next();
+        let neg = false;
+        if (this.peek().t === "id" && this.peek().v === "not") { neg = true; this.next(); }
+        const tn = this.next();
+        if (!(tn.t === "id" && (tn.v === "defined" || tn.v === "undefined"))) throw new Error("is 测试仅支持 defined/undefined");
+        l = { k: "test", e: l, name: tn.v, not: neg };
+      } else break;
+    }
+    return l;
+  }
+  parseAdd() {
+    let l = this.parseMul();
+    for (;;) { const t = this.peek(); if (t.t === "op" && (t.v === "+" || t.v === "-")) { this.next(); const r = this.parseMul(); l = { k: "bin", op: t.v, l, r }; } else break; }
+    return l;
+  }
+  parseMul() {
+    let l = this.parseUnary();
+    for (;;) { const t = this.peek(); if (t.t === "op" && (t.v === "*" || t.v === "/" || t.v === "%")) { this.next(); const r = this.parseUnary(); l = { k: "bin", op: t.v, l, r }; } else break; }
+    return l;
+  }
+  parseUnary() {
+    const t = this.peek();
+    if (t.t === "op" && t.v === "-") { this.next(); return { k: "un", op: "-", e: this.parseUnary() }; }
+    return this.parsePostfix();
+  }
+  parsePostfix() {
+    let e = this.parsePrimary();
+    for (;;) {
+      const t = this.peek();
+      if (t.t === "op" && t.v === ".") {
+        this.next(); const name = this.next();
+        if (name.t !== "id") throw new Error("属性名应为标识符");
+        e = { k: "attr", obj: e, name: name.v };
+      } else break;
+    }
+    while (this.peek().t === "op" && this.peek().v === "|") {
+      this.next(); const name = this.next();
+      if (name.t !== "id") throw new Error("过滤器名应为标识符");
+      let args = [];
+      if (this.peek().t === "op" && this.peek().v === "(") {
+        this.next();
+        if (!(this.peek().t === "op" && this.peek().v === ")")) {
+          args.push(this.parseExpr());
+          while (this.peek().t === "op" && this.peek().v === ",") { this.next(); args.push(this.parseExpr()); }
+        }
+        this.expectOp(")");
+      }
+      e = { k: "filter", e, name: name.v, args };
+    }
+    return e;
+  }
+  parsePrimary() {
+    const t = this.next();
+    if (t.t === "num") return { k: "num", v: t.v };
+    if (t.t === "str") return { k: "str", v: t.v };
+    if (t.t === "id") {
+      if (t.v === "true") return { k: "bool", v: true };
+      if (t.v === "false") return { k: "bool", v: false };
+      if (t.v === "none" || t.v === "null") return { k: "none" };
+      if (this.peek().t === "op" && this.peek().v === "(") {
+        this.next(); const args = [];
+        if (!(this.peek().t === "op" && this.peek().v === ")")) {
+          args.push(this.parseExpr());
+          while (this.peek().t === "op" && this.peek().v === ",") { this.next(); args.push(this.parseExpr()); }
+        }
+        this.expectOp(")");
+        return { k: "call", name: t.v, args };
+      }
+      return { k: "ident", v: t.v };
+    }
+    if (t.t === "op" && t.v === "(") { const e = this.parseExpr(); this.expectOp(")"); return e; }
+    if (t.t === "op" && t.v === "[") {
+      const items = [];
+      if (!(this.peek().t === "op" && this.peek().v === "]")) {
+        items.push(this.parseExpr());
+        while (this.peek().t === "op" && this.peek().v === ",") { this.next(); items.push(this.parseExpr()); }
+      }
+      this.expectOp("]");
+      return { k: "list", items };
+    }
+    throw new Error(`无法解析表达式: ${t.v || t.t}`);
+  }
+  parseExpr() { return this.parseTernary(); }
+}
+
+/* —— 过滤器 —— */
+function applyFilter(name, val, args) {
+  if (isUndef(val) && name !== "default" && name !== "d") return UNDEF;
+  const num = () => { const n = Number(val); if (!isFinite(n)) throw new Error(`过滤器 ${name}: 非有限数`); return n; };
+  switch (name) {
+    case "nc_fixed": { const n = num(), w = Number(args[0] ?? 3); return n.toFixed(w); }
+    case "nc_strip": { let s = num().toFixed(10).replace(/\.?0+$/, ""); if (s === "" || s === "-") s = "0"; return s; }
+    case "nc_pad": { const n = num(), w = Number(args[0] ?? 4); if (!Number.isInteger(n)) throw new Error("nc_pad: 需要整数值"); return String(Math.trunc(n)).padStart(w, "0"); }
+    case "default": case "d": return isUndef(val) ? args[0] : val;
+    case "int": return Math.trunc(num());
+    case "float": return num();
+    case "round": { const f = Math.pow(10, Number(args[0] ?? 0)); return Math.round(num() * f) / f; }
+    case "abs": return Math.abs(num());
+    case "lower": return String(val).toLowerCase();
+    case "upper": return String(val).toUpperCase();
+    case "trim": return String(val).trim();
+    case "length": return String(val).length;
+    case "sqrt": return Math.sqrt(num());
+    case "sin": return Math.sin(num());
+    case "cos": return Math.cos(num());
+    case "tan": return Math.tan(num());
+    case "floor": return Math.floor(num());
+    case "ceil": return Math.ceil(num());
+    case "pow": return Math.pow(num(), Number(args[0] ?? 1));
+    default: throw new Error(`未知过滤器: ${name}`);
+  }
+}
+function callFn(name, args) {
+  if (name === "range") { const n = Math.trunc(Number(args[0] ?? 0)); const a = []; for (let i = 0; i < n; i++) a.push(i); return a; }
+  throw new Error(`未知函数: ${name}`);
+}
+
+/* —— 表达式求值 —— */
+function evExpr(node, env) {
+  switch (node.k) {
+    case "num": case "str": case "bool": case "none": return node.v;
+    case "ident": {
+      if (node.v === "loop") return env.loop ?? UNDEF;
+      for (let i = env.scopes.length - 1; i >= 0; i--) if (node.v in env.scopes[i]) return env.scopes[i][node.v];
+      return UNDEF;
+    }
+    case "attr": {
+      const o = evExpr(node.obj, env);
+      if (isUndef(o) || o === null) return UNDEF;
+      if (typeof o === "object") return o[node.name] ?? UNDEF;
+      return UNDEF;
+    }
+    case "call": return callFn(node.name, node.args.map(a => evExpr(a, env)));
+    case "list": return node.items.map(i => evExpr(i, env));
+    case "un": {
+      if (node.op === "not") return !truthy(evExpr(node.e, env));
+      if (node.op === "-") { const v = evExpr(node.e, env); if (isUndef(v)) return UNDEF; if (typeof v !== "number") throw new Error("一元负号需要数值"); return -v; }
+      return UNDEF;
+    }
+    case "bin": {
+      if (node.op === "and") { const l = evExpr(node.l, env); return truthy(l) ? evExpr(node.r, env) : l; }
+      if (node.op === "or") { const l = evExpr(node.l, env); return truthy(l) ? l : evExpr(node.r, env); }
+      const l = evExpr(node.l, env), r = evExpr(node.r, env);
+      if (isUndef(l) || isUndef(r)) return UNDEF;
+      switch (node.op) {
+        case "+": if (typeof l === "number" && typeof r === "number") return l + r; return String(l) + String(r);
+        case "-": return l - r; case "*": return l * r; case "/": return l / r; case "%": return l % r;
+        case "==": return l === r; case "!=": return l !== r;
+        case "<": return l < r; case ">": return l > r; case "<=": return l <= r; case ">=": return l >= r;
+      }
+      return UNDEF;
+    }
+    case "test": {
+      const v = evExpr(node.e, env);
+      let res = node.name === "defined" ? !isUndef(v) : isUndef(v);
+      if (node.not) res = !res;
+      return res;
+    }
+    case "tern": { const c = evExpr(node.c, env); return truthy(c) ? evExpr(node.v, env) : evExpr(node.e, env); }
+    case "filter": {
+      const val = evExpr(node.e, env);
+      return applyFilter(node.name, val, node.args.map(a => evExpr(a, env)));
+    }
+  }
+  return UNDEF;
+}
+
+/* —— 模板分词 → 块树 —— */
+function tokenizeTemplate(src) {
+  const segs = []; let i = 0, text = "";
+  const pushText = () => { if (text !== "") { segs.push({ k: "text", v: text }); text = ""; } };
+  while (i < src.length) {
+    const openVar = src.indexOf("{{", i);
+    const openBlk = src.indexOf("{%", i);
+    const openCmt = src.indexOf("{#", i);
+    let next = Infinity, type = null;
+    if (openVar !== -1 && openVar < next) { next = openVar; type = "var"; }
+    if (openBlk !== -1 && openBlk < next) { next = openBlk; type = "blk"; }
+    if (openCmt !== -1 && openCmt < next) { next = openCmt; type = "cmt"; }
+    if (type === null) { text += src.slice(i); break; }
+    text += src.slice(i, next); i = next;
+    if (type === "var") {
+      const end = src.indexOf("}}", i + 2);
+      if (end === -1) { text += src.slice(i); break; }
+      pushText();
+      let expr = src.slice(i + 2, end), trimL = false, trimR = false;
+      if (expr.startsWith("-")) { trimL = true; expr = expr.slice(1); }
+      if (expr.endsWith("-")) { trimR = true; expr = expr.slice(0, -1); }
+      segs.push({ k: "var", expr: expr.trim(), trimL, trimR });
+      i = end + 2;
+    } else if (type === "blk") {
+      const end = src.indexOf("%}", i + 2);
+      if (end === -1) { text += src.slice(i); break; }
+      pushText();
+      let inner = src.slice(i + 2, end), trimL = false, trimR = false;
+      if (inner.startsWith("-")) { trimL = true; inner = inner.slice(1); }
+      if (inner.endsWith("-")) { trimR = true; inner = inner.slice(0, -1); }
+      const body = inner.trim();
+      const mSet = /^set\s+([A-Za-z_][A-Za-z0-9_]*)\s*=(.*)$/.exec(body);
+      const mFor = /^for\s+([A-Za-z_][A-Za-z0-9_]*)\s+in\s+(.*)$/.exec(body);
+      const mInc = /^include\s+["'](.*?)["']$/.exec(body);
+      if (/^set\s/.test(body) && mSet) segs.push({ k: "set", name: mSet[1], expr: mSet[2].trim(), trimL, trimR });
+      else if (/^include\s/.test(body) && mInc) segs.push({ k: "include", name: mInc[1], trimL, trimR });
+      else if (/^if\s/.test(body)) segs.push({ k: "branch", tag: "if", expr: body.slice(2).trim(), trimL, trimR });
+      else if (/^elif\s/.test(body)) segs.push({ k: "branch", tag: "elif", expr: body.slice(4).trim(), trimL, trimR });
+      else if (body === "else") segs.push({ k: "branch", tag: "else", expr: "", trimL, trimR });
+      else if (body === "endif") segs.push({ k: "end", tag: "endif", trimL, trimR });
+      else if (/^for\s/.test(body) && mFor) segs.push({ k: "for", name: mFor[1], expr: mFor[2].trim(), trimL, trimR });
+      else if (body === "endfor") segs.push({ k: "end", tag: "endfor", trimL, trimR });
+      else throw new Error(`不支持的控制块: {% ${body} %}`);
+      i = end + 2;
+    } else {
+      const end = src.indexOf("#}", i + 2);
+      if (end === -1) { text += src.slice(i); break; }
+      pushText(); i = end + 2;
+    }
+  }
+  pushText();
+  /* 空白控制 */
+  for (let idx = 0; idx < segs.length; idx++) {
+    const s = segs[idx];
+    if (s.trimL && segs[idx + 1] && segs[idx + 1].k === "text") segs[idx + 1].v = segs[idx + 1].v.replace(/^\s+/, "");
+    if (s.trimR && segs[idx - 1] && segs[idx - 1].k === "text") segs[idx - 1].v = segs[idx - 1].v.replace(/\s+$/, "");
+  }
+  /* 构建嵌套块树 */
+  const root = [], stack = [root];
+  for (const s of segs) {
+    if (s.k === "branch") {
+      if (s.tag === "if" || s.tag === "elif") {
+        const cur = stack[stack.length - 1];
+        const node = { k: "if", branches: [{ cond: s.expr, body: [] }], elseBody: null };
+        cur.push(node); stack.push(node.branches[0].body);
+      } else if (s.tag === "elif") {
+        stack.pop();
+        const cur = stack[stack.length - 1], ifNode = cur[cur.length - 1];
+        ifNode.branches.push({ cond: s.expr, body: [] }); stack.push(ifNode.branches[ifNode.branches.length - 1].body);
+      } else { /* else */
+        stack.pop();
+        const cur = stack[stack.length - 1], ifNode = cur[cur.length - 1];
+        ifNode.elseBody = []; stack.push(ifNode.elseBody);
+      }
+    } else if (s.k === "end") {
+      stack.pop();
+    } else if (s.k === "for") {
+      const cur = stack[stack.length - 1];
+      const node = { k: "for", name: s.name, expr: s.expr, body: [] };
+      cur.push(node); stack.push(node.body);
+    } else {
+      stack[stack.length - 1].push(s);
+    }
+  }
+  return root;
+}
+
+function formatValue(v) {
+  if (v === true) return "True";
+  if (v === false) return "False";
+  if (v === null || isUndef(v)) return "";
+  return String(v);
+}
+
+function renderBody(nodes, env, emit) {
+  for (const s of nodes) {
+    if (s.k === "text") { emit(s.v); }
+    else if (s.k === "var") {
+      const v = evExpr(new ExprParser(s.expr).parse(), env);
+      if (!isUndef(v)) emit(formatValue(v));
+    } else if (s.k === "set") {
+      const v = evExpr(new ExprParser(s.expr).parse(), env);
+      env.scopes[env.scopes.length - 1][s.name] = v;
+    } else if (s.k === "include") {
+      const t = env.registry[s.name];
+      if (!t) throw new Error(`模板不存在: ${s.name}`);
+      renderBody(tokenizeTemplate(t.source), env, emit);
+    } else if (s.k === "if") {
+      let taken = false;
+      for (const b of s.branches) {
+        const v = evExpr(new ExprParser(b.cond).parse(), env);
+        if (truthy(v)) { renderBody(b.body, env, emit); taken = true; break; }
+      }
+      if (!taken && s.elseBody) renderBody(s.elseBody, env, emit);
+    } else if (s.k === "for") {
+      const arr = evExpr(new ExprParser(s.expr).parse(), env);
+      if (Array.isArray(arr)) {
+        let idx0 = 0;
+        for (const item of arr) {
+          env.scopes.push({ [s.name]: item, loop: { index: idx0 + 1, index0: idx0, length: arr.length } });
+          renderBody(s.body, env, emit);
+          env.scopes.pop();
+          idx0++;
+        }
+      }
+    }
+  }
+}
+
+/* 渲染入口：返回 { text, error? } */
+function renderTemplateSource(tplName, source, params, machine, registry) {
+  const tpl = registry[tplName];
+  if (!tpl && source === undefined) return { error: `模板不存在: ${tplName}` };
+  try {
+    const src = source !== undefined ? source : tpl.source;
+    const env = { scopes: [{ ...params, machine }], loop: UNDEF, registry };
+    let out = "";
+    renderBody(tokenizeTemplate(src), env, c => { out += c; });
+    return { text: out };
+  } catch (e) {
+    return { error: e.message || String(e) };
+  }
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   3. 校验 + 后处理（客户端镜像 nctool-core 管线口径）
+   ═══════════════════════════════════════════════════════════════ */
+function validateTemplate(tpl, params) {
+  const issues = [];
+  for (const spec of tpl.params) {
+    const val = params[spec.name];
+    const has = val !== undefined && val !== "";
+    if (!has) {
+      const required = spec.required && spec.default === undefined;
+      if (required) issues.push({ level: "error", kind: "missing", param: spec.name, msg: `必选参数缺失：${spec.name}${spec.unit ? `（${spec.unit}）` : ""}` });
+      continue;
+    }
+    if (spec.kind === "Number" || spec.kind === "Integer") {
+      const n = Number(val);
+      if (val === "" || !isFinite(n)) issues.push({ level: "error", kind: "nonfinite", param: spec.name, msg: `参数 ${spec.name} 非有限数` });
+      else {
+        if (spec.kind === "Integer" && !Number.isInteger(n)) issues.push({ level: "error", kind: "type", param: spec.name, msg: `参数 ${spec.name} 需要整数` });
+        if (spec.min !== undefined && n < spec.min) issues.push({ level: "error", kind: "range", param: spec.name, msg: `${spec.name} 需 ≥ ${spec.min}${spec.unit || ""}` });
+        if (spec.max !== undefined && n > spec.max) issues.push({ level: "error", kind: "range", param: spec.name, msg: `${spec.name} 需 ≤ ${spec.max}${spec.unit || ""}` });
+      }
+    } else if (spec.kind === "Bool" && typeof val !== "boolean") {
+      issues.push({ level: "error", kind: "type", param: spec.name, msg: `${spec.name} 需要布尔值` });
+    }
+  }
+  return issues;
+}
+
+function postprocess(rendered, templateName, opts, machine) {
+  let out = "";
+  if (opts.addHeader) {
+    let h = `( ================================== )\n( nctool generated G-code )\n( template: ${templateName} )\n( ================================== )\n`;
+    if (opts.ascii) h = h.replace(/[^\x00-\x7F]/g, "?");
+    out += h;
+  }
+  if (opts.format === "text") { out += rendered; return out; }
+  const linePrefix = machine.config.line_number_prefix || "N";
+  let lineDigits = parseInt(machine.config.line_number_digits || "4", 10) || 4;
+  lineDigits = Math.max(1, Math.min(32, lineDigits));
+  const progPrefix = machine.config.program_prefix || "O";
+  const step = Math.max(1, opts.lineStep || 10);
+  let lineNo = 0;
+  /* 与 Rust 管线 `rendered.lines()` 语义一致：结尾换行不产生额外空行 */
+  const lines = rendered.endsWith("\n") ? rendered.slice(0, -1).split("\n") : rendered.split("\n");
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (trimmed === "") {
+      if (opts.stripBlank) continue;
+      out += "\n"; continue;
+    }
+    let content = trimmed;
+    if (opts.ascii) content = content.replace(/[^\x00-\x7F]/g, "?");
+    if (opts.lineNumbers) {
+      const isProg = trimmed.startsWith(progPrefix) || (progPrefix === "O" && trimmed.startsWith("o"));
+      const hasN = trimmed.startsWith(linePrefix) || (linePrefix === "N" && trimmed.startsWith("n"));
+      if (!isProg && !hasN) {
+        const next = lineNo + step;
+        if (next <= (opts.maxLine || 9999)) { lineNo = next; out += `${linePrefix}${String(lineNo).padStart(lineDigits, "0")} `; }
+      }
+    }
+    out += content + "\n";
+  }
+  return out;
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   4. API 抽象层（§6 契约）：demo 本地执行 / server 转发
+   ═══════════════════════════════════════════════════════════════ */

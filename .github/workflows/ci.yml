@@ -51,6 +51,14 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: node scripts/check_api_parity.mjs
 
+      # UI 生成物与源片段一致：`ui/index.html` 与 `cli/ui/index.html` 都是
+      # `ui/src/*.part.html` 的生成物。本步骤拦"改了片段忘生成"与"直接手改生成物"
+      # 两种漂移。注意它只能看到**提交的这一份**，本地改动仍需 `cargo test` 里那条
+      # 重拼接断言来拦（见 cli/tests/cli.rs 的 ui_html_copies_stay_in_sync）。
+      - name: UI build check (fragments -> index.html)
+        if: matrix.os == 'ubuntu-latest'
+        run: node scripts/build_ui.mjs --check
+
       # 文档链接与锚点检查：`CONTRIBUTING.md` §3 早已文档化其用法，却始终没有调用点
       # ——「工具闲置」等于这道门不存在（PROJECT_STATUS 登记过）。脚本对坏链接 exit 1，
       # 可以直接当门禁。与对拍脚本一样与系统无关，只在 ubuntu 跑一次。

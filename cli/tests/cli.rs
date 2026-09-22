@@ -908,12 +908,22 @@ fn render_infers_param_types() {
         .stdout(predicate::str::contains("X21.000"));
 }
 
-/// 两份 UI 页面必须保持一致。
+/// UI 生成物与源片段一致（**双断言**）。
 ///
 /// `cli/ui/index.html` 被 `include_str!` 嵌进二进制（`nctool ui` 提供的那份），
-/// `ui/index.html` 是给用户直接双击打开的 `file://` 演示版。两者是同一份页面的
-/// 两份拷贝——手工同步迟早漂移，届时"改了页面却看不到变化"会很难查。
-/// 加断言把漂移变成 CI 上的失败。
+/// `ui/index.html` 是给用户直接双击打开的 `file://` 演示版 —— 两者都是
+/// `ui/src/*.part.html` 的**生成物**（`node scripts/build_ui.mjs`）。
+///
+/// 两条断言缺一不可：
+/// ① 两份生成物**字节相等**；
+/// ② 源片段**重拼接** == 提交的 `ui/index.html`。
+///
+/// ② 为什么必须在 **Rust 侧**（而不是只在 `scripts/build_ui.mjs --check` 里）：
+/// `--check` 只在 CI 跑。本地改了片段却忘了跑生成脚本时，生成物是陈旧的 ——
+/// 此时 ① 照样通过（两份都陈旧，彼此仍相等），本地 `cargo test` 也拦不住，
+/// 于是一路绿到 CI 才报警（或者更糟：`--check` 那步被跳过就永远不报）。
+/// 直接在测试里重拼接，等于让"改了片段忘生成"在本机 `cargo test` 阶段就变红，
+/// 且不依赖 node 是否可用。
 #[test]
 fn ui_html_copies_stay_in_sync() {
     let cli_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
@@ -921,8 +931,36 @@ fn ui_html_copies_stay_in_sync() {
         .expect("cli/ui/index.html 应存在");
     let demo = std::fs::read_to_string(cli_dir.join("..").join("ui").join("index.html"))
         .expect("ui/index.html 应存在");
+
+    // ① 两份生成物一致。
     assert_eq!(
         embedded, demo,
-        "两份 UI 页面已漂移：请把改动同步到 cli/ui/index.html 与 ui/index.html 两份"
+        "两份 UI 生成物已漂移：请运行 node scripts/build_ui.mjs 重新生成（不要手改生成物）"
+    );
+
+    // ② 源片段重拼接 == 提交的生成物。
+    let src_dir = cli_dir.join("..").join("ui").join("src");
+    let mut parts: Vec<PathBuf> = std::fs::read_dir(&src_dir)
+        .unwrap_or_else(|e| panic!("读片段目录失败 {}: {e}", src_dir.display()))
+        .map(|e| e.expect("目录项").path())
+        .filter(|p| {
+            p.file_name()
+                .and_then(|n| n.to_str())
+                .is_some_and(|n| n.ends_with(".part.html"))
+        })
+        .collect();
+    // `read_dir` 的顺序不保证（Windows 尤其），拼接顺序必须与脚本一致：文件名升序。
+    parts.sort();
+    assert!(!parts.is_empty(), "{} 下没有任何片段", src_dir.display());
+
+    let mut assembled = String::new();
+    for p in &parts {
+        assembled.push_str(&std::fs::read_to_string(p).unwrap_or_else(|e| {
+            panic!("读片段失败 {}: {e}", p.display());
+        }));
+    }
+    assert_eq!(
+        assembled, demo,
+        "改了 ui/src/*.part.html 却没有重新生成：请运行 node scripts/build_ui.mjs"
     );
 }

@@ -1,0 +1,49 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="dark">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>nctool · NC 模板工作台</title>
+<!--
+  ═══════════════════════════════════════════════════════════════════
+  nctool Web UI  — 单文件前端设计（演示 + 可对接后端）
+
+  目标：为本项目（nctool-tpl / nctool-core / nctool-cli）提供本地运行的
+        可视化参数表单 + 实时 G-code 预览，见 docs/DEV_PLAN_CLI_UI.md §5/§6。
+
+  界面为 v2 设计方案（docs/UI_DESIGN_PROPOSAL.html）的落地实现，四条原则：
+    · 结果优先：结果区在任何断点下可见或一步可达（窄屏用分段视图切换）
+    · 就地反馈：校验错误贴着出错字段，模板行列定位降为字段下方次级信息
+    · 渐进披露：必选参数常展开；可选参数、源码、批量、自定义机床按需展开
+    · 状态可见：运行/成功/失败状态出现在结果区头部，页脚状态条只做辅助
+
+  设计要点
+    · 零外部运行时依赖（无框架 / 无 CDN / 无字体库），单文件可直接双击打开，
+      也可经 include_str! 内嵌进 binary 由 `nctool ui` 提供。
+    · 模式自动判定：以 file:// 打开（双击本地文件）走演示模式——内置模板库 +
+      迷你 Jinja 渲染器 + 客户端校验/后处理，离线即可完整体验
+      「选模板 → 填参数 → 实时预览 → 校验 → 下载」全链路；经 `nctool ui`
+      以 http(s):// 提供服务时走服务模式，全部请求转发到 nctool 的
+      HTTP API（§6 契约：{ ok, data?, error? }），前端零改动。
+    · 视觉：工业数控风格，暗色为默认（机床 HMI 观感）；亮色为对等主题
+      （令牌成对定义，正文对比度 ≥ 4.5:1），支持 G-code 轻量语法高亮。
+    · 键盘：⌘/Ctrl+K 命令面板、⌘/Ctrl+⏎ 立即生成、⌘/Ctrl+S 存为预设、Esc 关闭。
+
+  页面结构
+    header.appbar    应用栏：标识 / 模式徽标 / 命令面板 / 主题 / 帮助
+    aside.nav        模板导航：搜索 + 分类 + 最近使用 + 模板卡（挂预设 chips）
+    section.params   参数区：必填进度 + 预设 chips + 分组 + 就地校验 + 可选折叠
+    section.result   结果区：状态 pill + 机床 chip + 统计 + 视图 tab +
+                     工序索引 + 代码视图 + 动作条（复制 / 下载）
+    modals           侧抽屉：源码编辑 / 预设管理 / 批量生成 / 自定义机床 / 关于
+    footer           状态条：状态 / 数据源 / 模板数 / 版本
+
+  API 契约（对接后端时保持）：
+    GET  /api/templates?category=
+    GET  /api/templates/{name}
+    POST /api/inspect
+    POST /api/validate
+    POST /api/render
+    POST /api/part/generate
+  ═══════════════════════════════════════════════════════════════════
+-->

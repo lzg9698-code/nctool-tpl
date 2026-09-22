@@ -1,0 +1,1117 @@
+/* ═══════════════════════════════════════════════════════════════
+   5. UI 状态
+   ═══════════════════════════════════════════════════════════════ */
+const state = {
+  templates: API.mode === "server" ? [] : TEMPLATES,
+  machines: API.mode === "server" ? [] : Object.values(MACHINE_PRESETS),
+  templateDetails: {},
+  cat: "全部",
+  query: "",
+  selected: null,          // 当前模板名
+  params: {},              // 当前参数值（表单）
+  options: { lineNumbers:false, lineStep:10, addHeader:false, stripBlank:false, ascii:false, lenient:false, format:"gcode" },
+  machine: "generic",
+  lastOutput: "",
+  lastReport: { issues: [] },
+  renderSeq: 0,
+  recent: [],               /* v2：最近使用（localStorage 持久化，最多 5 个） */
+};
+
+/* ═══════════════════════════════════════════════════════════════
+   6. 渲染函数
+   ═══════════════════════════════════════════════════════════════ */
+const $ = id => document.getElementById(id);
+/* 分类栏。必须与 `cli/src/server.rs::parse_category` 和 `cli/src/cli.rs::CategoryArg`
+   的取值集合一致：少一项，该分类的模板就只在「全部」里出现、计数永远对不上。 */
+const CATS = ["全部", "通用", "铣削", "车削", "钻孔", "切槽", "机床"];
+
+/* localStorage 安全访问：Chrome 在 file:// 下会抛 SecurityError，
+   隐私模式同样可能拒绝写入。界面是只读工具，存取失败一律降级为「无持久化」，
+   绝不让持久化问题中断主流程。 */
+const LS = {
+  get(k) { try { return localStorage.getItem(k); } catch { return null; } },
+  set(k, v) { try { localStorage.setItem(k, v); } catch { /* 忽略：无持久化 */ } },
+  del(k) { try { localStorage.removeItem(k); } catch { /* 忽略 */ } },
+};
+
+/* HTML 转义（文本上下文与属性上下文通用）。
+   引号**必须**转 —— 属性值用双引号包裹时，一个 `"` 就能逃出属性边界并注入事件
+   处理器（`data-tpl="a"onerror=alert(1) x="`）。此前只转 `&` `<` `>`，漏了引号，
+   于是「模板文件名里有引号」直接等于「打开 nctool ui 即执行脚本」；
+   `'` 一并转掉，免得将来有人改用单引号包裹属性时又漏一个口子。 */
+function esc(s) {
+  return String(s)
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#39;");
+}
+
+/* 属性**选择器**里的转义规则与 HTML 不同：`querySelector('[data-param="…"]')` 里
+   要转的是 `\` 与 `"`，转成 `&quot;` 反而匹配不到。与 esc 配对使用：
+   写入用 esc，回读用本函数，两边才指向同一个 DOM 属性值。 */
+function selEsc(v) {
+  return String(v).replace(/\\/g, "\\\\").replace(/"/g, '\\"');
+}
+
+/* —— 最近使用（v2：复用路径前移，刷新后仍保留） —— */
+function loadRecent() {
+  try {
+    const raw = JSON.parse(LS.get("nctool.recent") || "[]");
+    return raw.filter(n => state.templates.some(t => t.name === n));
+  } catch { return []; }
+}
+function pushRecent(name) {
+  const r = [name, ...loadRecent().filter(n => n !== name)].slice(0, 5);
+  LS.set("nctool.recent", JSON.stringify(r));
+  state.recent = r;
+}
+
+/* —— 侧栏 —— */
+function tplCardHtml(t) {
+  const specs = t.params || [];
+  const reqN = specs.filter(p => p.required && paramDefault(p) === undefined).length;
+  const optN = specs.length - reqN;
+  /* v2：该模板已有的预设直接挂到卡片上，让「复用」发生在选模板之前 */
+  const presets = PRESET_CACHE.filter(p => p.template === t.name).slice(0, 2);
+  const chips = presets.map(p => {
+    const f = presetFlag(p);
+    return `<button class="chip act${f ? " stale" : ""}" data-preset="${esc(p.name)}"` +
+      ` title="${esc(f ? `预设「${p.name}」已陈旧：${f.text}` : `载入预设「${p.name}」`)}">` +
+      `${esc(p.name)}${f ? `<i class="flag">${esc(f.text)}</i>` : ""}</button>`;
+  }).join("");
+  /* t.name / t.category 对目录模板就是**磁盘文件名与目录名**，可含 `<` `"`。
+     属性与文本两处都要转：漏掉属性那处，一个 `"` 就能加出 onerror。 */
+  return `<div class="tpl-item ${state.selected === t.name ? "active" : ""}" data-tpl="${esc(t.name)}">
+    <div class="row1"><span class="name">${esc(t.name)}</span>
+      <span class="badge ${t.builtin ? "builtin" : "demo"}">${t.builtin ? "内置" : "示例"}</span>
+      <button class="chip" data-derive="${esc(t.name)}" title="以该模板为蓝本派生新模板">派生</button></div>
+    <div class="desc">${esc(t.description || "")}</div>
+    <div class="meta"><span>${esc(t.category)}</span><span>必选 ${reqN}</span><span>可选 ${optN}</span></div>
+    ${chips ? `<div class="tpl-presets">${chips}</div>` : ""}
+  </div>`;
+}
+
+function renderSidebar() {
+  /* 分类栏 */
+  const counts = {};
+  CATS.forEach(c => { counts[c] = c === "全部" ? state.templates.length : state.templates.filter(t => t.category === c).length; });
+  $("catBar").innerHTML = CATS.map(c =>
+    `<button class="chip ${state.cat === c ? "active" : ""}" data-cat="${c}">${c}<span class="n">${counts[c]}</span></button>`
+  ).join("");
+  /* 模板列表：最近使用置顶，其余按分类/搜索过滤 */
+  const q = state.query.toLowerCase();
+  const list = state.templates.filter(t =>
+    (state.cat === "全部" || t.category === state.cat) &&
+    (!q || t.name.toLowerCase().includes(q) || (t.description || "").toLowerCase().includes(q))
+  );
+  const recent = state.recent.map(n => list.find(t => t.name === n)).filter(Boolean);
+  const rest = list.filter(t => !recent.includes(t));
+  const html = (recent.length ? `<div class="tpl-sec">最近使用</div>${recent.map(tplCardHtml).join("")}` : "")
+    + `<div class="tpl-sec">${state.cat === "全部" ? "全部模板" : "分类 · " + state.cat}（${rest.length}）</div>`
+    + rest.map(tplCardHtml).join("");
+  $("tplList").innerHTML = list.length ? html : `<div class="gcode-empty" style="padding:30px 10px">无匹配模板</div>`;
+  $("tplCount").textContent = `模板 ${state.templates.length} 个`;
+}
+
+/* —— 参数表单 —— */
+/* 统一读取参数规格的有效默认值：
+   demo 模式 default 为裸值（null/undefined/数值/布尔/字符串）；
+   server 模式 API 返回带标签 ParamValue（{type,value}）或 null。
+   返回 undefined 表示“无有效默认值”——必选判定与默认值预填都以它为准
+   （此前用 `p.default === undefined` 判断，JSON 反序列化后 null !== undefined，
+   导致 required 参数被误判为可选、默认值对象被直填入输入框）。 */
+function paramDefault(s) {
+  const d = s.default;
+  if (d === undefined || d === null) return undefined;
+  if (typeof d === "object" && "value" in d) return d.value;
+  return d;
+}
+
+function renderForm() {
+  const t = state.templateDetails[state.selected] || state.templates.find(x => x.name === state.selected);
+  if (!t) {
+    $("paramHint").textContent = "从左侧选择一个模板开始";
+    $("progBar").style.width = "0";
+    $("presetChips").innerHTML = "";
+    $("formBody").innerHTML = `<div class="gcode-empty" style="height:auto;padding-top:48px">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><circle cx="12" cy="12" r="9"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/></svg>
+      <div>选择模板后在此填写参数</div></div>`;
+    return;
+  }
+  /* 派生参数（spec.derive）由系统在 Rust 侧算好注入，**不放进表单**：
+     用户填了也会被派生值覆盖（后端给警告），放个输入框只会误导。 */
+  const allSpecs = t.params || [];
+  const derivedSpecs = allSpecs.filter(s => s.derive);
+  const specs = allSpecs.filter(s => !s.derive);
+  const req = specs.filter(p => p.required && paramDefault(p) === undefined);
+  const opt = specs.filter(p => !(p.required && paramDefault(p) === undefined));
+  let html = "";
+  if (req.length) {
+    html += `<div class="form-group"><div class="form-group-title">必填参数（${req.length}）</div>${req.map(s => fieldHtml(t, s)).join("")}</div>`;
+  }
+  if (opt.length) {
+    html += `<details class="optbox" id="optBoxOpt"><summary>
+      <svg class="caret" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+      可选参数（${opt.length}）· 均有默认值</summary>
+      <div class="optbox-body">${opt.map(s => fieldHtml(t, s)).join("")}</div></details>`;
+  }
+  html += `<details class="optbox" id="optBoxGen" open><summary>
+    <svg class="caret" viewBox="0 0 24 24" width="14" height="14" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="m9 6 6 6-6 6"/></svg>
+    输出选项</summary>
+    <div class="optbox-body">${optionsHtml()}</div></details>`;
+  if (derivedSpecs.length) {
+    html += `<div class="param-note">由系统派生（无需填写）：${derivedSpecs
+      .map(s => `${esc(s.name)}${(s.description || s.desc) ? `（${esc(s.description || s.desc)}）` : ""}`)
+      .join("、")}</div>`;
+  }
+  $("formBody").innerHTML = html;
+  renderPresetChips();
+  updateProgress(t);
+  /* 事件绑定 */
+  $("formBody").querySelectorAll("input[data-param], select[data-param]").forEach(inp => {
+    inp.addEventListener("input", () => { collectParams(t); });
+    inp.addEventListener("change", () => { collectParams(t); });
+  });
+  $("formBody").querySelectorAll("input[type=checkbox][data-opt]").forEach(inp => {
+    inp.addEventListener("change", () => { state.options[inp.dataset.opt] = inp.checked; scheduleRender(); });
+  });
+  $("formBody").querySelectorAll("input[data-opt-num]").forEach(inp => {
+    /* 存数字而不是 `input.value` 的字符串：后端按 `as_u64()` 取值，字符串一律
+       400「必须是非负整数」。输入框清空时保留原样，交给发送前的 normalizeOpts 兜底。 */
+    inp.addEventListener("input", () => {
+      const n = Number(inp.value);
+      state.options[inp.dataset.optNum] = inp.value !== "" && Number.isFinite(n) ? n : inp.value;
+      scheduleRender();
+    });
+  });
+  $("formBody").querySelectorAll("button[data-seg]").forEach(btn => {
+    btn.addEventListener("click", () => {
+      state.options[btn.dataset.seg] = btn.dataset.val === "true";
+      renderForm();
+      scheduleRender();
+    });
+  });
+  if (state.lastReport.issues && state.lastReport.issues.length) applyInlineErrors(state.lastReport.issues);
+}
+
+/* —— 参数规格辅助（与后端 ParamSpec 对齐）—— */
+
+/* ParamValue：后端序列化为带标签形式 {type, value}，演示模式是裸值 */
+function bareValue(v) { return (v && typeof v === "object" && "value" in v) ? v.value : v; }
+
+/* 规格声明的候选项（裸值数组） */
+function optionValues(s) { return (s.options || []).map(bareValue).filter(v => v !== undefined && v !== null); }
+
+/* 条件必选的可读形式：`side = "Right"` */
+function requiredIfText(rif) {
+  if (!rif) return "";
+  const vals = (rif.values || []).map(v => JSON.stringify(bareValue(v))).join(" 或 ");
+  return `${rif.param} = ${vals}`;
+}
+
+/* 后端 `args::infer_param_value` 的等价实现。
+   由 scripts/check_param_parity.mjs 对拍（CI 硬门禁），改这里或改 Rust 都会失败：
+   1. `true` / `false`（忽略大小写）先判为布尔，与声明类型无关；
+   2. 前导零纯数字（007/00）保持字符串，数值化会丢前导零（T007→T7）；
+   3. 只接受 Rust `f64::from_str` 的语法（十进制 + 可选指数），故 JS `Number()`
+      能解析但 Rust 拒绝的 `0x10`、`Infinity` 一律按字符串处理；
+   4. 指数溢出（1e400 → Infinity）等非有限数同样不判为数值。 */
+function inferParamValue(t) {
+  if (t.toLowerCase() === "true") return true;
+  if (t.toLowerCase() === "false") return false;
+  const leadingZero = t.length > 1 && t[0] === "0" && /^\d+$/.test(t);
+  if (!leadingZero && /^[+-]?((\d+\.?\d*)|(\.\d+))([eE][+-]?\d+)?$/.test(t)) {
+    const n = Number(t);
+    if (isFinite(n)) return n;
+  }
+  return t;
+}
+
+/* 按规格把输入值归一，逐条对应后端 `args::coerce_param_value`：
+   先白名单（启发式解释 → 文本解释），再声明类型（String 强制文本）。
+   空输入返回 undefined —— UI 语义是「未填即不入参」，
+   CLI 的 `--param k=` 会得到空字符串，属刻意的两面差异，不在对拍范围内。 */
+function coerceParamValue(s, raw) {
+  const t = String(raw).trim();
+  if (t === "") return undefined;
+  const heur = inferParamValue(t);
+  const vals = optionValues(s);
+  if (vals.length) {
+    /* 严格同类型比较：不能用 String(true) === "true" 去匹配布尔候选项 */
+    if (vals.some(v => v === heur)) return heur;
+    if (vals.some(v => v === t)) return t;
+    return heur;
+  }
+  if (s.kind === "String") return t;
+  return heur;
+}
+
+/* 参数名与取值全部来自模板（`{# PARAMS: #}` 按空白分词，不校验字符集）或用户输入，
+   因此**每一处插值都要转**：属性值的引号会逃出属性边界，文本里的 `<` 会开新标签。
+   `name` 是转义后的参数名，DOM 属性值与文本都取它 —— 浏览器解析 `&quot;` 后得到
+   的还是原名，所以 `id="field-…"` 与 `applyInlineErrors` 的 `field-` 查找仍然对得上。 */
+function fieldHtml(t, s) {
+  const cur = state.params[s.name];
+  const has = cur !== undefined && cur !== "";
+  const name = esc(s.name);
+  let input = "";
+  const range = [s.min, s.max].filter(x => x !== undefined).map(x => `${esc(x)}`).join(" ~ ");
+  if (s.kind === "Bool") {
+    input = `<label class="switch"><input type="checkbox" data-param="${name}" ${cur ? "checked" : ""}><span class="slider"></span></label>`;
+  } else if (optionValues(s).length) {
+    /* 白名单参数用下拉框：后端会拒绝白名单外的取值，让用户在这里就选对 */
+    const vals = optionValues(s);
+    input = `<select data-param="${name}">
+      <option value="">— 请选择 —</option>
+      ${vals.map(v => `<option value="${esc(String(v))}" ${has && String(cur) === String(v) ? "selected" : ""}>${esc(String(v))}</option>`).join("")}
+    </select>`;
+  } else if (s.kind === "Number" || s.kind === "Integer") {
+    input = `<input type="number" data-param="${name}" step="${s.kind === "Integer" ? "1" : "any"}"
+      placeholder="${esc(paramDefault(s) !== undefined ? paramDefault(s) : "—")}" value="${has ? esc(cur) : ""}">
+      ${s.unit ? `<span class="suffix">${esc(s.unit)}</span>` : ""}`;
+  } else {
+    input = `<input type="text" data-param="${name}" placeholder="${esc(paramDefault(s) !== undefined ? paramDefault(s) : "")}" value="${has ? esc(cur) : ""}">`;
+  }
+  const req = s.required && paramDefault(s) === undefined;
+  const rif = s.requiredIf;
+  const tag = req ? `<span class="req-tag">*必填</span>`
+    : rif ? `<span class="opt-tag">条件必选</span>`
+    : `<span class="opt-tag">可选</span>`;
+  return `<div class="param-field ${req ? "req" : "opt"}" id="field-${name}">
+    <div class="param-top">
+      <label>${name}</label>
+      ${tag}
+      ${range ? `<span class="range">范围 ${range}</span>` : ""}
+    </div>
+    ${(s.description || s.desc) ? `<div class="param-desc">${esc(s.description || s.desc)}</div>` : ""}
+    ${rif ? `<div class="param-desc">条件必选：${esc(requiredIfText(rif))} 时必填</div>` : ""}
+    <div class="param-input-wrap">${input}</div>
+    <div class="field-msg"></div>
+  </div>`;
+}
+
+function optionsHtml() {
+  const o = state.options;
+  /* 当前调用点传的都是字面量，但仍在此转义：这是一个通用 HTML 构造器，
+     将来有人传进模板名或用户输入时不该再回头补一遍。 */
+  const chk = (key, label, sub) =>
+    `<label class="opt-item"><input type="checkbox" data-opt="${esc(key)}" ${o[key] ? "checked" : ""}><span>${esc(label)}</span>${sub ? `<span class="sub">${esc(sub)}</span>` : ""}</label>`;
+  return `
+    <div class="opts">
+      ${chk("lineNumbers", "行号", "N0010 N0020…")}
+      <label class="opt-inline">步进<input type="number" data-opt-num="lineStep" value="${esc(o.lineStep)}" min="1"></label>
+      ${chk("addHeader", "头部注释", "nctool generated")}
+      ${chk("stripBlank", "删除空行", "")}
+      ${chk("ascii", "ASCII 清洗", "开启后非 ASCII → ?")}
+    </div>
+    <div style="margin-top:10px;display:flex;align-items:center;gap:10px">
+      <span style="font-size:12px;color:var(--text-dim)">渲染模式</span>
+      <div class="seg" data-seg-group="lenient">
+        <button type="button" data-seg="lenient" data-val="false" class="${!o.lenient ? "active" : ""}">严格</button>
+        <button type="button" data-seg="lenient" data-val="true" class="${o.lenient ? "active" : ""}">宽松</button>
+      </div>
+      <span style="font-size:11px;color:var(--text-faint)">${o.lenient ? "缺失参数留空，校验问题降级为提示" : "缺失必选参数阻止生成"}</span>
+    </div>`;
+}
+
+/* 收集表单参数 → state.params → 渲染 */
+function collectParams(t) {
+  const p = {};
+  (t.params || []).forEach(s => {
+    if (s.derive) return; /* 派生参数由系统注入，不由表单提供 */
+    const inp = $("formBody").querySelector(`[data-param="${selEsc(s.name)}"]`);
+    if (!inp) return;
+    if (s.kind === "Bool") { p[s.name] = inp.checked; return; }
+    /* 空值统一记为 undefined（"未提供"，交给后端默认值/条件必选判定） */
+    p[s.name] = coerceParamValue(s, inp.value);
+  });
+  state.params = p;
+  updateProgress(t);
+  scheduleRender();
+}
+
+/* —— 预览 + 校验 —— */
+let renderTimer = null;
+function scheduleRender() {
+  clearTimeout(renderTimer);
+  renderTimer = setTimeout(() => doRender(), 300);
+}
+async function doRender() {
+  const t = state.templateDetails[state.selected] || state.templates.find(x => x.name === state.selected);
+  if (!t) return;
+  const seq = ++state.renderSeq;
+  $("statusBar").className = "st rendering";
+  $("statusBar").querySelector("span:last-child").textContent = "渲染中…";
+  $("rHead").classList.add("busy");
+  const t0 = performance.now();
+  const res = await API.render(t.name, state.params, state.machine, state.options);
+  if (seq !== state.renderSeq) return;
+  const ms = (performance.now() - t0).toFixed(1);
+  $("rHead").classList.remove("busy");
+  $("statusBar").className = "st " + (res.ok && !res.data.blocked ? "ok" : "err");
+  $("statusBar").querySelector("span:last-child").textContent =
+    res.ok ? (res.data.blocked ? "校验未通过" : "就绪") : "渲染失败";
+  if (res.ok) {
+    const d = res.data;
+    state.lastOutput = d.output || "";
+    state.lastReport = d.report || { issues: [] };
+    renderGcode(d.blocked);
+    renderValidation();
+    $("statChars").textContent = state.lastOutput ? `${state.lastOutput.length} 字符 · ${state.lastOutput.split("\n").length} 行` : "";
+    $("statTime").textContent = `渲染 ${ms} ms`;
+    /* ASCII 模式提示：勾上时显式提醒，避免中文被替换为 ? 被误当成显示 bug */
+    const ascii = !!(state.options && state.options.ascii);
+    $("statAscii").textContent = ascii ? "⚠ ASCII 模式：非 ASCII 已替换为 ?" : "";
+    $("statAscii").className = "stat" + (ascii ? " ascii-on" : "");
+  } else {
+    state.lastOutput = "";
+    state.lastReport = { issues: [{ level: "error", kind: "api", message: res.error && res.error.message }] };
+    renderGcode(true);
+    renderValidation();
+  }
+}
+
+function renderGcode(blocked) {
+  const page = $("page-gcode");
+  const body = $("previewBody");
+  body.classList.remove("rendering");
+  void body.offsetWidth; /* 重启动画 */
+  body.classList.add("rendering");
+  if (blocked || !state.lastOutput) {
+    const hasErr = state.lastReport.issues.some(i => i.level === "error");
+    page.innerHTML = `<div class="gcode-empty" style="padding-top:56px">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4">
+        <circle cx="12" cy="12" r="9"/><path d="M12 8v5"/><path d="M12 16h.01"/></svg>
+      <div>${hasErr ? "校验未通过，修正参数后将实时显示 G-code" : "生成的 G-code 将显示在这里"}</div>
+      ${hasErr ? `<div class="guide-steps">
+        <div class="step"><b>1 看红色字段</b><span>出错参数已就地标红并给出原因</span></div>
+        <div class="step"><b>2 修正参数</b><span>改完自动重新生成，无需手动触发</span></div>
+        <div class="step"><b>3 通览问题</b><span>切到「校验」可点击跳回对应字段</span></div>
+      </div>` : ""}</div>`;
+    buildProcessIndex("");
+    return;
+  }
+  /* v2：逐行渲染并带行号列，便于工序索引跳转与长程序核对 */
+  const lines = state.lastOutput.split("\n");
+  page.innerHTML = `<pre class="gcode-view">` + lines.map((l, i) =>
+    `<div class="cl" id="cl${i}"><span class="no">${i + 1}</span><span class="tx">${highlightGcode(l)}</span></div>`
+  ).join("") + `</pre>`;
+  buildProcessIndex(state.lastOutput);
+}
+
+/* v2：工序索引 —— 从注释块 / 循环 / 换刀 / 程序结束推导锚点（≥40 行才出现） */
+function buildProcessIndex(text) {
+  const idx = $("procIndex");
+  const rMain = $("rMain");
+  const clear = () => { idx.hidden = true; idx.innerHTML = ""; rMain.classList.remove("with-index"); };
+  if (!text) { clear(); return; }
+  const lines = text.split("\n");
+  if (lines.length < 40) { clear(); return; }
+  const items = [];
+  lines.forEach((l, i) => {
+    const cm = l.match(/\(([^)]+)\)/);
+    const code = l.replace(/^N\d+\s*/, "");
+    if (cm && !/^=+$/.test(cm[1].trim()) && !/^nctool generated/.test(cm[1].trim()) && !/^template:/.test(cm[1].trim())) {
+      items.push({ i, label: cm[1].trim().slice(0, 18) });
+    } else if (/G8[13]|G73|M6\b|M30\b|M3\b|M8\b/.test(code)) {
+      items.push({ i, label: code.replace(/\s+/g, " ").trim().slice(0, 18) });
+    }
+  });
+  if (items.length < 3) { clear(); return; }
+  idx.hidden = false;
+  rMain.classList.add("with-index");
+  idx.innerHTML = `<div class="h">工序索引</div>` + items.slice(0, 30).map((it, k) =>
+    `<button data-go="${it.i}" class="${k === 0 ? "on" : ""}" title="${esc(it.label)}">${esc(it.label)}</button>`).join("");
+  idx.querySelectorAll("button[data-go]").forEach(b => b.addEventListener("click", () => {
+    document.querySelectorAll(".gcode-view .cl.hi").forEach(el => el.classList.remove("hi"));
+    const el = $("cl" + b.dataset.go);
+    if (!el) return;
+    el.classList.add("hi");
+    el.scrollIntoView({ block: "center", behavior: "smooth" });
+    idx.querySelectorAll("button").forEach(x => x.classList.toggle("on", x === b));
+  }));
+}
+
+/* G-code 轻量高亮 */
+function highlightGcode(text) {
+  const lines = text.split("\n");
+  return lines.map(line => {
+    let html = "";
+    const re = /(\([^)]*\))|(;.*$)|([NOGMFTSHD])(\d+(?:\.\d+)?)|([XYZABCUVW])(\s*-?\d+(?:\.\d+)?)|(\d+(?:\.\d+)?)|([A-Za-z_]+)|(\s+)|([^\s]+)/g;
+    let m, last = 0;
+    while ((m = re.exec(line)) !== null) {
+      if (m.index > last) html += esc(line.slice(last, m.index));
+      if (m[1]) html += `<span class="cmt">${esc(m[1])}</span>`;
+      else if (m[2]) html += `<span class="cmt">${esc(m[2])}</span>`;
+      else if (m[3]) {
+        const cls = m[3] === "N" ? "ln" : m[3] === "O" ? "prog" : m[3] === "G" ? "g" : m[3] === "M" ? "m" : "tsf";
+        html += `<span class="${cls}">${m[3]}${esc(m[4])}</span>`;
+      }
+      else if (m[5]) html += `<span class="xyz">${m[5]}${esc(m[6])}</span>`;
+      else if (m[7]) html += `<span class="num">${esc(m[7])}</span>`;
+      else if (m[8]) html += esc(m[8]);
+      else if (m[9]) html += esc(m[9]);
+      else if (m[10]) html += esc(m[10]);
+      last = m.index + m[0].length;
+    }
+    if (last < line.length) html += esc(line.slice(last));
+    return html;
+  }).join("\n");
+}
+
+/* v2：错误呈现分主次 —— 主信息给「填参数的人能直接照做」的说法，模板坐标
+   与完整技术口径降为次级信息（完整原文保留在 title 中，信息不丢）。
+   后端消息形如：
+     必选参数缺失（模板引用且无默认值兜底，参数集未提供）（第 1 行第 24 列引用）
+     参数值 -5 mm 低于下界 0（第 1 行第 28 列引用） */
+function friendlyIssue(text) {
+  if (/必选参数缺失/.test(text)) return "必填，未填写";
+  if (/低于下界/.test(text)) return text.replace(/^参数值\s*/, "值 ").replace("低于下界", "低于允许的最小值");
+  if (/高于上界/.test(text)) return text.replace(/^参数值\s*/, "值 ").replace("高于上界", "高于允许的最大值");
+  return text;
+}
+function splitLoc(msg) {
+  const raw = msg || "";
+  const m = /（第 (\d+) 行第 (\d+) 列引用）\s*$/.exec(raw);
+  if (m) {
+    return { text: friendlyIssue(raw.slice(0, m.index)), loc: `模板第 ${m[1]} 行第 ${m[2]} 列引用`, raw };
+  }
+  return { text: friendlyIssue(raw), loc: "", raw };
+}
+
+/* v2：字段级就地错误（问题项同时驱动字段红框与提示） */
+function applyInlineErrors(issues) {
+  document.querySelectorAll(".param-field").forEach(el => {
+    el.classList.remove("err");
+    const m = el.querySelector(".field-msg");
+    if (m) m.innerHTML = "";
+  });
+  (issues || []).forEach(it => {
+    if (!it.param) return;
+    const el = $("field-" + it.param);
+    if (!el) return;
+    el.classList.add("err");
+    const box = el.closest("details.optbox");
+    if (box) box.open = true;      /* 可选参数里的错误自动展开，不让用户去找 */
+    const msg = el.querySelector(".field-msg");
+    if (msg) {
+      const p = splitLoc(it.message || it.msg || "");
+      msg.innerHTML = esc(p.text) + (p.loc ? `<div class="hint">${esc(p.loc)}</div>` : "");
+      msg.title = p.raw;
+    }
+  });
+}
+
+/* v2：结果区状态 pill（就近显示，失败可点击跳到校验列表） */
+function setStatePill() {
+  const pill = $("statePill");
+  const issues = state.lastReport.issues || [];
+  const errN = issues.filter(i => i.level === "error").length;
+  const warnN = issues.filter(i => i.level === "warning").length;
+  if (errN) {
+    pill.className = "state err";
+    pill.textContent = errN + " 个问题";
+    pill.dataset.jump = "1";
+  } else if (state.lastOutput) {
+    pill.className = "state ok";
+    pill.textContent = warnN ? "就绪（" + warnN + " 提示）" : "就绪";
+    delete pill.dataset.jump;
+  } else {
+    pill.className = "state";
+    pill.textContent = state.selected ? "待生成" : "未生成";
+    delete pill.dataset.jump;
+  }
+}
+
+/** 打开预设弹窗：每次打开都重拉一次（多端可能已经改过文件）。 */
+function openPresetModal() {
+  openModal("modalPreset");
+  $("presetName").value = "";
+  refreshPresets().then(() => $("presetName").focus());
+}
+
+/* v2：必填进度 */
+function updateProgress(t) {
+  const specs = (t && t.params) || [];
+  const req = specs.filter(p => p.required && paramDefault(p) === undefined);
+  const filled = req.filter(p => {
+    const v = state.params[p.name];
+    return v !== undefined && v !== "" && !(typeof v === "number" && isNaN(v));
+  }).length;
+  $("progBar").style.width = req.length ? (filled / req.length * 100) + "%" : "100%";
+  $("paramHint").innerHTML = `<span class="${filled === req.length ? "done" : "req"}">${filled} / ${req.length} 必填</span>`
+    + `<span>· ${specs.length - req.length} 可选</span>`;
+}
+
+/* 预设：走 API 层（模块三）。
+   此处曾是一套只落 localStorage 的本机实现 —— 与 CLI/HTTP 的 presets.yaml 是
+   两个互不相干的仓库：UI 里保存的预设，`nctool preset list` 看不见；CLI 保存的，
+   UI 也看不见。现在全部经 `API.listPresets / savePreset / deletePreset`，
+   demo 模式由 API 层落到 localStorage（同样是那套接口），服务模式落到
+   presets.yaml —— 一份数据，三处可见。 */
+let PRESET_CACHE = [];
+
+/** 陈旧标记 → chip 上的角标文案。`null`/`undefined` 表示模板不可解析。 */
+function presetFlag(p) {
+  if (p.resolvable === false) return { text: "模板缺失", cls: "err" };
+  if (p.stale === true) {
+    const bits = [];
+    if (p.staleParams && p.staleParams.length) bits.push(`失效:${p.staleParams.join("/")}`);
+    if (p.missingRequired && p.missingRequired.length) bits.push(`缺必选:${p.missingRequired.join("/")}`);
+    return { text: bits.length ? bits.join(" ") : "陈旧", cls: "warn" };
+  }
+  return null;
+}
+
+/** 重新拉取预设列表（当前有选中模板时按其过滤）。 */
+async function refreshPresets() {
+  const r = await API.listPresets(state.selected || undefined);
+  if (!r.ok) { PRESET_CACHE = []; return; }
+  PRESET_CACHE = (r.data && r.data.presets) || [];
+  for (const w of (r.data && r.data.warnings) || []) toast(w, "warn");
+  renderPresetChips();
+  renderPresetList();
+}
+
+/* v2：参数区顶部预设 chips（当前模板的命名预设） */
+function renderPresetChips() {
+  const box = $("presetChips");
+  if (!state.selected) { box.innerHTML = ""; return; }
+  const items = PRESET_CACHE.filter(p => p.template === state.selected);
+  if (!items.length) { box.innerHTML = ""; return; }
+  box.innerHTML = `<span class="opt-note">预设</span>` + items.map(p => {
+    const f = presetFlag(p);
+    /* 陈旧不是"不能载入"，而是"载入前你得知道"。角标提示 + title 说明原因，
+       不拦操作 —— 工艺判断在人，工具的职责是别让陈旧悄悄溜过去。 */
+    return `<button class="chip act${f ? " stale" : ""}" data-preset="${esc(p.name)}"` +
+      ` title="${esc(f ? `预设「${p.name}」已陈旧：${f.text}` : `载入预设「${p.name}」`)}">` +
+      `${esc(p.name)}${f ? `<i class="flag">${esc(f.text)}</i>` : ""}</button>`;
+  }).join("");
+}
+
+/** 载入预设 → 填参数 → 渲染。陈旧项先给一次提示。 */
+function loadPreset(name) {
+  const p = PRESET_CACHE.find(x => x.name === name);
+  if (!p) return;
+  const f = presetFlag(p);
+  if (f) toast(`预设「${name}」已陈旧（${f.text}）——参数已填入，请复核后再生成`, "warn");
+  selectTemplate(p.template);
+  state.params = { ...(p.params || {}) };
+  renderForm();
+  doRender();
+  closeModal("modalPreset");
+  if (!f) toast(`已载入预设「${name}」`);
+}
+
+/* 校验面板 */
+function renderValidation() {
+  const r = state.lastReport;
+  const errN = r.issues.filter(i => i.level === "error").length;
+  const warnN = r.issues.filter(i => i.level === "warning").length;
+  const infoN = r.issues.filter(i => i.level === "info").length;
+  const total = errN + warnN + infoN;
+  const page = $("page-validate");
+  const pageTab = document.querySelector(".tab[data-tab='validate']");
+  pageTab.innerHTML = total
+    ? `校验 <span style="font-size:11px;padding:0 5px;border-radius:999px;background:var(--err-bg);color:var(--err)">${total}</span>`
+    : "校验";
+  pageTab.style.color = errN ? "var(--err)" : warnN ? "var(--warn)" : "";
+  applyInlineErrors(r.issues);
+  setStatePill();
+  if (!r.issues.length) {
+    page.innerHTML = `<div class="v-empty"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg><span>校验通过，无问题</span></div>`;
+    return;
+  }
+  page.innerHTML = `<div class="vlist">` + r.issues.map((i, idx) => {
+    const param = i.param ? `<span class="v-param">${esc(i.param)}</span> ` : "";
+    const p = splitLoc(i.message || i.msg || "");
+    return `<div class="v-item ${i.level}" data-idx="${idx}" title="${esc(p.raw)}">
+      <span class="lv"></span><span><span class="v-msg">${param}${esc(p.text)}</span>
+      ${p.loc ? `<div class="v-loc">${esc(p.loc)}</div>` : ""}</span></div>`;
+  }).join("") + `</div>`;
+  page.querySelectorAll(".v-item").forEach(el => {
+    el.addEventListener("click", () => {
+      const p = r.issues[+el.dataset.idx].param;
+      if (!p) return;
+      const f = $("field-" + p);
+      if (f) {
+        const box = f.closest("details.optbox");
+        if (box) box.open = true;
+        setMobileView("params");
+        f.scrollIntoView({ behavior: "smooth", block: "center" });
+        f.classList.add("focus");
+        setTimeout(() => f.classList.remove("focus"), 1200);
+      }
+    });
+  });
+}
+
+/* 源码视图 */
+function renderSource() {
+  const t = state.templateDetails[state.selected] || state.templates.find(x => x.name === state.selected);
+  if (!t) return;
+  $("srcView").innerHTML = highlightSource(t.source || (API_REGISTRY[t.name] && API_REGISTRY[t.name].source) || "");
+}
+function highlightSource(src) {
+  return esc(src)
+    .replace(/\{\{[\s\S]*?\}\}/g, m => `<span class="tg">${m}</span>`)
+    .replace(/\{%[\s\S]*?%\}/g, m => `<span class="tg">${m}</span>`)
+    .replace(/\{#[\s\S]*?#\}/g, m => `<span class="tgc">${m}</span>`);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   7. 交互事件
+   ═══════════════════════════════════════════════════════════════ */
+async function selectTemplate(name, opts) {
+  state.selected = name;
+  state.params = {};
+  let t = state.templates.find(x => x.name === name);
+  if (!t) return;
+  if (API.mode === "server") {
+    const res = await API.getTemplate(name);
+    if (!res.ok) { toast(res.error && res.error.message || "模板详情加载失败", "err"); return; }
+    t = { ...t, ...res.data.template };
+    state.templateDetails[name] = t;
+    state.templates = state.templates.map(x => x.name === name ? t : x);
+  }
+  /* 默认值预填（server 模式默认值可能是带标签 ParamValue，统一经 paramDefault 取值） */
+  (t.params || []).forEach(s => {
+    const def = paramDefault(s);
+    if (s.kind === "Bool") state.params[s.name] = !!def;
+    else if (def !== undefined) state.params[s.name] = def;
+    else state.params[s.name] = undefined;
+  });
+  $("crumb").innerHTML = `· <b>${esc(t.category)}</b>`;
+  $("panelTitle").textContent = t.name;
+  pushRecent(name);
+  $("resetBtn").hidden = false;
+  if (window.innerWidth <= 767) setMobileView("params");
+  renderSidebar();
+  renderForm();
+  renderSource();
+  /* 预览默认清空 */
+  state.lastOutput = "";
+  state.lastReport = { issues: [] };
+  renderGcode(false);
+  renderValidation();
+  $("statChars").textContent = "";
+  $("statTime").textContent = "";
+  $("statAscii").textContent = "";
+  $("statAscii").className = "stat";
+  switchTab("gcode");
+  doRender();
+}
+
+function switchTab(name) {
+  document.querySelectorAll(".tab").forEach(b => b.classList.toggle("active", b.dataset.tab === name));
+  document.querySelectorAll(".tabpage").forEach(p => p.classList.toggle("active", p.id === "page-" + name));
+}
+
+/* 主题 */
+function setTheme(t) {
+  document.documentElement.dataset.theme = t;
+  LS.set("nctool.theme", t);
+}
+function toggleTheme() {
+  setTheme(document.documentElement.dataset.theme === "dark" ? "light" : "dark");
+}
+
+/* 机床选择 */
+function renderMachineSel() {
+  const custom = loadCustomMachine();
+  const sel = $("machineSel");
+  const machines = state.machines.length ? state.machines : Object.values(MACHINE_PRESETS);
+  /* 机床来自用户 TOML / 服务端注册表，同样按不可信处理 */
+  sel.innerHTML = machines.map(m =>
+    `<option value="${esc(m.id)}">${esc(m.vendor || "")} ${esc(m.model || "")} (${esc(m.id)})</option>`
+  ).join("") + (API.mode === "demo" && custom ? `<option value="custom">自定义 ${esc(custom.model || "")}</option>` : "");
+  sel.value = state.machine;
+}
+
+/* Toast */
+function toast(msg, type) {
+  const w = $("toast-wrap");
+  const el = document.createElement("div");
+  el.className = "toast " + (type || "ok");
+  el.textContent = msg;
+  w.appendChild(el);
+  setTimeout(() => { el.classList.add("out"); setTimeout(() => el.remove(), 350); }, 2200);
+}
+
+/* 复制 / 下载 */
+function copyGcode() {
+  if (!state.lastOutput) { toast("没有可复制的 G-code", "warn"); return; }
+  navigator.clipboard.writeText(state.lastOutput).then(() => toast("已复制到剪贴板")).catch(() => toast("复制失败", "err"));
+}
+function downloadGcode() {
+  if (!state.lastOutput) { toast("没有可下载的 G-code", "warn"); return; }
+  const blob = new Blob([state.lastOutput], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = (state.selected || "nctool") + ".nc";
+  a.click();
+  URL.revokeObjectURL(a.href);
+  toast("已下载 .nc 文件");
+}
+
+/* 预设列表（弹窗内）：含陈旧详情与删除 */
+function renderPresetList() {
+  const ul = $("presetList");
+  if (!PRESET_CACHE.length) {
+    ul.innerHTML = `<li style="border:none;color:var(--text-faint);justify-content:center">暂无预设</li>`;
+    return;
+  }
+  ul.innerHTML = PRESET_CACHE.map(p => {
+    const f = presetFlag(p);
+    const n = p.paramCount != null ? p.paramCount : Object.keys(p.params || {}).length;
+    const detail = f
+      ? `<span class="p-meta warn">${esc(f.text)}</span>`
+      : `<span class="p-meta">${esc(p.createdAt ? p.createdAt.slice(0, 10) : "—")}</span>`;
+    return `<li><span class="p-name">${esc(p.name)}</span>
+      <span class="p-meta">${esc(p.template)} · ${n} 参数</span>
+      ${detail}
+      <span class="spacer"></span>
+      <button class="btn" data-load="${esc(p.name)}">载入</button>
+      <button class="btn" data-del="${esc(p.name)}">删除</button></li>`;
+  }).join("");
+  ul.querySelectorAll("[data-load]").forEach(b => b.addEventListener("click", () => loadPreset(b.dataset.load)));
+  ul.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", async () => {
+    const r = await API.deletePreset(b.dataset.del);
+    if (!r.ok) { toast((r.error && r.error.message) || "删除失败", "err"); return; }
+    toast("预设已删除");
+    refreshPresets();
+  }));
+}
+
+/** 保存当前参数为预设。同名时先确认再带 force 重试。 */
+async function saveCurrentPreset() {
+  const name = ($("presetName").value || "").trim();
+  if (!name) { toast("请先填写预设名称", "err"); return; }
+  if (!state.selected) { toast("请先选择模板", "err"); return; }
+  let r = await API.savePreset(name, state.selected, state.params, false);
+  if (!r.ok && r.error && r.error.kind === "name_conflict") {
+    if (!confirm(`预设「${name}」已存在，覆盖它？`)) return;
+    r = await API.savePreset(name, state.selected, state.params, true);
+  }
+  if (!r.ok) { toast((r.error && r.error.message) || "保存失败", "err"); return; }
+  $("presetName").value = "";
+  toast(`已保存预设「${name}」`);
+  refreshPresets();
+}
+
+/* 自定义机床 */
+function loadCustomMachine() {
+  try { const j = JSON.parse(LS.get("nctool.customMachine") || "null"); return j; } catch { return null; }
+}
+
+/* 批量 */
+const BATCH_EXAMPLE = JSON.stringify({
+  name: "齿轮轴-示例",
+  ops: [
+    { template: "program_header", params: { prog: 1001, part_name: "GEAR SHAFT", op_name: "OP10" } },
+    { template: "tool_change", params: { tool_num: 5, spindle_speed: 3000 } },
+    { template: "drill_cycle", params: { x: 21, y: 15, depth: -10, feed: 100 } },
+    { template: "drill_cycle", params: { x: 41, y: 15, depth: -10, feed: 100 } },
+    { template: "program_footer", params: {} },
+  ],
+}, null, 2);
+let batchResults = [];
+async function runBatch() {
+  let part;
+  try { part = JSON.parse($("batchArea").value); }
+  catch (e) { toast("零件 JSON 解析失败：" + e.message, "err"); return; }
+  if (!part.ops || !part.ops.length) { toast("零件需包含 ops 数组", "err"); return; }
+  /* 走 API 出口而不是直接调 API.mock：server 模式下 mock 是前端 JS 复刻的引擎，
+     而后端 `/api/part/generate` 尚未实现（阶段 4）—— 直接调 mock 会让人以为
+     程序是 Rust 后端生成的，实际来自另一套实现。现在 server 模式发真实请求，
+     拿不到结果就明确报错；demo 模式（file://）仍落到 mock，行为不变。 */
+  const res = await API.partGenerate(part);
+  if (!res.ok || !res.data || !res.data.results) {
+    toast("批量生成失败：" + ((res.error && res.error.message) || "后端未实现该接口"), "err");
+    return;
+  }
+  batchResults = res.data.results;
+  const hasErr = batchResults.some(r => r.error);
+  $("batchResult").style.display = "block";
+  const tabs = $("batchTabs");
+  tabs.innerHTML = batchResults.map((r, i) => `<button class="tab2 ${i === 0 ? "active" : ""}" data-bi="${i}">${esc(r.name)}${r.error ? " ⚠" : ""}</button>`).join("");
+  showBatch(0);
+  $("batchDownloadAllBtn").style.display = batchResults.some(r => r.output) ? "" : "none";
+  tabs.querySelectorAll(".tab2").forEach(b => b.addEventListener("click", () => showBatch(+b.dataset.bi)));
+  toast(hasErr ? "批量完成，部分工序有误（见 ⚠）" : "批量生成完成", hasErr ? "warn" : "ok");
+}
+function showBatch(i) {
+  document.querySelectorAll(".batch-tabs .tab2").forEach((b, idx) => b.classList.toggle("active", idx === i));
+  const r = batchResults[i];
+  $("batchOut").textContent = r.error ? `✗ ${r.error}` : r.output;
+  $("batchOut").innerHTML = r.error ? `<span style="color:var(--err)">✗ ${esc(r.error)}</span>` : highlightGcode(r.output);
+}
+function downloadAll() {
+  let all = "";
+  batchResults.forEach(r => { if (r.output) { all += `( ${r.name} )\n` + r.output + "\n"; } });
+  const blob = new Blob([all], { type: "text/plain;charset=utf-8" });
+  const a = document.createElement("a");
+  a.href = URL.createObjectURL(blob);
+  a.download = "nctool_batch.nc";
+  a.click();
+  URL.revokeObjectURL(a.href);
+}
+
+/* ═══════════════════════════════════════════════════════════════
+   7.5 v2 新增：命令面板 / 移动端分段视图
+   ═══════════════════════════════════════════════════════════════ */
+function openPalette() {
+  $("palette").classList.add("open");
+  $("pq").value = "";
+  renderPalette();
+  $("pq").focus();
+}
+function closePalette() { $("palette").classList.remove("open"); }
+
+function paletteItems() {
+  const q = $("pq").value.trim().toLowerCase();
+  const items = [];
+  state.templates.forEach(t =>
+    items.push({ type: "模板", label: t.name, sub: t.description || "", cmd: "tpl:" + t.name }));
+  items.push({ type: "动作", label: "立即生成", sub: "⌘/Ctrl+⏎", cmd: "act:render" });
+  items.push({ type: "动作", label: "复制 G-code", sub: "⌘/Ctrl+⇧+C", cmd: "act:copy" });
+  items.push({ type: "动作", label: "下载 .nc", sub: "", cmd: "act:download" });
+  items.push({ type: "动作", label: "保存为预设", sub: "⌘/Ctrl+S", cmd: "act:preset" });
+  items.push({ type: "动作", label: "切换亮 / 暗主题", sub: "", cmd: "act:theme" });
+  state.machines.forEach(m =>
+    items.push({ type: "机床", label: m.id, sub: `${m.vendor || ""} ${m.model || ""}`.trim(), cmd: "machine:" + m.id }));
+  return items.filter(i => !q || i.label.toLowerCase().includes(q) || i.sub.toLowerCase().includes(q));
+}
+
+function renderPalette() {
+  const items = paletteItems();
+  $("pres").innerHTML = items.length
+    ? items.map((i, k) => `<div class="row ${k === 0 ? "on" : ""}" data-cmd="${esc(i.cmd)}">
+        <span>${esc(i.label)}</span><span class="k">${esc(i.type)}${i.sub ? " · " + esc(i.sub) : ""}</span></div>`).join("")
+    : `<div class="row" style="color:var(--text-faint)">无匹配结果</div>`;
+}
+
+function runCmd(cmd) {
+  const [kind, arg] = (cmd || "").split(":");
+  closePalette();
+  if (kind === "tpl") selectTemplate(arg);
+  else if (kind === "machine") {
+    state.machine = arg;
+    $("machineSel").value = arg;
+    doRender();
+    toast("已按 " + arg + " 重新生成");
+  } else if (kind === "act") {
+    if (arg === "render") doRender();
+    if (arg === "copy") copyGcode();
+    if (arg === "download") downloadGcode();
+    if (arg === "preset") { openPresetModal(); }
+    if (arg === "theme") toggleTheme();
+  }
+}
+
+/* 移动端：模板 / 参数 / 结果 分段视图 */
+function setMobileView(v) {
+  $("appBody").dataset.mv = v;
+  document.querySelectorAll(".mobile-seg button").forEach(b => {
+    const on = b.dataset.mv === v;
+    b.classList.toggle("active", on);
+    b.setAttribute("aria-selected", on);
+  });
+}
+
+/* 弹窗通用 */
+function openModal(id) { $(id).classList.add("open"); }
+function closeModal(id) { $(id).classList.remove("open"); }
+
+/* ═══════════════════════════════════════════════════════════════
+   8. 初始化与事件绑定
+   ═══════════════════════════════════════════════════════════════ */
+function init() {
+  /* 主题 */
+  const saved = LS.get("nctool.theme");
+  if (saved) setTheme(saved);
+
+  /* 机床（v2：切换后显式反馈「已按 X 重新生成」，机床属于输出目标而非界面偏好） */
+  $("machineSel").addEventListener("change", e => {
+    state.machine = e.target.value;
+    doRender();
+    toast("已按 " + e.target.value + " 重新生成");
+  });
+
+  /* 侧栏 */
+  renderSidebar();
+  $("catBar").addEventListener("click", e => {
+    const chip = e.target.closest(".chip"); if (!chip) return;
+    state.cat = chip.dataset.cat; renderSidebar();
+  });
+  $("searchInput").addEventListener("input", e => { state.query = e.target.value; renderSidebar(); });
+  $("tplList").addEventListener("click", e => {
+    const dv = e.target.closest("[data-derive]");
+    if (dv) { $("deriveSrc").textContent = dv.dataset.derive; $("deriveName").value = ""; openModal("modalDerive"); $("deriveName").focus(); return; }
+    const item = e.target.closest(".tpl-item"); if (!item) return;
+    selectTemplate(item.dataset.tpl);
+  });
+  $("deriveCopyBtn").addEventListener("click", () => {
+    const name = $("deriveName").value.trim();
+    if (!name) { toast("请输入新模板名", "warn"); return; }
+    const cmd = `nctool templates derive ${$("deriveSrc").textContent} ${name}`;
+    navigator.clipboard.writeText(cmd).then(() => toast("派生命令已复制")).catch(() => toast("复制失败", "err"));
+  });
+
+  /* 顶栏 */
+  $("themeBtn").addEventListener("click", toggleTheme);
+  $("helpBtn").addEventListener("click", () => openModal("modalAbout"));
+
+  /* 工具栏 */
+  $("srcBtn").addEventListener("click", () => {
+    const t = state.templates.find(x => x.name === state.selected);
+    if (!t) return;
+    $("srcName").value = t.name;
+    $("srcArea").value = t.source || (API_REGISTRY[t.name] && API_REGISTRY[t.name].source) || "";
+    $("srcCmd").value = `nctool templates edit ${t.name}`;
+    openModal("modalSrc");
+  });
+  $("srcReloadBtn").addEventListener("click", async () => {
+    const name = $("srcName").value;
+    if (API.mode !== "server") { toast("演示模式：源码来自内存，无外部改动", "warn"); return; }
+    const res = await API.getTemplate(name);
+    if (res.ok) { $("srcArea").value = (res.data.template && res.data.template.source) || ""; toast("已重新加载预览"); }
+    else toast("重新加载失败", "err");
+  });
+  $("srcCopyCmdBtn").addEventListener("click", () => {
+    navigator.clipboard.writeText($("srcCmd").value).then(() => toast("编辑命令已复制")).catch(() => toast("复制失败", "err"));
+  });
+  $("copyBtn").addEventListener("click", copyGcode);
+  $("downloadBtn").addEventListener("click", downloadGcode);
+  $("savePresetBtn").addEventListener("click", () => {
+    if (!state.selected) { toast("请先选择模板", "warn"); return; }
+    openPresetModal();
+  });
+  $("presetSaveBtn").addEventListener("click", saveCurrentPreset);
+  $("batchBtn").addEventListener("click", () => {
+    if (API.mode === "server") { toast("服务模式暂不支持批量生成", "warn"); return; }
+    $("batchArea").value = BATCH_EXAMPLE; $("batchResult").style.display = "none"; openModal("modalBatch");
+  });
+  $("batchExampleBtn").addEventListener("click", () => { $("batchArea").value = BATCH_EXAMPLE; });
+  $("batchRunBtn").addEventListener("click", runBatch);
+  $("batchDownloadAllBtn").addEventListener("click", downloadAll);
+
+  /* 预览标签 */
+  $("previewTabs").addEventListener("click", e => {
+    const b = e.target.closest(".tab"); if (!b) return;
+    switchTab(b.dataset.tab);
+  });
+
+  /* 弹窗关闭 */
+  document.querySelectorAll("[data-close]").forEach(b =>
+    b.addEventListener("click", () => closeModal(b.dataset.close)));
+  document.querySelectorAll(".modal-mask").forEach(m =>
+    m.addEventListener("click", e => { if (e.target === m) closeModal(m.id); }));
+
+  /* 自定义机床：双击机床选择器打开 JSON 编辑 */
+  const customMachineBtn = document.createElement("button");
+  customMachineBtn.className = "btn ghost";
+  customMachineBtn.id = "customMachineBtn";
+  customMachineBtn.title = "编辑自定义机床配置（JSON）";
+  customMachineBtn.textContent = "自定义…";
+  $("machineSel").parentElement.appendChild(customMachineBtn);
+  customMachineBtn.addEventListener("click", () => {
+    if (API.mode === "server") { toast("服务模式使用服务端机床配置", "warn"); return; }
+    const cur = loadCustomMachine() || { id: "custom", vendor: "Custom", model: "CNC", config: { ...BASE_CONFIG } };
+    $("customArea").value = JSON.stringify(cur, null, 2);
+    openModal("modalCustomMachine");
+  });
+
+  /* ── v2：命令面板 / 重置 / 移动端分段 / 快捷键 ── */
+  state.recent = loadRecent();
+  $("paletteBtn").addEventListener("click", () => openPalette());
+  $("resetBtn").addEventListener("click", () => {
+    if (!state.selected) return;
+    selectTemplate(state.selected);
+    toast("已重置为默认参数");
+  });
+  $("statePill").addEventListener("click", () => {
+    if ($("statePill").dataset.jump) switchTab("validate");
+  });
+  document.querySelectorAll(".mobile-seg button").forEach(b =>
+    b.addEventListener("click", () => setMobileView(b.dataset.mv)));
+  /* 模板卡上的预设 chips：捕获阶段拦截，避免同时触发模板选择 */
+  $("tplList").addEventListener("click", e => {
+    const chip = e.target.closest("[data-preset]");
+    if (chip) { e.stopPropagation(); loadPreset(chip.dataset.preset); }
+  }, true);
+  $("presetChips").addEventListener("click", e => {
+    const chip = e.target.closest("[data-preset]");
+    if (chip) loadPreset(chip.dataset.preset);
+  });
+  $("pq").addEventListener("input", renderPalette);
+  $("pq").addEventListener("keydown", e => {
+    const rows = [...document.querySelectorAll(".palette .row[data-cmd]")];
+    const cur = rows.findIndex(r => r.classList.contains("on"));
+    if (e.key === "ArrowDown" || e.key === "ArrowUp") {
+      e.preventDefault();
+      if (!rows.length) return;
+      const nx = (cur + (e.key === "ArrowDown" ? 1 : rows.length - 1)) % rows.length;
+      rows.forEach(r => r.classList.remove("on"));
+      rows[nx].classList.add("on");
+      rows[nx].scrollIntoView({ block: "nearest" });
+    } else if (e.key === "Enter") {
+      e.preventDefault();
+      const row = rows[cur < 0 ? 0 : cur];
+      if (row) runCmd(row.dataset.cmd);
+    }
+  });
+  $("pres").addEventListener("click", e => {
+    const row = e.target.closest("[data-cmd]");
+    if (row) runCmd(row.dataset.cmd);
+  });
+  document.addEventListener("click", e => {
+    const p = $("palette");
+    if (p.classList.contains("open") && !p.contains(e.target) && !$("paletteBtn").contains(e.target)) closePalette();
+  });
+  document.addEventListener("keydown", e => {
+    const meta = e.metaKey || e.ctrlKey;
+    if (meta && e.key.toLowerCase() === "k") { e.preventDefault(); openPalette(); }
+    else if (meta && e.key === "Enter") { e.preventDefault(); if (state.selected) doRender(); }
+    else if (meta && e.key.toLowerCase() === "s") {
+      e.preventDefault();
+      if (!state.selected) return;
+      openPresetModal();
+    }
+    else if (e.key === "Escape") closePalette();
+  });
+
+  $("verText").textContent = "nctool UI · 单文件前端设计";
+  $("modeText").textContent = API.mode === "demo" ? "演示模式" : "服务模式";
+  $("modeBadge").className = "mode-badge " + API.mode;
+
+  if (API.mode === "server") {
+    Promise.all([API.listTemplates(), API.listMachines()]).then(([tplRes, machineRes]) => {
+      if (!tplRes.ok || !machineRes.ok) {
+        $("apiMode").innerHTML = `<span>数据源：服务端 API（加载失败）</span>`;
+        toast((tplRes.error || machineRes.error || {}).message || "服务数据加载失败", "err");
+        return;
+      }
+      $("apiMode").innerHTML = `<span>数据源：服务端 API</span>`;
+      state.templates = tplRes.data.templates || [];
+      state.machines = machineRes.data.machines || [];
+      renderMachineSel();
+      renderSidebar();
+      /* 预设先于模板选中加载：模板卡片上的预设 chips 依赖 PRESET_CACHE */
+      refreshPresets().then(() => {
+        if (state.templates[0]) selectTemplate(state.templates[0].name);
+      });
+    });
+  } else {
+    renderMachineSel();
+    renderSidebar();
+    refreshPresets().then(() => {
+      if (TEMPLATES[0]) selectTemplate(TEMPLATES[0].name);
+    });
+  }
+}
+
+init();
+</script>

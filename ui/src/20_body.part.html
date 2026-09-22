@@ -1,0 +1,254 @@
+</head>
+<body>
+<div class="app">
+  <header class="appbar">
+    <div class="brand">
+      <div class="logo" aria-hidden="true">
+        <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round">
+          <circle cx="12" cy="12" r="9"/><path d="M12 3v4M12 17v4M3 12h4M17 12h4"/>
+          <circle cx="12" cy="12" r="2.4" fill="currentColor" stroke="none"/>
+        </svg>
+      </div>
+      <div>
+        <h1>nctool</h1>
+        <p class="sub">NC 模板工作台 · G-code 生成</p>
+      </div>
+    </div>
+    <span id="modeBadge" class="mode-badge demo"><span class="dot"></span><span id="modeText">演示模式</span></span>
+    <div class="spacer"></div>
+    <button class="btn" id="paletteBtn" title="打开命令面板（⌘K / Ctrl+K）">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg>
+      <span class="lbl">搜索</span><span class="kbd">⌘K</span>
+    </button>
+    <button class="btn icon" id="themeBtn" title="切换亮/暗主题" aria-label="切换主题">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M21 12.8A9 9 0 1 1 11.2 3 7 7 0 0 0 21 12.8z"/></svg>
+    </button>
+    <button class="btn icon ghost" id="helpBtn" title="关于本 UI" aria-label="关于">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round">
+        <circle cx="12" cy="12" r="9"/><path d="M9.5 9a2.5 2.5 0 1 1 3.6 2.2c-.8.4-1.1 1-1.1 1.8"/><path d="M12 17h.01"/>
+      </svg>
+    </button>
+  </header>
+
+  <div class="body" id="appBody" data-mv="params">
+    <div class="mobile-seg" role="tablist" aria-label="视图切换">
+      <button data-mv="tpl" role="tab" aria-selected="false">模板</button>
+      <button class="active" data-mv="params" role="tab" aria-selected="true">参数</button>
+      <button data-mv="result" role="tab" aria-selected="false">结果</button>
+    </div>
+
+    <!-- 模板导航 -->
+    <aside class="nav" aria-label="模板导航">
+      <div class="nav-head">
+        <div class="search">
+          <input id="searchInput" type="text" placeholder="搜索模板名 / 描述…" autocomplete="off" aria-label="搜索模板">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg>
+        </div>
+        <div class="chips" id="catBar"></div>
+      </div>
+      <div class="tpl-list" id="tplList"></div>
+    </aside>
+
+    <!-- 参数区 -->
+    <section class="params" aria-label="参数">
+      <div class="p-head">
+        <div class="p-title">
+          <h2 id="panelTitle">未选择模板</h2>
+          <span class="crumb" id="crumb"></span>
+          <button class="reset" id="resetBtn" hidden>重置</button>
+        </div>
+        <div class="progress"><i id="progBar"></i></div>
+        <div class="p-meta" id="paramHint">从左侧选择一个模板开始</div>
+        <div class="presets" id="presetChips"></div>
+      </div>
+      <div class="p-body" id="formBody"></div>
+    </section>
+
+    <!-- 结果区 -->
+    <section class="result" aria-label="结果">
+      <div class="r-head" id="rHead">
+        <span class="state" id="statePill">未生成</span>
+        <div class="mchip" title="输出目标机床（影响 G/M 代码与程序号格式）">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="3" y="5" width="18" height="14" rx="2"/><path d="M7 9h4M7 13h7"/></svg>
+          <select id="machineSel" aria-label="选择机床"></select>
+        </div>
+        <div class="stats">
+          <span class="stat" id="statAscii"></span>
+          <span class="stat" id="statChars"></span>
+          <span class="stat" id="statTime"></span>
+        </div>
+        <div class="prog"><i></i></div>
+      </div>
+      <div class="tabs" id="previewTabs" role="tablist">
+        <button class="tab active" data-tab="gcode" role="tab" aria-selected="true">G-code</button>
+        <button class="tab" data-tab="src" role="tab" aria-selected="false">模板源码</button>
+        <button class="tab" data-tab="validate" role="tab" aria-selected="false">校验</button>
+      </div>
+      <div class="r-main" id="rMain">
+        <div class="idx" id="procIndex" hidden></div>
+        <div class="preview-body" id="previewBody">
+          <div class="tabpage active" id="page-gcode">
+            <div class="gcode-empty" style="padding-top:70px">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.4"><path d="M4 17l6-6 4 4 6-8"/></svg>
+              <div>生成的 G-code 将显示在这里</div>
+            </div>
+          </div>
+          <div class="tabpage" id="page-src"><pre class="src-view" id="srcView"></pre></div>
+          <div class="tabpage" id="page-validate">
+            <div class="v-empty">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M20 6 9 17l-5-5"/></svg>
+              <span>校验通过，无问题</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <div class="r-foot">
+        <button class="btn" id="copyBtn" title="复制 G-code 到剪贴板">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><rect x="9" y="9" width="12" height="12" rx="2"/><path d="M5 15V5a2 2 0 0 1 2-2h10"/></svg>
+          复制
+        </button>
+        <button class="btn primary" id="downloadBtn" title="下载 .nc 文件">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="M12 3v12m0 0 4-4m-4 4-4-4"/><path d="M4 17v2a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-2"/></svg>
+          下载 .nc
+        </button>
+        <div class="spacer"></div>
+        <button class="btn ghost" id="srcBtn" title="查看 / 编辑模板源码">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><path d="m8 9-4 3 4 3M16 9l4 3-4 3M13 5l-2 14"/></svg>
+          源码
+        </button>
+        <button class="btn ghost" id="savePresetBtn" title="将当前参数保存为命名预设">预设</button>
+        <button class="btn ghost" id="batchBtn" title="零件级批量生成">批量</button>
+      </div>
+    </section>
+  </div>
+
+  <footer class="statusbar">
+    <span class="st" id="statusBar"><span class="dot"></span><span>就绪</span></span>
+    <span class="st src" id="apiMode"><span>数据源：演示数据（本地渲染）</span></span>
+    <span class="right">
+      <span id="tplCount"></span>
+      <span id="verText"></span>
+    </span>
+  </footer>
+</div>
+
+<!-- ═══════════ 侧抽屉（源码 / 预设 / 批量 / 关于） ═══════════ -->
+<!-- 源码编辑 -->
+<div class="modal-mask" id="modalSrc">
+  <div class="modal">
+    <div class="modal-head"><h3>模板源码</h3><button class="close" data-close="modalSrc">×</button></div>
+    <div class="modal-body">
+      <div class="field">
+        <label>模板名（只读）</label>
+        <input type="text" id="srcName" readonly>
+      </div>
+      <div class="field">
+        <label>Jinja2 源码（只读预览；编辑请在外部编辑器中完成）</label>
+        <textarea id="srcArea" spellcheck="false" readonly></textarea>
+      </div>
+      <div class="field">
+        <label>在外部编辑器中打开（复制命令到终端执行；保存前会做分级校验）</label>
+        <input type="text" id="srcCmd" readonly>
+      </div>
+      <div class="tip">支持 <code>{% set %}</code> <code>{% for %}</code> <code>{% if %}</code> <code>{% include %}</code>、
+        过滤器 <code>nc_fixed</code> <code>nc_strip</code> <code>nc_pad</code> <code>default</code> <code>round</code> <code>int</code> 等，
+        以及 <code>machine.xxx</code> 机床变量。浏览器内不写盘，改完用命令落盘并重新加载预览。</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" data-close="modalSrc">关闭</button>
+      <button class="btn" id="srcReloadBtn">重新加载预览</button>
+      <button class="btn primary" id="srcCopyCmdBtn">复制编辑命令</button>
+    </div>
+  </div>
+</div>
+
+<!-- 派生模板命名 -->
+<div class="modal-mask" id="modalDerive">
+  <div class="modal" style="max-width:440px">
+    <div class="modal-head"><h3>派生新模板</h3><button class="close" data-close="modalDerive">×</button></div>
+    <div class="modal-body">
+      <div class="field"><label>新模板名</label><input type="text" id="deriveName" placeholder="如 drill_deep"></div>
+      <div class="tip">源模板：<code id="deriveSrc"></code>。浏览器内不写盘；复制命令到终端执行，派生会复制源码与清单条目。</div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" data-close="modalDerive">取消</button>
+      <button class="btn primary" id="deriveCopyBtn">复制派生命令</button>
+    </div>
+  </div>
+</div>
+
+<!-- 预设管理 -->
+<div class="modal-mask" id="modalPreset">
+  <div class="modal">
+    <div class="modal-head"><h3>参数预设</h3><button class="close" data-close="modalPreset">×</button></div>
+    <div class="modal-body">
+      <div class="field" style="display:flex;gap:8px">
+        <input type="text" id="presetName" placeholder="新预设名称，如「钻孔 D10 × 3 深」" style="flex:1">
+        <button class="btn primary" id="presetSaveBtn">保存当前</button>
+      </div>
+      <div class="field"><label>已保存预设（本地存储）</label>
+        <ul class="preset-list" id="presetList"></ul>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn ghost" data-close="modalPreset">关闭</button></div>
+  </div>
+</div>
+
+<!-- 批量生成 -->
+<div class="modal-mask" id="modalBatch">
+  <div class="modal" style="width:min(760px,96vw)">
+    <div class="modal-head"><h3>零件级批量生成</h3><button class="close" data-close="modalBatch">×</button></div>
+    <div class="modal-body">
+      <div class="field">
+        <label>零件 JSON（多工序一次生成；每道工序：模板名 + 参数 + 可选机床）</label>
+        <textarea id="batchArea" spellcheck="false"></textarea>
+      </div>
+      <div class="tip">示例格式见下方「填入示例」。任一工序校验失败整批拒绝并定位。<br>
+        <code>{ "name": "齿轮轴", "ops": [ { "template": "drill_cycle", "params": { ... } }, ... ] }</code></div>
+      <div style="display:flex;gap:8px;margin-top:10px">
+        <button class="btn ghost" id="batchExampleBtn">填入示例</button>
+        <button class="btn primary" id="batchRunBtn">生成</button>
+        <div class="spacer"></div>
+        <button class="btn ghost" id="batchDownloadAllBtn" style="display:none">下载全部 .nc</button>
+      </div>
+      <div class="field" id="batchResult" style="margin-top:12px;display:none">
+        <label>生成结果</label>
+        <div class="batch-tabs" id="batchTabs"></div>
+        <pre class="src-view" id="batchOut" style="max-height:220px;overflow:auto;border:1px solid var(--border);border-radius:8px"></pre>
+      </div>
+    </div>
+    <div class="modal-foot"><button class="btn ghost" data-close="modalBatch">关闭</button></div>
+  </div>
+</div>
+
+<!-- 关于 -->
+<div class="modal-mask" id="modalAbout">
+  <div class="modal">
+    <div class="modal-head"><h3>关于 nctool Web UI</h3><button class="close" data-close="modalAbout">×</button></div>
+    <div class="modal-body">
+      <dl class="about-kv">
+        <dt>定位</dt><dd>本地运行的模板参数表单 + 实时 G-code 预览（<code>docs/DEV_PLAN_CLI_UI.md</code> §5/§6）</dd>
+        <dt>形态</dt><dd>单文件 <code>index.html</code>，零外部依赖；可经 <code>include_str!</code> 内嵌进 binary</dd>
+        <dt>演示模式</dt><dd>内置模板库 + 迷你 Jinja 渲染器 + 客户端校验/后处理，离线完整可用</dd>
+        <dt>服务模式</dt><dd>将 JS 中 <code>API.mode</code> 改为 <code>'server'</code> 并设置 <code>base</code>，
+          全部请求转至 <code>nctool ui</code> 的 HTTP 接口（<code>{ ok, data?, error? }</code>）</dd>
+        <dt>界面设计</dt><dd>v2 设计方案见 <code>docs/UI_DESIGN_PROPOSAL.html</code>：结果优先 · 就地反馈 · 渐进披露 · 状态可见；
+          快捷键 <code>⌘/Ctrl+K</code> 命令面板、<code>⌘/Ctrl+⏎</code> 立即生成、<code>⌘/Ctrl+S</code> 存为预设</dd>
+        <dt>功能覆盖</dt><dd>模板浏览/搜索/分类 · 参数表单自动生成（必填进度 + 就地校验）· 实时预览 ·
+          生成选项（行号/头部/ASCII/空行/宽松）· 工序索引 · 复制/下载 · 机床切换 · 参数预设 · 批量生成 · 主题切换</dd>
+        <dt>渲染口径</dt><dd>与 <code>nctool-core</code> 管线一致：校验 → 规格默认值兜底 → <code>machine</code> 注入 → 后处理</dd>
+      </dl>
+    </div>
+    <div class="modal-foot"><button class="btn primary" data-close="modalAbout">知道了</button></div>
+  </div>
+</div>
+
+<!-- 命令面板 -->
+<div class="palette" id="palette" role="dialog" aria-label="命令面板">
+  <input id="pq" type="text" placeholder="搜索模板、动作、机床…" autocomplete="off">
+  <div class="res" id="pres"></div>
+</div>
+
+<div id="toast-wrap"></div>
+
+
