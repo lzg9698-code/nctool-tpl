@@ -1,0 +1,86 @@
+%% T04 模块二（机床配置编辑）增量类图
+%% 只列 T04 新增/变更部分；既有类型标 <<existing>>。
+classDiagram
+    class WriteKernel {
+        <<existing>>
+        +write_guarded(path, bytes, expect) Result~WriteOutcome~
+        +read_fingerprint(path) Result~Option~FileFingerprint~~
+    }
+    class WriteOutcome {
+        <<existing>>
+        +PathBuf path
+        +WriteAction action
+        +Option~String~ fingerprint
+    }
+    class WriteAction {
+        <<existing enum>>
+        Created
+        Updated
+        Unchanged
+        Deleted
+    }
+    class WriteError {
+        <<existing enum, non_exhaustive>>
+        Conflict
+        PathEscape
+        ReadOnly
+        Io
+        NotFound
+        Corrupt
+    }
+
+    class MachineWriter {
+        <<service, new>>
+        +load(path) Result~BTreeMap~String_MachineConfig~~
+        +upsert(path, cfg, expect) Result~WriteOutcome~
+        +remove(path, id, expect) Result~WriteOutcome~
+        +check_completeness(cfg, required_keys) CompletenessReport
+        +preflight(cfg, required_keys) MachineSaveReport
+    }
+    class CompletenessReport {
+        <<new>>
+        +Vec~String~ missing_keys
+        +Vec~String~ unknown_keys
+        +bool blocking
+    }
+    class MachineSaveReport {
+        <<new>>
+        +Vec~String~ blocking
+        +Vec~String~ warnings
+        +Vec~String~ missing_keys
+        +Vec~String~ unknown_keys
+        +Vec~String~ invalid_values
+        +can_save() bool
+    }
+    class MachineConfig {
+        <<existing>>
+        +String id
+        +String vendor
+        +String model
+        +BTreeMap~String_String~ config
+        +get(key) Option~str~
+    }
+    class MachineKeySchema {
+        <<existing>>
+        +str key
+        +MachineKeyKind kind
+        +str default
+        +str description
+    }
+    class MachinePreset {
+        <<existing enum>>
+        +from_id(id) Option~MachinePreset~
+        +config() MachineConfig
+    }
+
+    MachineWriter ..> WriteKernel
+    MachineWriter ..> WriteError
+    MachineWriter ..> CompletenessReport
+    MachineWriter ..> MachineSaveReport
+    MachineWriter ..> MachineConfig
+    MachineWriter ..> MachineKeySchema : KNOWN_CONFIG_KEYS
+    MachineWriter ..> MachinePreset : is_builtin_machine
+    CompletenessReport ..> MachineSaveReport : 被 preflight 组装
+    WriteKernel ..> WriteOutcome
+    WriteKernel ..> WriteError
+    WriteOutcome --> WriteAction

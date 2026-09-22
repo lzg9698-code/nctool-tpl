@@ -1,0 +1,62 @@
+%% T04 模块二（机床配置编辑）关键时序图：F7/F8/F9 落盘 + F10 试渲染
+%% 落盘策略 = toml_edit 合并式 upsert（只改 [machine.<id>] 段，AC-2.10）
+
+sequenceDiagram
+    participant U as 用户
+    participant CLI as machine add/edit
+    participant CFG as cli::config
+    participant MP as MachinePreset
+    participant REG as TemplateRegistry
+    participant TPL as nctool_tpl::extract_member_accesses
+    participant MW as MachineWriter
+    participant K as WriteKernel
+
+    Note over U,K: ── F7 录入 + F8 校验 + F9 保存 ──
+    U->>CLI: machine add hero_x9 --from generic --set line_number_digits=5
+    CLI->>MP: is_builtin_machine("hero_x9")? -> false (否则 args/2, AC-2.2)
+    CLI->>MP: from_id("generic").config()  // 19 键基线 (axes 不预填)
+    MP-->>CLI: MachineConfig{generic}
+    CLI->>CLI: 合并 --set 覆盖 -> 目标 cfg(id=hero_x9)
+    CLI->>CLI: 重名检查(无 --force -> name_conflict/6)
+    CLI->>REG: list_for_machine(Some("hero_x9"), None, true)
+    REG-->>CLI: 可见模板条目
+    CLI->>TPL: parse(source_text,name) -> extract_member_accesses(&ast, "machine")
+    TPL-->>CLI: 引用键集合(并集 -> required_keys)
+    CLI->>MW: preflight(cfg, required_keys)
+    MW->>MW: validate_config_keys(cfg)  // 未知键/空串 -> 告警(复用既有)
+    MW->>MW: Choice/整数 值级阻断 + check_completeness 差集
+    MW-->>CLI: MachineSaveReport
+    alt report.can_save() == false
+        CLI-->>U: 阻断项清单(缺键/Choice 非法) + 退出码 1(不落盘)
+    else 通过
+        CLI->>CFG: project_config_path() -> nctool.toml
+        CLI->>K: read_fingerprint(path) -> expect
+        CLI->>MW: upsert(path, cfg, expect)
+        MW->>MW: validate_asset_name(id) -> toml_edit 写入 [machine.hero_x9]
+        MW->>K: write_guarded(path, doc.to_string(), expect)
+        K->>K: 重读比对指纹 -> 临时文件 -> fsync -> rename
+        alt 指纹不一致
+            K-->>MW: WriteError::Conflict
+            MW-->>CLI: write_conflict(6)
+        else 一致
+            K-->>MW: WriteOutcome{Created|Updated, fingerprint}
+            MW-->>CLI: ok
+            CLI-->>U: 提示 --machine hero_x9 + 建议 machine test + 退出码 0
+        end
+    end
+
+    Note over U,K: ── F10 试渲染验证（machine test）──
+    U->>CLI: machine test hero_x9 --template drill_cycle --param x=21 ...
+    CLI->>CLI: resolve_machine(Some("hero_x9")) -> 不存在则 machine_not_found(5)
+    CLI->>REG: build_registry() -> get("drill_cycle") -> 不存在则 template_not_found(5)
+    CLI->>CLI: build_params(--param/--params-file, specs)
+    CLI->>REG: registry.validate("drill_cycle", params)
+    alt 有 Error
+        REG-->>CLI: 报告
+        CLI-->>U: 展示报告 + 退出码 1
+    else 通过
+        CLI->>CLI: generate("drill_cycle", params, machine, GenerationOptions::default())
+        CLI-->>U: G-code 预览 + 退出码 0
+    end
+    Note over CLI,U: 固定文案保留："试渲染不能替代真实空运行/工艺评审"(R-8)
+    Note over CLI,U: AC-2.7：与 `render --machine` 逐字节一致（同一条管线调用）
