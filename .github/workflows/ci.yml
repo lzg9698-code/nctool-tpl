@@ -43,6 +43,16 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: node scripts/check_param_parity.mjs
 
+      # 生成选项对拍：CLI 的 --line-numbers/--line-step/--max-line/--header/
+      # --strip-blank/--ascii/--lenient 与 Web API 的 options 必须映射到同一份
+      # GenerationOptions。--line-step/--max-line 曾只存在于 UI，CLI 无法复现
+      # 同一输出（隐患修复，2026-09-22）。fixture：scripts/option_parity_cases.json；
+      # 本步骤查前端侧（normalizeOpts），Rust 侧由 cargo test 的
+      # option_mapping_matches_shared_fixture 查后端侧。
+      - name: Option parity (CLI <-> UI)
+        if: matrix.os == 'ubuntu-latest'
+        run: node scripts/check_option_parity.mjs
+
       # 接口集合对拍：后端 route() 的路由臂与前端 API 封装天然两份，此前没有任何
       # 机制提示「前端调的接口后端并没有」（/api/part/generate 就是这么悬空的）。
       # fixture 同样是 scripts/api_routes.json：本步骤查前端侧，Rust 侧由

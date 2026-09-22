@@ -1,0 +1,92 @@
+{
+  "description": "CLI 生成选项与 Web API options 的对拍 fixture。同一组语义选项在命令行（--line-numbers/--line-step/--max-line/--header/--strip-blank/--ascii/--lenient）与 Web UI（POST /api/render 的 options 对象）必须映射到同一份 GenerationOptions，否则同一份参数在两个入口会得到不同 G-code —— 这正是本项目零容忍的「静默不一致」。",
+  "note": "cli 字段名 = clap 的 snake_case（RenderArgs）；json 字段名 = 前端 normalizeOpts 发送的 camelCase。expect 是被映射后的 GenerationOptions 关键字段（与 rust 结构体字段名一致）。",
+  "cases": [
+    {
+      "name": "defaults",
+      "cli": {},
+      "json": {},
+      "expect": {
+        "line_numbers": false,
+        "line_number_step": 10,
+        "max_line_number": 9999,
+        "add_header_comment": false,
+        "strip_blank_lines": false,
+        "ascii_only": false,
+        "lenient": false
+      }
+    },
+    {
+      "name": "all_on",
+      "cli": {
+        "line_numbers": true,
+        "line_step": 100,
+        "max_line": 500,
+        "header": true,
+        "strip_blank": true,
+        "ascii": true,
+        "lenient": true
+      },
+      "json": {
+        "lineNumbers": true,
+        "lineStep": 100,
+        "maxLine": 500,
+        "addHeader": true,
+        "stripBlank": true,
+        "ascii": true,
+        "lenient": true
+      },
+      "expect": {
+        "line_numbers": true,
+        "line_number_step": 100,
+        "max_line_number": 500,
+        "add_header_comment": true,
+        "strip_blank_lines": true,
+        "ascii_only": true,
+        "lenient": true
+      }
+    },
+    {
+      "name": "custom_step_only",
+      "cli": { "line_numbers": true, "line_step": 50 },
+      "json": { "lineNumbers": true, "lineStep": 50 },
+      "expect": {
+        "line_numbers": true,
+        "line_number_step": 50,
+        "max_line_number": 9999,
+        "add_header_comment": false,
+        "strip_blank_lines": false,
+        "ascii_only": false,
+        "lenient": false
+      }
+    },
+    {
+      "name": "custom_max_only",
+      "cli": { "line_numbers": true, "max_line": 7 },
+      "json": { "lineNumbers": true, "maxLine": 7 },
+      "expect": {
+        "line_numbers": true,
+        "line_number_step": 10,
+        "max_line_number": 7,
+        "add_header_comment": false,
+        "strip_blank_lines": false,
+        "ascii_only": false,
+        "lenient": false
+      }
+    },
+    {
+      "name": "lenient_does_not_imply_numbers",
+      "cli": { "lenient": true },
+      "json": { "lenient": true },
+      "expect": {
+        "line_numbers": false,
+        "line_number_step": 10,
+        "max_line_number": 9999,
+        "add_header_comment": false,
+        "strip_blank_lines": false,
+        "ascii_only": false,
+        "lenient": true
+      }
+    }
+  ]
+}

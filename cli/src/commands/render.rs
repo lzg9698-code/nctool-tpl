@@ -29,10 +29,11 @@ pub fn run(ctx: &Ctx, args: &RenderArgs) -> Result<(), CliError> {
     let opts = GenerationOptions {
         format: OutputFormat::Gcode,
         line_numbers: args.line_numbers,
+        line_number_step: args.line_step,
+        max_line_number: args.max_line,
         add_header_comment: args.header,
         strip_blank_lines: args.strip_blank,
         ascii_only: args.ascii,
-        ..Default::default()
     };
 
     // 渲染前校验（宽松模式不阻断，仅提示）

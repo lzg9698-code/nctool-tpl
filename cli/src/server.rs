@@ -1241,6 +1241,93 @@ mod tests {
         assert_eq!(payload["data"]["template"], "drill_cycle");
     }
 
+    /// 选项对拍门禁（隐患修复）：CLI 的生成选项与 Web API 的 `options` 对象必须
+    /// 映射到同一份 `GenerationOptions`。fixture 是唯一来源，两侧各有一份消费点：
+    /// 本测试跑 JSON 侧（`generation_options`），并与 CLI 侧对照
+    /// （`RenderArgs` 的字段由 `commands::render` 1:1 赋值）。
+    ///
+    /// 背景：`--line-step` / `--max-line` 曾只存在于 Web UI，CLI 无法复现
+    /// 同一份带自定义步进的输出 —— 同一份参数在两个入口产出不同 G-code。
+    #[test]
+    fn option_mapping_matches_shared_fixture() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../scripts/option_parity_cases.json"))
+                .expect("option_parity_cases.json 必须是合法 JSON");
+        let cases = fixture["cases"]
+            .as_array()
+            .expect("fixture 需有 cases 数组");
+        assert!(!cases.is_empty(), "fixture 不应为空");
+
+        for (i, case) in cases.iter().enumerate() {
+            let name = case["name"].as_str().unwrap_or("?");
+            let json = &case["json"];
+
+            // —— JSON 侧：走真实函数 —————————————————————————
+            let body = serde_json::json!({ "options": json });
+            let (opts, lenient) = generation_options(&body)
+                .unwrap_or_else(|_| panic!("case #{i} {name}: generation_options 失败"));
+
+            let e = &case["expect"];
+            assert_eq!(
+                opts.line_numbers,
+                e["line_numbers"].as_bool().unwrap(),
+                "case #{i} {name}: line_numbers"
+            );
+            assert_eq!(
+                opts.line_number_step,
+                e["line_number_step"].as_u64().unwrap() as u32,
+                "case #{i} {name}: line_number_step"
+            );
+            assert_eq!(
+                opts.max_line_number,
+                e["max_line_number"].as_u64().unwrap() as u32,
+                "case #{i} {name}: max_line_number"
+            );
+            assert_eq!(
+                opts.add_header_comment,
+                e["add_header_comment"].as_bool().unwrap(),
+                "case #{i} {name}: add_header_comment"
+            );
+            assert_eq!(
+                opts.strip_blank_lines,
+                e["strip_blank_lines"].as_bool().unwrap(),
+                "case #{i} {name}: strip_blank_lines"
+            );
+            assert_eq!(
+                opts.ascii_only,
+                e["ascii_only"].as_bool().unwrap(),
+                "case #{i} {name}: ascii_only"
+            );
+            assert_eq!(
+                lenient,
+                e["lenient"].as_bool().unwrap(),
+                "case #{i} {name}: lenient"
+            );
+
+            // —— CLI 侧：从 cli 字段构出同一结构，必须与 JSON 侧一致 ——————
+            // （cli 字段名 = RenderArgs 的 snake_case；commands::render 把
+            //   它们 1:1 赋给 GenerationOptions，因此这里直接构造即代表 CLI 行为）
+            let cli = &case["cli"];
+            let cli_opts = GenerationOptions {
+                format: OutputFormat::Gcode,
+                line_numbers: cli["line_numbers"].as_bool().unwrap_or(false),
+                line_number_step: cli["line_step"].as_u64().unwrap_or(10) as u32,
+                max_line_number: cli["max_line"].as_u64().unwrap_or(9999) as u32,
+                add_header_comment: cli["header"].as_bool().unwrap_or(false),
+                strip_blank_lines: cli["strip_blank"].as_bool().unwrap_or(false),
+                ascii_only: cli["ascii"].as_bool().unwrap_or(false),
+            };
+            let cli_lenient = cli["lenient"].as_bool().unwrap_or(false);
+
+            assert_eq!(
+                cli_opts, opts,
+                "case #{i} {name}: CLI 与 API 映射到不同的 GenerationOptions\n\
+                 cli={cli_opts:?}\napi={opts:?}"
+            );
+            assert_eq!(cli_lenient, lenient, "case #{i} {name}: lenient 不一致");
+        }
+    }
+
     #[test]
     fn generation_options_full_set_is_applied() {
         // 所有开关都给上（format 走默认 gcode）：覆盖 get_u32 取值路径与完整

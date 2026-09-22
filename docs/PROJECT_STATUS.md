@@ -2,7 +2,7 @@
 
 > 生成时间：**2026-09-18**（上一版 2026-09-10，本次为全量重写）
 > 分析依据：本文数字**全部为实测值**，非文档转抄 —— `git log` / `git status`、
-> `cargo test --workspace --all-targets`（577 项）、
+> `cargo test --workspace --all-targets`（579 项）、
 > `cargo llvm-cov --workspace --all-features --lcov` + `scripts/check_coverage_caliber.py`
 > （生产口径行 90.34%）、
 > `cargo fmt --all --check`、`cargo clippy --workspace --all-targets`、
@@ -20,7 +20,7 @@
 | **清单记账** | ROADMAP §8 执行跟踪 **70 / 72 项（97%）** 勾选（A 12/13 · B 12/13 · C 12/12 · D 12/12 · E 12/12 · F 10/10）。本轮共新勾 4 项（E2.2 / E2.3 / B-Backlog / F1.3），均有 CI 或发布物取证；余 2 项为 A1 机床预设按键值核对（无手册资源）与 B4.2（Backlog） |
 | **发布状态** | 三个 crate 在 crates.io 可见（实测指定版本端点 `created_at` 为 2026-09-18T05:01–05:02Z）；三个 Release 各挂 3 个二进制（Windows 4.25 MB / Linux 3.62 MB / macOS-arm64 3.09 MB）。已下载 Windows 产物实测 `nctool 0.3.0` 可运行并正确产出 G-code；亦以 `cargo install nctool-cli --version 0.3.0` 从 crates.io 全新安装验证通过 |
 | **功能可用性** | CLI **10 个子命令**全部可用（除 `part` 占位）+ Web UI 完整交互闭环；模板库已整合 NCTool_V3 资产：**7 个内置 + 25 个文件模板**（隐藏 3） |
-| **测试基线** | workspace **577 项**实测（`--all-targets`），**577 通过 / 0 失败**；另 2 项 `#[ignore]`（万行实测，需 `--release --ignored`）与 1 项 doc-test（`core/src/model.rs`，标记 `#[ignore]`）；`cargo test --workspace --doc` 另有 1 项通过（`src/lib.rs`） |
+| **测试基线** | workspace **579 项**实测（`--all-targets`），**579 通过 / 0 失败**；另 2 项 `#[ignore]`（万行实测，需 `--release --ignored`）与 1 项 doc-test（`core/src/model.rs`，标记 `#[ignore]`）；`cargo test --workspace --doc` 另有 1 项通过（`src/lib.rs`） |
 | **覆盖率** | **生产口径**行 **90.34%**（4553/5040，门禁 ≥ 89%，2026-09-19 Ubuntu CI 实测）；对照 llvm-cov 原始口径 94.04% —— 二者差 4.34pt，因为原始口径把 `src/*.rs` 内的 `#[cfg(test)]` 段计入分母，会随「新增测试」虚涨，**不作门禁** |
 | **CI 状态** | 三平台矩阵（fmt / clippy `-D warnings` / test `--workspace` / doc `-D warnings` / audit）+ 覆盖率门 + 前后端对拍门。发版提交 `3031a71`（run #37）**全绿**；此前连续多次绿灯（最近 `db8d928` / `6e5a3a7`） |
 | **✅ 本轮（09-15 ~ 09-18）** | ① 架构评估 P0×3 + P1×4 + P2-1 **全部收口** ② 覆盖率从「未度量」到真门禁并两次上调（无 → 89% → 90%；**09-18 改为生产口径 ≥ 88%**，见 §4）③ CI 补 `--workspace`（被测项 155 → 527）④ NCTool_V3 模板资产整合（`manifest.rs` / `variables.rs` / `derive.rs` + 25 模板 + INDEX G420 全套）⑤ server.rs 接口契约补测 10 项 ⑥ **发版**：0.4.0 / 0.3.0 / 0.3.0 上线 crates.io + 三平台 Release 二进制 |
@@ -136,7 +136,7 @@ CLI E2E 契约、HTTP 契约、21 组正向 golden + 3 组负向报告、错误�
 | nctool-tpl | 137 | 18 + 1(属性) | 156 | ✅ 全过 |
 | nctool-core | 203 | 11 + 3(万行) | 217 | ✅ 全过 |
 | nctool-cli | 76 | 43 + 44(E2E) | 163 | ✅ 全过 |
-| **合计** | — | — | **577** | **577 通过 / 0 失败**（2026-09-22 实测） |
+| **合计** | — | — | **579** | **579 通过 / 0 失败**（2026-09-22 实测） |
 
 另 2 项 `#[ignore]`（`large_program` 万行实测，需 `--release --ignored`）、1 项 doc-test
 `#[ignore]`（`core/src/model.rs`）。上表是 `--all-targets` 的口径，**不含 doctest** ——

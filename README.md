@@ -437,6 +437,10 @@ nctool validate drill_cycle --param x=21 --param y=15 --param depth=-10 --param 
 nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100 \
     --line-numbers --header --out demo.nc
 
+# 行号步进与上限可调（与 Web UI 的选项一一对应，默认 10 / 9999）
+nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100 \
+    --line-numbers --line-step 100 --max-line 500
+
 # `generate` 与 `render` 同签名，是后处理全开时的规范入口（默认输出逐字节一致）
 nctool generate drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100
 
@@ -555,6 +559,7 @@ cargo test --workspace --all-targets
 cargo test --workspace --doc          # --all-targets 不跑 doctest，CI 为此单列一步
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 node scripts/check_param_parity.mjs   # --param 归一规则的 Rust/前端对拍
+node scripts/check_option_parity.mjs  # 生成选项（行号/步进/上限/…）的 CLI/前端对拍
 cargo audit
 
 # 覆盖率门（与 CI 同款；需先装 rustup component add llvm-tools-preview
@@ -588,6 +593,7 @@ python scripts/check_coverage_caliber.py lcov.info --min 88
 | 机床配置键 | `docs/MACHINE_CONFIG_GUIDE.md`（键清单、未知键告警） |
 | 新增内置模板 | golden 用例 + `docs/PROCESS_CHECKLIST.md` 登记，并声明未经工艺评审 |
 | `--param` 取值归一规则（`cli/src/args.rs` 或 UI 的 `coerceParamValue`） | 另一侧实现 + 共享 fixture `scripts/param_parity_cases.json`；两侧漂移会让 CLI 与 Web UI 对同一输入产出不同 G-code |
+| 生成选项（` --line-numbers`/`--line-step`/`--max-line`/`--header`/`--strip-blank`/`--ascii`/`--lenient` 或 UI 的 `normalizeOpts`） | 共享 fixture `scripts/option_parity_cases.json` + Rust 侧测试 `option_mapping_matches_shared_fixture`；CLI 与 Web API 必须映射到同一份 `GenerationOptions` |
 
 ### 提交与分支
 

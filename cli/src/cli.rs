@@ -247,6 +247,14 @@ pub struct RenderArgs {
     #[arg(long)]
     pub line_numbers: bool,
 
+    /// 行号步进（默认 10；`--line-numbers` 时生效，0 视为 1）
+    #[arg(long, value_name = "N", default_value_t = 10)]
+    pub line_step: u32,
+
+    /// 行号上限（默认 9999；超过后不再编号）
+    #[arg(long, value_name = "N", default_value_t = 9999)]
+    pub max_line: u32,
+
     /// 头部注释
     #[arg(long)]
     pub header: bool,

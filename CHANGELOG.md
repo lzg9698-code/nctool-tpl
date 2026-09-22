@@ -809,6 +809,44 @@ CI 转绿后从 run 的 `rust-coverage-lcov` 产物里取到 lcov，用项目自
   `cargo clippy --workspace --all-targets -- -D warnings`、
   `cargo test --workspace --doc` 均通过。
 
+### 批次十六：消除 CLI ↔ Web UI 生成选项隐患
+
+审计（手动走查 CLI 与 UI 功能覆盖）发现两类「同一份参数在两个入口产出不同结果」
+的隐患，均与「静默不一致」同族：
+
+#### Fixed
+
+- **CLI 补充 `--line-step` / `--max-line`**：`GenerationOptions` 的
+  `line_number_step` / `max_line_number` 此前**只能由 Web UI 设置**（API 已接受
+  `lineStep` / `maxLine`），CLI 无法复现同一份带自定义步进的输出 —— UI 上设
+  步进 100 生成的程序，用 CLI 默认步进 10 重跑得到不同 G-code。现
+  `render` / `generate` 均支持 `--line-step <N>`（默认 10）与 `--max-line <N>`
+  （默认 9999），与 UI 映射到同一份结构体（`cli/src/commands/render.rs`）。
+  ⚠️ 此修复后 `..Default::default()` 不再需要，clippy `needless_update` 会报错，
+  已一并去除。
+
+#### Added
+
+- **生成选项对拍门禁**（新 fixture + 双向消费点）：
+  `scripts/option_parity_cases.json` 是 CLI 选项与 Web API `options` 映射的单一来源。
+  Rust 侧由 `cli/src/server.rs::option_mapping_matches_shared_fixture` 消费（断言
+  JSON 侧 `generation_options` 与 CLI 字段构造出同一份 `GenerationOptions`）；
+  前端侧由新增的 `scripts/check_option_parity.mjs` 消费（从两份 UI 抠出
+  `normalizeOpts` 对拍）。CI 新增 `Option parity (CLI <-> UI)` 步骤。
+  两侧均做反向验证：故意改 fixture / 改 UI 默认值 → 立刻红。
+- `cli/tests/cli_e2e.rs` 1 项：`--line-step 100 --max-line 250` 实测行号步进为
+  100、且不超过上限。
+
+#### 说明（非缺陷，保留现状）
+
+- **自定义机床的两处入口**：Web UI 的 localStorage 自定义机床**只在演示模式生效**，
+  服务模式已明确 toast「服务模式使用服务端机床配置」（服务端机床来自 `nctool.toml`
+  经 `/api/machines` 下发）—— 属有意设计（浏览器无法写服务器文件），非静默失效。
+
+#### 验证
+
+- workspace 全量 **579 项**通过；fmt / clippy / doc / 三项对拍脚本 / 文档链接均通过。
+
 ---
 
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18

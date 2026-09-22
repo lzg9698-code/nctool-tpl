@@ -463,6 +463,41 @@ fn render_accepts_all_postprocess_flags() {
 }
 
 #[test]
+fn render_line_step_and_max_line_are_honored() {
+    // 隐患修复：`--line-step` / `--max-line` 曾只存在于 Web UI，CLI 无法复现
+    // 同一份带自定义步进的输出。现 CLI 与 API 共用同一份 GenerationOptions 映射。
+    let mut args = vec![
+        "render",
+        "drill_cycle",
+        "--line-numbers",
+        "--line-step",
+        "100",
+        "--max-line",
+        "250",
+    ];
+    args.extend_from_slice(DRILL_PARAMS);
+    let r = run_in(repo_root().as_path(), &args);
+    assert_eq!(r.code, 0, "stderr: {}", r.stderr);
+
+    // 按 token 抽出行号，相邻差值恒为 100，且不超过上限 250
+    let nums: Vec<u32> = r
+        .stdout
+        .split_whitespace()
+        .filter_map(|t| t.strip_prefix('N'))
+        .filter_map(|t| t.parse().ok())
+        .collect();
+    assert!(nums.len() >= 2, "应有多行带行号: {}", r.stdout);
+    assert!(
+        nums.windows(2).all(|w| w[1] - w[0] == 100),
+        "步进应为 100: {nums:?}"
+    );
+    assert!(
+        nums.iter().all(|&n| n <= 250),
+        "行号不应超过上限 250: {nums:?}"
+    );
+}
+
+#[test]
 fn render_unknown_machine_exits_5() {
     // 全局 --machine 会被延迟到真正需要机床配置时才校验
     let r = run_in(
