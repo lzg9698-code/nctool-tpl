@@ -565,12 +565,12 @@ cargo audit
 # 覆盖率门（与 CI 同款；需先装 rustup component add llvm-tools-preview
 # 与 cargo install cargo-llvm-cov，另需 python）
 cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
-python scripts/check_coverage_caliber.py lcov.info --min 88
+python scripts/check_coverage_caliber.py lcov.info --min 91
 ```
 
 > 覆盖率门判定的是**生产代码**口径，**不是** `cargo llvm-cov` 的原始口径 ——
 > llvm-cov 把 `src/*.rs` 内的 `#[cfg(test)]` 段本身计入分母，新增测试会推高数字、
-> 新增未覆盖的生产代码反被稀释（2026-09-19 实测：原始口径 94.04%，生产口径 90.34%）。
+> 新增未覆盖的生产代码反被稀释（2026-09-22 实测：生产口径 92.19%）。
 > 故由 `scripts/check_coverage_caliber.py` 剔除测试段后重新统计，细节见
 > [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) §3。
 

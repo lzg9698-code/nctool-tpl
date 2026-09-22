@@ -78,15 +78,15 @@ CI（`.github/workflows/ci.yml`）在 **ubuntu / windows / macos** 三平台各�
 rustup component add llvm-tools-preview
 cargo install cargo-llvm-cov        # 本地复现 CI 覆盖率门需要这两步
 cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
-python scripts/check_coverage_caliber.py lcov.info --min 89
+python scripts/check_coverage_caliber.py lcov.info --min 91
 ```
 
-阈值是**生产代码**行覆盖 ≥ 89%（2026-09-19 由 88% 上调），当前基线 **90.34%**（Ubuntu CI 实测；本机 Windows 数字会略低，以 CI 为准）。
+阈值是**生产代码**行覆盖 ≥ 91%（2026-09-22 由 89% 上调），当前基线 **92.19%**（本机实测）。
 
 > **不要用 `--fail-under-lines`。** llvm-cov 把 `src/*.rs` 内的 `#[cfg(test)]` 段本身
 > 也计入分母（本仓库 `src/lib.rs` 1824 行里测试段占 1760 行），于是「新增测试」会
 > **推高**覆盖率数字、「新增未覆盖的生产代码」反被稀释 —— 原始口径 94.04%，而剔除
-> 测试段后的生产代码只有 90.34%（2026-09-19 实测），**门禁绿 ≠ 生产代码达标**。
+> 测试段后的生产代码只有 92.19%（2026-09-22 实测），**门禁绿 ≠ 生产代码达标**。
 > `--ignore-filename-regex` 只能按文件路径排除，管不到 `src/` 内部的测试段，故改由
 > `scripts/check_coverage_caliber.py` 从 lcov 数据剔除测试段后重新统计。该脚本会
 > 同时打印两种口径的数字，便于核对。
@@ -100,10 +100,10 @@ python scripts/check_coverage_caliber.py lcov.info --min 89
 >     --strip-prefix /home/runner/work/nctool-tpl/nctool-tpl/
 > ```
 
-余量约 68 行未覆盖生产代码（阈值 89% vs 实测 90.34%）。**刻意不贴着实测值设阈值**：
+余量约 60 行未覆盖生产代码（阈值 91% vs 实测 92.19%）。**刻意不贴着实测值设阈值**：
 余量只剩十几行时任何一次小改动都可能误触，而"经常误报的门禁会被当成噪音忽略"。
 **覆盖率提升后请上调这个数字** —— 只改 `ci.yml` 里 `python3 scripts/check_coverage_caliber.py
-lcov.info --min 89` 那一行的 `--min`，一处。
+lcov.info --min 91` 那一行的 `--min`，一处。
 门禁失败时 job summary 与 lcov 产物仍会产出（那两步带 `if: always()`）——
 排查"覆盖为什么掉下去"正需要它们。
 

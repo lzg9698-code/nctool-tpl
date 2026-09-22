@@ -167,6 +167,52 @@ fn inspect_lists_required_and_optional() {
         .stdout(predicate::str::contains("machine").not());
 }
 
+/// 回归：带 include 的组合模板，参数表须并入片段变量并给出「引用了 …」提示。
+/// 这同时覆盖非空 `from_closure` 与含引用两条分支（原来只有内置无 include 模板的用例）。
+#[test]
+fn inspect_reports_include_closure_hint() {
+    let dir = tmp_dir("inspect_closure");
+    std::fs::write(
+        dir.join("frag.j2"),
+        "G1 X{{ fx | nc_fixed(3) }} \u{ff08}frag\u{ff09}\n",
+    )
+    .unwrap();
+    std::fs::write(
+        dir.join("main.j2"),
+        "{% include \"frag.j2\" %}\nG0 Z{{ top_z | nc_fixed(3) }}\n",
+    )
+    .unwrap();
+
+    let out = nctool()
+        .args(["inspect", "main.j2", "--template-dir"])
+        .arg(&dir)
+        .assert()
+        .success()
+        .get_output()
+        .stdout
+        .clone();
+    let text = String::from_utf8_lossy(&out);
+    assert!(text.contains("引用了"), "应提示 include 穿透: {text}");
+    assert!(text.contains("frag.j2"), "应列出被引用片段: {text}");
+    // 片段里的参数也必须并入参数表
+    assert!(text.contains("fx"), "片段变量 fx 应被并入: {text}");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// 无外部变量的模板应输出「（无外部变量引用）」，而不是空的参数分组。
+#[test]
+fn inspect_reports_no_variables() {
+    let dir = tmp_dir("inspect_novars");
+    std::fs::write(dir.join("const.j2"), "G21 G90 G54\n").unwrap();
+    nctool()
+        .args(["inspect", "const.j2", "--template-dir"])
+        .arg(&dir)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("无外部变量引用"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 #[test]
 fn inspect_unknown_template_errors() {
     nctool()

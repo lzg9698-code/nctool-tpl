@@ -274,6 +274,60 @@ variables:
     }
 
     #[test]
+    fn invalid_yaml_syntax_is_reported() {
+        // 短路到 serde_yaml 解析失败的早期分支（非法 YAML）
+        let err = VariableLibrary::from_yaml("variables: [1, 2", Path::new("v.yaml"))
+            .expect_err("非法 YAML 应报错");
+        assert!(matches!(err, ManifestError::Parse { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn bare_list_with_bad_entry_is_reported() {
+        // 顶层是序列但元素不合法（缺 name）→ 解析报错，而不是静默得到空库
+        let bad = "- kind: number\n";
+        let err = VariableLibrary::from_yaml(bad, Path::new("v.yaml"))
+            .expect_err("序列元素缺 name 应报错");
+        assert!(matches!(err, ManifestError::Parse { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn load_missing_file_is_empty_library() {
+        // 目录里没有 variables.yaml 时应返回空库，而不是报错
+        let dir = std::env::temp_dir().join(format!("nctool_vlib_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        let l = VariableLibrary::load(&dir).expect("缺文件应得空库");
+        assert!(l.is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_reads_file_from_directory() {
+        let dir = std::env::temp_dir().join(format!("nctool_vlib_ok_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(&dir);
+        std::fs::write(
+            dir.join("variables.yaml"),
+            "variables:\n  - name: U_Q\n    kind: number\n",
+        )
+        .unwrap();
+        let l = VariableLibrary::load(&dir).expect("应读到变量库");
+        assert_eq!(l.len(), 1);
+        // iter() 也要走到
+        assert_eq!(l.iter().count(), 1);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_reports_io_error_for_unreadable_path() {
+        // 把一个**目录**当作 variables.yaml 去读 → read_to_string 报 IO 错误，
+        // 覆盖 `load` 的 Io 分支（区别于「文件不存在返回空库」）。
+        let dir = std::env::temp_dir().join(format!("nctool_vlib_io_{}", std::process::id()));
+        let _ = std::fs::create_dir_all(dir.join("variables.yaml"));
+        let err = VariableLibrary::load(&dir).expect_err("目录不可当文件读");
+        assert!(matches!(err, ManifestError::Io { .. }), "{err:?}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn duplicate_variable_is_rejected() {
         // 静默让后者覆盖前者会让"我改了定义却不生效"变成难查的问题
         let yaml = r#"

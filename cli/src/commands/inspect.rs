@@ -227,3 +227,102 @@ fn options_summary(spec: &ParamSpec) -> Option<String> {
     }
     Some(text)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nctool_core::ParamKind;
+
+    fn var(name: &str) -> Variable {
+        Variable {
+            name: name.to_string(),
+            line: 1,
+            col: 1,
+            start: 0,
+            end: 0,
+            optional: false,
+        }
+    }
+
+    #[test]
+    fn constraint_summary_covers_every_shape() {
+        // 覆盖 `constraint_summary` 的全部分支：候选值 / 范围（双端/仅下/仅上）/
+        // 整数 / 单位 / 条件必选 / 派生。这些文本是用户看得到的约束提示。
+        let base = || ParamSpec::new("p", ParamKind::Number, "");
+
+        // 空规格 → 无约束
+        assert_eq!(constraint_summary(&base()), "");
+
+        // 范围三态
+        assert_eq!(
+            constraint_summary(&base().with_range(-5.0, 5.0)),
+            "范围 -5~5"
+        );
+        assert_eq!(constraint_summary(&base().with_min(0.0)), "≥ 0");
+        assert_eq!(constraint_summary(&base().with_max(10.0)), "≤ 10");
+
+        // 单位 + 整数
+        assert_eq!(
+            constraint_summary(&base().with_unit("mm").with_range(0.0, 1.0)),
+            "范围 0~1；单位 mm"
+        );
+
+        // 候选值
+        let choice = base().with_options(vec![ParamValue::Number(0.0), ParamValue::Number(8.0)]);
+        assert_eq!(constraint_summary(&choice), "可选值 0 / 8");
+    }
+
+    #[test]
+    fn options_summary_folds_when_over_limit() {
+        let base = || ParamSpec::new("p", ParamKind::Choice, "");
+        // 无候选值 → None
+        assert_eq!(options_summary(&base()), None);
+        // 空候选值 → None
+        assert_eq!(options_summary(&base().with_options(vec![])), None);
+
+        // 恰好上限：全列出
+        let at_limit: Vec<ParamValue> = (0..MAX_SHOWN_OPTIONS)
+            .map(|i| ParamValue::Number(i as f64))
+            .collect();
+        let s = options_summary(&base().with_options(at_limit)).unwrap();
+        assert!(!s.contains("共"), "未超限不应折叠: {s}");
+
+        // 超限：折叠并标注总数
+        let over: Vec<ParamValue> = (0..MAX_SHOWN_OPTIONS + 3)
+            .map(|i| ParamValue::Number(i as f64))
+            .collect();
+        let total = over.len();
+        let s = options_summary(&base().with_options(over)).unwrap();
+        assert!(s.contains("…"), "超限应折叠: {s}");
+        assert!(s.contains(&format!("共 {total} 项")), "应标注总数: {s}");
+    }
+
+    #[test]
+    fn render_line_pads_alignment_and_optionally_carries_spec() {
+        // 无名元（spec=None）：只有名字与行列
+        let bare = render_line(&var("x"), None, 6);
+        assert!(bare.starts_with("  x"), "{bare}");
+        assert!(bare.contains("行 1 列 1"), "{bare}");
+        assert!(bare.ends_with('\n'), "每行应以换行结束: {bare:?}");
+
+        // 带规格：类型 + 约束 + 描述
+        let spec = ParamSpec::new("feed", ParamKind::Number, "进给速度")
+            .with_range(0.0, 100.0)
+            .with_unit("mm/min");
+        let line = render_line(&var("feed"), Some(&spec), 8);
+        assert!(line.contains("数值"), "应带类型标签: {line}");
+        assert!(line.contains("范围 0~100"), "{line}");
+        assert!(line.contains("进给速度"), "{line}");
+    }
+
+    #[test]
+    fn bucket_all_has_stable_display_order() {
+        // 分组顺序是用户看到的顺序，锁定以防意外重排
+        let titles: Vec<&str> = Bucket::all().iter().map(|b| b.title()).collect();
+        assert_eq!(titles.len(), 4);
+        assert!(titles[0].contains("必选参数"));
+        assert!(titles[1].contains("条件必选"));
+        assert!(titles[2].contains("派生"));
+        assert!(titles[3].contains("可选参数"));
+    }
+}

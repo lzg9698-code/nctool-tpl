@@ -847,6 +847,38 @@ CI 转绿后从 run 的 `rust-coverage-lcov` 产物里取到 lcov，用项目自
 
 - workspace 全量 **579 项**通过；fmt / clippy / doc / 三项对拍脚本 / 文档链接均通过。
 
+### 批次十七：覆盖率洼地补齐（A3）
+
+三处「全项目最低」的覆盖洼地在 2026-09-22 集中补齐；均为**纯增测试/可测性重构**，
+不改运行时行为（`serve` 的拆分是等价重构）。
+
+#### 覆盖率变化（生产口径）
+
+| 文件 | 之前 | 之后 | 做法 |
+|---|---|---|---|
+| `cli/src/commands/ui.rs` | 20.00% | **98%** | 把 `run` 拆成 `prepare` + 注入式 `run_with_serve`，阻塞的 `serve` 成为参数；新增 9 项单测 |
+| `cli/src/commands/inspect.rs` | 80.79% | **93%** | 新增 4 项单测（`render_line`/`constraint_summary`/`options_summary`/Bucket）+ 2 项 E2E（include 穿透 / 无变量） |
+| `core/src/variables.rs` | 83.70% | **97%** | 新增 5 项错误路径测试（非法 YAML / 序列坏元素 / 缺文件 / IO 错误 / 正常加载） |
+| 全项目 | 90.47% | **92.19%** | +18 项测试（579 → 597） |
+
+#### Changed
+
+- **`server::serve` 拆出借用版 `serve_requests`**（等份重构）：`serve` 按值接管后，
+  测试进程无法再持有句柄调 `Server::unblock()` 让循环**干净退出** —— 而 llvm-cov
+  只在干净退出时才落盘覆盖数据，被 kill 的子进程（现有 spawn-and-kill E2E）
+  覆盖**全部丢失**（实测 `serve()` 循环体 0 覆盖）。拆分后新增
+  `serve_handles_real_request_then_unblocks_cleanly`：进程内跑真服务、发真请求、
+  `unblock()` 干净关停。
+- **`ui::run` 拆出 `run_with_serve`**：把阻塞的 `serve` 作为参数注入，
+  从而在单测里覆盖「prepare → 横幅 → `--open` 分支 → 移交 serve」完整启动序列。
+- **覆盖率门禁 89% → 91%**（`.github/workflows/ci.yml`）：补齐洼地后本机 92.19%，
+  余量 1.19pt ≈ 60 行。沿用「不贴着实测值设阈值」的原则。
+
+#### 验证
+
+- workspace 全量 **597 项**通过；fmt / clippy / doc / 三项对拍 / 文档链接均通过；
+  覆盖率门 91% 通过（实测 92.19%）。
+
 ---
 
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18

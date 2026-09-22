@@ -643,6 +643,16 @@ pub fn bind(addr: SocketAddr) -> Result<(tiny_http::Server, SocketAddr), CliErro
 /// 之后才准确），也不负责开浏览器，两者都由 [`crate::commands::ui`] 在绑定
 /// 成功之后完成。
 pub fn serve(server: tiny_http::Server, addr: SocketAddr, ctx: Ctx) -> Result<(), CliError> {
+    serve_requests(&server, addr, &ctx)
+}
+
+/// [`serve`] 的实际请求循环，按**借用**接收服务实例。
+///
+/// 拆出借用版是为了可测：`serve` 按值接管后，测试进程无法再持有句柄调用
+/// `Server::unblock()` 来让循环干净退出（而 llvm-cov 只在**干净退出**时才落盘
+/// 覆盖数据——被 kill 的子进程数据全丢）。测试用借用版 + `unblock()` 覆盖
+/// 请求循环（见 `serve_handles_real_request_then_unblocks_cleanly`）。
+fn serve_requests(server: &tiny_http::Server, addr: SocketAddr, ctx: &Ctx) -> Result<(), CliError> {
     let allowed = allowed_origins(&addr);
 
     for mut request in server.incoming_requests() {
@@ -679,7 +689,7 @@ pub fn serve(server: tiny_http::Server, addr: SocketAddr, ctx: Ctx) -> Result<()
                     if too_large {
                         Resp::Json(413, err("payload_too_large", "请求体超过 1 MiB 上限"))
                     } else {
-                        route(&ctx, &method, &path, &query, &body)
+                        route(ctx, &method, &path, &query, &body)
                     }
                 }
             }
@@ -966,6 +976,52 @@ mod tests {
             "错误应说明是绑定失败: {}",
             err.message
         );
+    }
+
+    /// 进程内真实服务测试（补 `ui.rs` / `serve()` 覆盖率，A3）。
+    ///
+    /// 为什么不用 `cli/tests/` 里的 spawn-and-kill E2E：llvm-cov 只在**进程干净退出**
+    /// 时才落盘 profile 数据；E2E 里服务被杀掉中途 kill，其 `run()` / `serve()` 的
+    /// 覆盖永远丢失（实测 `serve()` 循环体 0 覆盖，而 E2E 确实发过 HTTP 请求）。
+    /// 这里在**测试进程内**跑 `serve`，用 `Server::unblock()` 让它干净退出循环。
+    #[test]
+    fn serve_handles_real_request_then_unblocks_cleanly() {
+        use std::io::{Read, Write};
+        use std::net::TcpStream;
+        use std::time::Duration;
+
+        let (srv, actual) = bind("127.0.0.1:0".parse().unwrap()).expect("绑定回环应成功");
+        let port = actual.port();
+        // 借用版：serve 完成后测试侧仍持有 srv，才能调 unblock() 让循环干净退出
+        // （scoped thread 借用 srv，作用域结束即 join，天然同步）。
+        let handle = std::thread::scope(|scope| {
+            let srv_ref = &srv;
+            let t = scope.spawn(move || serve_requests(srv_ref, actual, &Ctx::for_test()));
+
+            // 真实 HTTP 请求：GET /health（走完 route() 的 JSON 分支）
+            let mut stream = TcpStream::connect_timeout(
+                &format!("127.0.0.1:{port}").parse().unwrap(),
+                Duration::from_millis(500),
+            )
+            .expect("应能连上服务");
+            stream
+                .write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_millis(1000)))
+                .unwrap();
+            let mut buf = String::new();
+            let _ = stream.read_to_string(&mut buf);
+            assert!(
+                buf.contains("HTTP/1.1 200") && buf.contains("\"status\":\"ok\""),
+                "应返回 200 与健康数据: {buf}"
+            );
+
+            // 干净关停：unblock 让 incoming_requests() 返回 None，循环正常结束
+            srv.unblock();
+            t.join().expect("serve 线程应正常结束")
+        });
+        assert!(handle.is_ok(), "serve 应返回 Ok: {handle:?}");
     }
 
     #[test]

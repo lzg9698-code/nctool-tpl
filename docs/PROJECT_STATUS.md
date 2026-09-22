@@ -2,9 +2,9 @@
 
 > 生成时间：**2026-09-18**（上一版 2026-09-10，本次为全量重写）
 > 分析依据：本文数字**全部为实测值**，非文档转抄 —— `git log` / `git status`、
-> `cargo test --workspace --all-targets`（579 项）、
+> `cargo test --workspace --all-targets`（597 项）、
 > `cargo llvm-cov --workspace --all-features --lcov` + `scripts/check_coverage_caliber.py`
-> （生产口径行 90.34%）、
+> （生产口径行 92.19%）、
 > `cargo fmt --all --check`、`cargo clippy --workspace --all-targets`、
 > CLI 与模板目录实际执行、CI run #34 的 jobs API 明细。
 > 定位：本文是**现状快照**，不是规划。规划以 `ROADMAP.md` 为准。
@@ -20,11 +20,11 @@
 | **清单记账** | ROADMAP §8 执行跟踪 **70 / 72 项（97%）** 勾选（A 12/13 · B 12/13 · C 12/12 · D 12/12 · E 12/12 · F 10/10）。本轮共新勾 4 项（E2.2 / E2.3 / B-Backlog / F1.3），均有 CI 或发布物取证；余 2 项为 A1 机床预设按键值核对（无手册资源）与 B4.2（Backlog） |
 | **发布状态** | 三个 crate 在 crates.io 可见（实测指定版本端点 `created_at` 为 2026-09-18T05:01–05:02Z）；三个 Release 各挂 3 个二进制（Windows 4.25 MB / Linux 3.62 MB / macOS-arm64 3.09 MB）。已下载 Windows 产物实测 `nctool 0.3.0` 可运行并正确产出 G-code；亦以 `cargo install nctool-cli --version 0.3.0` 从 crates.io 全新安装验证通过 |
 | **功能可用性** | CLI **10 个子命令**全部可用（除 `part` 占位）+ Web UI 完整交互闭环；模板库已整合 NCTool_V3 资产：**7 个内置 + 25 个文件模板**（隐藏 3） |
-| **测试基线** | workspace **579 项**实测（`--all-targets`），**579 通过 / 0 失败**；另 2 项 `#[ignore]`（万行实测，需 `--release --ignored`）与 1 项 doc-test（`core/src/model.rs`，标记 `#[ignore]`）；`cargo test --workspace --doc` 另有 1 项通过（`src/lib.rs`） |
-| **覆盖率** | **生产口径**行 **90.34%**（4553/5040，门禁 ≥ 89%，2026-09-19 Ubuntu CI 实测）；对照 llvm-cov 原始口径 94.04% —— 二者差 4.34pt，因为原始口径把 `src/*.rs` 内的 `#[cfg(test)]` 段计入分母，会随「新增测试」虚涨，**不作门禁** |
+| **测试基线** | workspace **597 项**实测（`--all-targets`），**597 通过 / 0 失败**；另 2 项 `#[ignore]`（万行实测，需 `--release --ignored`）与 1 项 doc-test（`core/src/model.rs`，标记 `#[ignore]`）；`cargo test --workspace --doc` 另有 1 项通过（`src/lib.rs`） |
+| **覆盖率** | **生产口径**行 **92.19%**（4672/5068，门禁 ≥ 91%，2026-09-22 本机实测）；对照 llvm-cov 原始口径（含 `#[cfg(test)]` 段），二者差约 4pt，原始口径会随「新增测试」虚涨，**不作门禁** |
 | **CI 状态** | 三平台矩阵（fmt / clippy `-D warnings` / test `--workspace` / doc `-D warnings` / audit）+ 覆盖率门 + 前后端对拍门。发版提交 `3031a71`（run #37）**全绿**；此前连续多次绿灯（最近 `db8d928` / `6e5a3a7`） |
 | **✅ 本轮（09-15 ~ 09-18）** | ① 架构评估 P0×3 + P1×4 + P2-1 **全部收口** ② 覆盖率从「未度量」到真门禁并两次上调（无 → 89% → 90%；**09-18 改为生产口径 ≥ 88%**，见 §4）③ CI 补 `--workspace`（被测项 155 → 527）④ NCTool_V3 模板资产整合（`manifest.rs` / `variables.rs` / `derive.rs` + 25 模板 + INDEX G420 全套）⑤ server.rs 接口契约补测 10 项 ⑥ **发版**：0.4.0 / 0.3.0 / 0.3.0 上线 crates.io + 三平台 Release 二进制 |
-| **当前最大问题** | ① `part generate` 未实现（Backlog #2）② 工艺评审长期外部依赖（R1，Q2=否）③ 覆盖率洼地 `cli/src/commands/ui.rs` 20.00% ④ 第四轮审查批次 E 的 UI 两项（P2-25 / P2-26）仍开放（需浏览器验证）；批次 D 的 P1-10 / P1-11 已2026-09-22 收口 ⑤ 发版遗留：`Release` 工作流的 `Publish <crate>` 步骤会红（Q11 见 §6.4）。**注**：第三轮 Web UI 存储型 XSS（P1-1）已于 2026-09-19 修复（`de64e32`），不再是开放项 |
+| **当前最大问题** | ① `part generate` 未实现（Backlog #2）② 工艺评审长期外部依赖（R1，Q2=否）③ 第四轮审查批次 E 的 UI 两项（P2-25 / P2-26）仍开放（需浏览器验证）；批次 D 的 P1-10 / P1-11 已 2026-09-22 收口 ④ 发版遗留：`Release` 工作流的 `Publish <crate>` 步骤会红（Q11 见 §6.4）。**注**：覆盖率洼地（`ui.rs`/`inspect.rs`/`variables.rs`）已 2026-09-22 补齐（A3）。 |
 
 **一句话**：地基、功能、联调、质量门、发版全部完成且全绿；剩下的只有「外部工艺评审」与 Backlog 里的增量功能。
 
@@ -136,7 +136,7 @@ CLI E2E 契约、HTTP 契约、21 组正向 golden + 3 组负向报告、错误�
 | nctool-tpl | 137 | 18 + 1(属性) | 156 | ✅ 全过 |
 | nctool-core | 203 | 11 + 3(万行) | 217 | ✅ 全过 |
 | nctool-cli | 76 | 43 + 44(E2E) | 163 | ✅ 全过 |
-| **合计** | — | — | **579** | **579 通过 / 0 失败**（2026-09-22 实测） |
+| **合计** | — | — | **597** | **597 通过 / 0 失败**（2026-09-22 实测） |
 
 另 2 项 `#[ignore]`（`large_program` 万行实测，需 `--release --ignored`）、1 项 doc-test
 `#[ignore]`（`core/src/model.rs`）。上表是 `--all-targets` 的口径，**不含 doctest** ——
@@ -146,9 +146,9 @@ CI 为此单列 `Doc tests` 步骤（`cargo test --workspace --doc`，当前 1 �
 
 | 口径 | 行覆盖 | 说明 |
 |---|---|---|
-| **生产代码**（门禁口径） | **90.34%**（4553/5040，2026-09-19 Ubuntu CI 实测） | `scripts/check_coverage_caliber.py` 剔除 `src/*.rs` 内的 `#[cfg(test)]` 段后统计 |
+| **生产代码**（门禁口径） | **92.19%**（4672/5068，2026-09-22 本机实测） | `scripts/check_coverage_caliber.py` 剔除 `src/*.rs` 内的 `#[cfg(test)]` 段后统计 |
 | llvm-cov 原始 | 94.04%（9727/10343） | 把测试段本身计入分母，**会随新增测试虚涨，不作门禁** |
-| 门禁 | — | **生产口径 ≥ 89%**（CI 真门禁，余量约 68 行） |
+| 门禁 | — | **生产口径 ≥ 91%**（CI 真门禁，2026-09-22 由 89% 上调；余量约 60 行） |
 
 覆盖洼地（下一步补测优先级）：
 
@@ -298,11 +298,13 @@ CI 为此单列 `Doc tests` 步骤（`cargo test --workspace --doc`，当前 1 �
 > 修复（`de64e32`）；P1-4（`TemplateMeta::default()` 与 serde 默认值不一致）已在批次 A 收口；
 > 批次 D 的 P1-10（CLI 读文件上限）与 P1-11（错误链）已于 2026-09-22 修复。
 
-**第二优先：补覆盖率洼地**
+**第二优先：补覆盖率洼地**（✅ 已完成，2026-09-22）
 
-`cli/src/commands/ui.rs` 20.00%（全项目最低，子进程启动路径难以单测）、
-`cli/src/commands/inspect.rs` 80.79%、`core/src/variables.rs` 83.70%。补上去后可上调阈值门
-（当前生产口径 ≥ 89%，基线 90.34%，余量约 68 行；2026-09-19 由 88% 上调）。
+三处洼地已补齐：`cli/src/commands/ui.rs` 20.00% → **98%**、
+`cli/src/commands/inspect.rs` 80.79% → **93%**、`core/src/variables.rs` 83.70% → **97%**；
+全项目 90.47% → **92.19%**，门禁 89% → **91%**。做法见 `CHANGELOG.md`「批次十七」。
+
+（当前生产口径 ≥ 91%，基线 92.19%，余量约 60 行；2026-09-22 由 89% 上调）。
 
 **第三优先：修发布流程与包内容**
 
