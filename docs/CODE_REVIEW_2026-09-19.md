@@ -381,13 +381,18 @@ golden 测试在 `core/tests/integration.rs`（core 包）。裸 `cargo test` **
 建议：文档一律不写硬数字，改指 CI job summary。
 
 **测试质量**
-- `src/lib.rs:1609-1634`：两个 fuzz 测试 `let _ =` 丢弃返回值，只断言不 panic（易造成「提取器已被 fuzz 验证」的错觉）
-- `tests/parsing.rs:363-366`：`all_math_filters_render` 用 `assert!(out.contains("2"))`，且 `:363` 与 `:366` 重复断言同一个 `"2"`
-- `cli/tests/cli.rs:256-272`：硬编码 stdout 字符串，不读 `tests/golden/*.nc`，模板一改需手工同步两处且无测试能发现
-- 覆盖薄弱：`cli/src/commands/ui.rs` **23.08%**、`cli/src/cli.rs` 66.67%、`core/src/variables.rs` 83.70%；`commands/render.rs`、`commands/templates.rs` 各仅 2 个测试
+- ✅ **已修（A8，2026-09-22）**：`src/lib.rs` 的 fuzz 测试不再 `let _ =`。
+  `fuzz_random_templates_no_panic` / `deeply_nested_100_levels_no_stack_overflow` 改用
+  共享的 `assert_extract_invariants`（名字非空/去重、行列 1 起、span 有序、未声明 ⊆ 全集）；
+  `fuzz_random_render_no_panic` 改为断言返回形状（Err 必带非空消息）。
+  反向验证：把 `Variable.start/end` 写反 → fuzz 立即报「span 应有序」——旧 `let _ =` 不会发现。
+- ✅ **已修（批次 A）**：`tests/parsing.rs:363-366` 的 `all_math_filters_render` 已改为
+  9 个过滤器逐个按数值精确断言（改后立刻抓到 `sqrt(4)` 渲染成 `"2.0"`）。
+- ✅ **已修（第四轮 P2-32）**：`cli/tests/cli.rs` 的 golden 测试改读 `tests/golden/*.nc`。
+- 覆盖薄弱：`ui.rs` 已 20% → **98%**；`cli.rs` 66.67%；`variables.rs` 83.70% → **97%**。
 
 **工程化**
-- `.github/workflows/release.yml:35`、`:93`：`cargo test --workspace` 缺 `--locked` 与 `--all-targets`（CI 内已合规，发布流漏了）
+- ✅ **已修**：`.github/workflows/release.yml` 两处 `cargo test` 已补 `--locked` / `--all-targets`。
 - `docs/DEV_PLAN_CLI_UI.md:149`：`cargo clippy -D warnings` 漏 `--workspace`（历史计划文档，建议标注为存档）
 - `ui/index.html`：P2-24/25/26 仍未做 —— `--open` 先于 bind（`commands/ui.rs:16-20`）、`--port 0` 时 `browser_url` 恒显示 `:0`、Bool 参数恒提交 `false`（`:1974`，而 CLI 省略该键 → 条件必选判定可能分歧）、无 `AbortController`（后端阻塞时旧请求堆积）
 - `server` 模式列表卡片只回 name/category/description（`server.rs:212-216`），缺 `builtin`/`params` → 前端恒显「示例」、必选数 0，直到 detail 拉回

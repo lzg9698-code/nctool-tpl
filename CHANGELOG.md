@@ -936,6 +936,30 @@ CI 转绿后从 run 的 `rust-coverage-lcov` 产物里取到 lcov，用项目自
   的 ≥ 45 断言）与 shell 守卫均报错；正常（no-op）刷新 ✓。
 - workspace 全量 **597 项**通过；fmt / clippy / doc / 守卫 / 文档链接均通过。
 
+### 批次二十：弱断言补强（A8）
+
+第四轮审查（`CODE_REVIEW_2026-09-19.md` §3.3）列出的三处「测试质量」问题，
+其中两处已在早前批次修复（`all_math_filters_render` 的精确断言、CLI golden 读基线），
+本轮处理剩余的 fuzz 弱断言。
+
+#### Changed
+
+- **fuzz 测试从「不 panic」提升到「不 panic 且产出自洽」**：
+  - `fuzz_random_templates_no_panic`：把内联的不变量检查抽为共享的
+    `assert_extract_invariants`（名字非空 / 按名去重 / 行列 1 起 / span 有序 /
+    未声明 ⊆ 全集）。
+  - `deeply_nested_100_levels_no_stack_overflow`：此前 `let _ = extract_*(&ast)`
+    丢弃返回值；现同样跑 `assert_extract_invariants`。
+  - `fuzz_random_render_no_panic`：此前 `let _ = renderer.render(...)`；现断言返回
+    形状恒定 —— 失败（`Err`）必须携带**非空**可读消息。
+
+#### 验证
+
+- **反向验证**：把 `extract.rs` 的 `Variable { start, end }` 写反（模拟 span 回归）
+  → `fuzz_random_templates_no_panic` 立即 FAILED 并报「span 应有序」；
+  而旧的 `let _ =` 版本不会发现。恢复后转绿。
+- workspace 全量 **597 项**通过；fmt / clippy / 覆盖率门 91% 均通过。
+
 ---
 
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18

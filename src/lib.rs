@@ -72,6 +72,39 @@ mod tests {
         vars.iter().map(|v| v.name.clone()).collect()
     }
 
+    /// 提取器返回值必须满足的不变量（A8：弱断言补强）。
+    ///
+    /// 在任意模板（包括 fuzz 生成的乱码）上都必须成立；把 fuzz 测试从
+    /// «不 panic» 提升到 «不 panic **且**产出仍自洽»。
+    fn assert_extract_invariants(src: &str, all: &[Variable], undeclared: &[Variable]) {
+        let mut seen = std::collections::HashSet::new();
+        for v in all {
+            assert!(!v.name.is_empty(), "变量名不应为空，输入 {src:?}");
+            assert!(
+                seen.insert(v.name.as_str()),
+                "`extract_variables` 应按名字去重，出现重复: {v:?}"
+            );
+            assert!(
+                v.line >= 1 && v.col >= 1,
+                "行列应 1 起: {v:?}，输入 {src:?}"
+            );
+            assert!(v.start <= v.end, "span 应有序: {v:?}，输入 {src:?}");
+        }
+        let all_names: std::collections::HashSet<&str> =
+            all.iter().map(|v| v.name.as_str()).collect();
+        let mut seen_u = std::collections::HashSet::new();
+        for v in undeclared {
+            assert!(
+                all_names.contains(v.name.as_str()),
+                "未声明项必须是全集的子集: {v:?}，输入 {src:?}"
+            );
+            assert!(
+                seen_u.insert(v.name.as_str()),
+                "`extract_undeclared` 也应按名字去重: {v:?}"
+            );
+        }
+    }
+
     #[test]
     fn extract_basic() {
         let src = r#"{% set feed = 0.15 %}
@@ -1662,26 +1695,7 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
             if let Ok(ast) = parse(&s, &name) {
                 let all = extract_variables(&ast);
                 let undeclared = extract_undeclared(&ast);
-
-                let mut seen = std::collections::HashSet::new();
-                for v in &all {
-                    assert!(!v.name.is_empty(), "变量名不应为空，输入 {s:?}");
-                    assert!(
-                        seen.insert(v.name.as_str()),
-                        "`extract_variables` 应按名字去重，出现重复: {v:?}"
-                    );
-                    assert!(v.line >= 1 && v.col >= 1, "行列应 1 起，输入 {s:?}");
-                    assert!(v.start <= v.end, "span 应有序，输入 {s:?}");
-                }
-                // 未声明集合必须是"全部引用"的子集
-                let all_names: std::collections::HashSet<&str> =
-                    all.iter().map(|v| v.name.as_str()).collect();
-                for v in &undeclared {
-                    assert!(
-                        all_names.contains(v.name.as_str()),
-                        "未声明项必须出现在全集中: {v:?}，输入 {s:?}"
-                    );
-                }
+                assert_extract_invariants(&s, &all, &undeclared);
             }
         }
         // 如果到达这里，说明 5000 次迭代均无 panic 且不变量成立
@@ -1704,10 +1718,24 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
             }
 
             let ctx = minijinja::context! { x => 1.0, y => "test", z => vec![1, 2, 3] };
-            // render 返回 Err 是正常的（语法错误），但绝不 panic
-            let _ = renderer.render(&s, &format!("r{iteration}.j2"), &ctx);
+            // 弱断言补强（A8）：不只是 "不 panic"，而是断言 `RichResult` 的形状
+            // 恒定 —— 成功时 Ok(String)，失败时 Err(TplError) 且 Display 不为空。
+            // 之前 `let _ =` 抛掉返回值，一个"永远返回 Err 且消息为空"的退步
+            // 也能通过。
+            match renderer.render(&s, &format!("r{iteration}.j2"), &ctx) {
+                Ok(out) => {
+                    // 成功渲染：输出是字符串（可为空——空模板合法）
+                    let _: &str = &out;
+                }
+                Err(e) => {
+                    assert!(
+                        !e.to_string().is_empty(),
+                        "渲染错误必须带可读消息，输入 {s:?}"
+                    );
+                }
+            }
         }
-        // 如果到达这里，说明 1000 次迭代均无 panic
+        // 如果到达这里，说明 1000 次迭代均无 panic 且返回形状恒定
     }
 
     // -----------------------------------------------------------------------
@@ -1779,9 +1807,11 @@ G1 X{{ diameter / 2 }} F{{ feed * 1.2 | round(2) }}
         let result = parse(&src, "deep100.j2");
         match result {
             Ok(ast) => {
-                // 如果解析成功（minijinja 允许 100 层），变量提取也不应栈溢出
-                let _ = extract_variables(&ast);
-                let _ = extract_undeclared(&ast);
+                // 如果解析成功（minijinja 允许 100 层），变量提取也不应栈溢出，
+                // 且仍满足提取器不变量（A8：弱断言补强——此前是 `let _ =`）
+                let all = extract_variables(&ast);
+                let undeclared = extract_undeclared(&ast);
+                assert_extract_invariants(&src, &all, &undeclared);
             }
             Err(_) => {
                 // 解析失败是正常的（递归深度限制），不是 bug
