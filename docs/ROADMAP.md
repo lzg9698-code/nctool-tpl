@@ -615,8 +615,7 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 > （本机 reftable 仓库致 `cargo publish` 不可用，改在普通格式克隆中执行），但 CI 的
 > `Publish <crate>` 步骤在 tag 推送后**确实运行并因版本已存在而失败** —— 这反证了 token 已配置。
 > 下次发版建议**先推 tag**，由 CI 自动 publish，可省去手动步骤且不会产生红运行。
-> B3 属阶段 C；B4.1/B4.3 完成，B4.2（golden 保护）记入 Backlog——
-> `NCTOOL_UPDATE_GOLDEN` 建议写成 CI 门禁的前置人工步骤。
+> B3 属阶段 C；B4.1/B4.3 完成，B4.2（golden 保护）已于 2026-09-22 步骤化：`scripts/refresh_golden.sh`（CI 拒刷 + 数量守卫 + diff 概览）+ CI 自测步骤。
 > 附带处置：CI `coverage` job 自 22a056e 引入起持续失败（quality 三平台矩阵
 > 始终全绿，本地 Windows 复现同一命令 EXIT=0；补装 `llvm-tools-preview` 后
 > 仍红）。job 日志下载需 admin 权限无法取证，已设 `continue-on-error` 解除
@@ -639,7 +638,7 @@ A 需求与设计收口 ──→ B 基础架构稳固 ──→ C UI 服务联�
 - [x] **B3.1** 引入 HTTP 库（tiny_http），`cargo clippy`/workspace 测试通过；依赖审计仍需在本轮发布前复核（阶段 C）
 - [x] **B3.2** 最小可启停服务（`/health`，仅回环；非回环地址直接拒绝）（阶段 C）
 - [x] **B4.1** CI 加 macOS 矩阵（macos-latest）
-- [ ] **B4.2** CI 加 golden 基线变更保护（Backlog：NCTOOL_UPDATE_GOLDEN 人工步骤化）
+- [x] **B4.2** CI 加 golden 基线变更保护（步骤化完成 2026-09-22：`scripts/refresh_golden.sh` 带 CI 拒刷/数量守卫 + Rust 侧 `assert!(CI.is_none())` + CI 自测步骤；流程写入 `CONTRIBUTING.md`）
 - [x] **B4.3** 确认 `cargo audit` 已在 CI 门内（ci.yml security audit step）
 - [x] **B5.1** 架构文档提交为基线（f7cf2bd）
 - [x] **B5.2** 修正 `DEV_PLAN_CLI_UI.md` 过期数据 + 标注被本文档取代（f7cf2bd）

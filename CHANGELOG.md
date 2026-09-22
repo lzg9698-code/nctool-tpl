@@ -908,6 +908,34 @@ CI 转绿后从 run 的 `rust-coverage-lcov` 产物里取到 lcov，用项目自
 - workspace 全量 **597 项**通过；fmt / clippy / doc / 四项对拍与守卫 / 文档链接均通过。
 - `cargo package` 验证通过（发布物可独立编译）。
 
+### 批次十九：golden 基线变更保护步骤化（A6 / B4.2）
+
+刷新机制（`NCTOOL_UPDATE_GOLDEN=1`）与 Rust 侧的「CI 拒刷」assert 早已存在（P2-30），
+但**人工流程未成步骤** —— 直接敲环境变量命令存在三个风险：误在 CI 触发、在脏工作区
+刷新导致 diff 混杂、误删基线而不自知。
+
+#### Added
+
+- **`scripts/refresh_golden.sh`**：把刷新包成带守卫的步骤。
+  1. **拒绝 CI**（检测 `CI`/`CI_NAME`/`GITHUB_ACTIONS`）——与 Rust 侧 `assert!` 双重兑底；
+  2. golden 之外的改动未提交时提示先处理（避免 diff 混杂）；
+  3. 刷新前展示当前基线 diff 概览；刷新后展示变化概览（含新增/删除文件）；
+  4. 刷新后校验基线文件数 **≥ 45**，防误删导致防线缩水；
+  5. 支持 `--yes` 非交互与 `--help`。
+- **CI 步骤 `Golden refresh script guards`**：`bash -n` 语法检查 + 带 `CI=1`
+  运行必须退出非 0（自测「CI 拒刷」这条最关键的行为）。
+
+#### Fixed
+
+- **文档数据漂移**：`CONTRIBUTING.md` 的 golden 一节记「42 个基线文件」（实为 **45**），
+  且刷新命令未提「必须 `--workspace`」。已改为 45 并重写为完整流程。
+
+#### 验证
+
+- 脚本正反向均实测：`CI=1` → 退出 1；删一个基线文件 → 测试阶段（`golden_files_are_lf_only`
+  的 ≥ 45 断言）与 shell 守卫均报错；正常（no-op）刷新 ✓。
+- workspace 全量 **597 项**通过；fmt / clippy / doc / 守卫 / 文档链接均通过。
+
 ---
 
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18

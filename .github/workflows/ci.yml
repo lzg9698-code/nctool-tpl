@@ -76,6 +76,18 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: python3 scripts/check_package_contents.py
 
+      # golden 刷新脚本的语法与「CI 拒刷」守卫自测（B4.2）。
+      # 两个断言：① bash -n 语法；② 带 CI=1 运行必须退出非 0（不得在 CI 刷新）。
+      # 这不需要跑测试、不写文件，几毫秒完成。
+      - name: Golden refresh script guards
+        if: matrix.os == 'ubuntu-latest'
+        run: |
+          bash -n scripts/refresh_golden.sh
+          if CI=1 bash scripts/refresh_golden.sh --yes; then
+            echo "✗ refresh_golden.sh 在 CI 环境未被拒绝" >&2; exit 1
+          fi
+          echo "✓ refresh_golden.sh 语法与 CI 拒刷守卫均正常"
+
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:

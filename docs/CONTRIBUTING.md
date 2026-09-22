@@ -158,14 +158,28 @@ cargo bench -p nctool-core --bench pipeline   # 后处理与端到端管线
 
 ### golden 基线
 
-G-code 输出是逐字节比对的（`tests/golden/`，42 个基线文件）。
+G-code 输出与校验报告都是逐字节比对的（`tests/golden/`，**45 个文件 = 21 组正向
+×2 + 3 份负向报告**）。
+
+刷新基线**必须**走带守卫的脚本，不要直接敲 `NCTOOL_UPDATE_GOLDEN=1 cargo test`：
 
 ```bash
-NCTOOL_UPDATE_GOLDEN=1 cargo test --workspace # 刷新基线（必须 --workspace：golden 在 core 包）
-git diff tests/golden                         # 必须人工逐行复核
+bash scripts/refresh_golden.sh        # 交互确认，展示 diff 概览
 ```
 
-**禁止**用刷新基线掩盖非预期回归 —— 每次刷新都要在 PR/commit 里说明「为什么输出变了」。
+脚本的守卫（B4.2 step 化）：
+
+1. **拒绝在 CI 中执行**（检测 `CI`/`GITHUB_ACTIONS`）—— 刷新会跳过全部 golden 断言，
+   Rust 侧 `assert_golden` 也有 `assert!(CI.is_none())` 兜底，shell 侧再挡一道。
+2. 若 `tests/golden/` 之外的改动未提交，提示先提交/暂存（避免 diff 混杂）。
+3. 刷新后校验基线文件数 ≥ 45，防止误删导致防线缩水。
+
+```bash
+git diff tests/golden                  # **必须**人工逐行复核
+```
+
+**禁止**用刷新基线掩盖非预期回归 —— 每次刷新都要在 commit message 里说明
+「为什么输出变了」。`tests/golden/*.nc` 的字节变化是**对外契约**（见 §5）。
 
 ---
 
