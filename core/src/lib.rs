@@ -23,11 +23,12 @@ pub mod registry;
 pub mod validate;
 pub mod variables;
 
-// 资产写入内核（原子写 / 乐观锁 / 路径防护 / 规格指纹 / 预设存储）
+// 资产写入内核（原子写 / 乐观锁 / 路径防护 / 规格指纹 / 预设存储 / 机床写策略）
 pub use asset::{
-    default_preset_path, ensure_outside_template_root, now_iso8601, validate_asset_name,
-    CrossTemplateReport, FileFingerprint, LoadOutcome, Preset, PresetFile, PresetStore, PresetView,
-    SafePath, SpecFingerprint, StaleReport, WriteAction, WriteError, WriteKernel, WriteOutcome,
+    default_preset_path, ensure_outside_template_root, is_builtin_machine, now_iso8601,
+    validate_asset_name, CompletenessReport, CrossTemplateReport, FileFingerprint, LoadOutcome,
+    MachineSaveReport, MachineWriter, Preset, PresetFile, PresetStore, PresetView, SafePath,
+    SpecFingerprint, StaleReport, WriteAction, WriteError, WriteKernel, WriteOutcome, CONFIG_FILE,
     PRESET_FILE, PRESET_SCHEMA_VERSION,
 };
 // 数据模型根导出

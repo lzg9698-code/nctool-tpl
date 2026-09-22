@@ -66,7 +66,9 @@ fn global_config_candidates() -> Vec<PathBuf> {
 
 /// 项目配置路径：从当前目录**向上递归**查找（到文件系统根为止），与 git 式
 /// 工具的直觉一致——在项目子目录执行命令也能命中仓库根的 `nctool.toml`。
-fn find_project_config() -> Option<PathBuf> {
+///
+/// `pub(crate)`：`Ctx::project_config_path`（写路径）复用它定位待写文件。
+pub(crate) fn find_project_config() -> Option<PathBuf> {
     let cwd = std::env::current_dir().ok()?;
     let mut dir = cwd.as_path();
     loop {

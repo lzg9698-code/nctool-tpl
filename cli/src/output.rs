@@ -51,12 +51,67 @@ impl CliError {
         self
     }
 
+    /// 写内核错误 → CLI 错误（**共享映射**，消除 preset / machine 两份漂移）。
+    ///
+    /// `not_found_kind` 由调用方指定条目不存在的分类
+    /// （preset → `"preset_not_found"`；machine → `"machine_not_found"`），
+    /// 二者都归退出码 5。
+    ///
+    /// 分类口径（`WriteError` 为 `#[non_exhaustive]`，未来变体走 `_` 归 `io`）：
+    ///
+    /// - `Conflict` → `write_conflict`(6)
+    /// - `PathEscape`（reason 含"已存在"）→ `name_conflict`(6)；其余 → `args`(2)
+    /// - `ReadOnly` / `Io` / `_` → `io`(3)
+    /// - `NotFound` → `not_found_kind`(5)
+    /// - `Corrupt` → `config`(4)：**配置文件本身**不可用（如 `nctool.toml` 损坏）。
+    ///
+    /// 注意：预设的 `map_write_err` **有意**把 `Corrupt` 归 `io`(3)（预设是资产、
+    /// 非配置），故它只对 `Corrupt` 覆写、其余委托本函数。
+    pub fn from_write_error(
+        err: nctool_core::asset::WriteError,
+        not_found_kind: &'static str,
+    ) -> CliError {
+        use nctool_core::asset::WriteError;
+        match err {
+            WriteError::Conflict { path, .. } => CliError::new(
+                "write_conflict",
+                format!(
+                    "写入冲突：{} 已被外部修改，未覆盖。可选：① 重试以当前内容为基线 \
+                     ② 放弃 ③ 另存为其它名称",
+                    path.display()
+                ),
+            ),
+            WriteError::PathEscape { rel, reason } => {
+                // 重名（`rename` 的新名已存在 / upsert 目标已存在）也走这里 ——
+                // 对用户是"名字不可用"，与 preset 同语义。
+                if reason.contains("已存在") {
+                    CliError::new("name_conflict", format!("{reason}：{rel}"))
+                } else {
+                    CliError::new("args", format!("名称非法：{rel}（{reason}）"))
+                }
+            }
+            WriteError::ReadOnly { path } => {
+                CliError::new("io", format!("目标只读或无写入权限：{}", path.display()))
+            }
+            WriteError::NotFound(m) => CliError::new(not_found_kind, m),
+            // 配置文件损坏是**配置**问题（拒绝覆盖），归 `config`(4) —— 与 preset
+            // 把损坏预设文件归 io(3) 有意不同（见本函数文档与设计 D4/D7）。
+            WriteError::Corrupt(m) => CliError::new("config", m),
+            WriteError::Io(e) => CliError::new("io", format!("读写失败：{e}")),
+            _ => CliError::new("io", "读写失败"),
+        }
+    }
+
     /// 命令失败对应的进程退出码。
     ///
     /// 矩阵：`0` 成功；`1` 参数校验未通过；`2` 参数/用法错误（与 clap 一致）；
     /// `3` IO 失败；`4` 配置错误；`5` 模板/机床/**预设**未找到；`6` 渲染/注册表/写冲突失败
     /// （含 `write_conflict` 乐观锁冲突、`name_conflict` 名称已存在）；
     /// `7` 功能尚未实现；未知分类兜底归 `1`。
+    ///
+    /// `config`(4) 的判据：**配置文件本身**不可用（如 `nctool.toml` 损坏）。
+    /// 机床写路径把 `WriteError::Corrupt` 归此码（见 [`CliError::from_write_error`]），
+    /// 与预设把损坏文件归 `io`(3) **有意不同**（D4）。
     pub fn exit_code(&self) -> u8 {
         match self.kind {
             "validation" => 1,

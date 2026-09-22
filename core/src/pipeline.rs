@@ -294,7 +294,10 @@ const DEFAULT_LINE_NUMBER_DIGITS: usize = 4;
 /// 放大倍数不同：`nc_pad` 只作用于**一行**（程序号），而行号前缀作用于
 /// **每一行**，总分配量是 `行数 × 位宽`。1024 位在万行程序上就是 10 MB 的
 /// 纯前导零，既无意义又拖慢后处理。32 位已远超任何真实控制器（常见 4–5 位）。
-const MAX_LINE_NUMBER_DIGITS: usize = 32;
+///
+/// `pub(crate)`：写层（`asset::machine::preflight`）需要据此**提示**用户
+/// "该值将被夹紧"，但**不得复制**夹紧逻辑（AC-2.9）。暴露同一常量即单一来源。
+pub(crate) const MAX_LINE_NUMBER_DIGITS: usize = 32;
 
 /// 后处理：行号 / 头部注释 / 空行清理 / ASCII 清洗。
 ///

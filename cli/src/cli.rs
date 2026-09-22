@@ -334,12 +334,102 @@ pub enum MachineCommand {
     List,
     /// 查看机床配置
     Show(MachineShowArgs),
+    /// 新建自定义机床（默认以 generic 为基线）
+    Add(MachineAddArgs),
+    /// 编辑既有自定义机床（合并式 upsert）
+    Edit(MachineEditArgs),
+    /// 删除自定义机床
+    Rm(MachineRmArgs),
+    /// 试渲染验证（该机床 + 目标模板）
+    Test(MachineTestArgs),
 }
 
 #[derive(Debug, Args)]
 pub struct MachineShowArgs {
     /// 机床标识（内置或自定义）
     pub id: String,
+}
+
+/// machine 写子命令共用的目标文件参数（默认：向上查找的项目 `nctool.toml`）。
+#[derive(Debug, Args)]
+pub struct MachineFileArgs {
+    /// 目标配置文件路径（默认：向上查找的项目 nctool.toml；不存在则于当前目录创建）
+    #[arg(long, value_name = "FILE")]
+    pub file: Option<PathBuf>,
+}
+
+#[derive(Debug, Args)]
+pub struct MachineAddArgs {
+    /// 新机床 id（内置 id 被拒：generic/wfl_m65/index_ms40）
+    pub id: String,
+    /// 基线预设（默认 generic）
+    #[arg(long, value_name = "ID", default_value = "generic")]
+    pub from: String,
+    /// 覆盖厂商
+    #[arg(long)]
+    pub vendor: Option<String>,
+    /// 覆盖型号
+    #[arg(long)]
+    pub model: Option<String>,
+    /// 覆盖单个配置键 k=v（可多次）
+    #[arg(long = "set", value_name = "K=V")]
+    pub set: Vec<String>,
+    /// 覆盖已存在的同名自定义机床（默认拒绝）
+    #[arg(long)]
+    pub force: bool,
+    /// 期望的当前文件指纹（fnv1a64:<16hex>）；不一致即并发冲突
+    #[arg(long, value_name = "HASH")]
+    pub expect_hash: Option<String>,
+    #[command(flatten)]
+    pub file: MachineFileArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct MachineEditArgs {
+    /// 目标机床 id（须为既有自定义机床）
+    pub id: String,
+    /// 覆盖厂商
+    #[arg(long)]
+    pub vendor: Option<String>,
+    /// 覆盖型号
+    #[arg(long)]
+    pub model: Option<String>,
+    /// 覆盖单个配置键 k=v（可多次）
+    #[arg(long = "set", value_name = "K=V")]
+    pub set: Vec<String>,
+    /// 删除配置键（可多次）
+    #[arg(long = "unset", value_name = "KEY")]
+    pub unset: Vec<String>,
+    /// 期望的当前文件指纹（fnv1a64:<16hex>）；不一致即并发冲突
+    #[arg(long, value_name = "HASH")]
+    pub expect_hash: Option<String>,
+    #[command(flatten)]
+    pub file: MachineFileArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct MachineRmArgs {
+    /// 目标机床 id
+    pub id: String,
+    /// 跳过二次确认（脚本场景）
+    #[arg(long)]
+    pub yes: bool,
+    /// 期望的当前文件指纹（fnv1a64:<16hex>）；不一致即并发冲突
+    #[arg(long, value_name = "HASH")]
+    pub expect_hash: Option<String>,
+    #[command(flatten)]
+    pub file: MachineFileArgs,
+}
+
+#[derive(Debug, Args)]
+pub struct MachineTestArgs {
+    /// 机床标识（内置或自定义）
+    pub id: String,
+    /// 目标模板（注册表逻辑名）
+    #[arg(long, value_name = "TEMPLATE")]
+    pub template: String,
+    #[command(flatten)]
+    pub params: ParamInputArgs,
 }
 
 // ---------------------------------------------------------------------------

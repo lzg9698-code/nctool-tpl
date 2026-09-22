@@ -16,6 +16,7 @@
 
 mod atomic;
 mod guard;
+pub mod machine;
 mod path;
 pub mod preset;
 mod spec_fingerprint;
@@ -24,6 +25,9 @@ pub mod template;
 use std::path::{Path, PathBuf};
 
 pub use guard::FileFingerprint;
+pub use machine::{
+    is_builtin_machine, CompletenessReport, MachineSaveReport, MachineWriter, CONFIG_FILE,
+};
 pub use path::{validate_asset_name, SafePath};
 pub use preset::{
     default_preset_path, ensure_outside_template_root, iso8601_from_unix, now_iso8601,

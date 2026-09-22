@@ -293,6 +293,18 @@ impl Ctx {
         ))
     }
 
+    /// 定位待写的项目配置文件 `nctool.toml`。
+    ///
+    /// 优先复用 [`config::find_project_config`]（从 cwd 向上递归找到的既有文件）；
+    /// 未发现时回退到**当前目录**的 `nctool.toml`——`machine add` 首次创建即写这里。
+    pub fn project_config_path(&self) -> PathBuf {
+        config::find_project_config().unwrap_or_else(|| {
+            std::env::current_dir()
+                .unwrap_or_else(|_| PathBuf::from("."))
+                .join(nctool_core::asset::CONFIG_FILE)
+        })
+    }
+
     /// 模板目录中是否存在指定文件模板（仅供 CLI 命令按路径定位）。
     ///
     /// HTTP 服务不得调用此方法；它只允许访问注册表中的逻辑模板名。

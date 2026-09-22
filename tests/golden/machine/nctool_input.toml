@@ -1,0 +1,14 @@
+# 项目配置（golden 输入：验证 upsert 不破坏其余段与注释）
+template_dir = "templates"     # 行内注释：必须保留
+default_machine = "generic"
+
+[machine.other]
+id = "other"
+vendor = "ACME"
+model = "M1"
+
+[machine.other.config]
+linear = "G1"
+rapid = "G0"
+
+# 尾部注释：upsert 后必须原样保留

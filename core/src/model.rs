@@ -944,6 +944,19 @@ pub struct MachineConfig {
 }
 
 impl MachineConfig {
+    /// 渲染上下文中**恒存在**的 `machine.*` 元信息键（`config` 键值之外）。
+    ///
+    /// [`build_render_context`] 无条件注入 `machine.id` / `machine.vendor` /
+    /// `machine.model`，模板可自由引用。它们**不是** `config` 键——因此完整性
+    /// 检查（"模板引用的配置键是否齐全"）必须排除它们，否则任何引用元信息的
+    /// 模板都会被误判为"缺失配置键"而阻断机床保存（值合法、不报错、只是错）。
+    pub const META_KEYS: [&'static str; 3] = ["id", "vendor", "model"];
+
+    /// 该键是否为恒存在的元信息键（见 [`Self::META_KEYS`]）。
+    pub fn is_meta_key(key: &str) -> bool {
+        Self::META_KEYS.contains(&key)
+    }
+
     /// 读取配置项。
     pub fn get(&self, key: &str) -> Option<&str> {
         self.config.get(key).map(String::as_str)
@@ -991,6 +1004,7 @@ pub(crate) fn build_render_context(params: &ParameterSet, machine: &MachineConfi
     for (k, v) in &machine.config {
         machine_obj.insert(k.as_str(), Value::from(v.as_str()));
     }
+    // 元信息恒注入（键集合见 `MachineConfig::META_KEYS`，其与完整性检查共用）。
     machine_obj.insert("id", Value::from(machine.id.as_str()));
     machine_obj.insert("vendor", Value::from(machine.vendor.as_str()));
     machine_obj.insert("model", Value::from(machine.model.as_str()));
@@ -1001,6 +1015,35 @@ pub(crate) fn build_render_context(params: &ParameterSet, machine: &MachineConfi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// `MachineConfig::META_KEYS` 必须与 `build_render_context` 实际注入的元信息
+    /// 键**完全一致**——它是完整性检查（"模板引用的配置键是否齐全"）的排除依据，
+    /// 二者一旦漂移，引用元信息的模板就会被误判为缺键而阻断保存。
+    #[test]
+    fn meta_keys_match_injected_context() {
+        // 空 config：上下文里除元信息外不应有别的 `machine.*` 键
+        let machine = MachineConfig {
+            id: "hero".to_string(),
+            vendor: "HERO".to_string(),
+            model: "X9".to_string(),
+            config: std::collections::BTreeMap::new(),
+        };
+        let ctx = build_render_context(&ParameterSet::default(), &machine);
+        let json = serde_json::to_value(&ctx).expect("上下文可序列化");
+        let obj = json
+            .get("machine")
+            .and_then(|m| m.as_object())
+            .expect("应注入 machine 对象");
+        let mut injected: Vec<String> = obj.keys().cloned().collect();
+        injected.sort();
+        let mut expected: Vec<String> = MachineConfig::META_KEYS
+            .iter()
+            .map(|k| k.to_string())
+            .collect();
+        expected.sort();
+        assert_eq!(injected, expected, "META_KEYS 与实际注入的元信息键必须一致");
+        assert_eq!(obj.get("vendor").and_then(|v| v.as_str()), Some("HERO"));
+    }
 
     #[test]
     fn param_value_views() {

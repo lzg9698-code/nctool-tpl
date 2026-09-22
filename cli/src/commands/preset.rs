@@ -107,37 +107,14 @@ fn candidate_template_roots(ctx: &Ctx) -> Vec<PathBuf> {
 
 /// 写内核错误 → CLI 错误。
 ///
-/// 复用 `templates` 的映射口径：冲突 → `write_conflict`(6)；越界 / 名称非法 →
-/// `args`(2)；条目不存在 → `preset_not_found`(5)。
+/// **委托**共享映射 [`CliError::from_write_error`]（消除 preset / machine 两份
+/// 漂移），仅覆写**一臂**：预设文件损坏归 `io`(3)。预设是工具自有**资产**，
+/// 损坏属 IO/内容问题；而 `machine` 的 `nctool.toml` 损坏是**配置**问题 → `config`(4)
+/// ——二者有意不同（设计 D4）。`NotFound` 委托为 `preset_not_found`(5)。
 fn map_write_err(e: WriteError) -> CliError {
     match e {
-        WriteError::Conflict { path, .. } => CliError::new(
-            "write_conflict",
-            format!(
-                "写入冲突：{} 已被外部修改，未覆盖。请重试（本次内容未丢失）",
-                path.display()
-            ),
-        ),
-        WriteError::PathEscape { rel, reason } => {
-            // 重名（`rename` 的新名已存在）也走这里 —— 对用户是"名字不可用"。
-            if reason.contains("已存在") {
-                CliError::new("name_conflict", format!("{reason}：{rel}"))
-            } else {
-                CliError::new("args", format!("预设名非法：{rel}（{reason}）"))
-            }
-        }
-        WriteError::ReadOnly { path } => {
-            CliError::new("io", format!("目标只读或无写入权限：{}", path.display()))
-        }
-        // "预设不存在"是**结构化**变体（不再靠匹配消息文本里的 "不存在"），
-        // 归 `preset_not_found` → 退出码 5，与 `template_not_found` 同一语义档：
-        // "你点的东西不存在"是资源查找失败，而不是命令行用法写错（那才是 2）。
-        WriteError::NotFound(m) => CliError::new("preset_not_found", m),
         WriteError::Corrupt(m) => CliError::new("io", m),
-        WriteError::Io(e) => CliError::new("io", format!("预设文件读写失败：{e}")),
-        // `WriteError` 为 `#[non_exhaustive]`：未来新增变体统一归 io，
-        // 由 `output.rs` 的 kind 矩阵决定退出码（不在此处静默降级）。
-        _ => CliError::new("io", "预设文件读写失败"),
+        other => CliError::from_write_error(other, "preset_not_found"),
     }
 }
 
