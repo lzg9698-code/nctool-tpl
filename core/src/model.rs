@@ -946,8 +946,9 @@ pub struct MachineConfig {
 impl MachineConfig {
     /// 渲染上下文中**恒存在**的 `machine.*` 元信息键（`config` 键值之外）。
     ///
-    /// [`build_render_context`] 无条件注入 `machine.id` / `machine.vendor` /
-    /// `machine.model`，模板可自由引用。它们**不是** `config` 键——因此完整性
+    /// 渲染上下文构造函数无条件注入 `machine.id` / `machine.vendor` /
+    /// `machine.model`（`pipeline::build_render_context`，私有），模板可自由引用。
+    /// 它们**不是** `config` 键——因此完整性
     /// 检查（"模板引用的配置键是否齐全"）必须排除它们，否则任何引用元信息的
     /// 模板都会被误判为"缺失配置键"而阻断机床保存（值合法、不报错、只是错）。
     pub const META_KEYS: [&'static str; 3] = ["id", "vendor", "model"];

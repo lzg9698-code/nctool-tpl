@@ -432,24 +432,57 @@ fn extract_machines(doc: &DocumentMut) -> BTreeMap<String, MachineConfig> {
         if let Some(s) = table.get("model").and_then(Item::as_str) {
             cfg.model = s.to_string();
         }
-        if let Some(config) = table.get("config").and_then(Item::as_table) {
-            for (k, v) in config.iter() {
-                if let Some(s) = item_as_config_string(v) {
-                    cfg.config.insert(k.to_string(), s);
+        // `config` 有两种**语义等价**的写法：标准子表 `[machine.<id>.config]`
+        // 与行内表 `config = { linear = "G1" }`。读路径（serde，见
+        // `cli::config::load`）两种都认 —— 写路径若只认子表，`machine edit`
+        // 就会把行内表里的键当成"不存在"，在注册表降级（模板目录里有坏模板）
+        // 导致 preflight 放行时**静默丢掉**它们。两个读者必须对同一份文件
+        // 得到同一个答案。
+        match table.get("config") {
+            Some(Item::Table(config)) => {
+                for (k, v) in config.iter() {
+                    if let Some(s) = item_as_config_string(v) {
+                        cfg.config.insert(k.to_string(), s);
+                    }
                 }
             }
+            Some(Item::Value(Value::InlineTable(inline))) => {
+                for (k, v) in inline.iter() {
+                    if let Some(s) = value_as_config_string(v) {
+                        cfg.config.insert(k.to_string(), s);
+                    }
+                }
+            }
+            _ => {} // 无 `config` 键（合法：机床可以没有配置）
         }
         out.insert(id.to_string(), cfg);
     }
     out
 }
 
-/// 配置值取字符串：字符串直接取；其余标量取原样文本（`4` / `true` 等）。
+/// 配置值取字符串（子表形态）。
 fn item_as_config_string(item: &Item) -> Option<String> {
-    if let Some(s) = item.as_str() {
-        return Some(s.to_string());
-    }
-    item.as_value().map(|v| v.to_string())
+    item.as_value().and_then(value_as_config_string)
+}
+
+/// 配置值取字符串：字符串取内部文本，其余标量取**无装饰**文本（`4` / `true` 等）。
+///
+/// 为什么不能直接 `Value::to_string()`：`toml_edit` 把 `key = value` 里 `=` 之后的
+/// 空白存为该值的 **decor**，渲染时会一并输出 —— `max_spindle_rpm = 4200` 读出来
+/// 是 `" 4200"`（行内表更糟，末值还会带上尾随空格）。这不是"格式差异"：值会经
+/// `machine.<key>` 注入渲染，多一个空格就进了 G-code，`| int` 还会直接失败。
+/// 逐变体取 `value()` 才是真正的"原样文本"。
+fn value_as_config_string(v: &Value) -> Option<String> {
+    Some(match v {
+        Value::String(s) => s.value().clone(),
+        Value::Integer(i) => i.value().to_string(),
+        Value::Float(f) => f.value().to_string(),
+        Value::Boolean(b) => b.value().to_string(),
+        Value::Datetime(d) => d.value().to_string(),
+        // 数组 / 嵌套表不是配置键的取值形态。取原样文本（去装饰），让"值不合法"
+        // 这件事在 preflight / 渲染处暴露，而不是在这里猜用户的意图。
+        other => other.to_string().trim().to_string(),
+    })
 }
 
 #[cfg(test)]

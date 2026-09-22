@@ -566,6 +566,67 @@ fn action_label(action: WriteAction) -> &'static str {
 mod tests {
     use super::*;
 
+    /// 建一个临时模板目录并写入给定模板，返回 `(目录, 供 Drop 清理的守卫路径)`。
+    fn template_dir_with(tag: &str, files: &[(&str, &str)]) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!(
+            "nctool_machine_unit_{}_{}",
+            std::process::id(),
+            tag
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        for (name, src) in files {
+            std::fs::write(dir.join(name), src).unwrap();
+        }
+        dir
+    }
+
+    /// 缺键集合来自"模板实际引用了哪些 `machine.*`"——**但必须排除元信息键**
+    /// （`id`/`vendor`/`model` 恒存在，纳入会让任何引用元信息的模板被误判为缺键
+    /// 而阻断保存）。
+    #[test]
+    fn required_machine_keys_exclude_meta_keys() {
+        let dir = template_dir_with(
+            "keys",
+            &[(
+                "m.j2",
+                "G0 X{{ machine.special_key }} {{ machine.id }}{{ machine.vendor }}\n",
+            )],
+        );
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(dir.clone());
+
+        let (keys, warnings) = required_machine_keys(&ctx, "hero_x9").unwrap();
+        assert!(warnings.is_empty(), "不应有告警：{warnings:?}");
+        assert!(
+            keys.contains("special_key"),
+            "应收集到模板引用的键：{keys:?}"
+        );
+        for meta in ["id", "vendor", "model"] {
+            assert!(!keys.contains(meta), "元信息键不应算作必需配置键：{keys:?}");
+        }
+        // 内置模板恒在注册表中，故其引用的键也应出现。
+        assert!(keys.contains("program_prefix"), "{keys:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 注册表构建失败（模板目录里有坏模板）→ 降级为空集 + **一条明确告警**，
+    /// 而不是报错：一个无关模板的语法错误不该锁死机床保存。
+    #[test]
+    fn required_machine_keys_degrade_to_warning_on_broken_registry() {
+        let dir = template_dir_with("broken", &[("bad.j2", "{% if %}\n")]);
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(dir.clone());
+
+        let (keys, warnings) = required_machine_keys(&ctx, "hero_x9").unwrap();
+        assert!(keys.is_empty(), "降级时应返回空集：{keys:?}");
+        assert_eq!(warnings.len(), 1, "{warnings:?}");
+        assert!(warnings[0].contains("无法加载模板注册表"), "{warnings:?}");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     #[test]
     fn parse_set_splits_at_first_equals() {
         assert_eq!(parse_set("a=1").unwrap(), ("a".into(), "1".into()));

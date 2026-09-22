@@ -964,3 +964,40 @@ fn ui_html_copies_stay_in_sync() {
         "改了 ui/src/*.part.html 却没有重新生成：请运行 node scripts/build_ui.mjs"
     );
 }
+
+/// 行数约束：拆分后从「单文件 ≤ 3000」迁移为「**每个片段** ≤ 3000」（T04 设计 §6.6）。
+///
+/// 原来那条上限是为"单文件前端失控"设的护栏，它逼出了构建期拆分；拆分之后约束
+/// 不能就这么消失 —— 片段会继续长，而生成物正是它们之和。按片段设限，让"某个
+/// 片段又膨胀成巨石"在 `cargo test` 阶段可见，而不是等到生成物又逼近 3000 行。
+#[test]
+fn ui_fragments_respect_the_line_budget() {
+    const LIMIT: usize = 3000;
+    let src_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("ui")
+        .join("src");
+    let mut over: Vec<String> = Vec::new();
+    let mut count = 0usize;
+    for e in std::fs::read_dir(&src_dir).expect("片段目录应存在") {
+        let p = e.expect("目录项").path();
+        let is_part = p
+            .file_name()
+            .and_then(|n| n.to_str())
+            .is_some_and(|n| n.ends_with(".part.html"));
+        if !is_part {
+            continue;
+        }
+        count += 1;
+        let text = std::fs::read_to_string(&p).expect("读片段");
+        let lines = text.lines().count();
+        if lines > LIMIT {
+            over.push(format!("{} = {lines} 行", p.display()));
+        }
+    }
+    assert!(count > 0, "{} 下没有任何片段", src_dir.display());
+    assert!(
+        over.is_empty(),
+        "片段超过 {LIMIT} 行上限，应再拆一个片段（并跑 node scripts/build_ui.mjs）：{over:?}"
+    );
+}

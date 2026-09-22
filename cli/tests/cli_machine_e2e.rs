@@ -909,6 +909,41 @@ fn corrupt_config_is_rejected_without_being_overwritten() {
 }
 
 // ---------------------------------------------------------------------------
+// 目标不可写：无半成品残留
+// ---------------------------------------------------------------------------
+
+/// 目标只读 → `io`(3)，且**不留任何 `.nctool-tmp-` 残留**、文件内容不变。
+///
+/// 用 `machine edit`（而不是 `add`）：`add` 在文件不存在时会走"新建"分支，
+/// 不构成"覆盖只读文件"的场景。断言口径照 `cli_edit_e2e.rs` 的既有约定 ——
+/// 部分平台/文件系统仍可能允许覆盖，此时退化为"成功且无残留"，两种结局都断言
+/// **无残留**，因此不在任何平台上产生"假绿"。
+#[test]
+fn write_failure_on_readonly_target_leaves_no_residue() {
+    let env = Env::new("ro");
+    env.add("hero_x9", &[]).code_is(0);
+    let before = env.read_config();
+
+    let mut perms = std::fs::metadata(env.config_path()).unwrap().permissions();
+    perms.set_readonly(true);
+    std::fs::set_permissions(env.config_path(), perms).unwrap();
+
+    let r = env.run(&["machine", "edit", "hero_x9", "--set", "units=imperial"]);
+    assert_no_tmp_residue(&env.work);
+    if r.code != 0 {
+        assert_eq!(r.code, 3, "可写性失败应归 io(3)：{}", r.stderr);
+        assert_eq!(env.read_config(), before, "被拒时文件不得变");
+    }
+
+    // 恢复可写，避免临时目录清理失败
+    // （该 lint 面向 Unix 的 world-writable 语义，此处仅为还原）
+    let mut perms = std::fs::metadata(env.config_path()).unwrap().permissions();
+    #[allow(clippy::permissions_set_readonly_false)]
+    perms.set_readonly(false);
+    let _ = std::fs::set_permissions(env.config_path(), perms);
+}
+
+// ---------------------------------------------------------------------------
 // 失败的命令不得留下文件 / 非法 id（AC-2.3「不落盘」的严格形态）
 // ---------------------------------------------------------------------------
 
