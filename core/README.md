@@ -80,7 +80,7 @@ cargo test -p nctool-core   # 84 单元 + 11 集成 + 3 大程序（workspace �
 ```
 
 - **集成测试**（`tests/integration.rs`）：内置模板 × 机床预设的 golden 基线矩阵
-  （5 模板 × 3 预设 = 15 组，渲染输出与校验报告均冻结）。比较前统一换行符为 LF，
+  （7 模板 × 3 预设 = 21 组，渲染输出与校验报告均冻结）。比较前统一换行符为 LF，
   断言不受平台 / git 检出配置影响；`NCTOOL_UPDATE_GOLDEN=1` 可刷新基线
   （**仅人工确认后使用，切勿在 CI 更新**）。
 - **大程序测试**（`tests/large_program.rs`）：行号上限截断、恶意位宽夹紧、`step=0` 兜底；

@@ -675,7 +675,7 @@ CI 转绿后从 run 的 `rust-coverage-lcov` 产物里取到 lcov，用项目自
 #### 验证
 
 - `cargo +1.85 check --workspace --locked` 通过（独立 target 目录，未污染主缓存）
-- workspace 全量 **569 项**通过；fmt / clippy 门禁通过
+- workspace 全量 **571 项**通过；fmt / clippy 门禁通过
 - `ci.yml` YAML 解析校验通过
 
 ### 批次十二：服务层两项的实测定性（第四轮批次 G，纯测量，无代码改动）
@@ -765,7 +765,7 @@ CI 转绿后从 run 的 `rust-coverage-lcov` 产物里取到 lcov，用项目自
   并显式守住两种**不属于**本缺陷、必须保持原样的情形（`InvalidOperation` 归 `Render`；
   `{{ missing ~ "x" }}` 必须继续恢复出 `missing`）。
 - **反向验证**：移除 `|` 判据 → 报 `应留空而不是报 "upper"` → FAILED → 恢复。
-- workspace 全量 **569 项**通过；fmt / clippy 门禁均通过。
+- workspace 全量 **571 项**通过；fmt / clippy 门禁均通过。
 
 #### 一处更正
 

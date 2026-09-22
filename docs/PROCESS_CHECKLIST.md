@@ -16,7 +16,7 @@
 
 - 对象：5 个内置模板（`program_header` / `program_footer` / `tool_change` /
   `safe_move` / `drill_cycle`）× 3 个机床预设（`generic` / `wfl_m65` /
-  `index_ms40`），输出见 `tests/golden/*.nc`（15 组基线）。
+  `index_ms40`），输出见 `tests/golden/*.nc`（21 组基线）。
 - 方法：逐行对照 golden 输出，按 G/M 码模态组、字址合法性、循环取消、
   坐标系初始化、工艺安全五类标准核对。
 - 结论标记：✅ 已核对（符合通用标准）/ ⚠️ 约定或差异（需用户或手册确认）/

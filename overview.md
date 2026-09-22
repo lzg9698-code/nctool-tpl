@@ -1,23 +1,36 @@
 # 本轮继续开发概览
 
-## 完成内容
+> 更新：2026-09-22。本文是**当前快照摘要**，数字均为实测值。
+> 权威现状见 `docs/PROJECT_STATUS.md`，规划见 `docs/ROADMAP.md`。
 
-- 增加配置驱动 UI 集成测试：目录模板、自定义机床和真实 render 链路。
-- 修复发布包缺少 UI 文件的问题：将 `ui/index.html` 纳入 `cli/ui/index.html`，并调整 `include_str!` 路径。
-- 通过禁用增量编译规避 Windows rustc 1.98 打包阶段 ICE：`CARGO_INCREMENTAL=0 cargo package --workspace --allow-dirty`。
-- 完成隔离目录安装验证：`cargo install --path cli --locked` 后 `nctool 0.2.1` 正常运行。
-- 更新 `PROJECT_STATUS.md`、`ROADMAP.md` 和项目记忆。
+## 当前位置
 
-## 最终质量门
+- 阶段 A–F **全部收口**（ROADMAP 执行跟踪 70/72，97%）。
+- 三个 crate 已发版 crates.io：`nctool-tpl` 0.4.0 / `nctool-core` 0.3.0 / `nctool-cli` 0.3.0，
+  并挂三平台 GitHub Release 二进制。
+- CLI 10 个子命令可用（除 `part` 占位）；Web UI 完整交互闭环。
+- 模板库：**7 个内置模板 + 25 个文件模板**（NCTool_V3 资产已整合）。
 
-- workspace 测试：297 项通过，0 失败
-- Clippy 严格模式：通过
-- Rust 文档生成：通过
-- cargo audit：通过，无漏洞输出
-- cargo package：通过（`CARGO_INCREMENTAL=0`）
-- cargo install：通过
-- git diff check：通过
+## 质量基线（2026-09-22 实测）
+
+| 门 | 结果 |
+|---|---|
+| workspace 测试（`--all-targets`） | **571 通过 / 0 失败**（另 2 项 `#[ignore]`） |
+| Doc-test | 1 通过（`src/lib.rs`）+ 1 `#[ignore]` |
+| 覆盖率（生产口径） | **90.34%**（4553/5040），门禁 **≥ 89%** |
+| 覆盖率（llvm-cov 原始口径） | 94.04%（仅参考，不作门禁） |
+| `cargo fmt --all --check` | 干净 |
+| `cargo clippy --workspace --all-targets -- -D warnings` | 零告警 |
+| MSRV | 1.85（三个 Cargo.toml 与 CI `msrv` job 一致） |
+| CI | 三平台矩阵 + 覆盖率门 + 前后端对拍门，均为阻断项 |
 
 ## 剩余工作
 
-真实浏览器走查、跨平台/性能验证、GitHub Release、CHANGELOG/README 发布同步和 `part generate` 仍待后续处理。
+- **第四轮审查批次 D 服务层**：CLI 侧文件读取无大小上限（P1-10）、
+  `registry.rs` 静默吞错（P1-11）等；**批次 E 的 UI 两项**（P2-25 Bool 恒提交 `false` /
+  P2-26 无 `AbortController`）需浏览器验证。
+- **覆盖率洼地**：`cli/src/commands/ui.rs` 20.00%（全项目最低）、
+  `cli/src/commands/inspect.rs` 80.79%、`core/src/variables.rs` 83.70%。
+- **发布流程**：给三个 crate 加 `include`/`exclude` 收窄发布包；下次发版先推 tag 交 CI 发布。
+- **Backlog**：`nctool part generate`、内置模板补外圆车削与攻丝、参数集命名预设、`nctool lint`。
+- **长期外部依赖**：真实工艺评审与机床空运行（R1，Q2=否）—— 代码无法解决。

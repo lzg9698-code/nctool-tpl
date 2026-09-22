@@ -2,7 +2,7 @@
 
 > 生成时间：**2026-09-18**（上一版 2026-09-10，本次为全量重写）
 > 分析依据：本文数字**全部为实测值**，非文档转抄 —— `git log` / `git status`、
-> `cargo test --workspace --all-targets`（536 项）、
+> `cargo test --workspace --all-targets`（571 项）、
 > `cargo llvm-cov --workspace --all-features --lcov` + `scripts/check_coverage_caliber.py`
 > （生产口径行 90.34%）、
 > `cargo fmt --all --check`、`cargo clippy --workspace --all-targets`、
@@ -20,11 +20,11 @@
 | **清单记账** | ROADMAP §8 执行跟踪 **70 / 72 项（97%）** 勾选（A 12/13 · B 12/13 · C 12/12 · D 12/12 · E 12/12 · F 10/10）。本轮共新勾 4 项（E2.2 / E2.3 / B-Backlog / F1.3），均有 CI 或发布物取证；余 2 项为 A1 机床预设按键值核对（无手册资源）与 B4.2（Backlog） |
 | **发布状态** | 三个 crate 在 crates.io 可见（实测指定版本端点 `created_at` 为 2026-09-18T05:01–05:02Z）；三个 Release 各挂 3 个二进制（Windows 4.25 MB / Linux 3.62 MB / macOS-arm64 3.09 MB）。已下载 Windows 产物实测 `nctool 0.3.0` 可运行并正确产出 G-code；亦以 `cargo install nctool-cli --version 0.3.0` 从 crates.io 全新安装验证通过 |
 | **功能可用性** | CLI **10 个子命令**全部可用（除 `part` 占位）+ Web UI 完整交互闭环；模板库已整合 NCTool_V3 资产：**7 个内置 + 25 个文件模板**（隐藏 3） |
-| **测试基线** | workspace **536 项**实测（`--all-targets`），**536 通过 / 0 失败**；另 2 项 `#[ignore]`（万行实测，需 `--release --ignored`）与 1 项 doc-test（`core/src/model.rs`，标记 `#[ignore]`）；`cargo test --workspace --doc` 另有 1 项通过（`src/lib.rs`） |
+| **测试基线** | workspace **571 项**实测（`--all-targets`），**571 通过 / 0 失败**；另 2 项 `#[ignore]`（万行实测，需 `--release --ignored`）与 1 项 doc-test（`core/src/model.rs`，标记 `#[ignore]`）；`cargo test --workspace --doc` 另有 1 项通过（`src/lib.rs`） |
 | **覆盖率** | **生产口径**行 **90.34%**（4553/5040，门禁 ≥ 89%，2026-09-19 Ubuntu CI 实测）；对照 llvm-cov 原始口径 94.04% —— 二者差 4.34pt，因为原始口径把 `src/*.rs` 内的 `#[cfg(test)]` 段计入分母，会随「新增测试」虚涨，**不作门禁** |
 | **CI 状态** | 三平台矩阵（fmt / clippy `-D warnings` / test `--workspace` / doc `-D warnings` / audit）+ 覆盖率门 + 前后端对拍门。发版提交 `3031a71`（run #37）**全绿**；此前连续多次绿灯（最近 `db8d928` / `6e5a3a7`） |
 | **✅ 本轮（09-15 ~ 09-18）** | ① 架构评估 P0×3 + P1×4 + P2-1 **全部收口** ② 覆盖率从「未度量」到真门禁并两次上调（无 → 89% → 90%；**09-18 改为生产口径 ≥ 88%**，见 §4）③ CI 补 `--workspace`（被测项 155 → 527）④ NCTool_V3 模板资产整合（`manifest.rs` / `variables.rs` / `derive.rs` + 25 模板 + INDEX G420 全套）⑤ server.rs 接口契约补测 10 项 ⑥ **发版**：0.4.0 / 0.3.0 / 0.3.0 上线 crates.io + 三平台 Release 二进制 |
-| **当前最大问题** | ① `part generate` 未实现（Backlog #2）② 工艺评审长期外部依赖（R1，Q2=否）③ 覆盖率洼地 `cli/src/commands/ui.rs` 23.08%、`src/extract.rs` 79.89% ④ 第三轮审查批次三/四未做，其中 Web UI 存储型 XSS（P1-1）是剩余项里唯一的真安全问题 ⑤ 发版遗留：`Release` 工作流的 `Publish <crate>` 步骤会红（Q11 见 §6.4） |
+| **当前最大问题** | ① `part generate` 未实现（Backlog #2）② 工艺评审长期外部依赖（R1，Q2=否）③ 覆盖率洼地 `cli/src/commands/ui.rs` 20.00% ④ 第四轮审查批次 D 服务层与批次 E 的 UI 两项（P2-25 / P2-26）仍开放 ⑤ 发版遗留：`Release` 工作流的 `Publish <crate>` 步骤会红（Q11 见 §6.4）。**注**：第三轮 Web UI 存储型 XSS（P1-1）已于 2026-09-19 修复（`de64e32`），不再是开放项 |
 
 **一句话**：地基、功能、联调、质量门、发版全部完成且全绿；剩下的只有「外部工艺评审」与 Backlog 里的增量功能。
 
@@ -136,7 +136,7 @@ CLI E2E 契约、HTTP 契约、21 组正向 golden + 3 组负向报告、错误�
 | nctool-tpl | 137 | 18 + 1(属性) | 156 | ✅ 全过 |
 | nctool-core | 203 | 11 + 3(万行) | 217 | ✅ 全过 |
 | nctool-cli | 76 | 43 + 44(E2E) | 163 | ✅ 全过 |
-| **合计** | **416** | **120** | **536** | **536 通过 / 0 失败** |
+| **合计** | — | — | **571** | **571 通过 / 0 失败**（2026-09-22 实测） |
 
 另 2 项 `#[ignore]`（`large_program` 万行实测，需 `--release --ignored`）、1 项 doc-test
 `#[ignore]`（`core/src/model.rs`）。上表是 `--all-targets` 的口径，**不含 doctest** ——
@@ -147,18 +147,19 @@ CI 为此单列 `Doc tests` 步骤（`cargo test --workspace --doc`，当前 1 �
 | 口径 | 行覆盖 | 说明 |
 |---|---|---|
 | **生产代码**（门禁口径） | **90.34%**（4553/5040，2026-09-19 Ubuntu CI 实测） | `scripts/check_coverage_caliber.py` 剔除 `src/*.rs` 内的 `#[cfg(test)]` 段后统计 |
-| llvm-cov 原始 | 92.99%（8869/9538） | 把测试段本身计入分母（9538 行中 6908 行是测试代码），**会随新增测试虚涨，不作门禁** |
+| llvm-cov 原始 | 94.04%（9727/10343） | 把测试段本身计入分母，**会随新增测试虚涨，不作门禁** |
 | 门禁 | — | **生产口径 ≥ 89%**（CI 真门禁，余量约 68 行） |
 
 覆盖洼地（下一步补测优先级）：
 
 | 文件 | 行覆盖（生产口径） | 说明 |
 |---|---|---|
-| `cli/src/commands/ui.rs` | **23.08%** | 全项目最低（13 行生产代码仅 3 行覆盖）—— 子进程启动路径难以单测 |
-| `src/extract.rs` | **79.89%** | 承载「必选/可选判定」这一最微妙逻辑（判错会静默产出错误 G-code 或误拦用户）；已补 18 样例 + 300 例属性测试，未覆盖的疑为分支组合 |
+| `cli/src/commands/ui.rs` | **20.00%** | 全项目最低（15 行生产代码仅 3 行覆盖）—— 子进程启动路径难以单测 |
 | `cli/src/commands/inspect.rs` | 80.79% | 输出层 |
-| `cli/src/server.rs` | 83.46% | 本轮刚补过（74% → 83%） |
 | `core/src/variables.rs` | 83.70% | 变量提取 |
+| `cli/src/context.rs` | 84.35% | 模板/机床解析入口 |
+| `core/src/pipeline.rs` | 84.74% | 生成管线 |
+| `cli/src/server.rs` | 85.40% | HTTP 服务层 |
 
 覆盖高地：`cli/src/output.rs` 98.41%、`core/src/validate.rs` 96.66%。
 
@@ -167,7 +168,7 @@ CI 为此单列 `Doc tests` 步骤（`cargo test --workspace --doc`，当前 1 �
 - `cargo fmt --all --check`：干净。
 - `cargo clippy --workspace --all-targets`：零告警。
 - 生产代码规模：`src` 3430 + `core/src` 8182 + `cli/src` 4527 = **16139 行**；测试文件 2673 行（另有各模块内联测试）。
-- `ui/index.html` **2685 行** ×2 副本（md5 一致），上限 3000 行 → **余量收窄至 315 行**（见 §6.2 R3）。
+- `ui/index.html` **2735 行** ×2 副本（md5 一致），上限 3000 行 → **余量收窄至 265 行**（见 §6.2 R3）。
 
 ---
 
@@ -229,7 +230,7 @@ CI 为此单列 `Doc tests` 步骤（`cargo test --workspace --doc`，当前 1 �
 |---|---|---|---|
 | R1 | 工艺正确性未验证 | 灾难 / 中 | 🟡 已降级「模板开发工具」+ README 声明，待外部评审 |
 | R2 | minijinja 锁 `~2.24.0` | — | 🟡 固有约束，升级需全量验证 |
-| R3 | 单文件前端失控（3000 行上限） | — | 🟡 **余量收窄**：`ui/index.html` 2081（09-10）→ **2685 行**，上限 3000，余量 315 行。新增 UI 功能前应评估拆分 |
+| R3 | 单文件前端失控（3000 行上限） | — | 🟡 **余量收窄**：`ui/index.html` 2081（09-10）→ **2735 行**（2026-09-22 实测），上限 3000，余量 265 行。新增 UI 功能前应评估拆分 |
 | R4 | 演示模式语义漂移 | 高 / 已消除 | ✅ 前端已切 server 模式并真实走查；DEMO_SERVER_DIFF 记录差异 |
 | R5 | HTTP 新攻击面 | — | 🟡 回环绑定（现为**拒绝非回环**）+ 跨站判定 + CSP + 路径攻击负例已覆盖 |
 | R8 | 机床配置键无 schema | — | ✅ 已消除（A4，20 键 schema） |
@@ -283,18 +284,24 @@ CI 为此单列 `Doc tests` 步骤（`cargo test --workspace --doc`，当前 1 �
 2. ✅ **F1.3 收口**：Release 三平台二进制 job 真实跑通（此前只有配置）。
 3. ✅ **文档漂移修正**：本文全量重写、ROADMAP 勾选 4 项 + Q11 更正、README 示例输出按 0.3.0 实测重写、CHANGELOG 补 `[nctool-cli 0.2.2]` 段标题 + 去重。
 
-**第一优先：第三轮审查批次三 —— Web UI 加固**
+**第一优先：第四轮审查剩余批次 —— 服务层与 UI 两项**
 
-`docs/CODE_REVIEW_2026-09-18.md` §3 的批次一（静默出错）与批次二（度量闭环）已落地
-（提交 `300c49e` / `4afada0`）。剩余项里**唯一的真安全问题**是 P1-1：UI 存在存储型
-XSS，且 CSP 明确放行 inline 事件处理器 —— 建议连 P1-4（`TemplateMeta::default()` 与
-serde 默认值不一致，未入清单的模板被静默隐藏）一起做，后者与批次一属同一类「静默出错」。
+`docs/CODE_REVIEW_2026-09-19.md` §4 的批次 A/B/C/E/F 已落地，批次 D 服务层与批次 E
+的 UI 两项仍开放：
+
+- **批次 D（服务层）**：CLI 侧文件读取无大小上限（P1-10）、`registry.rs` 静默吞错
+  （P1-11，防 NaN 的安全闸门 `try_iter().ok()?` 静默失效）等。
+- **批次 E（UI 两项）**：P2-25 Bool 参数恒提交 `false`（与 CLI 省略该键 → 条件必选判定
+  可能分歧）、P2-26 无 `AbortController`（后端阻塞时旧请求堆积）—— 两者均需浏览器验证。
+
+> **历史项已关闭（2026-09-22 核对）**：第三轮的 UI 存储型 XSS（P1-1）已于 2026-09-19
+> 修复（`de64e32`）；P1-4（`TemplateMeta::default()` 与 serde 默认值不一致）亦已在批次 A
+> 收口。
 
 **第二优先：补覆盖率洼地**
 
-`cli/src/commands/ui.rs` 23.08%（全项目最低，子进程启动路径难以单测）、
-`src/extract.rs` 79.89%（承载「必选/可选判定」这一最微妙逻辑，判错会导致静默产出错误
-G-code 或误拦用户）、`cli/src/commands/inspect.rs` 80.79%。补上去后可上调阈值门
+`cli/src/commands/ui.rs` 20.00%（全项目最低，子进程启动路径难以单测）、
+`cli/src/commands/inspect.rs` 80.79%、`core/src/variables.rs` 83.70%。补上去后可上调阈值门
 （当前生产口径 ≥ 89%，基线 90.34%，余量约 68 行；2026-09-19 由 88% 上调）。
 
 **第三优先：修发布流程与包内容**
