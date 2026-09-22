@@ -850,6 +850,104 @@ CLI `nctool preset ...`、HTTP `/api/presets`、Web UI 预设面板。
   因 `default_preset_path()` 读**进程级** `APPDATA`，这批测试用全局互斥锁**串行**，
   否则并行测试会互相覆盖 env、把文件写进彼此的临时目录。
 
+### 批次十六：共用写盘底座与模板编辑（编辑模块一，T01 + T02）
+
+把资产（模板 / 清单）从"只能手改文件"变成"工具内可创建、可修改、可复用"，
+且所有写入都受与渲染**同源的校验**保护。
+
+#### Added
+
+- **`core::asset`（新模块，T01）**：领域层**唯一写内核** ——
+  `WriteKernel::{write_atomic, write_guarded, read_fingerprint}`、`SafePath`、
+  `validate_asset_name`。三条保证：**原子写**（同目录 `.nctool-tmp-` 临时文件 →
+  `fsync` → `rename`，失败清理）、**乐观锁**（`hash + len + mtime` 三者比对，
+  **禁用纯 mtime** —— Windows 时间分辨率粗会漏检）、**路径防护**
+  （`SafePath::resolve` 对候选路径断言根包含，拒符号链接逃逸）。
+- **`core::asset::template` 与三种编辑策略（T02）**：`TemplateWriter` 对
+  `templates.yaml` 做**定点文本编辑**（YAML 无成熟注释保全写库，serde 往返会删注释）；
+  另两种格式各按其性 —— `nctool.toml` 用 `toml_edit`、预设文件用 serde 全量往返。
+- **`nctool templates edit / derive / rename`（T02）**；`templates new` 迁移到写内核
+  并落清单。**保存前校验分级 L1/L2/L3**：语法（总是）→ 规格自洽（总是，不依赖参数值）
+  → 参数值校验（提供 `--param` 时；只查已提供的值，不查缺失）。
+- **`core::validate::{check_spec_consistency, check_param_values}`**：把上述 L2/L3
+  下沉为可复用的公共入口。
+
+#### Fixed
+
+- **路径逃逸（QA 击穿）**：`SafePath::resolve("Z:")` 曾返回**根外路径** ——
+  `validate_asset_name` 的注释写着"恰为一个**普通**组件"，实现却只数
+  `components().count() == 1`，而 Windows 上 `"Z:"` 恰好是 1 个 `Prefix` 组件；
+  `root.join("Z:")` 因 RHS 带前缀而**整体替换**根，随后根包含校验查的是 `anchor`
+  而非 `candidate`，等于没校验。两层一起修：名称校验要求唯一 `Component::Normal`，
+  `resolve` 对 `candidate` 断言根包含。
+- **指纹歧义（QA 击穿）**：`specFingerprint` 的 `None` 记 `-`，与真实值 `"-"` 撞车。
+  改为全字段长度前缀编码（`None`→`-1:`、`Some(s)`→`<字节长>:<s>`），使 `|`/`\n`/`;`
+  均无法注入。**这是改编码的最后窗口** —— 预设落盘后再改会让既有预设全部被误判为陈旧。
+- **清单定点编辑吞并兄弟条目（QA 击穿）**：`manifest_entry_body` 只在空行/顶格行停、
+  **不在同级键行停** → `derive` 会吞并相邻兄弟条目 → 重复键 → `serde_yaml` 拒收
+  **整份清单** → 全部模板元数据静默丢失。仓库自带清单用空行分隔故 CI 永不触发，
+  **只有用户手写清单会中招**。
+- **`default` 自洽判定被写两遍**（P4 单一来源违规）：`validate.rs::check_spec_defaults`
+  与 `asset/template.rs` 各一份 → 同一模板在 `nctool validate` 与 `templates edit`
+  下可能结论不同。
+
+### 批次十七：机床配置编辑 + UI 构建期拆分（编辑模块二，T04）
+
+机床此前只能手写 `nctool.toml`，而**键错一个就是撞刀** —— 本批把写入做成
+"校验先于落盘"的 CLI 命令，并把 Web UI 里那套只写 `localStorage` 的机床编辑界面
+（与 CLI/HTTP 读的 `nctool.toml` 是两个互不相干的仓库）换成**只读助手**。
+
+#### Added
+
+- **`core::asset::machine`**：`MachineWriter::{load, upsert, remove,
+  check_completeness, preflight}`，全部经 `WriteKernel`。`upsert` 用 `toml_edit`
+  **合并式写入**：只改 `[machine.<id>]`，其余段与注释**逐字节不变**；追加新段时以
+  原文为字节前缀（避免 `toml_edit` 把文档尾注释挤到新段之后）。
+- **`nctool machine add / edit / rm / test`**：`add` 默认以 `generic` 为基线预填
+  19 键（`axes` 为可选扩展键、不预填）；内置预设只读；`rm` 须显式 `--yes`；
+  `--expect-hash fnv1a64:<16hex>` 提供乐观锁。`preflight` **阻断** Choice 越界 /
+  整数不可解析 / 缺被模板引用的键（退出码 1 且不落盘）；扩展键与超大
+  `line_number_digits` 仅告警（夹紧仍在 `pipeline`，写层不复制）。
+- **`GET /api/machines` 增 `schema` 字段**：机床键规格（键 / 类型 / 默认值 / 候选 /
+  含义），取自 core 的 `KNOWN_CONFIG_KEYS`（单一来源）。**机床仍无任何 HTTP 写端点**。
+- **UI 只读「机床配置」弹窗**：当前键值 + 键规格 + 可复制的
+  `nctool machine edit <id> --set …` 命令 + 「用该机床试渲染」（复用既有 `/api/render`）。
+
+#### Changed
+
+- **UI 改为构建期拼接（T04-c）**：前端源码上移到 `ui/src/*.part.html` 7 个片段，
+  由 `scripts/build_ui.mjs` 按文件名升序**逐字节**拼接，**同一份 Buffer** 写出
+  `ui/index.html` 与 `cli/ui/index.html`。`ui/index.html` 从"唯一真值"降级为
+  **生成物** —— **改前端请改片段并重新生成，不要手改生成物**。
+  行数约束从"单文件 ≤ 3000"迁移为"每个片段 ≤ 3000"（最大片段 1160 行）。
+  防线两条：CI 的 `build_ui.mjs --check`（对提交物）+ `cli/tests/cli.rs` 的
+  重拼接断言（本机 `cargo test` 即可拦住"改了片段忘生成"，不依赖 node）。
+- 退出码 0–7、`cli_e2e.rs` 44 用例、golden 45 文件**均未变动**。
+
+#### Fixed
+
+- **失败的命令会留下文件**：`machine add` 的 id 合法性与 `preflight` 都排在
+  "首次创建写 `EXAMPLE_CONFIG`"之后 → `machine add "../evil"` 或 `--set units=inch`
+  在空项目目录里会先建出一份 `nctool.toml` 再报错，与"校验失败不落盘"相悖。
+  改为全部校验前置。
+- **`machine edit` 静默删除注释块**：`toml_edit` 把紧邻表头的注释存为该表的 `decor`，
+  而 `Table::insert` 换入新表时会连同旧 decor 一起丢弃 —— `add` 写入的
+  `EXAMPLE_CONFIG` 示例头（19 行）恰是文件第一个表的前缀，一次 `edit` 就**全数消失**
+  （实测 43 行 → 25 行）且无任何提示。改为替换前保留旧表（含 `config` 子表）的 decor。
+- **`config` 写成行内表时被当成不存在**（QA 击穿）：`config = { linear = "G1" }` 与
+  `[machine.<id>.config]` 语义等价，读路径（serde）两种都认、写路径只认子表 →
+  `load` 静默返回空配置，`machine edit` 在注册表降级放行时会**静默丢掉**这些键。
+- **非字符串值带装饰空白**（QA 击穿）：`toml_edit` 把 `key = value` 里 `=` 之后的空白
+  存进该值的 decor，`max_spindle_rpm = 4200` 读成 `" 4200"`（行内表末值还带尾随空格）。
+  值经 `machine.<key>` 注入渲染 —— 多一个空格就进了 G-code。
+
+#### 测试
+
+- `cli/tests/cli_machine_e2e.rs`（38 例）、`core/tests/machine_write.rs`（11 例，
+  含 AC-2.10 golden）、`core/tests/machine_adversarial.rs`（8 例，其中两条带
+  **变异判别** —— 用缺陷变体重放同一输入，证明用例不是空洞的）、
+  `cli/tests/cli.rs` 新增片段行数护栏。合计 **868 passed / 0 failed**。
+
 ---
 
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18

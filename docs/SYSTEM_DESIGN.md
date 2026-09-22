@@ -1,6 +1,15 @@
 # nctool 系统设计文档
 
 > 版本：v2.1 · 2026-09-20（**架构性变更记档**：`nctool-core` 首次承担资产写入职责）
+> **v2.2 修订说明（2026-09-21）**：三大编辑模块 T01–T04 全部落地，本版据其收口 ——
+> ① **前端改为构建期拼接**（T04-c）：源码上移到 `ui/src/*.part.html`，`ui/index.html` 与
+> `cli/ui/index.html` 降级为**生成物**（§3 相应段落已改），行数约束迁移为"每片段 ≤ 3000"；
+> ② **机床编辑走 CLI、UI 只读**（T04-b/d）：`machine add/edit/rm/test` 是唯一写入通道，
+> **不新增任何 HTTP 写端点**（Q8），`GET /api/machines` 只增只读 `schema` 字段 ——
+> 与 **D19**（资产写全部经 `core::asset`）一致，未新增例外；
+> ③ `core::asset` 的三种编辑策略（`toml_edit` 合并写 / YAML 定点文本编辑 / serde 全量往返）
+> 至此全部落地。**本次仅改文档，未改源码/测试**。
+>
 > **v2.1 修订说明**：依据 T01「共用写盘底座」落地并通过独立验证，记档一项**架构性变更** —— `nctool-core` **首次承担资产写入职责**（新增 `core::asset` 写内核：原子写 / 乐观锁 / 路径防护）。本次修订 §2.1（依赖图补 `core::asset`）、§2.2（crate 职责矩阵两行）、§2.3（补 `core::asset` 模块）、§6（新增 D19）、§7（补"新增写操作"扩展点）、§8（补 T01 已登记边界）；另据编辑模块（T02）定案，§3.2 记 `core::validate` 新增 `check_spec_consistency`（保存前 L2，须复用 `check_spec_defaults`）与 `check_param_values`（保存前 L3，值级、不查缺失）两个入口。**（v2.1 收准）** D19 例外改为**分类全枚举**——交付层生产口径 `fs::write` 共 3 处、全部非资产写（`config init` / `render --out` / `$EDITOR` 临时副本）；**资产写全部经 `core::asset`，D19 规则成立**。**仅改文档，未改源码/测试**。
 > 对应代码：`nctool-tpl` v0.4.0 / `nctool-core` v0.3.0 / `nctool-cli` v0.3.0（crate 版本号经查 `Cargo.toml` **未变**；**规模数字为 v2.0 快照，T01 新增 `core::asset` 后待重新实测**，见 §2.3 注）
 > 范围：三个 crate 的分层架构、核心模块职责、数据结构、端到端数据流与设计决策。
@@ -471,8 +480,16 @@ undefined 参与运算或取属性会直接报错，`default` 来不及兜底。
 显式后缀指 `k:s=v`（强制字符串）、`k:n=v`（强制数值）、`k:b=v`（强制布尔）；
 另有约定：**前导零的纯数字按字符串处理**（`0008` 是程序号/刀号而非数值 8）。
 
-**UI 有两份文件**（`ui/index.html` 供 `file://` 演示、`cli/ui/index.html` 被
-`include_str!` 嵌入二进制），必须同步改，`cli/tests/cli.rs::ui_html_copies_stay_in_sync` 会拦。
+**UI 是构建产物**（v2.2 修订）：
+
+> **源码**：`ui/src/*.part.html`（7 个片段，按文件名升序）——**改前端改这里**。
+> **生成物**：`ui/index.html`（供 `file://` 演示）与 `cli/ui/index.html`（被
+> `include_str!` 嵌入二进制），由 `scripts/build_ui.mjs` 从**同一份 Buffer** 写出，
+> 因此两份天然字节一致，不再依赖人工同步。
+> **两条防线**：CI 的 `node scripts/build_ui.mjs --check`（对提交物）与
+> `cli/tests/cli.rs::ui_html_copies_stay_in_sync` 的**重拼接断言**（本机 `cargo test`
+> 即可拦住"改了片段忘生成"，不依赖 node）。
+> **行数约束**：从"单文件 ≤ 3000"迁移为"**每个片段** ≤ 3000"（最大片段 1160 行）。
 
 ---
 

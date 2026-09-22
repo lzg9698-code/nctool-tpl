@@ -34,7 +34,12 @@ use crate::commands::templates::extract_variables;
 use crate::context::Ctx;
 use crate::output::CliError;
 
-/// 内嵌单文件前端（`ui/index.html`，演示与服务双模式）。
+/// 内嵌单文件前端（`cli/ui/index.html`，演示与服务双模式）。
+///
+/// 该文件是**生成物**：源在仓库根的 `ui/src/*.part.html`，由 `scripts/build_ui.mjs`
+/// 拼装（同一份 Buffer 同时写 `ui/index.html` 与 `cli/ui/index.html`）。改前端请改
+/// 片段并重新生成 —— 手改生成物会被 `build_ui.mjs --check` 与 `ui_html_copies_stay_in_sync`
+/// 的第 2 条断言拦下。
 pub const UI_HTML: &str = include_str!("../ui/index.html");
 
 /// 单个请求体上限：inspect 的模板源码远小于此，超出视为异常载荷。
@@ -50,7 +55,8 @@ const MAX_BODY_BYTES: usize = 1024 * 1024;
 /// **当前依赖**：这条取舍成立的前提是页面里**不存在**可注入的插值点。
 /// 2026-09-18 之前不成立 —— `esc()` 不转引号，模板文件名 / 参数名里的 `"` 就能
 /// 加出 `onerror=`，而 `unsafe-inline` 恰好放行属性事件处理器（P1-1）。
-/// 现已补全转义（见 `ui/index.html` 的 `esc` / `selEsc`），并逐点核对过全部
+/// 现已补全转义（见 `ui/src/32_script_ui.part.html` 的 `esc` / `selEsc`，经
+/// `build_ui.mjs` 进两份生成物），并逐点核对过全部
 /// `innerHTML` 插值位。**改动前端插值时必须一并复核**：CSP 在这里不是兜底。
 ///
 /// 若要去掉 `'unsafe-inline'`，需要把内联 `<script>`/`<style>` 外置成同源文件

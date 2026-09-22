@@ -120,12 +120,45 @@ coolant_on = "M8"
 
 引用方式：CLI 用 `--machine hero_x9`，Web UI 在机床下拉里选。
 
+### 4.1 用 CLI 管理自定义机床（推荐）
+
+手写 `nctool.toml` 容易漏键，而**漏一个被模板引用的键**在严格模式下会让渲染
+直接失败。`machine add/edit/rm` 把这套校验前置到写入之前：
+
+```bash
+nctool machine add hero_x9                     # 以 generic 为基线预填 19 键
+nctool machine add hero_x9 --from wfl_m65      # 换基线（20 键，含 axes）
+nctool machine add hero_x9 --vendor ACME --model X9 --set max_spindle_rpm=4200
+
+nctool machine edit hero_x9 --set units=imperial   # 改一个键
+nctool machine edit hero_x9 --unset machine_type   # 删一个键
+
+nctool machine rm hero_x9 --yes                # 删除（破坏性，须显式 --yes）
+nctool machine test hero_x9 --template drill_cycle --param x=10 --param y=10
+```
+
+四条命令共同的保证（写入经 `core::asset` 的统一内核）：
+
+| 保证 | 说明 |
+|---|---|
+| **四重校验先于写盘** | Choice 越界 / 整数不可解析 / **缺被模板引用的键** → 阻断（退出码 1）且**不落盘**；扩展键与超大 `line_number_digits` 仅告警 |
+| **只改目标段** | `nctool.toml` 的其余段、注释、行尾风格**逐字节不变**（含 `EXAMPLE_CONFIG` 的示例头注释） |
+| **乐观锁** | `--expect-hash fnv1a64:<16hex>` 可在文件被外部改动时中止（退出码 6），不静默覆盖 |
+| **内置机床不可改** | `generic` / `wfl_m65` / `index_ms40` 是只读基线，需定制请 `machine add <新id> --from <内置id>` |
+
+`machine test` 与 `render --machine` 走**同一条管线**，输出逐字节一致；它只是
+试渲染，**不能替代真实空运行与工艺评审**。
+
 **初始化示例配置**（不覆盖已有文件）：
 
 ```bash
 nctool config init             # 在当前目录生成 nctool.toml
 nctool config show             # 展示生效配置（来源路径 + 合并结果 + 警告）
 ```
+
+> **Web UI 是只读的**：`nctool ui` 的「机床配置…」按钮展示当前机床的键值、
+> 每个键的类型/默认值/候选与含义，并给出可直接复制到终端执行的命令 ——
+> 写入通道只有 CLI（见 Web UI 弹窗内的同款说明）。
 
 ## 5. 配置加载顺序
 

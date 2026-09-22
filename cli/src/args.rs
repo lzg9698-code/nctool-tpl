@@ -454,8 +454,9 @@ mod tests {
     }
 
     /// `--param` 取值归一的规则有两份实现：本文件的 `coerce_param_value` 与前端
-    /// `ui/index.html` 的 `coerceParamValue`（`cli/ui/index.html` 是它的副本）。
-    /// 两份各自漂移，CLI 与 Web UI 就会对同一输入产出不同 G-code —— 典型的静默错误。
+    /// `coerceParamValue`（在 `ui/src/32_script_ui.part.html`，经 `build_ui.mjs`
+    /// 进两份生成物）。两份各自漂移，CLI 与 Web UI 就会对同一输入产出不同
+    /// G-code —— 典型的静默错误。
     ///
     /// 故用例与期望值集中在 `scripts/param_parity_cases.json`：本测试消费它，
     /// 前端由 `scripts/check_param_parity.mjs`（CI 硬门禁）消费同一份。

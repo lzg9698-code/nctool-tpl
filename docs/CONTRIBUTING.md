@@ -46,7 +46,8 @@ cargo install cargo-audit --locked           # 安全审计
 | --- | --- | --- |
 | `src/` | `nctool-tpl` | 模板解析 + 变量提取（可选/必选）+ 渲染（NC / 数学过滤器） |
 | `core/` | `nctool-core` | 数据模型 + 参数校验 + 模板注册表 + 机床配置 + G-code 生成管线 |
-| `cli/` | `nctool-cli` | `nctool` 命令行（薄壳）+ Web UI（`cli/ui/index.html`） |
+| `cli/` | `nctool-cli` | `nctool` 命令行（薄壳）+ Web UI（内嵌 `cli/ui/index.html`，**生成物**） |
+| `ui/src/` | 前端源码（`*.part.html` 片段） | **改前端改这里**；生成物由 `scripts/build_ui.mjs` 拼装 |
 | `tests/` | 根 crate 集成测试 + `tests/golden/` 基线 | 解析、渲染、golden 逐字节比对 |
 | `benches/`、`core/benches/` | criterion 基准 | 解析/提取/渲染、后处理与端到端管线 |
 | `docs/` | 设计、指南、路线、状态 | 改架构/配置/工艺必须同步更新 |
@@ -177,7 +178,7 @@ git diff tests/golden                         # 必须人工逐行复核
 | --- | --- | --- |
 | CLI 退出码 0–7 | README「退出码」表 | 由 `cli/tests/cli_e2e.rs` 44 个用例逐条断言 |
 | `--format json` 输出结构 | `cli/src/output.rs` | 成功 `{"ok":true,"data":…}`，失败 `{"ok":false,"error":…}` |
-| Web UI HTTP API | `cli/src/server.rs` + `ui/index.html` | 契约端点与字段名 |
+| Web UI HTTP API | `cli/src/server.rs` + `ui/src/31_script_api.part.html` | 契约端点与字段名；前端字面量集合由 `scripts/check_api_parity.mjs` 对拍 |
 | MSRV 1.82 | 各 crate `Cargo.toml` 的 `rust-version` | 提升需改 CI 并在 CHANGELOG 标注 |
 | `minijinja ~2.24.0` | 根 `Cargo.toml` | 依赖 `unstable_machinery` / `debug` feature，升 minor 可能编译不过，需全量验证 |
 
@@ -192,6 +193,8 @@ git diff tests/golden                         # 必须人工逐行复核
 | 机床配置键 | `MACHINE_CONFIG_GUIDE.md`（键清单、未知键告警） |
 | 模板写法 / 过滤器 | `TEMPLATE_WRITING_GUIDE.md` |
 | 新增内置模板 | golden 用例 + `PROCESS_CHECKLIST.md` 登记 + 声明「未经工艺评审」 |
+| 前端（界面 / 脚本 / 样式） | 改 `ui/src/*.part.html` → **跑 `node scripts/build_ui.mjs`** → 提交生成物。手改 `ui/index.html` / `cli/ui/index.html` 会被 `build_ui.mjs --check`（CI）与 `ui_html_copies_stay_in_sync` 第 2 条断言（本机 `cargo test`）拦下 |
+| 机床写命令（`machine add/edit/rm/test`） | `cli/tests/cli_machine_e2e.rs` + `MACHINE_CONFIG_GUIDE.md`；改 `upsert` 的合并语义须同步 `core/tests/machine_write.rs` 与 golden |
 
 ---
 

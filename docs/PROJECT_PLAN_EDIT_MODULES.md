@@ -17,7 +17,7 @@
 | **方案骨架** | 新增领域层**唯一写内核 `core::asset`**（原子写 + 乐观锁 + 路径防护），按格式挂三种编辑策略；**CLI 为主入口，UI 为辅** |
 | **规模** | 5 个阶段（T01 底座 → T02 模块一 → T03 模块三 → T04 模块二 → T05 收口），新增 8 个源文件 + 3 个测试文件，**零新增第三方 crate** |
 | **硬约束** | 退出码 0–7 **冻结**（有测试强制）；`ui/index.html` 距 3000 行上限**仅 265 行**；golden 基线 21+3 不得自动改 |
-| **执行进度** | **T01 共用写盘底座已完成并通过 QA 独立验证**（路由 NoOne；641 测试全绿、覆盖率 89.35%、零新增 crate）。T02–T05 待启动。详见 §6.7 |
+| **执行进度** | **T01–T04 全部完成**：T01 底座（§6.7）、T02 模板编辑（§6.8）、T03 预设编辑（§6.10）、T04 机床编辑（§6.11）均通过 QA 独立验证（路由 NoOne）。**T05 文档与契约收口本轮随 T04 一并完成**。当前 868 测试全绿、覆盖率生产口径 89.99% |
 | **已拍板决策** | Q1 编辑主入口 = **CLI 为主、UI 为辅**；Q2 预设持久化 = **文件后端默认启用、落配置目录**；Q4 机床缺键 = **阻断保存** |
 
 ---
@@ -48,7 +48,7 @@
 |---|---|---|---|
 | 1 | **`toml_edit 0.22.27` 已在依赖树中**（`toml 0.8` 的传递依赖） | `Cargo.lock:802-811, 823` | 提为直接依赖 = **构建图零新增 crate**，使「注释保全」成为免费方案 |
 | 2 | **退出码矩阵被测试强制恰好覆盖 0..=7** | `cli/tests/cli_e2e.rs:697`（`let want = (0..=7)...`） | **绝不能新增退出码**，新失败类别必须映射进既有码 |
-| 3 | **`ui/index.html` 实测 2735 行**（两份 md5 一致），上限 3000 | `wc -l` / `md5sum` | 余量仅 **265 行** → 任何加界面方案都必须先算账 |
+| 3 | **`ui/index.html` 实测 2735 行**（两份 md5 一致），上限 3000 | `wc -l` / `md5sum` | 余量仅 **265 行** → 任何加界面方案都必须先算账。**【T04-c 已收口】源码上移到 `ui/src/*.part.html`，生成物 2940 行；上限语义迁移为"每个片段 ≤ 3000"（最大片段 1160 行）** |
 
 > ⚠️ 另有两处**文档漂移**需随本计划一并修正：`docs/PROJECT_STATUS.md` 记「UI 2685 行」与「XSS P1-1 未修」，二者均已过时（后者已按 `CODE_REVIEW_2026-09-19.md` 修复）。
 
@@ -332,7 +332,7 @@ graph LR
 | **D-1** | **注释保全分三策略，共用同一内核**：`nctool.toml` 用 `toml_edit`；`templates.yaml` 用**定点文本编辑**（无成熟注释保全 YAML 写库）；预设文件用 serde 全量读写（工具自有新文件、无人工注释） | serde 版 `toml`/`serde_yaml` 往返会**删掉用户注释**（`EXAMPLE_CONFIG` 通篇是注释，`templates.yaml` 头 24 行是注释）；而手写 TOML 文本拼接正是"静默损坏"高发区 |
 | **D-2** | **写内核放 `nctool-core`（新模块 `core::asset`）** | `SYSTEM_DESIGN` 明写"所有真实业务逻辑都在 core"，而 cli"不含任何校验逻辑"；写前校验编排属业务逻辑。**需修订 crate 职责矩阵** |
 | **D-3** | **退出码 0–7 冻结，新失败类别全部映射进既有码** | 有测试强制 README 矩阵恰好覆盖 0..=7。`write_conflict`/`name_conflict` → **6**；只读 → **3**；预设损坏（写时）→ **4**；跨模板不兼容 / 缺键 → **1** |
-| **D-4** | **UI 走方案 A（CLI 为主）**，增量预算 ≤ 145 行（2735 → ≈2880 < 2900）→ **不触发拆分**；预置拆分方案 B 规格，一旦预计 > 2900 立即切换 | 余量仅 265 行；编辑器是低频高风险操作，不值得为它撑爆单文件；写操作走本地文件权限模型，**不引入新的 HTTP 写端点** |
+| **D-4** | **UI 走方案 A（CLI 为主）**，增量预算 ≤ 145 行（2735 → ≈2880 < 2900）→ **不触发拆分**；预置拆分方案 B 规格，一旦预计 > 2900 立即切换。**【T04 实际结果：T03 落地后实测 2918 行，越过 2900 硬触发线 → 由用户拍板执行方案 B（T04-c，纯搬运，md5 不变）】** | 余量仅 265 行；编辑器是低频高风险操作，不值得为它撑爆单文件；写操作走本地文件权限模型，**不引入新的 HTTP 写端点**（Q8，T04-d 复核后维持） |
 
 ### 6.6 依赖包
 
@@ -411,7 +411,7 @@ graph LR
 | **绝对句被代码证伪** | D19 原文"`nctool-cli` 不 `fs::write`/`File::create`"，而 `config.rs:183`（`config init`）就是 → 作用域收准为**资产写** |
 | **假并发保证** | 注释称重名检查已"变为内核原子判定（并发下也不会互相覆盖）"。**不成立**：`write_guarded(expect=None)` 仍是 check-then-write。已改为准确表述 |
 
-### 6.9 已知问题登记（留待 T03/T05，不在 T02 扩大）
+### 6.9 已知问题登记（累计，均为"有意接受/延后"）
 
 | # | 问题 | 处置建议 |
 |---|---|---|
@@ -420,6 +420,82 @@ graph LR
 | K-3 | **重名检查非原子**：`write_guarded(expect=None)` 是 check-then-write，并发同名 `new` 可互相覆盖。设计 §9.1 已把该 TOCTOU 窗口登记为**有意接受**（单用户本地工具） | 若需真原子：`create` 走 `OpenOptions::create_new`（`O_EXCL`） |
 | K-4 | **`$EDITOR` 交互分支未自动化覆盖**（Windows 无稳定 TTY 自动化）；已证明它与 `--from-file` **共用同一条写路径**（同一校验 + 同一乐观锁），风险低 | 后续若有 Linux CI 可补 |
 | K-5 | **悬空符号链接向量未实测**（本机建不出真符号链接）；"防假绿"机制有效（回读 `symlink_metadata` 确认后才 SKIP） | 在具备权限的环境复验 |
+| K-6 | **`--expect-hash` 的格式校验不对称**（T04-e 发现，**有意不改**）：`machine add` 先校验格式（非法 → `args`(2)），`machine edit` / `machine rm` 直接进 `resolve_expect` → 同样的非法格式只表现为"指纹不匹配"（`write_conflict`(6)）。**功能正确**（都不会误写盘），改它要动已发布的退出码行为 | 已由 `expect_hash_format_is_not_checked_by_edit_or_rm` 按现状钉住；若将来要统一，须同时改三处 CLI 与用例，并按退出码契约评估 |
+| K-7 | **`preflight` 与 `validate_config_keys` 各自维护一份值级判定**（T04-e 发现，**有意不改**）：同一非法值，`machine show` 与 `machine add/edit` 的**告警文案**不同（例如未知键提示一处含 `{{ machine.k }}`、一处不含）。语义一致、功能正确 | 收敛办法：把值级判定抽成 core 的共享分类函数（返回 `Blocking`/`Warning` + 文案），两处都调它。属"单一来源"整洁性问题，不阻塞交付 |
+| K-8 | **组合边界未落 golden**（T04-e 决定）：T04 设计列了 `tests/golden/machine/*`，实际改用"原字节必须是新文件的前缀"逐字节断言 | 理由：`assert_golden` 比较前归一化行尾，恰好会抹掉 CRLF 这条边界；逐字节前缀断言更强。若将来仍要 golden，需先让 golden 比较支持行尾敏感 |
+
+### 6.10 T03 执行记录（2026-09-21，已通过）
+
+**结论**：T03 完成并通过 QA 独立验证，路由判定 **NoOne**。提交 `5569a8d`。
+
+| 项 | 实测值 |
+|---|---|
+| 六道门 | fmt / clippy `-D warnings` / test / doctest / rustdoc `-D warnings` / 覆盖率 **全部 RC=0** |
+| 测试 | **791 passed / 0 failed / 2 ignored** |
+| 覆盖率（生产口径） | **92.37% ≥ 89%** |
+| `Cargo.lock` | 仅新增 `nctool-cli → serde_yaml` 一条依赖边（`serde_yaml` 本就在树中）→ **零新增 crate** |
+| 契约 | 退出码 0–7 未变、golden 45 文件无变更、`cli_e2e` 44/44 绿 |
+| UI | 两份 md5 一致；预设面板替换原先只落 `localStorage` 的本机实现 |
+
+**交付物**：`core::asset::preset`（`PresetStore` + 陈旧检测 + 跨模板交集 + 导入导出）、CLI `preset save/list/show/rename/rm/export/import/apply`、HTTP `/api/presets` 与 `/api/presets/delete`、前端预设面板；`cli/tests/cli_preset_e2e.rs`（22 例）+ core 21 单测 + server 9 端点测试。
+
+**QA 击穿并已修复的四个静默缺陷**
+
+| # | 缺陷 |
+|---|---|
+| 1 | **红线 R-9 条件性失效**：预设文件"不得落在模板根内"写成 `if let Some(root) = &ctx.template_dir`，未配置模板目录时**整条红线被跳过**，实测把 `./templates/presets.yaml` 写进了模板根；`normalize()` 对尚不存在的文件返回相对路径，与绝对化的根比较恒为 false（第二层缺口）。两层一起修 |
+| 2 | **新鲜预设被误报陈旧**：`stale_report` 只拿 specs 判参数存亡，对**没有声明规格**的模板会把每个参数都判成失效 —— 狼来了，真正的失效反而被淹没 |
+| 3 | **删除被报成更新**：`remove()` 内部是"改完内容再落盘"，直接透传了 `save` 的动作 → `action` 返回 `updated`，消费方按 action 分支时永远走不到删除分支。新增 `WriteAction::Deleted` |
+| 4 | **"不存在"靠匹配消息文本分类**（违反 D7）：预设不存在被塞进 `WriteError::Corrupt`，下游只能 `msg.contains("不存在")` 分流，文案一改就静默归错（HTTP 侧把"删一个不存在的预设"报成 500）。新增结构化 `WriteError::NotFound` |
+
+顺带修：`/api/presets` 的 `template_not_found` 给 400，而 `template_detail` / `registered_template` / `inspect` 三处都是 404 —— 同一 kind 因端点不同给出两种状态码，前端按状态码分支必然错判。新增 `cli_error_mapped` 按 kind 校正。
+
+> 测试隔离教训：`default_preset_path()` 读**进程级** `APPDATA`，server 侧那批端点测试必须用全局互斥锁串行 —— 并行跑会互相覆盖 env、把文件写进彼此的临时目录（实测踩到，症状是断言拿到另一个环境的数据）。CLI 侧 E2E 不受影响：它们用**子进程级** `Command::env`。
+
+### 6.11 T04 执行记录（2026-09-21，已通过）
+
+**结论**：T04 完成并通过 QA 独立对抗性验证，路由判定 **NoOne**。分四个提交落地：`0ecb39a`（T04-a 设计）、`65cc690`（T04-b）、`34903a8`（T04-c）、`2d7b4a4`（T04-d）、`c985aa8`（T04-e）。
+
+| 项 | 实测值 |
+|---|---|
+| 六道门 | ① test ② rustdoc `-D warnings` ③ api parity ④ param parity ⑤ `cli_e2e` 44 + 退出码 0..=7 ⑥ `build_ui.mjs --check` + golden —— **全部绿** |
+| 测试 | **868 passed / 0 failed / 2 ignored**（T04 新增：E2E 38 + 对抗 8 + core 写 11 + 过程内单测） |
+| 覆盖率（生产口径） | **89.99% ≥ 89%**（⚠️ 余量收窄：T03 为 92.37%，见下方"遗留风险"） |
+| `Cargo.lock` | **零新增 crate**（`toml_edit` 本就在树中，提为 core 直接依赖） |
+| 契约 | 退出码 0–7 未变、golden 45 文件无变更、`cli_e2e` 44/44 绿 |
+| UI | 拆分后 md5 `0c5eed0a807b487465e57ee400f0a891`、各 **2940 行**；两副本由同一份 Buffer 写出 |
+
+**T04-b · core 写策略 + CLI 子命令**
+
+- `core::asset::machine`：`MachineWriter::{load,upsert,remove,check_completeness,preflight}`，全部经 `WriteKernel`（原子写 + 乐观锁 + 路径防护）
+- `upsert` 用 `toml_edit` 合并式写入：只改 `[machine.<id>]`，其余段与注释逐字节不变；追加新段时以**原文为字节前缀**
+- CLI `machine add/edit/rm/test`；`preflight` 阻断 Choice 越界 / 整数不可解析 / 缺被模板引用的键，扩展键与超大位数仅告警
+- **① 失败的命令会留下文件**：id 合法性与 `preflight` 都排在"首次创建写 `EXAMPLE_CONFIG`"之后 → `machine add "../evil"` 或 `--set units=inch` 在空项目目录里会先建出一份 `nctool.toml` 再报错，与 AC-2.3/2.4 的"不落盘"相悖。改为**全部校验前置**
+- **② `machine edit` 静默删除注释块**：`toml_edit` 把紧邻表头的注释存为该表的 `decor`，`Table::insert` 换入新表时连同旧 decor 一起丢弃 —— `add` 写入的 `EXAMPLE_CONFIG` 示例头（19 行）恰是第一个表的前缀，一次 `edit` 就全删（实测 43 行 → 25 行）且无提示。改为替换前保留旧表（含 `config` 子表）的 decor
+
+**T04-c · UI 构建期拆分（纯搬运）**
+
+- `ui/src/*.part.html` 7 个片段 + `scripts/build_ui.mjs`：按文件名升序**逐字节**拼接，同一份 Buffer 写两份
+- **纯搬运的证据**：`build_ui.mjs --check` 对拆分前的提交物通过；生成物 md5 仍为拆分前的 `cd6dc686…`、行数仍 2918、`git diff --stat ui/index.html cli/ui/index.html` 为空
+- `cli/tests/cli.rs::ui_html_copies_stay_in_sync` 升级为**双断言**：① 两份生成物字节相等；② 源片段重拼接 == 提交的生成物。② 必须在 Rust 侧 —— `--check` 只在 CI 跑，生成物陈旧时 ① 照样通过
+- 篡改验证：改一个片段不重新生成 → `--check` 与 `cargo test` **双双变红**，还原后复原
+- 行数约束从"单文件 ≤ 3000"迁移为"**每片段** ≤ 3000"，并由 `ui_fragments_respect_the_line_budget` 钉住
+
+**T04-d · HTTP 只读 schema + UI 只读助手**
+
+- `GET /api/machines` 增 `schema`（来自 core `KNOWN_CONFIG_KEYS` 的单一来源）；**不新增任何机床写端点**，并有用例断言 `POST/PUT/DELETE /api/machines` 全部 404
+- UI 删除 demo-only 的 `modalCustomMachine` 写入路径（它只写 `localStorage`，与 CLI/HTTP 读的 `nctool.toml` 是两个互不相干的仓库，且绕过全部校验），改为只读"机床配置"弹窗：当前键值 + 键规格 + 可复制的 CLI 命令 + 「用该机床试渲染」复用既有 `doRender()`
+- **真实浏览器实测**：下拉含 CLI 建的机床；弹窗对自定义机床显示「（自定义）」、读到 CLI 写入的 `max_spindle_rpm=4200`、命令示例为 `nctool machine edit hero_x9 --set program_prefix=<值>`；schema 20 键含 Choice 候选；演示模式分支给出说明而非空白；**零 JS 错误**
+
+**T04-e · QA 独立对抗性验证**
+
+- `core/tests/machine_adversarial.rs`（8 例），其中两条带**变异判别**：用缺陷变体重放同一输入，证明该输入真能区分对错实现（否则用例是空洞的）
+- **③ `config` 写成行内表时被当成不存在**：行内表是 `Item::Value` 而非 `Item::Table`，写路径只认子表 → `load` 静默返回空配置；`machine edit` 于是把行内表里的键当成"不存在"，在注册表降级导致 preflight 放行时**静默丢掉**它们。读路径（serde）两种都认 —— 两个读者必须对同一份文件给出同一答案
+- **④ 非字符串值带装饰空白**：`toml_edit` 把 `key = value` 里 `=` 之后的空白存进该值的 decor，`Value::to_string()` 会一并渲染 —— `max_spindle_rpm = 4200` 读成 `" 4200"`（行内表末值还带尾随空格）。值经 `machine.<key>` 注入渲染，多一个空格就进了 G-code
+- 顺带修：`MachineConfig::META_KEYS` 的文档链接指向私有项，`cargo doc -D warnings` 会红（六道门第 ② 条捕获）
+- 把「段内注释可丢（§10 有意接受）/ 段外一个字节不动」这条取舍**钉成决定而非事故**
+
+> **遗留风险（T05 记档）**：覆盖率生产口径从 T03 的 92.37% 降到 **89.99%**，距 89% 门槛仅 ~1pt ≈ 77 行。成因是 T04 新增约 1100 行生产代码（`cli/src/commands/machine.rs` 664 行 + server/UI 侧），而其中的 CLI 写命令主要靠**子进程 E2E** 覆盖。缺口集中在既有的三个洼地（`cli/src/commands/ui.rs` 18.75%、`src/extract.rs` 76.12%、`cli/src/commands/inspect.rs` 80.79%），**不属 T04 新增代码**。下一步若要上调阈值，应先补这三个洼地，或先取一次 Ubuntu CI 实测数据。
 
 ---
 
@@ -433,7 +509,7 @@ graph LR
 | **R-4** | **破坏 golden 基线** | 中 | 写操作**不自动**改 golden；仅提示人工 `NCTOOL_UPDATE_GOLDEN` + diff 复核 |
 | **R-5** | **静默出错** | **高** | 写前校验阻断；Choice / 缺键**必须阻断**；未知键仅告警（保留扩展语义） |
 | **R-6** | **契约漂移** | 中 | 退出码 0–7 与 JSON 包络不变；`cli_e2e.rs` 44 用例须全绿；`/api/presets` 三处同步（`api_routes.json` + 后端测试 + 对拍脚本） |
-| **R-7** | **UI 余量告急** | 中 | 增量预算 ≤145 行；>2900 行硬触发方案 B（构建期拆分，生成物写两份天然一致） |
+| **R-7** | **UI 余量告急** | 中 | ✅ **已收口（T04-c）**：>2900 行硬触发方案 B，已执行构建期拆分 —— 源码上移到 `ui/src/*.part.html`，生成物由 `scripts/build_ui.mjs` 从**同一份 Buffer** 写两份（天然一致）。行数约束改为"每个片段 ≤ 3000"（最大 1160 行），由 `ui_fragments_respect_the_line_budget` 钉住；"改了片段忘生成"由 CI 的 `--check` 与 `cli/tests/cli.rs` 的重拼接断言**双防线**拦截 |
 | **R-8** | **削弱安全提示** | 中 | `machine test` 试渲染、预设应用界面**必须保留**"未经真实工艺评审、上机前须复核"文案，不得折叠或默认隐藏 |
 | **R-9** | **持久化文件污染注册表** | 中 | 预设默认落**配置目录**（非模板根）；若用户要求项目内，须校验目标目录 ≠ 模板目录 |
 | **R-10** | **core 首次承担写职责** | 中 | 属架构性变更，须在 `SYSTEM_DESIGN.md` 明确记档（crate 职责矩阵新措辞已给出） |

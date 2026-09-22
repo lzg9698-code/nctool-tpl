@@ -427,6 +427,19 @@ nctool templates list
 nctool templates show drill_cycle        # 查看源码与参数表
 nctool templates new my_op               # 在当前 templates/ 下新建骨架
 
+# 模板资产的创建 / 修改 / 复用（写入前校验，失败不落盘）
+nctool templates edit my_op --from-file new_body.j2
+nctool templates derive drill_cycle drill_deep
+nctool templates rename my_op drilling_v2
+
+# 参数预设：一份可复用的参数集，CLI / HTTP / Web UI 读写同一份 presets.yaml
+nctool preset save 钻孔D10 drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100
+nctool preset list
+nctool preset show 钻孔D10
+nctool preset apply 钻孔D10 another_template --confirm   # 跨模板复用须显式确认
+nctool preset export 钻孔D10 preset.json
+nctool preset import preset.json
+
 # 提取模板必选/可选参数（含行列定位）
 nctool inspect drill_cycle
 
@@ -443,12 +456,20 @@ nctool generate drill_cycle --param x=21 --param y=15 --param depth=-10 --param 
 # 参数文件（JSON）批量输入；显式 --param 覆盖文件值
 nctool render my_op.j2 --params-file params.json
 
-# 机床配置查看 / 配置初始化 / shell 补全
+# 机床配置查看 / 编辑 / 试渲染
 nctool machine show wfl_m65
+nctool machine add hero_x9 --from generic --vendor ACME --model X9   # 基线预填 + 四重校验
+nctool machine edit hero_x9 --set max_spindle_rpm=4200
+nctool machine rm hero_x9 --yes                                     # 破坏性操作须显式 --yes
+nctool machine test hero_x9 --template drill_cycle --param x=10 --param y=10
+#   内置预设（generic / wfl_m65 / index_ms40）只读，需定制请 --from <内置id> 派生
+#   写入只改目标段：nctool.toml 的其余段与注释逐字节不变
+
 nctool config init
 nctool completion bash          # 另支持 zsh / fish / elvish 及 Windows 系 shell
 
 # 启动本地 Web UI（模板浏览 + 只读 API；仅绑定回环地址）
+# 机床在 UI 里**只读**：展示键值与键规格 + 可复制的 CLI 命令；写入通道只有 CLI
 nctool ui --host 127.0.0.1 --port 8787
 
 # 机器可读输出（--format json）：成功 {"ok":true,"data":...}，失败 {"ok":false,"error":{...}}

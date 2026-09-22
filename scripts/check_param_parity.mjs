@@ -24,7 +24,7 @@ const fixture = JSON.parse(
   readFileSync(join(root, "scripts", "param_parity_cases.json"), "utf8"),
 );
 
-/** 前端两份 UI 实现，任一漂移都要拦住 */
+/** UI 的两份**生成物**（源在 `ui/src/*.part.html`）；任一与后端漂移都要拦住 */
 const UI_FILES = ["ui/index.html", "cli/ui/index.html"];
 
 /**

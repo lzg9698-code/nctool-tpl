@@ -27,8 +27,9 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v4
 
-      # `--param` 取值归一的规则有两份实现：后端 args.rs 与前端 ui/index.html
-      # （cli/ui/index.html 是副本）。两者漂移会让 CLI 与 Web UI 对同一输入产出
+      # `--param` 取值归一的规则有两份实现：后端 args.rs 与前端片段
+      # （ui/src/32_script_ui.part.html，经 build_ui.mjs 进两份生成物，上一步已校验新鲜度）。
+      # 两者漂移会让 CLI 与 Web UI 对同一输入产出
       # 不同的 G-code —— 静默错误，必须拦。做法是用同一份 fixture
       # （scripts/param_parity_cases.json）对拍：Rust 侧由下面的 cargo test 消费，
       # 前端由本步骤消费。放在最前面是为了让 JS 漂移在几十秒内红，不必等完整构建。
@@ -38,6 +39,15 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '20'
+
+      # UI 生成物与源片段一致：`ui/index.html` 与 `cli/ui/index.html` 都是
+      # `ui/src/*.part.html` 的生成物。本步骤拦"改了片段忘生成"与"直接手改生成物"
+      # 两种漂移，**必须排在对拍脚本之前** —— 否则下面是拿陈旧产物在判定。
+      # 注意它只能看到**提交的这一份**，本地改动仍需 `cargo test` 里那条重拼接
+      # 断言来拦（见 cli/tests/cli.rs 的 ui_html_copies_stay_in_sync）。
+      - name: UI build check (fragments -> index.html)
+        if: matrix.os == 'ubuntu-latest'
+        run: node scripts/build_ui.mjs --check
 
       - name: Param parity (Rust <-> UI)
         if: matrix.os == 'ubuntu-latest'
@@ -50,14 +60,6 @@ jobs:
       - name: API routes parity (backend <-> UI)
         if: matrix.os == 'ubuntu-latest'
         run: node scripts/check_api_parity.mjs
-
-      # UI 生成物与源片段一致：`ui/index.html` 与 `cli/ui/index.html` 都是
-      # `ui/src/*.part.html` 的生成物。本步骤拦"改了片段忘生成"与"直接手改生成物"
-      # 两种漂移。注意它只能看到**提交的这一份**，本地改动仍需 `cargo test` 里那条
-      # 重拼接断言来拦（见 cli/tests/cli.rs 的 ui_html_copies_stay_in_sync）。
-      - name: UI build check (fragments -> index.html)
-        if: matrix.os == 'ubuntu-latest'
-        run: node scripts/build_ui.mjs --check
 
       # 文档链接与锚点检查：`CONTRIBUTING.md` §3 早已文档化其用法，却始终没有调用点
       # ——「工具闲置」等于这道门不存在（PROJECT_STATUS 登记过）。脚本对坏链接 exit 1，

@@ -27,6 +27,8 @@ const fixture = JSON.parse(
   readFileSync(join(root, "scripts", "api_routes.json"), "utf8"),
 );
 
+// 两份都是**生成物**（源在 `ui/src/*.part.html`，由 `build_ui.mjs` 拼装）。
+// CI 里 `build_ui.mjs --check` 先跑，故这里读到的必然与片段一致。
 const UI_FILES = ["ui/index.html", "cli/ui/index.html"];
 
 /** 路径归一：去掉结尾斜杠，让 "/api/templates/" 与 "/api/templates" 视为同一条 */
