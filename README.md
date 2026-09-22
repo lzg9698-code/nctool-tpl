@@ -560,6 +560,7 @@ cargo test --workspace --doc          # --all-targets 不跑 doctest，CI 为此
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 node scripts/check_param_parity.mjs   # --param 归一规则的 Rust/前端对拍
 node scripts/check_option_parity.mjs  # 生成选项（行号/步进/上限/…）的 CLI/前端对拍
+python3 scripts/check_package_contents.py  # 发布包不得含非库资产（--offline）
 cargo audit
 
 # 覆盖率门（与 CI 同款；需先装 rustup component add llvm-tools-preview
@@ -593,7 +594,8 @@ python scripts/check_coverage_caliber.py lcov.info --min 91
 | 机床配置键 | `docs/MACHINE_CONFIG_GUIDE.md`（键清单、未知键告警） |
 | 新增内置模板 | golden 用例 + `docs/PROCESS_CHECKLIST.md` 登记，并声明未经工艺评审 |
 | `--param` 取值归一规则（`cli/src/args.rs` 或 UI 的 `coerceParamValue`） | 另一侧实现 + 共享 fixture `scripts/param_parity_cases.json`；两侧漂移会让 CLI 与 Web UI 对同一输入产出不同 G-code |
-| 生成选项（` --line-numbers`/`--line-step`/`--max-line`/`--header`/`--strip-blank`/`--ascii`/`--lenient` 或 UI 的 `normalizeOpts`） | 共享 fixture `scripts/option_parity_cases.json` + Rust 侧测试 `option_mapping_matches_shared_fixture`；CLI 与 Web API 必须映射到同一份 `GenerationOptions` |
+| 生成选项（`--line-numbers`/`--line-step`/`--max-line`/`--header`/`--strip-blank`/`--ascii`/`--lenient` 或 UI 的 `normalizeOpts`） | 共享 fixture `scripts/option_parity_cases.json` + Rust 侧测试 `option_mapping_matches_shared_fixture`；CLI 与 Web API 必须映射到同一份 `GenerationOptions` |
+| 发布包内容（`Cargo.toml` 的 `package.exclude`） | `scripts/check_package_contents.py` 的黑名单；新增仓库级资产（如新的 `output/` 子目录）时同步该列表，否则 CI 的 `Package contents` 步骤会红 |
 
 ### 提交与分支
 

@@ -68,6 +68,14 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: python3 scripts/check_docs_links.py README.md docs templates/README.md
 
+      # 发布包内容守卫：根 crate 是库，仓库里却住着 CLI/UI/开发脚本/原型产物。
+      # Cargo.toml 的 exclude 是唯一真源；本步骤对 `cargo package --list` 做黑名单
+      # 断言，防止非库资产（output/ scripts/ ui/ …）又被打进 .crate。
+      # 用 --offline 避免依赖 crates.io 索引（与系统无关，只在 ubuntu 跑）。
+      - name: Package contents (no repo junk in .crate)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 scripts/check_package_contents.py
+
       - name: Install Rust (stable)
         uses: dtolnay/rust-toolchain@stable
         with:

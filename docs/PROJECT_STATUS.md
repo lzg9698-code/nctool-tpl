@@ -222,7 +222,7 @@ CI 为此单列 `Doc tests` 步骤（`cargo test --workspace --doc`，当前 1 �
 | — | ~~CHANGELOG `[未发布]` 积压未发版~~ | ✅ 已清（2026-09-18 转为 0.4.0 / 0.3.0 / 0.3.0 版本段并发布） |
 | — | `scripts/check_docs_links.py` 存在但**未接入 CI**（无调用点） | 🚧 工具闲置（非现存问题：09-18 对全部 tracked `.md` 实跑一遍，链接与锚点均通过；缺的是防未来漂移的门禁） |
 | — | `Release` 工作流的 `Publish <crate>` 步骤在本地先发布时会红 | 🚧 见 §6.4（发布物不受影响；下次先推 tag 即可避免） |
-| — | 发布包包含仓库级杂物（`output/` 原型 PNG、`ui/`、`scripts/`、启动脚本），tpl 包 925 KiB | 🚧 需加 `include`/`exclude`；注意 `include_str!("../ui/index.html")` 使 `ui/` 不可简单排除 |
+| — | ~~发布包包含仓库级杂物（`output/` 原型 PNG、`ui/`、`scripts/`、启动脚本），tpl 包 925 KiB~~ | ✅ 已清（2026-09-22，A5）：扩充 `package.exclude`，120 文件 / 498 KiB → **63 文件 / 126 KiB**；新增 `scripts/check_package_contents.py` 守卫并接入 CI |
 
 ### 6.2 风险登记册（来源 ROADMAP §6，标注当前状态）
 
@@ -306,9 +306,9 @@ CI 为此单列 `Doc tests` 步骤（`cargo test --workspace --doc`，当前 1 �
 
 （当前生产口径 ≥ 91%，基线 92.19%，余量约 60 行；2026-09-22 由 89% 上调）。
 
-**第三优先：修发布流程与包内容**
+**第三优先：修发布流程与包内容**（包内容已清，2026-09-22）
 
-① 按 §6.4 的结论，下次发版**先推 tag 交 CI 发布**；② 给三个 crate 加 `include`/`exclude` 收窄发布包（当前 tpl 包 925 KiB，含 `output/` 原型 PNG、`scripts/`、启动脚本等仓库级杂物）—— 注意 `cli` 的 `include_str!("../ui/index.html")` 意味着 `ui/` 必须保留。
+① 按 §6.4 的结论，下次发版**先推 tag 交 CI 发布**；② ~~给三个 crate 加 `include`/`exclude` 收窄发布包~~ —— **已完成（A5）**：`nctool-tpl` 的 `package.exclude` 已扩充，120 文件 / 498 KiB → **63 文件 / 126 KiB**（`core`/`cli` 包本已干净，未动）；新增 `scripts/check_package_contents.py` 守卫。
 
 **第四优先：Backlog 继续**
 

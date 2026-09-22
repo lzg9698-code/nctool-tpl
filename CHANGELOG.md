@@ -879,6 +879,35 @@ CI 转绿后从 run 的 `rust-coverage-lcov` 产物里取到 lcov，用项目自
 - workspace 全量 **597 项**通过；fmt / clippy / doc / 三项对拍 / 文档链接均通过；
   覆盖率门 91% 通过（实测 92.19%）。
 
+### 批次十八：收窄发布包（A5）
+
+`nctool-tpl` 是**库**，但仓库里同时住着 CLI / Web UI / 开发脚本 / 原型产物，
+此前 `Cargo.toml` 的 `exclude` 只挡了 `.github/` `docs/` `target/`，其余全部
+被打进 `.crate`：**120 个文件 / 498 KiB**（原型 PNG、验收脚本、模型交接 HTML…）。
+
+#### Changed
+
+- **扩充 `nctool-tpl` 的 `package.exclude`**：新增 `output/`、`scripts/`、`ui/`、
+  `examples/multi_op_demo.sh`、`启动UI.bat`、`overview.md`、`CODE_REVIEW_AND_DEV_PLAN.md`
+  以及 `templates/` 下除演示模板外的内容。
+  效果：**120 → 63 个文件，498 KiB → 126 KiB（−75%）**。
+- **保留 `templates/turning/demo_gcode.j2`**：`examples/demo.rs` 运行时会读它，
+  整目录排除会让发布物的 `cargo run --example demo` 运行时报错。该模板自包含
+  （无 include），保留成本极小。
+
+#### Added
+
+- **发布包内容守卫**（`scripts/check_package_contents.py` + CI 步骤
+  `Package contents`）：对 `cargo package --list --offline` 做**黑名单断言**
+  （而非白名单——白名单会在库合法新增文件时误报），另加正向断言确保
+  `src/lib.rs` / `Cargo.toml` / `LICENSE` / `README.md` 仍在包里（防 exclude 写过头）。
+  正反向均实测：把 `output/` 从 exclude 移除 → 守卫立即报错列出 16 个文件。
+
+#### 验证
+
+- workspace 全量 **597 项**通过；fmt / clippy / doc / 四项对拍与守卫 / 文档链接均通过。
+- `cargo package` 验证通过（发布物可独立编译）。
+
 ---
 
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18

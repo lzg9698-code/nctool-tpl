@@ -15,12 +15,39 @@ categories = ["template-engine", "parser-implementations", "development-tools::b
 repository = "https://github.com/lzg9698-code/nctool-tpl"
 # documentation = "https://docs.rs/nctool-tpl"  # docs.rs 自动生成，无需手动填写
 
-# 发布到 crates.io 时排除的文件
+# 发布到 crates.io 时排除的文件。
+#
+# 本 crate 是**库**（nctool-tpl）：只需要 `src/` + 自己的测试/基准/示例。
+# 仓库里那些服务于 CLI / Web UI / 开发流程的资源都不属于本库的发布物：
+#   - `output/`：UI 原型 PNG / 验收脚本 / 工艺参数 JSON（仓库级产物，420K）
+#   - `scripts/`：CI 对拍脚本与 fixture（跟 workspace 开发流程相关）
+#   - `ui/`：Web UI 单文件（由 `cli` 通过 `include_str!` 打包，不在本库）
+#   - `templates/`：**不**全部排除 —— `examples/demo.rs` 运行时会读
+#     `templates/turning/demo_gcode.j2`（自包含，无 include），若整个排除,
+#     发布物的 `cargo run --example demo` 会在运行时报错。这里只排除 templates 下
+#     除该演示模板之外的内容（其它模板属于 core 的资产 / 仓库开发用例）。
+#   - 启动脚本 / 审查记录 / 开发概览：仓库级文档与工具，非库内容。
 exclude = [
     ".github/",
     "docs/",
     "target/",
     "*.probestmp",
+    "output/",
+    "scripts/",
+    "ui/",
+    "examples/multi_op_demo.sh",
+    "启动UI.bat",
+    "overview.md",
+    "CODE_REVIEW_AND_DEV_PLAN.md",
+    "templates/README.md",
+    "templates/templates.yaml",
+    "templates/variables.yaml",
+    "templates/grooving/",
+    "templates/machines/",
+    "templates/turning/_undercut_common.j2",
+    "templates/turning/undercut.j2",
+    "templates/turning/undercut_es.j2",
+    "templates/turning/undercut_fs.j2",
 ]
 
 [dependencies]
