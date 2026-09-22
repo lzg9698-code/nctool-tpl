@@ -1216,4 +1216,274 @@ mod tests {
             vec!["program_prefix", "program_digits", "spindle_on"]
         );
     }
+
+    // ---- 覆盖率补齐：`Ast` 访问器 ----
+
+    /// `Ast::name` / `Ast::source` 返回解析时传入的同一份文本。
+    #[test]
+    fn ast_exposes_name_and_source() {
+        let src = "{{ x }}";
+        let ast = parse(src, "demo.j2").unwrap();
+        assert_eq!(ast.name(), "demo.j2");
+        assert_eq!(ast.source(), src);
+    }
+
+    // ---- 覆盖率补齐：Collection 语义 ----
+
+    /// 同一变量多次出现只进结果一次，位置取**首次**出现处；
+    /// 首次引用被 `default` 兜底时，后续必选引用不改变已定的可选性。
+    #[test]
+    fn variable_appears_once_at_first_position() {
+        let vs = all_of("{{ x }}\n{{ x }}\n{% if x %}{{ x }}{% endif %}");
+        assert_eq!(names(&vs), vec!["x"], "重复引用应去重：{:?}", names(&vs));
+        assert_eq!(vs[0].line, 1, "位置应为首次出现处");
+    }
+
+    // ---- 覆盖率补齐：语句遍历分支 ----
+
+    /// `{% do %}` 语句里的表达式变量要被收集（此前零覆盖）。
+    #[test]
+    fn do_statement_variables_collected() {
+        let vs = undeclared_of("{% do log(marker) %}");
+        assert!(
+            names(&vs).contains(&"marker"),
+            "do 语句实参应计入未声明：{:?}",
+            names(&vs)
+        );
+    }
+
+    /// `{% autoescape %}` 块的开关表达式与块体变量都要被收集（此前零覆盖）。
+    #[test]
+    fn autoescape_block_variables_collected() {
+        let vs = undeclared_of("{% autoescape flag %}{{ inner }}{% endautoescape %}");
+        let n = names(&vs);
+        assert!(n.contains(&"flag"), "开关表达式应计入：{n:?}");
+        assert!(n.contains(&"inner"), "块体应计入：{n:?}");
+    }
+
+    /// `{% filter %}` 块的过滤器表达式与块体变量都要被收集（此前零覆盖）。
+    #[test]
+    fn filter_block_variables_collected() {
+        let vs = undeclared_of("{% filter upper %}{{ inner }}{% endfilter %}");
+        assert!(
+            names(&vs).contains(&"inner"),
+            "filter 块体应计入未声明：{:?}",
+            names(&vs)
+        );
+    }
+
+    /// `{% call %}` 块：实参被求值，块体与宏默认值在宏作用域内展开（此前零覆盖）。
+    #[test]
+    fn call_block_variables_collected() {
+        let vs = undeclared_of(
+            "{% macro m(a, b = fallback) %}{{ a }}{{ b }}{% endmacro %}\
+             {% call m(arg) %}{{ body_var }}{% endcall %}",
+        );
+        let n = names(&vs);
+        assert!(n.contains(&"fallback"), "宏默认值应计入：{n:?}");
+        assert!(n.contains(&"arg"), "call 实参应计入：{n:?}");
+        assert!(n.contains(&"body_var"), "call 块体应计入：{n:?}");
+    }
+
+    /// `{% for %}…{% else %}` 的 else 体在循环变量**不可见**的外层作用域求值：
+    /// 循环变量在 else 体中引用时仍算未声明（此前零覆盖）。
+    #[test]
+    fn for_else_body_is_outside_loop_scope() {
+        let vs = undeclared_of("{% for i in xs %}{{ i }}{% else %}{{ i }}{% endfor %}");
+        let n = names(&vs);
+        assert!(n.contains(&"xs"), "迭代对象应计入：{n:?}");
+        assert!(n.contains(&"i"), "else 体里的 i 在循环作用域外：{n:?}");
+    }
+
+    // ---- 覆盖率补齐：表达式遍历分支 ----
+
+    /// 切片 `x[a:b:c]` 的被切表达式与起止步三段都要被收集（此前零覆盖）。
+    #[test]
+    fn slice_expression_variables_collected() {
+        let vs = undeclared_of("{{ items[start:stop:step] }}");
+        let n = names(&vs);
+        for want in ["items", "start", "stop", "step"] {
+            assert!(n.contains(&want), "切片 {want} 应计入：{n:?}");
+        }
+    }
+
+    /// 列表字面量与映射字面量的键/值都要被收集（此前零覆盖）。
+    ///
+    /// 注意 minijinja 的映射字面量**只接受字符串字面量键**，`{"k": v}` 可以，
+    /// 裸标识符简写 `{w: z}` 会在解析期报 `unexpected ':'` —— 这不是实现缺陷，
+    /// 是语法约束，用例按实际语法写。
+    #[test]
+    fn list_and_map_literal_variables_collected() {
+        let vs = undeclared_of(r#"{{ [a, b] }}{{ {"k": v, "w": z} }}"#);
+        let n = names(&vs);
+        for want in ["a", "b", "v", "z"] {
+            assert!(n.contains(&want), "集合字面量 {want} 应计入：{n:?}");
+        }
+    }
+
+    /// `is` 测试（非 defined/undefined）不兜底：裸变量操作数仍为必选（此前零覆盖）。
+    #[test]
+    fn non_defined_test_does_not_opt_out() {
+        let vs = undeclared_of("{% if n is odd %}{{ n }}{% endif %}");
+        assert!(!opt(&vs, "n"), "只有 defined/undefined 才兜底 → n 必选");
+    }
+
+    /// `default` 过滤器的**参数**仍需正常求值：参数是必选变量（此前零覆盖）。
+    #[test]
+    fn default_filter_argument_is_required() {
+        let vs = undeclared_of("{{ x | default(fallback) }}");
+        assert!(opt(&vs, "x"), "裸操作数 x 被兜底 → 可选");
+        assert!(
+            !opt(&vs, "fallback"),
+            "default 的参数不被兜底 → 必选：{:?}",
+            names(&vs)
+        );
+    }
+
+    // ---- 覆盖率补齐：成员访问的语句/表达式分支 ----
+
+    /// for 的 `if` 过滤条件、if 的 else 体、with 赋值的右值、set/set-block 的
+    /// 过滤器、autoescape / filter-block 的表达式、block 体、macro 默认值、
+    /// call 块的实参与默认值、do 语句 —— 全都要被成员访问遍历穿透
+    /// （此前这些分支在 `collect_member_keys_stmt` 里零覆盖）。
+    ///
+    /// 这不是「多测一点」：`extract_member_accesses` 决定**机床配置键的完整性
+    /// 检查范围**，漏一个分支 = 用那种语法写的模板，其引用的机床键不进校验，
+    /// 缺键一路静默到渲染。
+    #[test]
+    fn member_accesses_traverse_every_stmt_branch() {
+        let cases: &[(&str, &[&str])] = &[
+            (r#"{{ machine.a }}"#, &["a"]),
+            (
+                r#"{% for i in machine.iter if machine.pred %}{{ i }}{% endfor %}"#,
+                &["iter", "pred"],
+            ),
+            (
+                r#"{% if machine.c %}{{ machine.t }}{% else %}{{ machine.f }}{% endif %}"#,
+                &["c", "t", "f"],
+            ),
+            (r#"{% with v = machine.w %}{{ v }}{% endwith %}"#, &["w"]),
+            (r#"{% set s = machine.set %}"#, &["set"]),
+            (
+                r#"{% set sb | upper %}{{ machine.sb }}{% endset %}"#,
+                &["sb"],
+            ),
+            (
+                r#"{% autoescape machine.ae %}{{ machine.ab }}{% endautoescape %}"#,
+                &["ae", "ab"],
+            ),
+            (
+                r#"{% filter upper %}{{ machine.fb }}{% endfilter %}"#,
+                &["fb"],
+            ),
+            (
+                r#"{% block blk %}{{ machine.blk }}{% endblock %}"#,
+                &["blk"],
+            ),
+            (
+                r#"{% macro m(d = machine.md) %}{{ machine.mb }}{% endmacro %}"#,
+                &["md", "mb"],
+            ),
+            (r#"{{ machine.imp }}"#, &["imp"]),
+            (r#"{% do log(machine.do) %}"#, &["do"]),
+        ];
+        for (src, want) in cases {
+            let ast = parse(src, "m.j2").unwrap_or_else(|e| panic!("解析失败 {src}: {e}"));
+            assert_eq!(
+                extract_member_accesses(&ast, "machine"),
+                want.iter().map(|s| s.to_string()).collect::<Vec<_>>(),
+                "源码: {src}"
+            );
+        }
+    }
+
+    /// `collect_member_keys_stmt` 的 for-else / call 块 / import 等剩余分支。
+    ///
+    /// `{% continue %}` / `{% break %}` 只允许出现在循环体内，故与 for 一起写。
+    #[test]
+    fn member_accesses_traverse_remaining_stmt_branches() {
+        let cases: &[&str] = &[
+            "{% for i in xs %}{% else %}{{ machine.forelse }}{% endfor %}",
+            "{% import \"macros.j2\" as m %}{{ m.x }}{{ machine.after_import }}",
+            "{% from \"macros.j2\" import f %}{{ machine.fromimp }}",
+            "{% extends \"base.j2\" %}{{ machine.ext }}",
+            "{% call mc(1) %}{{ machine.cb }}{% endcall %}",
+            "{% for i in xs %}{% continue %}{% break %}{% endfor %}{{ machine.after_loop }}",
+        ];
+        for src in cases {
+            let ast = parse(src, "m.j2").unwrap_or_else(|e| panic!("解析失败 {src}: {e}"));
+            let keys = extract_member_accesses(&ast, "machine");
+            assert!(
+                !keys.is_empty(),
+                "该分支应至少收集一个 machine 键：{src} → {keys:?}"
+            );
+        }
+    }
+
+    /// `collect_member_keys_call` 的三类调用实参（位置 / 展开 / 关键字）都要穿透
+    /// （此前 `Kwarg` 与 `PosSplat` 分支零覆盖）。
+    #[test]
+    fn member_accesses_traverse_every_call_arg_kind() {
+        let ast = parse(
+            "{{ f(machine.pos, *machine.splat, **machine.kw, key=machine.kwarg) }}",
+            "m.j2",
+        )
+        .unwrap();
+        assert_eq!(
+            extract_member_accesses(&ast, "machine"),
+            vec!["pos", "splat", "kw", "kwarg"]
+        );
+    }
+
+    /// `walk_expr` 的 Test / Slice / List / Map 分支也要被未声明提取穿透
+    /// （与上面的成员访问用例互补：一个查机床键，一个查必选参数）。
+    #[test]
+    fn undeclared_traverses_test_and_collection_exprs() {
+        let vs = undeclared_of(
+            r#"{{ items[lo:hi:st] }}{{ [p, q] }}{{ {"k": r} }}{% if n is odd %}{{ n }}{% endif %}"#,
+        );
+        let n = names(&vs);
+        for want in ["items", "lo", "hi", "st", "p", "q", "r", "n"] {
+            assert!(n.contains(&want), "表达式分支 {want} 应计入：{n:?}");
+        }
+    }
+
+    /// 宏内 `{% call %}` 的宏默认值也要被未声明提取穿透。
+    #[test]
+    fn undeclared_traverses_call_block_defaults() {
+        let vs = undeclared_of(
+            "{% macro m(a = dflt) %}{{ a }}{% endmacro %}{% call m() %}{% endcall %}",
+        );
+        assert!(
+            names(&vs).contains(&"dflt"),
+            "call 块内宏默认值应计入：{:?}",
+            names(&vs)
+        );
+    }
+
+    /// 解构赋值目标（`Expr::List`）也要登记为模板局部
+    /// （此前 `declare_locals` 的 `Expr::List` 分支零覆盖）。
+    ///
+    /// 语法注意：minijinja 只支持 `{% set a, b = pair %}` 形式的解构目标，
+    /// `{% with a, b = pair %}`（with 只接受单个赋值目标）会解析失败 ——
+    /// 已用 `nctool inspect` 探针确认，不是实现缺陷。
+    #[test]
+    fn set_destructuring_binds_locals() {
+        let vs = undeclared_of("{% set a, b = pair %}{{ a }}{{ b }}");
+        let n = names(&vs);
+        assert!(n.contains(&"pair"), "右值 pair 应计入：{n:?}");
+        assert!(!n.contains(&"a"), "解构目标 a 是局部：{n:?}");
+        assert!(!n.contains(&"b"), "解构目标 b 是局部：{n:?}");
+    }
+
+    /// 宏参数解构目标（`{% macro m((a, b)) %}` 形态）同理走 `declare_locals`
+    /// 的 `Expr::List` 分支。用 `for` 的解构目标做等价验证 —— 三者共用同一函数。
+    #[test]
+    fn for_destructuring_target_is_local() {
+        let vs = undeclared_of("{% for k, v in mapping %}{{ k }}{{ v }}{% endfor %}");
+        let n = names(&vs);
+        assert!(n.contains(&"mapping"), "迭代对象应计入：{n:?}");
+        assert!(!n.contains(&"k"), "解构目标 k 是局部：{n:?}");
+        assert!(!n.contains(&"v"), "解构目标 v 是局部：{n:?}");
+    }
 }

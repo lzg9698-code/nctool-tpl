@@ -227,3 +227,232 @@ fn options_summary(spec: &ParamSpec) -> Option<String> {
     }
     Some(text)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use nctool_core::{ParamKind, ParamSpec};
+
+    /// 一个"裸"规格：只给名字，其余字段取最小默认值。
+    ///
+    /// `ParamSpec` 没有实现 `Default`（字段语义各异，给不出合理默认），
+    /// 故在此显式构造 —— 也让用例对"哪些字段属于约束"保持敏感。
+    fn spec(name: &str) -> ParamSpec {
+        ParamSpec {
+            name: name.to_string(),
+            kind: ParamKind::Any,
+            required: false,
+            default: None,
+            min: None,
+            max: None,
+            integer: false,
+            unit: None,
+            options: None,
+            description: String::new(),
+            required_if: None,
+            derive: None,
+        }
+    }
+
+    // ---- constraint_summary：每个分支单独钉住 ----
+
+    /// 无任何约束时摘要为空字符串（`render_line` 据此省略该段）。
+    #[test]
+    fn constraint_summary_empty_when_unconstrained() {
+        assert_eq!(constraint_summary(&spec("x")), "");
+    }
+
+    /// 只有 `min` / 只有 `max` / 两端都有 —— 三种区间形态各自的文案。
+    #[test]
+    fn constraint_summary_covers_every_range_shape() {
+        let mut only_min = spec("x");
+        only_min.min = Some(1.0);
+        assert_eq!(constraint_summary(&only_min), "≥ 1");
+
+        let mut only_max = spec("x");
+        only_max.max = Some(9.0);
+        assert_eq!(constraint_summary(&only_max), "≤ 9");
+
+        let mut both = spec("x");
+        both.min = Some(1.0);
+        both.max = Some(9.0);
+        assert_eq!(constraint_summary(&both), "范围 1~9");
+    }
+
+    /// `integer` / `unit` 两个标记位各自贡献一段。
+    #[test]
+    fn constraint_summary_includes_integer_and_unit() {
+        let mut s = spec("n");
+        s.integer = true;
+        assert_eq!(constraint_summary(&s), "整数");
+
+        let mut s = spec("f");
+        s.unit = Some("mm/min".to_string());
+        assert_eq!(constraint_summary(&s), "单位 mm/min");
+    }
+
+    /// 候选值摘要与其它约束用 `；` 连接，顺序为 可选值 → 范围 → 整数 → 单位。
+    ///
+    /// 字符串候选**带双引号**是 `ParamValue::display` 的有意行为：本模型里
+    /// `"8"`（文本候选）与 `8`（数值候选）是不同候选项，加引号才能区分。
+    #[test]
+    fn constraint_summary_joins_with_semicolon_in_fixed_order() {
+        let mut s = spec("side");
+        s.options = Some(vec![
+            ParamValue::String("Left".to_string()),
+            ParamValue::String("Right".to_string()),
+        ]);
+        s.min = Some(0.0);
+        s.max = Some(5.0);
+        s.integer = true;
+        s.description = "说明文字不应出现在约束摘要里".to_string();
+        assert_eq!(
+            constraint_summary(&s),
+            "可选值 \"Left\" / \"Right\"；范围 0~5；整数"
+        );
+        assert!(
+            !constraint_summary(&s).contains("说明文字"),
+            "描述不属于约束摘要"
+        );
+    }
+
+    /// 文本候选与数值候选即使字面相同也保持区分（引号是唯一的区分手段）。
+    #[test]
+    fn string_and_number_options_are_visually_distinct() {
+        let mut s = spec("n");
+        s.options = Some(vec![
+            ParamValue::String("8".to_string()),
+            ParamValue::Number(8.0),
+        ]);
+        assert_eq!(constraint_summary(&s), "可选值 \"8\" / 8");
+    }
+
+    /// 布尔与列表候选的展示形态（列表降级为 `<列表>`）。
+    #[test]
+    fn boolean_and_list_options_display_forms() {
+        let mut s = spec("b");
+        s.options = Some(vec![ParamValue::Bool(true), ParamValue::Bool(false)]);
+        assert_eq!(constraint_summary(&s), "可选值 true / false");
+
+        let mut s = spec("l");
+        s.options = Some(vec![ParamValue::List(vec![ParamValue::Number(1.0)])]);
+        assert_eq!(constraint_summary(&s), "可选值 <列表>");
+    }
+
+    // ---- options_summary ----
+
+    /// 无 `options` 字段、或候选值为空列表 → 不产出摘要（而不是产出空串）。
+    #[test]
+    fn options_summary_none_for_absent_or_empty() {
+        assert_eq!(options_summary(&spec("x")), None);
+
+        let mut empty = spec("x");
+        empty.options = Some(Vec::new());
+        assert_eq!(options_summary(&empty), None);
+    }
+
+    /// 候选值数量恰好等于上限时不折叠；超出 1 个即折叠并给出总数。
+    #[test]
+    fn options_summary_folds_only_beyond_limit() {
+        let many: Vec<ParamValue> = (0..=MAX_SHOWN_OPTIONS)
+            .map(|i| ParamValue::Number(i as f64))
+            .collect();
+
+        let mut at_limit = spec("x");
+        at_limit.options = Some(many[..MAX_SHOWN_OPTIONS].to_vec());
+        let text = options_summary(&at_limit).unwrap();
+        assert_eq!(text, "0 / 1 / 2 / 3 / 4 / 5");
+        assert!(!text.contains("共"), "恰好等于上限不应折叠：{text}");
+
+        let mut over = spec("x");
+        over.options = Some(many);
+        let text = options_summary(&over).unwrap();
+        assert_eq!(text, "0 / 1 / 2 / 3 / 4 / 5 …（共 7 项）");
+    }
+
+    // ---- render_line ----
+
+    /// 无规格时只到「行 L 列 C」为止，不留尾随空格。
+    #[test]
+    fn render_line_without_spec_stops_after_position() {
+        let v = Variable {
+            name: "x".to_string(),
+            line: 3,
+            col: 7,
+            start: 0,
+            end: 1,
+            optional: false,
+        };
+        let line = render_line(&v, None, 1);
+        assert_eq!(line, "  x  行 3 列 7\n");
+    }
+
+    /// 名字短于 `width` 时右侧补空格对齐；长于 `width` 时不补（`saturating_sub`）。
+    #[test]
+    fn render_line_pads_to_width_without_overflow() {
+        let mk = |name: &str| Variable {
+            name: name.to_string(),
+            line: 1,
+            col: 1,
+            start: 0,
+            end: 1,
+            optional: false,
+        };
+        // width=5，名字 2 字符 → 补 3 个空格
+        assert_eq!(render_line(&mk("ab"), None, 5), "  ab     行 1 列 1\n");
+        // 名字比 width 长 → 不补、不 panic
+        assert_eq!(
+            render_line(&mk("abcdefgh"), None, 3),
+            "  abcdefgh  行 1 列 1\n"
+        );
+    }
+
+    /// 有规格时按 类型 → 约束 → 描述 的顺序附加，且空描述不产生多余分隔。
+    #[test]
+    fn render_line_appends_kind_constraints_description() {
+        let v = Variable {
+            name: "feed".to_string(),
+            line: 2,
+            col: 4,
+            start: 0,
+            end: 1,
+            optional: false,
+        };
+        let mut s = spec("feed");
+        s.kind = ParamKind::Number;
+        s.unit = Some("mm/min".to_string());
+
+        let with_desc = {
+            let mut s2 = s.clone();
+            s2.description = "进给速度".to_string();
+            render_line(&v, Some(&s2), 4)
+        };
+        assert!(with_desc.contains("mm/min"), "{with_desc}");
+        assert!(with_desc.contains("进给速度"), "{with_desc}");
+        // 描述在单位之后
+        let unit_pos = with_desc.find("mm/min").unwrap();
+        let desc_pos = with_desc.find("进给速度").unwrap();
+        assert!(unit_pos < desc_pos);
+
+        // 描述为空时不追加多余内容
+        let no_desc = render_line(&v, Some(&s), 4);
+        assert_eq!(
+            no_desc,
+            format!(
+                "  feed  行 2 列 4  {}  单位 mm/min\n",
+                ParamKind::Number.label()
+            )
+        );
+    }
+
+    // ---- MAX_NAME_WIDTH 的语义 ----
+
+    /// `run` 里对宽度取 `min(MAX_NAME_WIDTH)`：超长名字不应把整行推得很远。
+    #[test]
+    fn max_name_width_is_a_bounded_cap() {
+        assert_eq!(MAX_NAME_WIDTH, 24);
+        let long = "a".repeat(60);
+        let width = long.chars().count().min(MAX_NAME_WIDTH);
+        assert_eq!(width, MAX_NAME_WIDTH);
+    }
+}
