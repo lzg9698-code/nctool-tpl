@@ -59,6 +59,8 @@ pub enum Command {
     Templates(TemplatesArgs),
     /// 变量提取：必选/可选参数 + 行列定位
     Inspect(InspectArgs),
+    /// 静态检查：在渲染前发现会导致错误 G-code 的常见笔误
+    Lint(LintArgs),
     /// 渲染前参数校验，输出结构化报告
     Validate(ValidateArgs),
     /// 渲染生成 G-code
@@ -205,6 +207,13 @@ mod tests {
 
 #[derive(Debug, Args)]
 pub struct InspectArgs {
+    /// 模板名或模板文件路径
+    pub template: String,
+}
+
+/// `lint` 的参数。目前只需一个模板，独立成结构体便于后续加检查项开关。
+#[derive(Debug, Args)]
+pub struct LintArgs {
     /// 模板名或模板文件路径
     pub template: String,
 }

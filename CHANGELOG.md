@@ -971,6 +971,35 @@ CI 转绿后从 run 的 `rust-coverage-lcov` 产物里取到 lcov，用项目自
   而旧的 `let _ =` 版本不会发现。恢复后转绿。
 - workspace 全量 **597 项**通过；fmt / clippy / 覆盖率门 91% 均通过。
 
+### 批次二十一：新增 `nctool lint`（三角函数度制风险检查）
+
+Backlog 里唯一带**安全性质**的未实现功能：模板里写 `{{ 30 | sin }}` 时，
+minijinja 的 `sin` 按**弧度**解释（项目另有度制变体 `sin_d`）。写错**不会报错**，
+只会静默产出错误坐标（撞刀级）。`lint` 在渲染前把这类用法拦下。
+
+#### Added
+
+- **`nctool lint <模板>`**：静态检查模板。首个检查项：标准三角函数
+  `sin`/`cos`/`tan`/`asin`/`acos`/`atan`（弧度制）给出警告并建议改用
+  `sin_d` 等度制变体。支持内置/目录模板名与文件路径、`--format json`。
+  退出码：无发现 0；有发现 1；语法错误 6。
+- **`nctool_tpl::lint` / `LintFinding`**（`src/lint.rs`）：遍历 minijinja AST
+  的**全部**语句 / 表达式形态收集过滤器用法；公开供其他前端复用。
+- 测试：`src/lint.rs` 11 项单测（含“把 | sin 放进每一种 AST 形态”的遍历完整性用例
+  + raw 块不误报）、`cli/tests/cli.rs` 4 项、`cli/tests/cli_e2e.rs` 2 项。
+
+#### 说明
+
+- 遍历完整性用例暴露了一个 parser 细节：minijinja **只为链式比较（2+ 运算符）
+  构造 `Expr::Compare`**，单次 `>` 走 `Expr::BinOp` —— walker 必须两个分支都覆盖。
+- 弧度可能是刻意的，故为**警告**而非错误。`nctool-tpl` 的 `src/lint.rs` 生产口径
+  覆盖率 **100%**。
+
+#### 验证
+
+- workspace 全量 **614 项**通过；fmt / clippy / doc / 四项对拍与守卫 / 文档链接均通过；
+  覆盖率门 91% 通过（实测 92.35%）。
+
 ---
 
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18

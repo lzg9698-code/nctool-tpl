@@ -51,6 +51,7 @@ fn help_shows_complete_command_tree() {
         .success()
         .stdout(predicate::str::contains("templates"))
         .stdout(predicate::str::contains("inspect"))
+        .stdout(predicate::str::contains("lint"))
         .stdout(predicate::str::contains("validate"))
         .stdout(predicate::str::contains("render"))
         .stdout(predicate::str::contains("generate"))
@@ -220,6 +221,74 @@ fn inspect_unknown_template_errors() {
         .assert()
         .failure()
         .stderr(predicate::str::contains("模板不存在"));
+}
+
+// ---------------------------------------------------------------------------
+// lint
+// ---------------------------------------------------------------------------
+
+#[test]
+fn lint_flags_radian_trig_and_exits_1() {
+    // 核心场景：`| sin`（弧度）会给警告并退出 1 —— 这是防「静默产出错误坐标」
+    let dir = tmp_dir("lint_trig");
+    std::fs::write(dir.join("t.j2"), "G0 X{{ angle | sin }}\n").unwrap();
+    nctool()
+        .args(["lint", "t.j2", "--template-dir"])
+        .arg(&dir)
+        .assert()
+        .failure()
+        .stdout(predicate::str::contains("弧度"))
+        .stdout(predicate::str::contains("sin_d"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn lint_degree_variant_is_clean() {
+    let dir = tmp_dir("lint_deg");
+    std::fs::write(dir.join("t.j2"), "G0 X{{ angle | sin_d }}\n").unwrap();
+    nctool()
+        .args(["lint", "t.j2", "--template-dir"])
+        .arg(&dir)
+        .assert()
+        .success()
+        .stdout(predicate::str::contains("静态检查通过"));
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn lint_json_reports_findings() {
+    let dir = tmp_dir("lint_json");
+    std::fs::write(dir.join("t.j2"), "{{ x | tan }}\n").unwrap();
+    let out = nctool()
+        .args(["--format", "json", "lint", "t.j2", "--template-dir"])
+        .arg(&dir)
+        .assert()
+        .failure()
+        .get_output()
+        .stdout
+        .clone();
+    let v: serde_json::Value = serde_json::from_slice(&out).expect("JSON 输出应可解析");
+    assert_eq!(v["ok"], false);
+    assert_eq!(v["data"]["finding_count"], 1);
+    assert_eq!(v["data"]["findings"][0]["filter"], "tan");
+    assert_eq!(v["data"]["findings"][0]["suggestion"], "tan_d");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn lint_syntax_error_exits_6() {
+    // 直接用文件路径（而非 --template-dir）：后者会在「注册表加载」阶段就
+    // 因编译失败而报错（退出码 1），测不到 lint 自身的解析错误路径。
+    let dir = tmp_dir("lint_syntax");
+    let path = dir.join("bad.j2");
+    std::fs::write(&path, "{{ unclosed\n").unwrap();
+    nctool()
+        .args(["lint"])
+        .arg(&path)
+        .assert()
+        .code(6)
+        .stderr(predicate::str::contains("语法错误"));
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ---------------------------------------------------------------------------

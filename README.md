@@ -430,6 +430,9 @@ nctool templates new my_op               # 在当前 templates/ 下新建骨架
 # 提取模板必选/可选参数（含行列定位）
 nctool inspect drill_cycle
 
+# 静态检查：发现会导致错误 G-code 的笔误（如三角函数度制风险）
+nctool lint my_op.j2            # 有发现 → 退出码 1；干净 → 0
+
 # 参数校验（缺失必选 → 退出码 1 + 结构化报告）
 nctool validate drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100
 
@@ -477,7 +480,7 @@ nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param fe
 | 7 | 功能尚未实现 | `part generate`（规划于阶段 4） |
 
 该矩阵是稳定的对外契约，由 `cli/tests/cli_e2e.rs` 的 44 个 E2E 用例逐条断言
-（覆盖全部 10 个子命令 × 正常/异常路径）；变更退出码必须同步更新该测试与 CHANGELOG。
+（覆盖全部 11 个子命令 × 正常/异常路径）；变更退出码必须同步更新该测试与 CHANGELOG。
 
 ## 可选 / 必选判定规则
 
@@ -571,7 +574,7 @@ python scripts/check_coverage_caliber.py lcov.info --min 91
 
 > 覆盖率门判定的是**生产代码**口径，**不是** `cargo llvm-cov` 的原始口径 ——
 > llvm-cov 把 `src/*.rs` 内的 `#[cfg(test)]` 段本身计入分母，新增测试会推高数字、
-> 新增未覆盖的生产代码反被稀释（2026-09-22 实测：生产口径 92.19%）。
+> 新增未覆盖的生产代码反被稀释（2026-09-22 实测：生产口径 92.35%）。
 > 故由 `scripts/check_coverage_caliber.py` 剔除测试段后重新统计，细节见
 > [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) §3。
 

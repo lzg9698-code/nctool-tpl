@@ -2,9 +2,9 @@
 
 > 生成时间：**2026-09-18**（上一版 2026-09-10，本次为全量重写）
 > 分析依据：本文数字**全部为实测值**，非文档转抄 —— `git log` / `git status`、
-> `cargo test --workspace --all-targets`（597 项）、
+> `cargo test --workspace --all-targets`（614 项）、
 > `cargo llvm-cov --workspace --all-features --lcov` + `scripts/check_coverage_caliber.py`
-> （生产口径行 92.19%）、
+> （生产口径行 92.35%）、
 > `cargo fmt --all --check`、`cargo clippy --workspace --all-targets`、
 > CLI 与模板目录实际执行、CI run #34 的 jobs API 明细。
 > 定位：本文是**现状快照**，不是规划。规划以 `ROADMAP.md` 为准。
@@ -19,9 +19,9 @@
 | **整体进度** | **发版已完成**（2026-09-18）：阶段 A–F 的交付项只剩 2 条外部依赖/Backlog。三个 crate 已发布 crates.io（tpl 0.4.0 / core 0.3.0 / cli 0.3.0），三个 GitHub Release 已带三平台二进制 |
 | **清单记账** | ROADMAP §8 执行跟踪 **71 / 72 项（99%）** 勾选（A 12/13 · B 13/13 · C 12/12 · D 12/12 · E 12/12 · F 10/10）。B4.2 已 2026-09-22 步骤化；余 1 项为 A1 机床预设按键值核对（无手册资源，外部依赖） |
 | **发布状态** | 三个 crate 在 crates.io 可见（实测指定版本端点 `created_at` 为 2026-09-18T05:01–05:02Z）；三个 Release 各挂 3 个二进制（Windows 4.25 MB / Linux 3.62 MB / macOS-arm64 3.09 MB）。已下载 Windows 产物实测 `nctool 0.3.0` 可运行并正确产出 G-code；亦以 `cargo install nctool-cli --version 0.3.0` 从 crates.io 全新安装验证通过 |
-| **功能可用性** | CLI **10 个子命令**全部可用（除 `part` 占位）+ Web UI 完整交互闭环；模板库已整合 NCTool_V3 资产：**7 个内置 + 25 个文件模板**（隐藏 3） |
-| **测试基线** | workspace **597 项**实测（`--all-targets`），**597 通过 / 0 失败**；另 2 项 `#[ignore]`（万行实测，需 `--release --ignored`）与 1 项 doc-test（`core/src/model.rs`，标记 `#[ignore]`）；`cargo test --workspace --doc` 另有 1 项通过（`src/lib.rs`） |
-| **覆盖率** | **生产口径**行 **92.19%**（4672/5068，门禁 ≥ 91%，2026-09-22 本机实测）；对照 llvm-cov 原始口径（含 `#[cfg(test)]` 段），二者差约 4pt，原始口径会随「新增测试」虚涨，**不作门禁** |
+| **功能可用性** | CLI **11 个子命令**全部可用（除 `part` 占位）+ Web UI 完整交互闭环；模板库已整合 NCTool_V3 资产：**7 个内置 + 25 个文件模板**（隐藏 3） |
+| **测试基线** | workspace **614 项**实测（`--all-targets`），**614 通过 / 0 失败**；另 2 项 `#[ignore]`（万行实测，需 `--release --ignored`）与 1 项 doc-test（`core/src/model.rs`，标记 `#[ignore]`）；`cargo test --workspace --doc` 另有 1 项通过（`src/lib.rs`） |
+| **覆盖率** | **生产口径**行 **92.35%**（4899/5305，门禁 ≥ 91%，2026-09-22 本机实测）；对照 llvm-cov 原始口径（含 `#[cfg(test)]` 段），二者差约 4pt，原始口径会随「新增测试」虚涨，**不作门禁** |
 | **CI 状态** | 三平台矩阵（fmt / clippy `-D warnings` / test `--workspace` / doc `-D warnings` / audit）+ 覆盖率门 + 前后端对拍门。发版提交 `3031a71`（run #37）**全绿**；此前连续多次绿灯（最近 `db8d928` / `6e5a3a7`） |
 | **✅ 本轮（09-15 ~ 09-18）** | ① 架构评估 P0×3 + P1×4 + P2-1 **全部收口** ② 覆盖率从「未度量」到真门禁并两次上调（无 → 89% → 90%；**09-18 改为生产口径 ≥ 88%**，见 §4）③ CI 补 `--workspace`（被测项 155 → 527）④ NCTool_V3 模板资产整合（`manifest.rs` / `variables.rs` / `derive.rs` + 25 模板 + INDEX G420 全套）⑤ server.rs 接口契约补测 10 项 ⑥ **发版**：0.4.0 / 0.3.0 / 0.3.0 上线 crates.io + 三平台 Release 二进制 |
 | **当前最大问题** | ① `part generate` 未实现（Backlog #2）② 工艺评审长期外部依赖（R1，Q2=否）③ 第四轮审查批次 E 的 UI 两项（P2-25 / P2-26）仍开放（需浏览器验证）；批次 D 的 P1-10 / P1-11 已 2026-09-22 收口 ④ 发版遗留：`Release` 工作流的 `Publish <crate>` 步骤会红（Q11 见 §6.4）。**注**：覆盖率洼地（`ui.rs`/`inspect.rs`/`variables.rs`）已 2026-09-22 补齐（A3）。 |
@@ -136,7 +136,7 @@ CLI E2E 契约、HTTP 契约、21 组正向 golden + 3 组负向报告、错误�
 | nctool-tpl | 137 | 18 + 1(属性) | 156 | ✅ 全过 |
 | nctool-core | 203 | 11 + 3(万行) | 217 | ✅ 全过 |
 | nctool-cli | 76 | 43 + 44(E2E) | 163 | ✅ 全过 |
-| **合计** | — | — | **597** | **597 通过 / 0 失败**（2026-09-22 实测） |
+| **合计** | — | — | **614** | **614 通过 / 0 失败**（2026-09-22 实测） |
 
 另 2 项 `#[ignore]`（`large_program` 万行实测，需 `--release --ignored`）、1 项 doc-test
 `#[ignore]`（`core/src/model.rs`）。上表是 `--all-targets` 的口径，**不含 doctest** ——
@@ -146,7 +146,7 @@ CI 为此单列 `Doc tests` 步骤（`cargo test --workspace --doc`，当前 1 �
 
 | 口径 | 行覆盖 | 说明 |
 |---|---|---|
-| **生产代码**（门禁口径） | **92.19%**（4672/5068，2026-09-22 本机实测） | `scripts/check_coverage_caliber.py` 剔除 `src/*.rs` 内的 `#[cfg(test)]` 段后统计 |
+| **生产代码**（门禁口径） | **92.35%**（4899/5305，2026-09-22 本机实测） | `scripts/check_coverage_caliber.py` 剔除 `src/*.rs` 内的 `#[cfg(test)]` 段后统计 |
 | llvm-cov 原始 | 94.04%（9727/10343） | 把测试段本身计入分母，**会随新增测试虚涨，不作门禁** |
 | 门禁 | — | **生产口径 ≥ 91%**（CI 真门禁，2026-09-22 由 89% 上调；余量约 60 行） |
 
@@ -220,7 +220,7 @@ CI 为此单列 `Doc tests` 步骤（`cargo test --workspace --doc`，当前 1 �
 | P2-2~P2-4, P2-6 | 架构评审 P2 剩余项（数据表内联 / `model.rs` 拆分 / 扩展点 / 上下文复用） | ❌ 未动 |
 | — | ~~F1.3 真实 GitHub Release 未触发~~ | ✅ 已清（2026-09-18，三个 Release 各带三平台二进制） |
 | — | ~~CHANGELOG `[未发布]` 积压未发版~~ | ✅ 已清（2026-09-18 转为 0.4.0 / 0.3.0 / 0.3.0 版本段并发布） |
-| — | `scripts/check_docs_links.py` 存在但**未接入 CI**（无调用点） | 🚧 工具闲置（非现存问题：09-18 对全部 tracked `.md` 实跑一遍，链接与锚点均通过；缺的是防未来漂移的门禁） |
+| — | ~~`scripts/check_docs_links.py` 存在但**未接入 CI**（无调用点）~~ | ✅ 已清（已接入 CI：`ci.yml` 的 `Docs links & anchors` 步骤，对 `README.md` / `docs/` / `templates/README.md` 做链接与锚点门禁） |
 | — | `Release` 工作流的 `Publish <crate>` 步骤在本地先发布时会红 | 🚧 见 §6.4（发布物不受影响；下次先推 tag 即可避免） |
 | — | ~~发布包包含仓库级杂物（`output/` 原型 PNG、`ui/`、`scripts/`、启动脚本），tpl 包 925 KiB~~ | ✅ 已清（2026-09-22，A5）：扩充 `package.exclude`，120 文件 / 498 KiB → **63 文件 / 126 KiB**；新增 `scripts/check_package_contents.py` 守卫并接入 CI |
 
@@ -272,7 +272,7 @@ CI 为此单列 `Doc tests` 步骤（`cargo test --workspace --doc`，当前 1 �
 | 4 | 浏览器内模板编辑 | 21 | ⬜ 需写 API + 路径穿越/并发覆盖防护 |
 | 5 | i18n | 20 | ⬜ 取决于商业交付决策 |
 | — | B4.2 golden 保护步骤化 / P2-2~P2-6 架构评审剩余项 / F1 转速联动 / F4 机键 / F2 组合模板 | — | ⬜ 见 §6.1 与 `PROCESS_CHECKLIST.md` |
-| — | `nctool lint`（模板内出现三角函数时提示度制风险） | — | ⬜ 整合方案提出，未实现 |
+| — | ~~`nctool lint`（模板内出现三角函数时提示度制风险）~~ | — | ✅ 已实现（2026-09-22，批次二十一）：`nctool lint` 检查弧度制三角函数并建议 `sin_d` 等 |
 
 ---
 
@@ -302,9 +302,9 @@ CI 为此单列 `Doc tests` 步骤（`cargo test --workspace --doc`，当前 1 �
 
 三处洼地已补齐：`cli/src/commands/ui.rs` 20.00% → **98%**、
 `cli/src/commands/inspect.rs` 80.79% → **93%**、`core/src/variables.rs` 83.70% → **97%**；
-全项目 90.47% → **92.19%**，门禁 89% → **91%**。做法见 `CHANGELOG.md`「批次十七」。
+全项目 90.47% → **92.35%**，门禁 89% → **91%**。做法见 `CHANGELOG.md`「批次十七」。
 
-（当前生产口径 ≥ 91%，基线 92.19%，余量约 60 行；2026-09-22 由 89% 上调）。
+（当前生产口径 ≥ 91%，基线 92.35%，余量约 71 行；2026-09-22 由 89% 上调）。
 
 **第三优先：修发布流程与包内容**（包内容已清，2026-09-22）
 

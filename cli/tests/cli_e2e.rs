@@ -14,9 +14,9 @@
 //! | 6 | 渲染/注册表失败 | `render` / `pipeline` / `registry` / `template_*` |
 //! | 7 | 功能尚未实现 | `not_implemented` |
 //!
-//! 覆盖的 10 个顶层子命令：`templates` / `inspect` / `validate` / `render` /
+//! 覆盖的 11 个顶层子命令：`templates` / `inspect` / `lint` / `validate` / `render` /
 //! `generate` / `machine` / `config` / `ui` / `part` / `completion`
-//! （ROADMAP 记为 9 个，`generate` 为后加的规范入口，故实际为 10 个）。
+//! （ROADMAP 记为 9 个，`generate` 为后加的规范入口、`lint` 为 2026-09-22 新增，故实际为 11 个）。
 //!
 //! 说明：`ui` 为阻塞服务，E2E 只覆盖其启动前的安全守卫（非回环地址拒绝），
 //! 保证用例不会挂起；服务的 HTTP 行为由 `cli/src/server.rs` 的单元测试覆盖。
@@ -389,6 +389,24 @@ fn render_outputs_gcode() {
 fn render_missing_params_exits_1() {
     let r = run_in(repo_root().as_path(), &["render", "drill_cycle"]);
     assert_eq!(r.code, 1, "render 前置校验失败同样退出 1");
+}
+
+#[test]
+fn lint_clean_template_exits_0() {
+    // 内置模板不含弧度三角函数 → 无发现项
+    let r = run_in(repo_root().as_path(), &["lint", "drill_cycle"]);
+    assert_eq!(r.code, 0, "干净模板应退出 0: {}", r.stderr);
+    r.stdout_contains(&["静态检查通过"]);
+}
+
+#[test]
+fn lint_radian_trig_exits_1() {
+    let dir = temp_dir("lint_trig");
+    let path = dir.join("t.j2");
+    std::fs::write(&path, "G0 X{{ angle | sin }}\n").unwrap();
+    let r = run_in(&dir, &["lint", path.to_str().unwrap()]);
+    assert_eq!(r.code, 1, "有发现应退出 1");
+    r.stdout_contains(&["弧度", "sin_d"]);
 }
 
 #[test]

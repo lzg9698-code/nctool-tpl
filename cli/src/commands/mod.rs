@@ -3,6 +3,7 @@
 pub mod completion;
 pub mod config_cmd;
 pub mod inspect;
+pub mod lint;
 pub mod machine;
 pub mod part;
 pub mod render;
@@ -30,6 +31,7 @@ impl Command {
         match self {
             Command::Templates(a) => templates::run(&ctx, a),
             Command::Inspect(a) => inspect::run(&ctx, a),
+            Command::Lint(a) => lint::run(&ctx, a),
             Command::Validate(a) => validate::run(&ctx, a),
             Command::Render(a) | Command::Generate(a) => render::run(&ctx, a),
             Command::Machine(a) => machine::run(&ctx, a),

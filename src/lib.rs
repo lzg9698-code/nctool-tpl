@@ -35,6 +35,7 @@
 mod error;
 mod extract;
 mod filters;
+mod lint;
 mod renderer;
 
 // 公共 API 再导出
@@ -42,6 +43,7 @@ pub use error::TplError;
 pub use extract::{
     extract_template_refs, extract_undeclared, extract_variables, parse, Ast, Variable,
 };
+pub use lint::{lint, LintFinding};
 pub use renderer::Renderer;
 
 /// 渲染上下文值类型（`minijinja::Value` 的**再导出**）。
