@@ -11,6 +11,7 @@ mod cli;
 mod commands;
 mod config;
 mod context;
+mod limits;
 mod output;
 mod server;
 

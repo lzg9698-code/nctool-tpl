@@ -45,6 +45,11 @@ impl std::error::Error for PipelineError {
         match self {
             PipelineError::Render(err) => Some(err),
             PipelineError::Registry(err) => Some(err),
+            // 第四轮 P1-11：此前漏了 `Derive`，导致 `source()` 链在派生失败时分叉。
+            // `DeriveError` 已 impl `Error`（`derive.rs`），补上才能让调用方
+            // 沿错误链拿到根因。`Validation` 仍为 None —— `ValidationReport`
+            // 不是 `Error`（它是聚合报告，不 impl `Error`），保留现状。
+            PipelineError::Derive(err) => Some(err),
             _ => None,
         }
     }
@@ -1133,5 +1138,36 @@ mod tests {
         assert!(out.contains("N0010 G0 X0"));
         assert!(out.contains("G1 X1"), "未编号行内容应保留: {out}");
         assert!(out.contains("G2 X2"), "未编号行内容应保留: {out}");
+    }
+
+    #[test]
+    fn derive_error_is_reachable_through_source_chain() {
+        // 回归（第四轮 P1-11）：`PipelineError::source()` 曾漏掉 `Derive` 变体，
+        // 使 `Error::source()` 在派生失败时分叉。构造一个派生成环的规格，
+        // 断言能沿 source 链拿到根因 `DeriveError`。
+        use crate::model::{DeriveRule, ParamKind, ParamSpec, ParamValue};
+
+        let rule = |from: &str| DeriveRule {
+            from: from.into(),
+            table: vec![(ParamValue::Number(1.0), ParamValue::Number(1.0))],
+            fallback: Some(ParamValue::Number(0.0)),
+        };
+        let specs = [
+            ParamSpec::new("a", ParamKind::Number, "A").with_derive(rule("b")),
+            ParamSpec::new("b", ParamKind::Number, "B").with_derive(rule("a")),
+        ];
+
+        let err = crate::derive::apply(&specs, &ParameterSet::new()).unwrap_err();
+        let wrapped = PipelineError::Derive(err);
+
+        let source =
+            std::error::Error::source(&wrapped).expect("Derive 变体应通过 source() 暴露根因");
+        assert!(
+            matches!(
+                source.downcast_ref::<crate::derive::DeriveError>(),
+                Some(crate::derive::DeriveError::Circular { .. })
+            ),
+            "source() 应能 downcast 回 DeriveError"
+        );
     }
 }

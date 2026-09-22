@@ -422,6 +422,31 @@ fn render_missing_params_file_exits_3() {
 }
 
 #[test]
+fn render_oversized_params_file_is_rejected() {
+    // 回归（第四轮 P1-10）：`--params-file` 曾无上限地 `read_to_string`，
+    // 指向大文件 / 网络盘时会把内容整体读进内存。现改为 1 MiB 上限，超限即报错。
+    let dir = temp_dir("big_params");
+    let path = dir.join("huge.json");
+    let f = std::fs::File::create(&path).unwrap();
+    f.set_len(1024 * 1024 + 1).unwrap(); // 上限 + 1 字节
+    drop(f);
+
+    let r = run_in(
+        dir.as_path(),
+        &[
+            "render",
+            "program_header",
+            "--param",
+            "prog=1001",
+            "--params-file",
+            path.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(r.code, 3, "参数文件超限属 IO 类失败");
+    r.stderr_contains(&["过大", "上限"]);
+}
+
+#[test]
 fn render_accepts_all_postprocess_flags() {
     let mut args = vec![
         "render",

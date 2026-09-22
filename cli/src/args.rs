@@ -126,8 +126,7 @@ fn has_leading_zero(v: &str) -> bool {
 ///
 /// 数值 → Number，字符串 → String，布尔 → Bool；其他类型报错。
 pub fn load_params_file(path: &Path) -> Result<ParameterSet, CliError> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| CliError::new("io", format!("读取参数文件失败 {}: {e}", path.display())))?;
+    let text = crate::limits::read_text_limited(path, "io", "参数文件")?;
     let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
         CliError::new(
             "args",

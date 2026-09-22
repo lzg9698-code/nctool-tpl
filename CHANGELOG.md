@@ -774,6 +774,41 @@ CI 转绿后从 run 的 `rust-coverage-lcov` 产物里取到 lcov，用项目自
 里仍被借用，而 `add_template_owned` 按值接管两者，两个 `clone()` 都必需。
 报告已同步更正，**不要按原文去"修"**。
 
+### 批次十五：本地文件读取上限 + 错误链补全（第四轮批次 D）
+
+第四轮审查（`docs/CODE_REVIEW_2026-09-19.md`）批次 D 的剩余项。核实后其中
+两项（`registry.rs` 的 `try_iter().ok()?` 静默吞错、`RegistryError::Io` 丢路径）
+**已于前批次修复**，本批次处理真正开放的 P1-10 与 P1-11 的 `source()` 缺口。
+
+#### Fixed
+
+- **CLI 侧本地文件读取加上限**（第四轮 P1-10）：此前 HTTP 侧有 1 MiB 请求体上限，
+  而 CLI 侧的 `nctool.toml`、`--params-file`、模板目录下的 `*.j2` 三处
+  `read_to_string` **全部无上限**——`--template-dir` 指向网络盘或大文件时会把
+  内容整体读进内存。新增 `cli/src/limits.rs`（`MAX_LOCAL_TEXT_BYTES = 1 MiB`）
+  与 `read_text_limited`，先用 `metadata` 在读取前拒绝超大文件（避免先读进内存
+  再判断），三处入口统一走它。超限时报 `io` 类错误并**同时给出路径、实际大小
+  与上限**，不静默截断（截断会产出语法不完整的内容，更难排查）。
+- **`PipelineError::source()` 补上 `Derive` 变体**（第四轮 P1-11）：`DeriveError`
+  已 `impl Error`，但 `source()` 的 `match` 漏了该变体，导致派生失败时错误链分叉、
+  调用方无法沿 `source()` 拿到根因。`Validation` 仍为 `None`（`ValidationReport`
+  是聚合报告，不 `impl Error`），保留现状。
+
+#### Added
+
+- `cli/src/limits.rs` 4 项单元测试：小文件可读 / 超限拒绝（带路径与上限文案）/ 
+  **恰好等于上限则通过**（边界包含）/ 文件缺失报 `io`。
+- `cli/tests/cli_e2e.rs` 1 项 E2E：`--params-file` 指向超限文件时真实二进制
+  退出码 3 且 stderr 含「过大」「上限」。
+- `core/src/pipeline.rs` 1 项回归：构造派生成环的规格，断言
+  `PipelineError::Derive` 的 `source()` 能 `downcast_ref` 回 `DeriveError::Circular`。
+
+#### 验证
+
+- workspace 全量 **577 项**通过；`cargo fmt --all -- --check`、
+  `cargo clippy --workspace --all-targets -- -D warnings`、
+  `cargo test --workspace --doc` 均通过。
+
 ---
 
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18

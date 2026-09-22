@@ -15,7 +15,7 @@
 
 | 门 | 结果 |
 |---|---|
-| workspace 测试（`--all-targets`） | **571 通过 / 0 失败**（另 2 项 `#[ignore]`） |
+| workspace 测试（`--all-targets`） | **577 通过 / 0 失败**（另 2 项 `#[ignore]`） |
 | Doc-test | 1 通过（`src/lib.rs`）+ 1 `#[ignore]` |
 | 覆盖率（生产口径） | **90.34%**（4553/5040），门禁 **≥ 89%** |
 | 覆盖率（llvm-cov 原始口径） | 94.04%（仅参考，不作门禁） |
@@ -26,9 +26,9 @@
 
 ## 剩余工作
 
-- **第四轮审查批次 D 服务层**：CLI 侧文件读取无大小上限（P1-10）、
-  `registry.rs` 静默吞错（P1-11）等；**批次 E 的 UI 两项**（P2-25 Bool 恒提交 `false` /
-  P2-26 无 `AbortController`）需浏览器验证。
+- **第四轮审查批次 E 的 UI 两项**：P2-25 Bool 参数恒提交 `false`、P2-26 无
+  `AbortController`（均需浏览器验证）。批次 D 的服务层两项（P1-10 CLI 读文件上限、
+  P1-11 `PipelineError::source()` 漏 `Derive`）已于 2026-09-22 收口。
 - **覆盖率洼地**：`cli/src/commands/ui.rs` 20.00%（全项目最低）、
   `cli/src/commands/inspect.rs` 80.79%、`core/src/variables.rs` 83.70%。
 - **发布流程**：给三个 crate 加 `include`/`exclude` 收窄发布包；下次发版先推 tag 交 CI 发布。

@@ -82,8 +82,7 @@ fn read_config_file(path: &Path) -> Result<Option<NctoolConfig>, CliError> {
     if !path.exists() {
         return Ok(None);
     }
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| CliError::new("io", format!("读取配置文件失败 {}: {e}", path.display())))?;
+    let text = crate::limits::read_text_limited(path, "io", "配置文件")?;
     let cfg: NctoolConfig = toml::from_str(&text).map_err(|e| {
         CliError::new(
             "config",

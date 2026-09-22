@@ -317,6 +317,12 @@ golden 测试在 `core/tests/integration.rs`（core 包）。裸 `cargo test` **
 
 #### P1-10｜CLI 侧文件读取无大小上限，与 HTTP 侧的 1 MiB 上限不对称
 
+> ✅ **已修复（2026-09-22，批次十五）**：新增 `cli/src/limits.rs`
+> （`MAX_LOCAL_TEXT_BYTES = 1 MiB` + `read_text_limited`），三处入口
+> （`config.rs` / `context.rs` / `args.rs`）统一走它；先用 `metadata` 在读取前
+> 拒绝超大文件，超限报 `io` 错误并带路径 / 实际大小 / 上限，**不静默截断**。
+> 守卫：4 项单元测试 + 1 项 E2E（`--params-file` 超限退出码 3）。
+
 - 位置：`cli/src/config.rs:85`、`cli/src/context.rs:199`（读全部 `.j2`）、`cli/src/args.rs:129`（`--params-file`）
 - HTTP 侧已有 `MAX_BODY`（`server.rs:40`）+ 413，CLI 侧全部 `read_to_string` 无上限。本地工具定位下风险可控，但 `--template-dir` 指向网络盘/大目录时会整体读入内存。
 - 修复：至少 `load_params_file` 加上限并给出明确的错误文案。
@@ -324,6 +330,17 @@ golden 测试在 `core/tests/integration.rs`（core 包）。裸 `cargo test` **
 ---
 
 #### P1-11｜静默吞错与错误上下文丢失　`指纹 ERR-CONTEXT-LOST`
+
+> ✅ **已全部收口**：
+> - `registry.rs` 的 `try_iter().ok()?` **已重建为 fail-closed**（`.map_err(...)?`，
+>   注释明写「一个防非法坐标的闸门不该有这种失败模式」）—— 早于本批次。
+> - `RegistryError::Io` 丢路径 **已在构造处把路径并进 `io::Error` 消息**，
+>   并有回归测试 `add_file_io_error_includes_the_path` —— 早于本批次。
+> - `PipelineError::source()` 漏 `Derive` **已修复（2026-09-22，批次十五）**，
+>   回归测试 `derive_error_is_reachable_through_source_chain`。
+> - 生产 `expect` 3 处**保留**：均有不变量守护（内置模板源码应为合法、
+>   `derive.is_some()` 已过滤、作用域栈由 `push_scope` 配对），改为
+>   `unwrap_or` 反而会掩盖真正的编程错误；属低危，未动。
 
 - `core/src/registry.rs:716/725` `try_iter().ok()?` —— 迭代失败时被当作「无非有限数」返回，**安全闸门静默失效**（这是防 NaN 进 G-code 的最后一道）。
 - `core/src/registry.rs:336` `.map_err(RegistryError::Io)` 丢掉文件路径，`Display`（`:236`）只印 `{err}`；而 `ManifestError::Io{path,source}` 带路径 —— 两处口径不一致，用户看不到是哪个模板文件出错。
@@ -483,7 +500,12 @@ SF 路径（本次就是先这么做的），属于"有数据但拿不到"的隐
 
 > 四处修复均经反向验证：临时还原实现后 4 项测试全部 FAILED，恢复后全绿。
 
-### 批次 D：服务层与去重 ⚠️ **去重部分已完成（2026-09-19），服务层仍开放**
+### 批次 D：服务层与去重 ✅ **服务层 P1-10/P1-11 已收口（2026-09-22，批次十五）；P1-4/P1-5 已定量判定不修**
+
+> **2026-09-22 补做**：批次的最后两个真开放项（P1-10 CLI 文件读取上限、
+> P1-11 的 `PipelineError::source()` 漏 `Derive`）已随 `CHANGELOG.md`「批次十五」
+> 完成；P1-11 另两项（`try_iter().ok()?`、`RegistryError::Io` 路径）经核实早于本批次
+> 已修，不再开放。详见下方 §3.2 的 ✅ 标记。
 
 **已完成**
 
