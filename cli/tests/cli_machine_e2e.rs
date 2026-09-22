@@ -11,8 +11,11 @@
 //! ③ 用**子进程级**环境变量而非 `std::env::set_var`：不污染同进程的其它测试，
 //! 因此本文件不需要互斥锁、可与其它测试并行（对比 `cli/src/server.rs` 的预设端点测试）。
 
+use std::io::{Read, Write};
+use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
+use std::time::Duration;
 
 use assert_cmd::Command;
 
@@ -197,6 +200,67 @@ impl Env {
         let mut tail = vec!["machine", "add", id];
         tail.extend_from_slice(extra);
         self.run(&tail)
+    }
+}
+
+// ---------------------------------------------------------------------------
+// 真实 HTTP：AC-2.6 的跨进程形态（CLI 写 → HTTP 立刻可见）
+// ---------------------------------------------------------------------------
+
+fn reserve_port() -> u16 {
+    let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+    let port = listener.local_addr().unwrap().port();
+    drop(listener);
+    port
+}
+
+fn http_request(port: u16, method: &str, path: &str) -> std::io::Result<String> {
+    let mut stream = TcpStream::connect_timeout(
+        &format!("127.0.0.1:{port}").parse().unwrap(),
+        Duration::from_millis(300),
+    )?;
+    stream.set_read_timeout(Some(Duration::from_millis(500)))?;
+    let request =
+        format!("{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Length: 0\r\n\r\n");
+    stream.write_all(request.as_bytes())?;
+    let mut response = Vec::new();
+    stream.read_to_end(&mut response)?;
+    Ok(String::from_utf8_lossy(&response).into_owned())
+}
+
+/// 在夹具的工作目录里起 `nctool ui`（同样的三层隔离）；`Drop` 时杀掉。
+struct UiServer(std::process::Child);
+
+impl UiServer {
+    fn start(env: &Env) -> (Self, u16) {
+        let port = reserve_port();
+        let mut child = std::process::Command::new(env!("CARGO_BIN_EXE_nctool"))
+            .args(["ui", "--port", &port.to_string()])
+            .current_dir(&env.work)
+            .env("APPDATA", &env.cfg)
+            .env("XDG_CONFIG_HOME", &env.cfg)
+            .env("HOME", &env.cfg)
+            .env("USERPROFILE", &env.cfg)
+            .spawn()
+            .expect("应能启动 UI 服务");
+        for _ in 0..100 {
+            if let Ok(r) = http_request(port, "GET", "/health") {
+                if r.starts_with("HTTP/1.1 200") {
+                    return (UiServer(child), port);
+                }
+            }
+            std::thread::sleep(Duration::from_millis(20));
+        }
+        let _ = child.kill();
+        let _ = child.wait();
+        panic!("UI 服务未在超时时间内就绪");
+    }
+}
+
+impl Drop for UiServer {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
     }
 }
 
@@ -400,6 +464,44 @@ fn ac_2_6_list_marks_the_custom_machine() {
         .find(|m| m["id"] == "hero_x9")
         .expect("应含 hero_x9");
     assert_eq!(hero["builtin"], serde_json::json!(false));
+}
+
+/// AC-2.6：CLI 写完，**HTTP 立刻看得到**（两者读同一份 `nctool.toml`）。
+///
+/// 顺带钉住 `schema` 字段 —— 它是 UI 只读助手的唯一输入，取自 core 的
+/// `KNOWN_CONFIG_KEYS`（单一来源），前端不另存一份。
+#[test]
+fn ac_2_6_http_sees_machines_written_by_cli() {
+    let env = Env::new("ac26http");
+    env.add("hero_x9", &["--vendor", "ACME"]).code_is(0);
+
+    let (_server, port) = UiServer::start(&env);
+    let raw = http_request(port, "GET", "/api/machines").unwrap();
+    assert!(raw.starts_with("HTTP/1.1 200"), "{raw}");
+    let body = raw.split("\r\n\r\n").nth(1).unwrap_or("");
+    let v: serde_json::Value = serde_json::from_str(body).expect("响应应是 JSON");
+    assert_eq!(v["ok"], serde_json::json!(true));
+
+    let ids: Vec<&str> = v["data"]["machines"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|m| m["id"].as_str())
+        .collect();
+    assert!(
+        ids.contains(&"hero_x9"),
+        "HTTP 应立即可见 CLI 写入的机床：{ids:?}"
+    );
+
+    let schema = v["data"]["schema"].as_array().expect("schema 应为数组");
+    let prefix = schema
+        .iter()
+        .find(|s| s["key"] == "program_prefix")
+        .expect("schema 应含 program_prefix");
+    assert_eq!(prefix["kind"], "String");
+    let units = schema.iter().find(|s| s["key"] == "units").unwrap();
+    assert_eq!(units["kind"], "Choice");
+    assert_eq!(units["options"], serde_json::json!(["metric", "imperial"]));
 }
 
 // ---------------------------------------------------------------------------

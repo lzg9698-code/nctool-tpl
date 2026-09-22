@@ -243,6 +243,28 @@
   </div>
 </div>
 
+<!-- 机床配置（**只读**：写入通道只有 CLI，浏览器不写盘） -->
+<div class="modal-mask" id="modalMachineCfg">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-head"><h3>机床配置</h3><button class="close" data-close="modalMachineCfg">×</button></div>
+    <div class="modal-body">
+      <div class="tip">本页<strong>只读</strong>。机床的创建/修改/删除走 CLI —— 那里的写入带键名与取值校验、
+        缺键阻断与乐观锁；浏览器不写盘。</div>
+      <div class="field"><label>当前机床</label><div class="tip" id="mcHead"></div></div>
+      <div class="field"><label>配置键值</label><dl class="about-kv" id="mcValues"></dl></div>
+      <div class="field"><label>键规格（内建 schema）</label><dl class="about-kv" id="mcSchema"></dl></div>
+      <div class="field"><label>命令（复制到终端执行）</label>
+        <input type="text" id="mcCmd" readonly spellcheck="false">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" data-close="modalMachineCfg">关闭</button>
+      <button class="btn" id="mcTestBtn">用该机床试渲染</button>
+      <button class="btn primary" id="mcCopyBtn">复制命令</button>
+    </div>
+  </div>
+</div>
+
 <!-- 命令面板 -->
 <div class="palette" id="palette" role="dialog" aria-label="命令面板">
   <input id="pq" type="text" placeholder="搜索模板、动作、机床…" autocomplete="off">

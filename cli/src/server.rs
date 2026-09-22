@@ -23,7 +23,7 @@ use std::net::{IpAddr, SocketAddr};
 use std::rc::Rc;
 
 use nctool_core::asset::{now_iso8601, Preset, PresetStore, SpecFingerprint, WriteError};
-use nctool_core::machine::MachinePreset;
+use nctool_core::machine::{MachineKeyKind, MachineKeySchema, MachinePreset};
 use nctool_core::pipeline::{GCodeGenerator, GenerationOptions, OutputFormat};
 use nctool_core::registry::{TemplateCategory, TemplateSource};
 use nctool_tpl::Variable;
@@ -538,9 +538,40 @@ fn render(ctx: &Ctx, body: &[u8]) -> Resp {
 // GET /api/machines
 // ---------------------------------------------------------------------------
 
+/// `MachineKeySchema` → 前端机床键规格 JSON。
+///
+/// 与 [`spec_json`] 同款做法：手写 `match`，**不**给 core 的类型加 `Serialize`
+/// ——core 对这些类型零 serde 依赖，而派生形状是外部标签（`{"Choice":[…]}`），
+/// 与前端要的 `"Choice"` + 候选列表对不上。
+pub(crate) fn machine_schema_json(s: &MachineKeySchema) -> serde_json::Value {
+    let (kind, options) = match s.kind {
+        MachineKeyKind::String => ("String", Vec::new()),
+        MachineKeyKind::Integer => ("Integer", Vec::new()),
+        MachineKeyKind::Choice(opts) => (
+            "Choice",
+            opts.iter().map(|o| (*o).to_string()).collect::<Vec<_>>(),
+        ),
+    };
+    serde_json::json!({
+        "key": s.key,
+        "kind": kind,
+        "default": s.default,
+        "description": s.description,
+        // 候选值白名单：仅 Choice 非空，其余为 null（与 `spec_json` 的 options 同约定）
+        "options": if options.is_empty() {
+            serde_json::Value::Null
+        } else {
+            serde_json::json!(options)
+        },
+    })
+}
+
 /// 机床列表：内置预设 + 配置文件自定义机床（与 `machine list` 口径一致）。
 ///
 /// `nctool ui` 的前端机床切换需要它；属于 ROADMAP C2 三端点之外的必要补充。
+/// **只读**：机床的写入通道只有 CLI（`machine add/edit/rm`），本端点不提供写入口
+/// （Q8）；`schema` 字段供前端展示"每个键是什么类型、什么含义、有哪些候选"，
+/// 让用户在 CLI 里手打命令时知道该填什么，而不是让 UI 去猜。
 fn machines_list(ctx: &Ctx) -> Resp {
     // 枚举规则（预设 + 自定义、按预设 id 去重）来自 core 的单一来源；
     // 此前与 `commands/machine.rs::list` 各写一遍，两份会漂移。
@@ -556,7 +587,15 @@ fn machines_list(ctx: &Ctx) -> Resp {
             })
         })
         .collect();
-    Resp::Json(200, ok(serde_json::json!({ "machines": machines })))
+    // 键规格同样取自 core 的单一来源（`KNOWN_CONFIG_KEYS`），前端不另存一份。
+    let schema: Vec<serde_json::Value> = nctool_core::machine::KNOWN_CONFIG_KEYS
+        .iter()
+        .map(machine_schema_json)
+        .collect();
+    Resp::Json(
+        200,
+        ok(serde_json::json!({ "machines": machines, "schema": schema })),
+    )
 }
 
 // ---------------------------------------------------------------------------
@@ -1621,6 +1660,60 @@ mod tests {
         assert!(payload["data"]["machines"]
             .as_array()
             .is_some_and(|items| { items.iter().any(|item| item["id"] == "generic") }));
+
+        // `schema`：机床键规格（键 / 类型 / 默认值 / 含义），供 UI 只读展示。
+        let schema = payload["data"]["schema"]
+            .as_array()
+            .expect("schema 应为数组");
+        assert!(!schema.is_empty(), "schema 不应为空");
+        let prefix = schema
+            .iter()
+            .find(|s| s["key"] == "program_prefix")
+            .expect("schema 应含 program_prefix");
+        assert_eq!(prefix["kind"], "String");
+        assert_eq!(prefix["default"], "O");
+        assert!(prefix["description"]
+            .as_str()
+            .is_some_and(|d| !d.is_empty()));
+
+        // Choice 键带候选值（其余键 `options` 为 null）。
+        let units = schema
+            .iter()
+            .find(|s| s["key"] == "units")
+            .expect("应含 units");
+        assert_eq!(units["kind"], "Choice");
+        assert_eq!(units["options"], serde_json::json!(["metric", "imperial"]));
+        assert_eq!(prefix["options"], serde_json::Value::Null);
+
+        // 键规格与 core 的单一来源逐条对齐（数目 + 键名都不得漂移）。
+        assert_eq!(
+            schema.len(),
+            nctool_core::machine::KNOWN_CONFIG_KEYS.len(),
+            "schema 应逐条覆盖 KNOWN_CONFIG_KEYS"
+        );
+        for (got, want) in schema
+            .iter()
+            .zip(nctool_core::machine::KNOWN_CONFIG_KEYS.iter())
+        {
+            assert_eq!(got["key"], want.key);
+        }
+    }
+
+    /// 机床**没有** HTTP 写端点（Q8）：写了也得是 404，不能悄悄生效。
+    #[test]
+    fn machines_have_no_write_endpoint() {
+        for (method, path) in [
+            ("POST", "/api/machines"),
+            ("PUT", "/api/machines"),
+            ("DELETE", "/api/machines"),
+            ("POST", "/api/machines/delete"),
+        ] {
+            let Resp::Json(status, payload) = route(&test_ctx(), method, path, "", b"{}") else {
+                panic!("未命中路由应返回 JSON")
+            };
+            assert_eq!(status, 404, "{method} {path} 不应存在");
+            assert_eq!(payload["error"]["kind"], "not_found");
+        }
     }
 
     #[test]

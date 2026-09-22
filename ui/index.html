@@ -824,6 +824,28 @@ h1, h2, h3 { font-weight: 500; margin: 0; letter-spacing: -.2px; }
   </div>
 </div>
 
+<!-- 机床配置（**只读**：写入通道只有 CLI，浏览器不写盘） -->
+<div class="modal-mask" id="modalMachineCfg">
+  <div class="modal" style="max-width:560px">
+    <div class="modal-head"><h3>机床配置</h3><button class="close" data-close="modalMachineCfg">×</button></div>
+    <div class="modal-body">
+      <div class="tip">本页<strong>只读</strong>。机床的创建/修改/删除走 CLI —— 那里的写入带键名与取值校验、
+        缺键阻断与乐观锁；浏览器不写盘。</div>
+      <div class="field"><label>当前机床</label><div class="tip" id="mcHead"></div></div>
+      <div class="field"><label>配置键值</label><dl class="about-kv" id="mcValues"></dl></div>
+      <div class="field"><label>键规格（内建 schema）</label><dl class="about-kv" id="mcSchema"></dl></div>
+      <div class="field"><label>命令（复制到终端执行）</label>
+        <input type="text" id="mcCmd" readonly spellcheck="false">
+      </div>
+    </div>
+    <div class="modal-foot">
+      <button class="btn ghost" data-close="modalMachineCfg">关闭</button>
+      <button class="btn" id="mcTestBtn">用该机床试渲染</button>
+      <button class="btn primary" id="mcCopyBtn">复制命令</button>
+    </div>
+  </div>
+</div>
+
 <!-- 命令面板 -->
 <div class="palette" id="palette" role="dialog" aria-label="命令面板">
   <input id="pq" type="text" placeholder="搜索模板、动作、机床…" autocomplete="off">
@@ -1759,6 +1781,7 @@ function buildReport(t, params, body) {
 const state = {
   templates: API.mode === "server" ? [] : TEMPLATES,
   machines: API.mode === "server" ? [] : Object.values(MACHINE_PRESETS),
+  machineSchema: [],        /* 机床键规格（服务端 `/api/machines` 的 schema；演示模式为空） */
   templateDetails: {},
   cat: "全部",
   query: "",
@@ -2475,14 +2498,53 @@ function toggleTheme() {
 
 /* 机床选择 */
 function renderMachineSel() {
-  const custom = loadCustomMachine();
   const sel = $("machineSel");
   const machines = state.machines.length ? state.machines : Object.values(MACHINE_PRESETS);
   /* 机床来自用户 TOML / 服务端注册表，同样按不可信处理 */
   sel.innerHTML = machines.map(m =>
     `<option value="${esc(m.id)}">${esc(m.vendor || "")} ${esc(m.model || "")} (${esc(m.id)})</option>`
-  ).join("") + (API.mode === "demo" && custom ? `<option value="custom">自定义 ${esc(custom.model || "")}</option>` : "");
+  ).join("");
   sel.value = state.machine;
+}
+
+/* 当前机床（用于只读弹窗；找不到就退回内置预设） */
+function currentMachine() {
+  return state.machines.find(m => m.id === state.machine)
+    || Object.values(MACHINE_PRESETS).find(m => m.id === state.machine)
+    || null;
+}
+
+/* 只读「机床配置」弹窗：当前键值 + 键规格 + 可复制的 CLI 命令。
+   写入通道只有 CLI —— 浏览器不做机床写操作（Q8），故这里没有保存按钮。 */
+function renderMachineCfg() {
+  const m = currentMachine();
+  const id = m ? m.id : state.machine;
+  $("mcHead").textContent = m
+    ? `${m.id} · ${m.vendor || ""} ${m.model || ""}${m.builtin ? "（内置预设）" : "（自定义）"}`
+    : `${id}（未在当前机床列表中）`;
+
+  /* 键值：来自用户 TOML / 服务端，按不可信处理 → esc() */
+  const cfg = (m && m.config) || {};
+  const keys = Object.keys(cfg);
+  $("mcValues").innerHTML = keys.length
+    ? keys.map(k => `<dt>${esc(k)}</dt><dd>${esc(String(cfg[k]))}</dd>`).join("")
+    : `<dt>（无）</dt><dd>该机床没有配置键</dd>`;
+
+  /* 键规格：服务端 schema；演示模式没有它 —— 明说，不编一份假的 */
+  $("mcSchema").innerHTML = state.machineSchema.length
+    ? state.machineSchema.map(s => {
+        const cand = (s.options && s.options.length) ? `；候选 ${s.options.map(o => esc(String(o))).join(" / ")}` : "";
+        const def = s.default ? `默认 ${esc(String(s.default))}` : "无默认值";
+        return `<dt>${esc(s.key)}</dt><dd><code>${esc(s.kind)}</code> · ${def}${cand} · ${esc(s.description || "")}</dd>`;
+      }).join("")
+    : `<dt>（服务模式可见）</dt><dd>演示模式下没有服务端 schema；运行 <code>nctool ui</code> 后可查看每个键的类型、默认值、候选与含义。</dd>`;
+
+  /* 命令助手：把"想改什么"变成一条能直接粘进终端的命令。
+     示例键优先取 schema 里的（那是"有文档、有校验"的键，如 program_prefix），
+     取不到再退回首个字面键 —— 否则会挑中 `axes` 这类可选扩展键，示例没代表性。 */
+  const schemaKeys = state.machineSchema.map(s => s.key);
+  const sample = schemaKeys.find(k => k in cfg) || keys[0] || "program_prefix";
+  $("mcCmd").value = `nctool machine edit ${id} --set ${sample}=<值>`;
 }
 
 /* Toast */
@@ -2554,11 +2616,6 @@ async function saveCurrentPreset() {
   $("presetName").value = "";
   toast(`已保存预设「${name}」`);
   refreshPresets();
-}
-
-/* 自定义机床 */
-function loadCustomMachine() {
-  try { const j = JSON.parse(LS.get("nctool.customMachine") || "null"); return j; } catch { return null; }
 }
 
 /* 批量 */
@@ -2765,19 +2822,25 @@ function init() {
   document.querySelectorAll(".modal-mask").forEach(m =>
     m.addEventListener("click", e => { if (e.target === m) closeModal(m.id); }));
 
-  /* 自定义机床：双击机床选择器打开 JSON 编辑 */
+  /* 机床配置（只读）：查看当前键值与键规格 + 复制 CLI 命令。
+     原「自定义…」JSON 编辑框已删除 —— 它只写 localStorage，与 CLI / HTTP 读的
+     `nctool.toml` 是两个互不相干的仓库（UI 里改的机床 `nctool machine show` 看不见，
+     反之亦然），且绕过全部键名与取值校验。 */
   const customMachineBtn = document.createElement("button");
   customMachineBtn.className = "btn ghost";
   customMachineBtn.id = "customMachineBtn";
-  customMachineBtn.title = "编辑自定义机床配置（JSON）";
-  customMachineBtn.textContent = "自定义…";
+  customMachineBtn.title = "查看机床配置与键规格（只读）";
+  customMachineBtn.textContent = "配置…";
   $("machineSel").parentElement.appendChild(customMachineBtn);
-  customMachineBtn.addEventListener("click", () => {
-    if (API.mode === "server") { toast("服务模式使用服务端机床配置", "warn"); return; }
-    const cur = loadCustomMachine() || { id: "custom", vendor: "Custom", model: "CNC", config: { ...BASE_CONFIG } };
-    $("customArea").value = JSON.stringify(cur, null, 2);
-    openModal("modalCustomMachine");
+  customMachineBtn.addEventListener("click", () => { renderMachineCfg(); openModal("modalMachineCfg"); });
+  $("mcCopyBtn").addEventListener("click", () => {
+    const cmd = $("mcCmd").value;
+    const done = () => toast("命令已复制，粘到终端执行");
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(cmd).then(done).catch(() => toast("复制失败，请手动选择命令", "err"));
+    } else { toast("当前环境不支持剪贴板，请手动选择命令", "warn"); }
   });
+  $("mcTestBtn").addEventListener("click", () => { closeModal("modalMachineCfg"); doRender(); });
 
   /* ── v2：命令面板 / 重置 / 移动端分段 / 快捷键 ── */
   state.recent = loadRecent();
@@ -2852,6 +2915,8 @@ function init() {
       $("apiMode").innerHTML = `<span>数据源：服务端 API</span>`;
       state.templates = tplRes.data.templates || [];
       state.machines = machineRes.data.machines || [];
+      /* 键规格来自服务端（core 的单一来源）；演示模式没有它，弹窗会说明 */
+      state.machineSchema = machineRes.data.schema || [];
       renderMachineSel();
       renderSidebar();
       /* 预设先于模板选中加载：模板卡片上的预设 chips 依赖 PRESET_CACHE */
@@ -2871,48 +2936,5 @@ function init() {
 init();
 </script>
 
-<!-- 自定义机床弹窗（脚本末尾动态使用，独立于此便于阅读） -->
-<div class="modal-mask" id="modalCustomMachine">
-  <div class="modal">
-    <div class="modal-head"><h3>自定义机床配置</h3><button class="close" data-close="modalCustomMachine">×</button></div>
-    <div class="modal-body">
-      <div class="field"><label>MachineConfig JSON（id / vendor / model / config）</label>
-        <textarea id="customArea" spellcheck="false" style="min-height:300px"></textarea>
-      </div>
-      <div class="tip">config 键值均为字符串，模板通过 <code>{{ machine.xxx }}</code> 引用；
-        保存后在下拉框选择「自定义」即可生效（localStorage 持久化）。</div>
-    </div>
-    <div class="modal-foot">
-      <button class="btn ghost" id="customResetBtn">恢复内置</button>
-      <span class="spacer"></span>
-      <button class="btn ghost" data-close="modalCustomMachine">取消</button>
-      <button class="btn primary" id="customSaveBtn">保存</button>
-    </div>
-  </div>
-</div>
-
-<script>
-"use strict";
-/* 自定义机床：保存 / 恢复（独立小块，避免与主脚本耦合） */
-(function () {
-  const $ = id => document.getElementById(id);
-  $("customSaveBtn").addEventListener("click", () => {
-    try {
-      const cfg = JSON.parse($("customArea").value);
-      if (!cfg.id || !cfg.config) throw new Error("缺少 id 或 config");
-      try { localStorage.setItem("nctool.customMachine", JSON.stringify(cfg)); }
-      catch { alert("当前环境不允许本地存储（file:// 或隐私模式），配置未能保存"); return; }
-      closeCustom();
-      location.reload();
-    } catch (e) { alert("JSON 无效：" + e.message); }
-  });
-  $("customResetBtn").addEventListener("click", () => {
-    try { localStorage.removeItem("nctool.customMachine"); } catch { /* 忽略 */ }
-    closeCustom();
-    location.reload();
-  });
-  function closeCustom() { document.getElementById("modalCustomMachine").classList.remove("open"); }
-})();
-</script>
 </body>
 </html>
