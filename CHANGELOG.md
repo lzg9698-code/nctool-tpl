@@ -903,6 +903,17 @@ CI 转绿后从 run 的 `rust-coverage-lcov` 产物里取到 lcov，用项目自
   `src/lib.rs` / `Cargo.toml` / `LICENSE` / `README.md` 仍在包里（防 exclude 写过头）。
   正反向均实测：把 `output/` 从 exclude 移除 → 守卫立即报错列出 16 个文件。
 
+#### Fixed（CI 首次运行的回归）
+
+- **守卫步骤的两个环境假设不成立，导致 CI 红**（`no matching package named
+  'minijinja' found`）：
+  1. 步骤被插在 `Install Rust` **之前**，而 `--offline` 要求注册表已 populate
+     → 已移到 `Test` 之后（依赖已拉取），并给脚本加**联网回退**（`--offline`
+     失败则重试不带 `--offline`），无论置于何处都能工作；
+  2. 脚本 subprocess 用只含 `PATH` 的**干净环境**调用 cargo，丢掉
+     `HOME`/`CARGO_HOME`/`RUSTUP_HOME` → 改为**继承**当前环境，仅覆盖
+     `CARGO_INCREMENTAL`。
+
 #### 验证
 
 - workspace 全量 **597 项**通过；fmt / clippy / doc / 四项对拍与守卫 / 文档链接均通过。

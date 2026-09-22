@@ -46,21 +46,42 @@ FORBIDDEN = [
 
 
 def package_list() -> list[str] | None:
-    """返回 `cargo package --list` 的文件列表；失败返回 None。"""
-    try:
-        out = subprocess.run(
-            ["cargo", "package", "--list", "--offline", "--allow-dirty"],
-            capture_output=True,
-            text=True,
-            check=True,
-            env={"CARGO_INCREMENTAL": "0", "PATH": __import__("os").environ.get("PATH", "")},
-        )
-    except (subprocess.CalledProcessError, FileNotFoundError) as e:
-        print(f"✗ 无法列出发布包内容: {e}", file=sys.stderr)
-        if isinstance(e, subprocess.CalledProcessError) and e.stderr:
-            print(e.stderr, file=sys.stderr)
-        return None
-    return [line for line in out.stdout.splitlines() if line.strip()]
+    """返回 `cargo package --list` 的文件列表；失败返回 None。
+
+    先用 `--offline`（本地快、不碰网络）；若因**注册表尚未 populate**而失败
+    （CI 上本步骤若先于依赖拉取，会报 `no matching package ... found`），
+    则回退到联网重试 —— 这样无论放在 job 的哪个位置都能工作。
+
+    `env` **继承**当前环境并只覆盖 `CARGO_INCREMENTAL`——不能用只含 PATH 的
+    干净环境：cargo 需要 `HOME` / `CARGO_HOME` / `RUSTUP_HOME` 才能定位注册表
+    与工具链（替换环境会让 `cargo` 直接找不到）。
+    """
+    import os
+
+    env = dict(os.environ)
+    env["CARGO_INCREMENTAL"] = "0"
+    # 优先离线（快）；失败则联网重试
+    for extra in (["--offline"], []):
+        try:
+            out = subprocess.run(
+                ["cargo", "package", "--list", "--allow-dirty", *extra],
+                capture_output=True,
+                text=True,
+                check=True,
+                env=env,
+            )
+            return [line for line in out.stdout.splitlines() if line.strip()]
+        except FileNotFoundError as e:
+            print(f"✗ 找不到 cargo（未安装 Rust？）: {e}", file=sys.stderr)
+            return None
+        except subprocess.CalledProcessError as e:
+            if extra:  # --offline 失败 → 继续用联网重试
+                continue
+            print(f"✗ 无法列出发布包内容: {e}", file=sys.stderr)
+            if e.stderr:
+                print(e.stderr, file=sys.stderr)
+            return None
+    return None
 
 
 def main() -> int:

@@ -68,17 +68,9 @@ jobs:
         if: matrix.os == 'ubuntu-latest'
         run: python3 scripts/check_docs_links.py README.md docs templates/README.md
 
-      # 发布包内容守卫：根 crate 是库，仓库里却住着 CLI/UI/开发脚本/原型产物。
-      # Cargo.toml 的 exclude 是唯一真源；本步骤对 `cargo package --list` 做黑名单
-      # 断言，防止非库资产（output/ scripts/ ui/ …）又被打进 .crate。
-      # 用 --offline 避免依赖 crates.io 索引（与系统无关，只在 ubuntu 跑）。
-      - name: Package contents (no repo junk in .crate)
-        if: matrix.os == 'ubuntu-latest'
-        run: python3 scripts/check_package_contents.py
-
       # golden 刷新脚本的语法与「CI 拒刷」守卫自测（B4.2）。
       # 两个断言：① bash -n 语法；② 带 CI=1 运行必须退出非 0（不得在 CI 刷新）。
-      # 这不需要跑测试、不写文件，几毫秒完成。
+      # 只依赖 bash，无需 Rust，放这里几毫秒完成。
       - name: Golden refresh script guards
         if: matrix.os == 'ubuntu-latest'
         run: |
@@ -109,6 +101,17 @@ jobs:
       - name: Test
         # `--locked`：Cargo.lock 已提交，CI 必须与它一致（否则"本地能过、CI 红了"无解）
         run: cargo test --workspace --all-targets --locked
+
+      # 发布包内容守卫：根 crate 是库，仓库里却住着 CLI/UI/开发脚本/原型产物。
+      # Cargo.toml 的 exclude 是唯一真源；本步骤对 `cargo package --list` 做黑名单
+      # 断言，防止非库资产（output/ scripts/ ui/ …）又被打进 .crate。
+      #
+      # **必须在 Rust 安装且依赖已就绪之后**（即 Test 之后）：`cargo package --list`
+      # 需要 cargo 与可解析的依赖图；放在 job 开头（Rust 未装/注册表为空）会因
+      # 找不到 registry 而失败。用 --offline 确保不依赖 crates.io 网络。
+      - name: Package contents (no repo junk in .crate)
+        if: matrix.os == 'ubuntu-latest'
+        run: python3 scripts/check_package_contents.py
 
       # `--all-targets` 不跑 doctest：实测 `cargo test --workspace --all-targets`
       # 的输出里没有 Doc-tests 段。README 声称"单元 + 集成 + 文档"全跑，故单独补一步。
