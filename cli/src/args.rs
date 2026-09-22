@@ -122,12 +122,50 @@ fn has_leading_zero(v: &str) -> bool {
     bytes.len() > 1 && bytes[0] == b'0' && v.chars().all(|c| c.is_ascii_digit())
 }
 
+/// CLI 侧读取文本文件的大小上限。
+///
+/// 与 HTTP 侧的 `MAX_BODY_BYTES`（1 MiB）同一口径：参数文件/模板都不该接近这个量级，
+/// 超出即视为拿错了文件（如把日志、二进制、网络盘上的大目录内容传了进来）。
+///
+/// **为什么必须有**：`read_to_string` 会把整个文件读进内存，`--params-file` 指向
+/// 网络盘或误传大文件时会一次性吃掉全部内存，而报错信息完全指不到病因。
+/// 先 `metadata` 拿长度再读，命中上限就明确报 `args`（用户输入问题），
+/// 而不是等 OOM 或解析出莫名其妙的 JSON 错误。
+pub const MAX_CLI_FILE_BYTES: u64 = 1024 * 1024;
+
+/// 按上限读取文本文件，超出即报 `io` 类别的错误。
+///
+/// `what` 用于错误文案（如「参数文件」），`path` 用于指路。
+///
+/// **为什么是 `io` 而不是各调用方自己的类别**：读写失败与"文件过大"同属
+/// **I/O 层**问题（与用户传错路径、权限不足同类），退出码应一致。用 `config`/`args`
+/// 会把"文件拿错了"和"文件内容不合法"混在一起 —— 后者才是调用方类别该表达的。
+pub fn read_text_capped(path: &Path, what: &str) -> Result<String, CliError> {
+    // 先看长度，避免把超大文件整个读进内存再判断
+    if let Ok(meta) = std::fs::metadata(path) {
+        if meta.len() > MAX_CLI_FILE_BYTES {
+            return Err(CliError::new(
+                "io",
+                format!(
+                    "{}过大 {}: {} 字节，上限 {} 字节（{} KiB）",
+                    what,
+                    path.display(),
+                    meta.len(),
+                    MAX_CLI_FILE_BYTES,
+                    MAX_CLI_FILE_BYTES / 1024
+                ),
+            ));
+        }
+    }
+    std::fs::read_to_string(path)
+        .map_err(|e| CliError::new("io", format!("读取{}失败 {}: {e}", what, path.display())))
+}
+
 /// 从 JSON 对象构造参数集：`{"x": 21.0, "tool": "D12", "coolant": true}`。
 ///
 /// 数值 → Number，字符串 → String，布尔 → Bool；其他类型报错。
 pub fn load_params_file(path: &Path) -> Result<ParameterSet, CliError> {
-    let text = std::fs::read_to_string(path)
-        .map_err(|e| CliError::new("io", format!("读取参数文件失败 {}: {e}", path.display())))?;
+    let text = read_text_capped(path, "参数文件")?;
     let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
         CliError::new(
             "args",
@@ -529,5 +567,72 @@ mod tests {
             "bool" => ParamValue::Bool(v["value"].as_bool().expect("bool 需要布尔")),
             other => panic!("case #{i}: 未知 type {other:?}"),
         }
+    }
+
+    // ---- 读取上限（第四轮 P1-10）----
+
+    /// 恰好等于上限的文件必须**放行**（边界是 `>` 不是 `>=`）。
+    ///
+    /// 用稀疏文件思路：不真的写 1 MiB 内容，而是写一个 1 MiB 的文本
+    /// （全空格）——解析会失败，但**不是**「过大」错误，故能区分两种拒绝原因。
+    #[test]
+    fn read_text_capped_allows_file_at_limit() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("nctool_cap_at_limit_{}.txt", std::process::id()));
+        let text = " ".repeat(MAX_CLI_FILE_BYTES as usize);
+        std::fs::write(&path, &text).unwrap();
+        let got = read_text_capped(&path, "测试文件").expect("恰好等于上限应放行");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(got.len(), MAX_CLI_FILE_BYTES as usize);
+    }
+
+    /// 超出上限 1 字节即拒绝，且错误里**带文件路径与两个数字**（便于定位）。
+    #[test]
+    fn read_text_capped_rejects_over_limit() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("nctool_cap_over_limit_{}.txt", std::process::id()));
+        let text = " ".repeat(MAX_CLI_FILE_BYTES as usize + 1);
+        std::fs::write(&path, &text).unwrap();
+        let err = read_text_capped(&path, "测试文件").unwrap_err();
+        std::fs::remove_file(&path).ok();
+
+        assert_eq!(err.kind, "io", "过大属 I/O 层问题");
+        let msg = &err.message;
+        assert!(msg.contains("测试文件过大"), "文案应点明是什么过大：{msg}");
+        assert!(msg.contains("nctool_cap_over_limit"), "应带路径：{msg}");
+        assert!(
+            msg.contains(&(MAX_CLI_FILE_BYTES + 1).to_string()),
+            "应给出实际字节数：{msg}"
+        );
+        assert!(
+            msg.contains(&MAX_CLI_FILE_BYTES.to_string()),
+            "应给出上限：{msg}"
+        );
+    }
+
+    /// 通过 `load_params_file` 走一遍：超限的参数文件必须以 `io` 失败，
+    /// 而**不是**被当成"JSON 不合法"（后者会让用户去查 JSON 语法，方向全错）。
+    #[test]
+    fn load_params_file_rejects_oversized_file_as_io_error() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("nctool_cap_params_{}.json", std::process::id()));
+        // 内容本身是合法 JSON 前缀，只是被空格撑过上限
+        let mut text = String::from("{\"x\": 1}");
+        text.push_str(&" ".repeat(MAX_CLI_FILE_BYTES as usize));
+        std::fs::write(&path, &text).unwrap();
+        let err = load_params_file(&path).unwrap_err();
+        std::fs::remove_file(&path).ok();
+        assert_eq!(err.kind, "io");
+        assert!(err.message.contains("参数文件过大"), "{}", err.message);
+    }
+
+    /// 文件不存在时仍是 I/O 错误（上限检查不能把"读不到"吞掉）。
+    #[test]
+    fn read_text_capped_missing_file_is_io_error() {
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("nctool_cap_absent_{}.txt", std::process::id()));
+        let err = read_text_capped(&path, "测试文件").unwrap_err();
+        assert_eq!(err.kind, "io");
+        assert!(err.message.contains("读取测试文件失败"), "{}", err.message);
     }
 }

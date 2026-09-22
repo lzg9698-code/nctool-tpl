@@ -203,9 +203,7 @@ impl Ctx {
         }
 
         for (rel_key, canonical) in found {
-            let source_text = std::fs::read_to_string(&canonical).map_err(|e| {
-                CliError::new("io", format!("读取模板失败 {}: {e}", canonical.display()))
-            })?;
+            let source_text = crate::args::read_text_capped(&canonical, "模板")?;
             let rel_path = std::path::Path::new(&rel_key);
             let meta =
                 ResolvedMeta::resolve(rel_path, &source_text, manifest.get(&rel_key), &library);
