@@ -29,6 +29,16 @@ pub fn parse_kv_with_specs(s: &str, specs: &[ParamSpec]) -> Result<(String, Para
     if raw_key.is_empty() {
         return Err(CliError::new("args", "参数名不能为空"));
     }
+    // ERR-NUM-UNDERFLOW：`--param x=1e-400` 会被 `str::parse`/`infer_param_value`
+    // 静默归零（写成错误 G-code）。在按类型解释**之前**拦下（`k:s=` 强制字符串不解释、
+    // 不触发）。确认用本通道实际的 `str::parse::<f64>`，硬失败、不受 --lenient 影响。
+    if forced != Some("s") {
+        if let Some(err) =
+            crate::output::cli_underflow_error(v.trim(), &format!("参数 --param {raw_key}"))
+        {
+            return Err(err);
+        }
+    }
     let value = match forced {
         Some("s") => ParamValue::String(v.trim().to_string()),
         Some("n") => match v.trim().parse::<f64>() {
@@ -166,6 +176,13 @@ pub fn read_text_capped(path: &Path, what: &str) -> Result<String, CliError> {
 /// 数值 → Number，字符串 → String，布尔 → Bool；其他类型报错。
 pub fn load_params_file(path: &Path) -> Result<ParameterSet, CliError> {
     let text = read_text_capped(path, "参数文件")?;
+    // ERR-NUM-UNDERFLOW：在 serde_json 解析**之前**拦下会被静默归零的下溢字面量
+    // （如 `1e-400` → `0.0` 会写进错误 G-code）。硬失败、不受 --lenient 影响。
+    if let Some(err) =
+        crate::output::json_underflow_error(&text, &format!("参数文件 {}", path.display()))
+    {
+        return Err(err);
+    }
     let value: serde_json::Value = serde_json::from_str(&text).map_err(|e| {
         CliError::new(
             "args",
@@ -324,6 +341,38 @@ mod tests {
         assert!(parse_kv_with_specs("=1", &[]).is_err());
     }
 
+    // -----------------------------------------------------------------------
+    // ERR-NUM-UNDERFLOW：`--param` 通道（str::parse 确认）
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn parse_kv_rejects_underflow() {
+        // `1e-400` 经 `str::parse` 静默归零 → 必须硬失败（否则写成错误坐标）
+        let err = parse_kv_with_specs("x=1e-400", &[]).expect_err("下溢字面量应被拒绝");
+        assert_eq!(err.kind, "args", "kind 应为 args（退出码 2）");
+        assert!(
+            err.message.contains("cli:1e-400"),
+            "消息应带载体前缀 cli: 与字面量: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn parse_kv_accepts_legal_subnormals() {
+        // 最小次正规数及相邻值均**不是**下溢：str::parse 给出非零值
+        let (_, v) = parse_kv_with_specs("x=5e-324", &[]).unwrap();
+        assert_eq!(v, ParamValue::Number(5e-324));
+        let (_, v) = parse_kv_with_specs("x=1e-323", &[]).unwrap();
+        assert_eq!(v, ParamValue::Number(1e-323));
+    }
+
+    #[test]
+    fn parse_kv_forced_string_channel_not_interpreted() {
+        // `k:s=` 是显式字符串通道：不做数值解释，故 `1e-400` 合法（原样保留）
+        let (_, v) = parse_kv_with_specs("x:s=1e-400", &[]).unwrap();
+        assert_eq!(v, ParamValue::String("1e-400".to_string()));
+    }
+
     #[test]
     fn infer_leading_zero_stays_string() {
         // 前导零纯数字保持字符串（数值会丢前导零：T007 → T7）
@@ -399,6 +448,47 @@ mod tests {
         let set = build_parameter_set(Some(&path), &["x=99.0".to_string()], &[]).unwrap();
         std::fs::remove_file(&path).ok();
         assert_eq!(set.get("x"), Some(&ParamValue::Number(99.0)));
+    }
+
+    #[test]
+    fn load_params_file_rejects_underflow() {
+        // JSON 参数文件里的下溢字面量：serde_json 会静默归零 → 必须在解析前硬失败
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("nctool_test_uf_{}.json", std::process::id()));
+        std::fs::write(&path, r#"{"x": 1e-400}"#).unwrap();
+        let err = load_params_file(&path).expect_err("下溢字面量应被拒绝");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(err.kind, "args");
+        assert!(
+            err.message.contains("json:1e-400"),
+            "消息应带 json: 前缀与字面量: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn load_params_file_string_content_is_not_underflow() {
+        // 字符串内容里的 `1e-400` 不是数值，不得误报（0 候选）
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("nctool_test_ufstr_{}.json", std::process::id()));
+        std::fs::write(&path, r#"{"note": "1e-400"}"#).unwrap();
+        let set = load_params_file(&path).expect("字符串内容不应被当作下溢");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(
+            set.get("note"),
+            Some(&ParamValue::String("1e-400".to_string()))
+        );
+    }
+
+    #[test]
+    fn load_params_file_accepts_legal_subnormal() {
+        // `5e-324` 是合法最小次正规数：候选但确认后非下溢，正常加载
+        let dir = std::env::temp_dir();
+        let path = dir.join(format!("nctool_test_subn_{}.json", std::process::id()));
+        std::fs::write(&path, r#"{"x": 5e-324}"#).unwrap();
+        let set = load_params_file(&path).expect("合法次正规数应通过");
+        std::fs::remove_file(&path).ok();
+        assert_eq!(set.get("x"), Some(&ParamValue::Number(5e-324)));
     }
 
     /// 数组现在被解析为列表参数（`ParamValue::List`），不再是坏类型。

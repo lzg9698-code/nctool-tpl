@@ -158,16 +158,28 @@ impl Ctx {
 
         // 清单加载失败不阻断：清单是可选的，损坏时降级为「无清单」并告警，
         // 这样模板仍可用，用户也能看到问题所在。
+        //
+        // 例外（ERR-NUM-UNDERFLOW）：下溢是**数值正确性**问题，不是「清单损坏」。
+        // 被静默归零的 `params[].default` 会直接写进 G-code（错误坐标 = 撞刀），
+        // 故这一类**硬失败**，不参与下面的「可选文件降级」策略。
+        // 注意 arm 顺序：`Underflow` 必须在通配 arm **之前**，否则会被吃掉。
         let manifest = match TemplateManifest::load(root) {
             Ok(m) => m,
+            Err(e @ nctool_core::manifest::ManifestError::Underflow { .. }) => {
+                return Err(CliError::new("args", e.to_string()));
+            }
             Err(e) => {
                 eprintln!("warning: {e}");
                 TemplateManifest::empty()
             }
         };
-        // 变量库同理：可选文件，损坏时降级为空库（参数规格退回头部声明）
+        // 变量库同理：可选文件，损坏时降级为空库（参数规格退回头部声明）。
+        // 同一例外适用：变量库的 `default_value` / `options` 下溢一样会污染参数 → 硬失败。
         let library = match VariableLibrary::load(root) {
             Ok(l) => l,
+            Err(e @ nctool_core::manifest::ManifestError::Underflow { .. }) => {
+                return Err(CliError::new("args", e.to_string()));
+            }
             Err(e) => {
                 eprintln!("warning: {e}");
                 VariableLibrary::empty()
@@ -677,6 +689,107 @@ mod tests {
         assert!(
             cached_again.registry().get("tmp_ad_hoc").is_none(),
             "临时模板不得泄漏进共享缓存"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // -----------------------------------------------------------------------
+    // ERR-NUM-UNDERFLOW：清单 / 变量库的下溢必须**硬失败**（不得降级为 warning）
+    // -----------------------------------------------------------------------
+
+    /// 清单 `params[].default: 1e-400` → `load_registry` 必须**返回 Err**（不是 Ok + warning）。
+    ///
+    /// 这是 P1：此前所有清单加载错误被一律降级为 warning，下溢默认值随之被静默归零成
+    /// `0.0` 写进 G-code（错误坐标 = 撞刀）。下溢是数值正确性问题，必须前置硬失败。
+    #[test]
+    fn manifest_underflow_is_hard_error() {
+        let (dir, _tpl) = temp_template_dir("manifest_underflow");
+        let manifest = dir.join(MANIFEST_FILE);
+        std::fs::write(
+            &manifest,
+            "templates:\n  \"turning/a.j2\":\n    params:\n      - name: x\n        default: 1e-400\n",
+        )
+        .expect("写清单");
+
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(dir.clone());
+        let err = ctx
+            .build_registry()
+            .expect_err("含下溢的清单必须硬失败（不能只 warning）");
+        assert_eq!(
+            err.kind, "args",
+            "kind 应为 args（退出码 2，与 --params-file 一致）"
+        );
+        assert!(
+            err.message.contains("yaml:1e-400"),
+            "消息应带 yaml: 前缀与字面量: {}",
+            err.message
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 负向对照：清单 `default: 5e-324`（合法最小次正规数）→ 照常 Ok，不得误拒。
+    #[test]
+    fn manifest_legal_subnormal_is_accepted() {
+        let (dir, _tpl) = temp_template_dir("manifest_subnormal");
+        let manifest = dir.join(MANIFEST_FILE);
+        std::fs::write(
+            &manifest,
+            "templates:\n  \"turning/a.j2\":\n    params:\n      - name: x\n        default: 5e-324\n",
+        )
+        .expect("写清单");
+
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(dir.clone());
+        ctx.build_registry().expect("合法次正规数不得被误拒");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 回归：清单是**语法损坏**（`params` 写成 map 而非 sequence）→ 仍走降级 warning 路径
+    /// （不得因这次修复把「可选文件损坏不阻断」的既有行为一起改掉）。
+    #[test]
+    fn manifest_syntax_damage_still_degrades_to_warning() {
+        let (dir, _tpl) = temp_template_dir("manifest_damage");
+        let manifest = dir.join(MANIFEST_FILE);
+        // `params` 应为列表，这里写成映射 → serde 解析失败（Parse 错误，非 Underflow）
+        std::fs::write(
+            &manifest,
+            "templates:\n  \"turning/a.j2\":\n    params:\n      name: x\n",
+        )
+        .expect("写损坏清单");
+
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(dir.clone());
+        // 仍应成功（降级为「无清单」），模板照样可用
+        ctx.build_registry()
+            .expect("损坏清单应降级为 warning，不阻断");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 变量库同口径：`options: [1e-400]` 下溢 → `load_registry` 必须返回 Err。
+    #[test]
+    fn variable_library_underflow_is_hard_error() {
+        use nctool_core::variables::VARIABLES_FILE;
+        let (dir, _tpl) = temp_template_dir("varlib_underflow");
+        let varfile = dir.join(VARIABLES_FILE);
+        std::fs::write(
+            &varfile,
+            "variables:\n  - name: x\n    kind: number\n    options: [1e-400]\n",
+        )
+        .expect("写变量库");
+
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(dir.clone());
+        let err = ctx.build_registry().expect_err("含下溢的变量库必须硬失败");
+        assert_eq!(err.kind, "args");
+        assert!(
+            err.message.contains("yaml:1e-400"),
+            "消息应带 yaml: 前缀: {}",
+            err.message
         );
 
         let _ = std::fs::remove_dir_all(&dir);

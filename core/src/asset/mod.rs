@@ -177,6 +177,23 @@ pub enum WriteError {
     ///
     /// 注意：**并非**"数据损坏"——通常是目标位置被同名目录占用，改名或移除即可。
     Corrupt(String),
+    /// 文件中的数值字面量下溢（`|真值| < 2^-1000` 且被 YAML 解析器静默归零）。
+    ///
+    /// **为什么是错误而非警告**：被静默归零的值（如预设参数 `value: 1e-400` → `0.0`）
+    /// 会直接参与渲染，产出错误坐标（撞刀）。故这类**硬失败**，且**不**参与
+    /// "损坏文件降级"策略（ERR-NUM-UNDERFLOW，设计 §4.1 / 附录 D6）。
+    ///
+    /// 定位信息（行/列 + 字面量）用于让用户直接改到那一行。
+    NumUnderflow {
+        /// 文件路径。
+        path: PathBuf,
+        /// 触发下溢的原始字面量文本。
+        literal: String,
+        /// 字面量所在行（1 起）。
+        line: usize,
+        /// 字面量所在列（1 起，字节计）。
+        column: usize,
+    },
 }
 
 impl std::fmt::Display for WriteError {
@@ -194,6 +211,17 @@ impl std::fmt::Display for WriteError {
             WriteError::Io(err) => write!(f, "IO 错误：{err}"),
             WriteError::NotFound(msg) => write!(f, "{msg}"),
             WriteError::Corrupt(msg) => write!(f, "写入目标不可用：{msg}"),
+            WriteError::NumUnderflow {
+                path,
+                literal,
+                line,
+                column,
+            } => write!(
+                f,
+                "预设文件 {} 第 {line} 行第 {column} 列：数值 yaml:{literal} 低于 f64 最小可表示正数\
+                 （会被静默变 0，G-code 将产出错误坐标）。请改用可表示的数值。",
+                path.display()
+            ),
         }
     }
 }

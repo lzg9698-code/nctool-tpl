@@ -1,0 +1,79 @@
+sequenceDiagram
+    %% ERR-NUM-UNDERFLOW 下溢拦截 · 调用流程（第三版：候选 + 确认）
+    autonumber
+    participant U as 用户 / 前端
+    participant CLI as CLI 入口
+    participant SRV as server.rs
+    participant JN as core::json_num
+    participant PARSE as 实际解析器<br/>(serde_json / serde_yaml / str::parse)
+
+    rect rgb(255, 245, 235)
+    note over U,PARSE: ① CLI --params-file（扫描候选 -> serde_json 确认）
+    U->>CLI: nctool render --params-file p.json
+    CLI->>CLI: read_text_capped(p.json) -> text
+    CLI->>JN: scan_underflow_candidates(text)
+    alt 有候选（|真值| < 2^-1000 且真值非零）
+        JN-->>CLI: Vec[UnderflowCandidate{literal,line,col}]
+        CLI->>PARSE: serde_json::from_str::<f64>("1e-400") -> 0.0 ?
+        alt 确认归零
+            PARSE-->>CLI: 0.0  => 确认下溢
+            CLI-->>U: CliError kind="args"(2)<br/>"参数文件 p.json 第1行第6列：数值 1e-400 超出…"
+        else 未归零（如 5e-324）
+            PARSE-->>CLI: 非零 => 放过
+            CLI->>CLI: 继续正常解析
+        end
+    else 无候选
+        JN-->>CLI: None
+        CLI->>CLI: 直接解析（正常值不进确认，性能友好）
+    end
+    end
+
+    rect rgb(235, 250, 235)
+    note over U,PARSE: ② CLI --param x=1e-400（无文本扫描，直接用 str::parse 确认）
+    U->>CLI: nctool render --param x=1e-400
+    CLI->>CLI: parse_dec("1e-400") -> 真值非零
+    CLI->>PARSE: "1e-400".parse::<f64>() -> 0.0
+    PARSE-->>CLI: 0.0 => 确认下溢
+    CLI-->>U: CliError kind="args"(2)
+    note right of CLI: --param x=5e-324 -> parse 得 5e-324(非零) => 放过
+    end
+
+    rect rgb(240, 248, 255)
+    note over U,PARSE: ③ HTTP /api/render|validate|inspect|part/generate（统一经 api_body）
+    U->>SRV: POST /api/render {...,"params":{"x":1e-400}}
+    SRV->>SRV: body: &[u8] -> str::from_utf8
+    SRV->>JN: scan_underflow_candidates(text)
+    alt 有候选
+        JN-->>SRV: Some(cand)
+        SRV->>PARSE: serde_json::from_str::<f64>(cand.literal)
+        alt 确认归零
+            SRV-->>U: Resp::Json(400, err("num_underflow", msg))
+        else 未归零
+            SRV-->>U: 继续 200 { ok:true, ... }
+        end
+    else 无候选
+        SRV->>SRV: 正常解析
+    end
+    end
+
+    rect rgb(250, 245, 255)
+    note over U,PARSE: ④ core YAML 入口（manifest / variables / preset）—— 用 serde_yaml 确认
+    U->>JN: （由 manifest.rs 等调用）scan_underflow_candidates_yaml(yaml)
+    alt 有候选
+        JN-->>U: Some(cand)
+        U->>PARSE: serde_yaml::from_str::<f64>(cand.literal)
+        alt 确认归零（如 1e-400）
+            PARSE-->>U: 0.0 => 拒绝
+        else 未归零（如 2.4703282292062328e-324，YAML 正确舍入）
+            PARSE-->>U: 5e-324 => 放过
+        end
+    end
+    end
+
+    rect rgb(238, 238, 238)
+    note over JN: scan_underflow_candidates 内部（仅候选，不裁决）
+    JN->>JN: 状态机扫描 Normal/InString/Escape<br/>（YAML 另加 注释/单引号/块标量 跳过）
+    JN->>JN: 每个数字 token -> parse_dec -> (sig, exp)
+    JN->>JN: cmp_abs(token, prescreen_threshold()=2^-1000)
+    note right of JN: < 0 且 sig 非空 => 候选（宽松预筛，非最终裁决）
+    end

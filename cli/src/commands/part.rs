@@ -16,11 +16,16 @@ use nctool_core::part::{PartError, PartOptions, PartSpec};
 use crate::args::read_text_capped;
 use crate::cli::PartGenerateArgs;
 use crate::context::Ctx;
-use crate::output::CliError;
+use crate::output::{json_underflow_error, CliError};
 
 /// `nctool part generate`：零件级批量生成。
 pub fn run(ctx: &Ctx, args: &PartGenerateArgs) -> Result<(), CliError> {
     let text = read_text_capped(&args.part, "零件定义文件")?;
+    // ERR-NUM-UNDERFLOW：在 serde_json 解析**之前**拦下下溢字面量（硬失败）。
+    if let Some(err) = json_underflow_error(&text, &format!("零件定义文件 {}", args.part.display()))
+    {
+        return Err(err);
+    }
     let spec: PartSpec = serde_json::from_str(&text).map_err(|e| {
         CliError::new(
             "args",

@@ -334,8 +334,26 @@ fn vars_json(vars: &[Variable]) -> serde_json::Value {
 // ---------------------------------------------------------------------------
 
 fn api_body(body: &[u8]) -> Result<serde_json::Value, Resp> {
+    // ERR-NUM-UNDERFLOW：JSON 下溢字面量（如 `1e-400`）会被 serde_json 静默归零 →
+    // 错误 G-code。在解析**之前**做文本层候选提取 + serde_json 实测确认（硬失败）。
+    // 请求体按 UTF-8 解码失败时不在此报错——交下面的 from_slice 报合法错误。
+    if let Ok(text) = std::str::from_utf8(body) {
+        if let Some(resp) = json_underflow_resp(text) {
+            return Err(resp);
+        }
+    }
     serde_json::from_slice(body)
         .map_err(|e| Resp::Json(400, err("bad_request", format!("请求体不是合法 JSON: {e}"))))
+}
+
+/// JSON 文本 → 下溢错误响应（HTTP 400，kind `"num_underflow"`）；无命中返回 `None`。
+///
+/// 复用 [`crate::output::json_underflow_error`] 的两段式（core 候选 + serde_json 确认），
+/// 但 HTTP 通道用**自己的** kind（`num_underflow`）与状态码（400），与 CLI 的 `args`/2
+/// 区分：前端可据此把「数值下溢」独立渲染，而非笼统的 bad_request。
+fn json_underflow_resp(text: &str) -> Option<Resp> {
+    crate::output::json_underflow_error(text, "请求体")
+        .map(|e| Resp::Json(400, err("num_underflow", e.message)))
 }
 
 fn api_template_params(
@@ -806,6 +824,12 @@ fn presets_list(ctx: &Ctx, query: &str) -> Resp {
 /// 校验链路与 `preset save` **逐条一致**（参数归属 → L3 值校验 → 同名拒绝），
 /// 否则同一份数据 CLI 能存、HTTP 不能存（或反之），是典型的两套口径。
 fn presets_save(ctx: &Ctx, body: &[u8]) -> Resp {
+    // ERR-NUM-UNDERFLOW：与 `api_body` 同一口径，在解析前拦下下溢字面量（400/num_underflow）。
+    if let Ok(text) = std::str::from_utf8(body) {
+        if let Some(resp) = json_underflow_resp(text) {
+            return resp;
+        }
+    }
     let parsed: serde_json::Value = match serde_json::from_slice(body) {
         Ok(v) => v,
         Err(e) => return Resp::Json(400, err("bad_request", format!("请求体不是合法 JSON: {e}"))),
@@ -1447,6 +1471,81 @@ mod tests {
 
     fn json_body(v: &serde_json::Value) -> Vec<u8> {
         serde_json::to_vec(v).unwrap()
+    }
+
+    // -----------------------------------------------------------------------
+    // ERR-NUM-UNDERFLOW：HTTP 通道（400 / num_underflow）
+    // -----------------------------------------------------------------------
+
+    /// `api_body` 在解析前拦下下溢字面量：`{"x":1e-400}` → 400 / num_underflow。
+    ///
+    /// 未命中模板解析（下溢检查在 `api_body` 内、模板解析之前），故普通 ctx 即可。
+    #[test]
+    fn api_body_rejects_underflow_literal() {
+        let ctx = test_ctx();
+        let body = br#"{"template":"t.j2","params":{"x":1e-400}}"#;
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/validate", "", body) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 400, "{payload}");
+        assert_eq!(payload["ok"], false);
+        assert_eq!(
+            payload["error"]["kind"], "num_underflow",
+            "HTTP 通道 kind 应为 num_underflow: {payload}"
+        );
+        assert!(
+            payload["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("json:1e-400"),
+            "消息应带回显的字面量: {payload}"
+        );
+    }
+
+    /// 字符串内容里的 `1e-400` 不是数值 → 不得误报（前端回退到模板解析）。
+    #[test]
+    fn api_body_string_content_not_underflow() {
+        let ctx = test_ctx();
+        let body = br#"{"template":"t.j2","params":{"note":"1e-400"}}"#;
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/validate", "", body) else {
+            panic!("应返回 JSON")
+        };
+        // 未命中下溢 → 落到正常的模板解析（此处模板不存在 → 404），**不是** num_underflow
+        assert_ne!(
+            payload["error"]["kind"], "num_underflow",
+            "字符串内容不应被判为下溢: {payload}"
+        );
+        assert_ne!(status, 400, "不应是下溢的 400: {payload}");
+    }
+
+    /// 合法次正规数 `5e-324` / `1e-323` 不得被判为下溢。
+    #[test]
+    fn api_body_accepts_legal_subnormals() {
+        let ctx = test_ctx();
+        for lit in ["5e-324", "1e-323"] {
+            let body = format!(r#"{{"template":"t.j2","params":{{"x":{lit}}}}}"#);
+            let Resp::Json(_status, payload) =
+                route(&ctx, "POST", "/api/validate", "", body.as_bytes())
+            else {
+                panic!("应返回 JSON")
+            };
+            assert_ne!(
+                payload["error"]["kind"], "num_underflow",
+                "合法次正规数 {lit} 不应判为下溢: {payload}"
+            );
+        }
+    }
+
+    /// `presets_save` 与 `api_body` 同口径：下溢字面量 → 400 / num_underflow。
+    #[test]
+    fn presets_save_rejects_underflow() {
+        let ctx = test_ctx();
+        let body = br#"{"name":"p","template":"t.j2","params":{"x":1e-400}}"#;
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/presets", "", body) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 400, "{payload}");
+        assert_eq!(payload["error"]["kind"], "num_underflow", "{payload}");
     }
 
     /// GET 空文件：合法返回空列表，不是错误。

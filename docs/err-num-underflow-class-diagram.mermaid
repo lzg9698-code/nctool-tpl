@@ -1,0 +1,87 @@
+classDiagram
+    %% ERR-NUM-UNDERFLOW 下溢拦截 · 类图（第三版：候选 + 确认）
+    %% core 侧（零新 crate，仅 std）
+
+    class UnderflowCandidate {
+        <<pub struct>>
+        +literal: String
+        +byte_offset: usize
+        +line: usize
+        +column: usize
+    }
+
+    class json_num {
+        <<pub module>>
+        +scan_underflow_candidates(json: &str) Vec~UnderflowCandidate~
+        +scan_underflow_candidates_yaml(yaml: &str) Vec~UnderflowCandidate~
+        +confirm_underflow_yaml(cand: &UnderflowCandidate) bool
+    }
+
+    class Decimal {
+        <<private struct>>
+        +sig: Vec~u8~
+        +exp: i64
+    }
+
+    class PrivateFns {
+        <<private fns>>
+        parse_dec(s: &str) Option~Decimal~
+        cmp_abs(a: &Decimal, b: &Decimal) Ordering
+        pow5(n: u32) Vec~u8~
+        prescreen_threshold() &'static Decimal
+    }
+
+    json_num --> UnderflowCandidate : 返回
+    json_num ..> Decimal : 内部使用
+    json_num ..> PrivateFns : 委托
+    PrivateFns ..> Decimal : 构造/比较
+
+    %% 调用方：扫描候选 + 用各语言解析器「确认」
+    class CliArgs {
+        <<cli/src/args.rs>>
+        +load_params_file(path) Result~ParameterSet, CliError~
+        +--param 解析分支
+    }
+    class CliPart {
+        <<cli/src/commands/part.rs>>
+        +run(ctx, args) Result~(), CliError~
+    }
+    class ServerApiBody {
+        <<cli/src/server.rs>>
+        +api_body(body: &[u8]) Result~Value, Resp~
+        +presets_save(ctx, body) Resp
+        +inspect(ctx, body) Resp
+    }
+    class CoreYamlCallers {
+        <<core: manifest/variables/asset::preset>>
+        扫描后 用 serde_yaml 确认
+    }
+
+    class JsonConfirm {
+        <<cli 侧 helper>>
+        +confirmed_json_underflow(cand) bool
+        note: serde_json::from_str::<f64> 实测
+    }
+    class YamlConfirm {
+        <<core 侧 helper>>
+        +confirmed_yaml_underflow(cand) bool
+        note: serde_yaml::from_str::<f64> 实测
+    }
+    class StrParseConfirm {
+        <<cli 侧, --param>>
+        note: str::parse::<f64> 实测
+    }
+
+    CliArgs ..> json_num : scan_underflow_candidates
+    CliPart ..> json_num : scan_underflow_candidates
+    ServerApiBody ..> json_num : scan_underflow_candidates
+    CoreYamlCallers ..> json_num : scan_underflow_candidates_yaml
+
+    CliArgs ..> JsonConfirm : 确认(JSON)
+    CliArgs ..> StrParseConfirm : 确认(--param)
+    CliPart ..> JsonConfirm : 确认(JSON)
+    ServerApiBody ..> JsonConfirm : 确认(JSON)
+    CoreYamlCallers ..> YamlConfirm : 确认(YAML)
+
+    note for JsonConfirm "serde_json 非正确舍入\n2.4703282292062328e-324 -> 0.0"
+    note for YamlConfirm "serde_yaml 正确舍入\n2.4703282292062328e-324 -> 5e-324"

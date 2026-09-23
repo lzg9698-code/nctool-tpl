@@ -15,6 +15,9 @@
 
 pub mod asset;
 pub mod derive;
+// JSON/YAML 数字字面量下溢候选提取（ERR-NUM-UNDERFLOW）：文本层扫描 + 十进制真值预筛。
+// 只提取候选；最终是否下溢由持解析器的调用方确认（JSON 在 cli、YAML 在 core）。
+pub mod json_num;
 pub mod machine;
 pub mod manifest;
 pub mod model;
@@ -61,3 +64,9 @@ pub use part::{
 };
 // 机床配置
 pub use machine::{MachineId, MachinePreset};
+// 下溢候选提取（ERR-NUM-UNDERFLOW）：文本层扫描 JSON/YAML，提取「真值非零且
+// < 2^-1000」的候选字面量；最终是否下溢由调用方用实际解析器确认。
+pub use json_num::{
+    confirm_underflow_yaml, scan_underflow_candidates, scan_underflow_candidates_yaml,
+    UnderflowCandidate,
+};

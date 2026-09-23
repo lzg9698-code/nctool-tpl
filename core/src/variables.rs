@@ -75,6 +75,19 @@ impl VariableLibrary {
     /// 会因缺键而得到**空库**（若该字段带 `default`），于是第二种写法静默失效。
     /// 因此先解析成通用 `serde_yaml::Value` 显式判型。
     pub fn from_yaml(text: &str, origin: &Path) -> Result<Self, ManifestError> {
+        // ERR-NUM-UNDERFLOW：与清单同一口径——变量库也是 YAML，其中的数值字面量
+        // （如 `options: [1e-400]`）会被 serde_yaml 静默归零。文本层候选 + serde_yaml
+        // 实测确认，命中即硬失败。
+        for cand in crate::json_num::scan_underflow_candidates_yaml(text) {
+            if crate::json_num::confirm_underflow_yaml(&cand) {
+                return Err(ManifestError::Underflow {
+                    path: origin.to_path_buf(),
+                    literal: cand.literal,
+                    line: cand.line,
+                    column: cand.column,
+                });
+            }
+        }
         let value: serde_yaml::Value =
             serde_yaml::from_str(text).map_err(|e| ManifestError::Parse {
                 path: origin.to_path_buf(),
@@ -373,5 +386,26 @@ variables:
         assert_eq!(specs.len(), 1);
         assert!(specs[0].default.is_none(), "库不应注入默认值");
         assert!(!specs[0].required, "库不应把参数标为文档必选");
+    }
+
+    /// ERR-NUM-UNDERFLOW：变量库 YAML 里的下溢字面量必须硬失败。
+    #[test]
+    fn variable_library_rejects_underflow_literal() {
+        let err = VariableLibrary::from_yaml(
+            "variables:\n  - name: U_A\n    options: [1e-400]\n",
+            Path::new("variables.yaml"),
+        )
+        .expect_err("下溢字面量应被拒绝");
+        match err {
+            ManifestError::Underflow { literal, .. } => assert_eq!(literal, "1e-400"),
+            other => panic!("应为 Underflow，得到: {other:?}"),
+        }
+    }
+
+    /// 合法次正规数 `5e-324`（候选但确认非下溢）应正常解析。
+    #[test]
+    fn variable_library_accepts_legal_subnormal() {
+        let l = lib("variables:\n  - name: U_A\n    kind: number\n    options: [5e-324]\n");
+        assert_eq!(l.len(), 1);
     }
 }

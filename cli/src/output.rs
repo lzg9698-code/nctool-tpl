@@ -97,6 +97,10 @@ impl CliError {
             // 配置文件损坏是**配置**问题（拒绝覆盖），归 `config`(4) —— 与 preset
             // 把损坏预设文件归 io(3) 有意不同（见本函数文档与设计 D4/D7）。
             WriteError::Corrupt(m) => CliError::new("config", m),
+            // ERR-NUM-UNDERFLOW：下溢是**数值正确性**问题，不是"文件损坏"。
+            // 归 `args`(2)，与 `--params-file` / `--param` 通道一致（用户在命令行上
+            // 处理的是同一类问题），且**不**参与"损坏文件降级"策略。
+            WriteError::NumUnderflow { .. } => CliError::new("args", err.to_string()),
             WriteError::Io(e) => CliError::new("io", format!("读写失败：{e}")),
             _ => CliError::new("io", "读写失败"),
         }
@@ -137,6 +141,98 @@ impl fmt::Display for CliError {
 
 impl std::error::Error for CliError {}
 
+/// 检测 JSON 文本中的**下溢字面量**并用 `serde_json` **确认**，命中则返回 `CliError`。
+///
+/// 两段式（ERR-NUM-UNDERFLOW，设计 §3.1 / 附录 D4）：
+/// 1. [`nctool_core::json_num::scan_underflow_candidates`] 在 `core` 做文本层**候选提取**
+///    （宽松预筛 `|真值| < 2^-1000`，绝不漏报）；
+/// 2. 本函数用 **`serde_json` 实测确认**：把候选字面量包成 `{"x":<字面量>}` 解析，
+///    得 `0.0` 而预筛已保证十进制真值非零 ⇒ **确认为下溢**。
+///
+/// **为什么确认必须在 `cli` 侧**：`serde_json` 在 `core` 只是 dev-dependency，
+/// `core` 运行时不可调用它（硬约束）；且 JSON 与 YAML 的十进制→f64 行为**不同**
+/// （`serde_json` 非正确舍入、`serde_yaml` 正确舍入），**必须各自用自己的解析器确认**。
+///
+/// `origin` 用于错误消息中的来源标签（如 `参数文件 <path>`）。错误 kind 复用 `"args"`
+/// （退出码 2，语义：用户传入的参数值不合法）。**硬失败**，不受 `--lenient` 影响。
+///
+/// 返回 `None` 表示未发现（或候选经确认均为合法值）——**不**代表 JSON 一定合法，
+/// 语法错误仍由调用方原有的 `serde_json` 解析路径报错。
+pub fn json_underflow_error(text: &str, origin: &str) -> Option<CliError> {
+    for cand in nctool_core::json_num::scan_underflow_candidates(text) {
+        if confirm_json_underflow(&cand.literal) {
+            return Some(CliError::new(
+                "args",
+                underflow_message("json", origin, &cand),
+            ));
+        }
+    }
+    None
+}
+
+/// 用 `serde_json` 实测某字面量是否被**静默归零**（下溢确认）。
+///
+/// 包一层同格式的壳 `{"x":<字面量>}` 再解析（与 YAML 侧 `x: <字面量>` 同构）。
+/// 解析得 `0.0` ⇒ `true`；解析得非零 / 报语法错 ⇒ `false`（语法错交原解析路径报错）。
+pub fn confirm_json_underflow(literal: &str) -> bool {
+    let probe = format!("{{\"x\":{literal}}}");
+    match serde_json::from_str::<serde_json::Value>(&probe) {
+        Ok(v) => v.get("x").and_then(serde_json::Value::as_f64) == Some(0.0),
+        Err(_) => false,
+    }
+}
+
+/// 构造下溢错误消息：`<来源> 第 <行> 行第 <列> 列：数值 <前缀>:<字面量> 低于 f64 …`。
+///
+/// `prefix` 为**载体前缀**（`json` / `yaml` / `cli`）—— 描述用户手上那坨文本的格式，
+/// 与实现库名无关（`serde_json` 是库名、用户不认；且换库即失效）。
+pub fn underflow_message(
+    prefix: &str,
+    origin: &str,
+    cand: &nctool_core::json_num::UnderflowCandidate,
+) -> String {
+    format!(
+        "{origin} 第 {} 行第 {} 列：数值 {prefix}:{} 低于 f64 最小可表示正数，\
+         会被静默当作 0（G-code 将产出错误坐标）。请改用可表示的数值。",
+        cand.line, cand.column, cand.literal
+    )
+}
+
+/// 检测**单个 CLI 字面量**（`--param x=<v>` 的取值）是否下溢，命中则返回 `CliError`。
+///
+/// 第三通道：`--param` 的取值由 **`str::parse::<f64>`** 解释（非 `serde_json`、非
+/// `serde_yaml`）——三者的十进制→f64 舍入行为互不相同，**必须用本通道自己的解析器确认**。
+///
+/// 两段式：先 [`nctool_core::json_num::scan_underflow_candidates`] 对字面量做候选预筛
+/// （`|真值| < 2^-1000`），再由 [`confirm_cli_underflow`] 用 `str::parse` 实测确认。
+/// 单字面量的扫描与 JSON 扫描共用同一状态机（`Normal` 态直接读完整 token）。
+///
+/// `origin` 用于错误消息中的来源标签（如 `参数 --param x`）。kind 复用 `"args"`（退出码 2）。
+/// **硬失败**，不受 `--lenient` 影响。返回 `None` ⇒ 该取值不是下溢字面量。
+pub fn cli_underflow_error(value: &str, origin: &str) -> Option<CliError> {
+    for cand in nctool_core::json_num::scan_underflow_candidates(value) {
+        if confirm_cli_underflow(&cand.literal) {
+            return Some(CliError::new(
+                "args",
+                underflow_message("cli", origin, &cand),
+            ));
+        }
+    }
+    None
+}
+
+/// 用 **`str::parse::<f64>`** 实测某字面量是否被**静默归零**（`--param` 通道的下溢确认）。
+///
+/// 解析得 `0.0` ⇒ `true`（配合预筛已保证十进制真值非零 ⇒ 确认下溢）；
+/// 解析得非零 / 报错 ⇒ `false`。
+///
+/// **不可复用 [`confirm_json_underflow`]**：`serde_json` 与 `str::parse` 的十进制→f64
+/// 舍入不同（`serde_json` 非正确舍入），对边界字面量（如 `2.4703282292062328e-324`）
+/// 会给出不同结论；确认必须用调用方**实际使用**的那条解析器。
+pub fn confirm_cli_underflow(literal: &str) -> bool {
+    matches!(literal.parse::<f64>(), Ok(v) if v == 0.0)
+}
+
 impl From<std::io::Error> for CliError {
     fn from(err: std::io::Error) -> Self {
         CliError::new("io", err.to_string())
@@ -172,6 +268,8 @@ impl From<nctool_core::asset::WriteError> for CliError {
             }
             // 目标不可用（如同名目录占位）≠ "数据损坏"：payload 已自述。
             WriteError::Corrupt(m) => CliError::new("io", m),
+            // ERR-NUM-UNDERFLOW：下溢是数值正确性问题 → `args`(2)，与其它 CLI 通道一致。
+            WriteError::NumUnderflow { .. } => CliError::new("args", err.to_string()),
             WriteError::Io(e) => CliError::new("io", format!("写入失败：{e}")),
             _ => CliError::new("io", "写入失败"),
         }
@@ -321,6 +419,75 @@ mod tests {
     use nctool_core::derive::DeriveError;
     use nctool_core::validate::ValidationReport;
     use nctool_tpl::TplError;
+
+    // -----------------------------------------------------------------------
+    // ERR-NUM-UNDERFLOW：各通道确认器
+    // -----------------------------------------------------------------------
+
+    #[test]
+    fn confirm_json_underflow_true_for_zeroed_literal() {
+        // `1e-400` 经 serde_json 静默归零
+        assert!(confirm_json_underflow("1e-400"));
+    }
+
+    #[test]
+    fn confirm_json_underflow_false_for_legal_subnormal() {
+        // 最小次正规数不受影响
+        assert!(!confirm_json_underflow("5e-324"));
+        assert!(!confirm_json_underflow("1e-323"));
+    }
+
+    #[test]
+    fn confirm_cli_and_json_agree_on_clear_cases() {
+        // 明确的零与非零，两条通道结论一致
+        assert!(confirm_cli_underflow("1e-400"));
+        assert!(!confirm_cli_underflow("5e-324"));
+        assert!(!confirm_cli_underflow("1e-323"));
+    }
+
+    #[test]
+    fn json_underflow_error_reports_prefix_and_location() {
+        let err = json_underflow_error(r#"{"x": 1e-400}"#, "请求体").expect("应命中下溢");
+        assert_eq!(err.kind, "args");
+        assert!(
+            err.message.contains("json:1e-400"),
+            "应带 json: 前缀与字面量: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("第 1 行"),
+            "应带行定位: {}",
+            err.message
+        );
+        assert!(
+            err.message.contains("列：数值 json:1e-400"),
+            "列定位应紧邻字面量: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn json_underflow_error_none_for_string_content() {
+        // 字符串内容里的 `1e-400` 不是数值 → 0 候选 → 不报错
+        assert!(json_underflow_error(r#"{"note": "1e-400"}"#, "请求体").is_none());
+    }
+
+    #[test]
+    fn cli_underflow_error_reports_cli_prefix() {
+        let err = cli_underflow_error("1e-400", "参数 --param x").expect("应命中下溢");
+        assert_eq!(err.kind, "args");
+        assert!(
+            err.message.contains("cli:1e-400"),
+            "应带 cli: 前缀: {}",
+            err.message
+        );
+    }
+
+    #[test]
+    fn cli_underflow_error_none_for_legal_value() {
+        assert!(cli_underflow_error("5e-324", "参数 --param x").is_none());
+        assert!(cli_underflow_error("21.5", "参数 --param x").is_none());
+    }
 
     /// 退出码是对外契约（README 有完整矩阵，clap 的用法错误也按 2 走），
     /// 逐个钉住，改动即红。

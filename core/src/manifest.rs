@@ -413,6 +413,20 @@ impl TemplateManifest {
     ///   name: 越程槽加工
     /// ```
     pub fn from_yaml(text: &str, origin: &Path) -> Result<Self, ManifestError> {
+        // ERR-NUM-UNDERFLOW：清单是 YAML，其中的数值字面量（如 `1e-400`）会被
+        // serde_yaml 静默归零，进而污染参数默认值 / 上下界。**先**在文本层做候选提取，
+        // 再逐条用 serde_yaml **实测确认**（`confirm_underflow_yaml`）——那条通道自己的
+        // 解析器。命中即硬失败（不静默降级）。
+        for cand in crate::json_num::scan_underflow_candidates_yaml(text) {
+            if crate::json_num::confirm_underflow_yaml(&cand) {
+                return Err(ManifestError::Underflow {
+                    path: origin.to_path_buf(),
+                    literal: cand.literal,
+                    line: cand.line,
+                    column: cand.column,
+                });
+            }
+        }
         // 两种手写形式都支持：
         //   1. 带 `templates:` 键（文档推荐）
         //   2. **裸映射**：顶层直接是 `"路径": {…}`
@@ -965,6 +979,20 @@ pub enum ManifestError {
         /// 重复的变量名
         name: String,
     },
+    /// 清单中的数值字面量下溢（`|真值| < 2^-1000` 且被 YAML 解析器静默归零）。
+    ///
+    /// 下溢会静默产出错误数值（如默认值变成 `0`），进而生成错误 G-code，故**硬失败**
+    /// 而非警告。定位信息（行/列 + 字面量）用于让用户直接改到那一行。
+    Underflow {
+        /// 文件路径
+        path: std::path::PathBuf,
+        /// 触发下溢的原始字面量文本
+        literal: String,
+        /// 字面量所在行（1 起）
+        line: usize,
+        /// 字面量所在列（1 起，字节计）
+        column: usize,
+    },
 }
 
 impl std::fmt::Display for ManifestError {
@@ -979,6 +1007,17 @@ impl std::fmt::Display for ManifestError {
             ManifestError::DuplicateVariable { path, name } => {
                 write!(f, "变量库 {} 中变量 '{name}' 重复定义", path.display())
             }
+            ManifestError::Underflow {
+                path,
+                literal,
+                line,
+                column,
+            } => write!(
+                f,
+                "模板清单 {} 第 {line} 行第 {column} 列：数值 yaml:{literal} 低于 f64 最小可表示正数，\
+                 会被静默当作 0（将产出错误默认值/坐标）。请改用可表示的数值。",
+                path.display()
+            ),
         }
     }
 }
@@ -989,6 +1028,8 @@ impl std::error::Error for ManifestError {
             ManifestError::Io { source, .. } => Some(source),
             ManifestError::Parse { source, .. } => Some(source),
             ManifestError::DuplicateVariable { .. } => None,
+            // 下溢由本模块的文本层判定，无底层错误源
+            ManifestError::Underflow { .. } => None,
         }
     }
 }
@@ -1837,5 +1878,95 @@ templates:
         // 库未定义的 U_A 保持头部声明
         let u_a = r.params.iter().find(|s| s.name == "U_A").unwrap();
         assert_eq!(u_a.kind, ParamKind::Number);
+    }
+
+    // -----------------------------------------------------------------------
+    // ERR-NUM-UNDERFLOW：清单 YAML 通道
+    // -----------------------------------------------------------------------
+
+    /// 清单里的下溢字面量必须硬失败（否则默认值/上下界被静默归零）。
+    #[test]
+    fn manifest_rejects_underflow_literal() {
+        let yaml = r#"
+templates:
+  "turning/a.j2":
+    params:
+      - name: X
+        default: 1e-400
+"#;
+        let err = TemplateManifest::from_yaml(yaml, Path::new("templates.yaml"))
+            .expect_err("下溢字面量应被拒绝");
+        match err {
+            ManifestError::Underflow {
+                literal,
+                line,
+                column,
+                ..
+            } => {
+                assert_eq!(literal, "1e-400");
+                assert!(line >= 1 && column >= 1, "应带行列定位: {line}:{column}");
+            }
+            other => panic!("应为 Underflow，得到: {other:?}"),
+        }
+    }
+
+    /// 注释里的 `# note: 1e-400` 不是数值 → 0 候选，不得误报。
+    #[test]
+    fn manifest_comment_is_not_underflow() {
+        let yaml = r#"
+# note: 1e-400
+templates:
+  "turning/a.j2":
+    name: 测试
+"#;
+        assert!(
+            crate::json_num::scan_underflow_candidates_yaml(yaml).is_empty(),
+            "注释内容不应产生候选"
+        );
+        assert!(TemplateManifest::from_yaml(yaml, Path::new("templates.yaml")).is_ok());
+    }
+
+    /// serde_yaml 正确舍入：`2.4703282292062328e-324` 解析得 `5e-324`（非零），
+    /// 确认结果为 **false** —— 它是候选但**不是**下溢，必须放行。
+    #[test]
+    fn manifest_yaml_confirm_false_for_rounding_safe_literal() {
+        let yaml = r#"
+templates:
+  "turning/a.j2":
+    params:
+      - name: X
+        default: 2.4703282292062328e-324
+"#;
+        let cands = crate::json_num::scan_underflow_candidates_yaml(yaml);
+        assert_eq!(cands.len(), 1, "应为候选（真值 < 2^-1000）");
+        assert!(
+            !crate::json_num::confirm_underflow_yaml(&cands[0]),
+            "serde_yaml 正确舍入得非零 → 确认应为 false"
+        );
+        assert!(
+            TemplateManifest::from_yaml(yaml, Path::new("templates.yaml")).is_ok(),
+            "确认 false ⇒ 放行"
+        );
+    }
+
+    /// 合法次正规数 `5e-324`：候选但确认非下溢 → 放行。
+    #[test]
+    fn manifest_accepts_legal_subnormal() {
+        let yaml = r#"
+templates:
+  "turning/a.j2":
+    params:
+      - name: X
+        default: 5e-324
+"#;
+        assert!(TemplateManifest::from_yaml(yaml, Path::new("templates.yaml")).is_ok());
+        let yaml2 = r#"
+templates:
+  "turning/a.j2":
+    params:
+      - name: X
+        default: 1e-323
+"#;
+        assert!(TemplateManifest::from_yaml(yaml2, Path::new("templates.yaml")).is_ok());
     }
 }

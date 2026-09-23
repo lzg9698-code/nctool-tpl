@@ -1094,6 +1094,63 @@ CLI `nctool preset ...`、HTTP `/api/presets`、Web UI 预设面板。
   **变异判别** —— 用缺陷变体重放同一输入，证明用例不是空洞的）、
   `cli/tests/cli.rs` 新增片段行数护栏。合计 **868 passed / 0 failed**。
 
+### 批次十八：堵住 JSON/YAML 数值下溢静默归零（`ERR-NUM-UNDERFLOW`）
+
+第五轮代码审查（`docs/CODE_REVIEW_2026-09-23.md`）提出的 P1：**极小十进制字面量被解析器
+静默归零，而 `0.0` 作为合法参数一路写进 G-code，全程无任何报错**。
+
+```
+{"x":1e-400}  ->  ParamValue::Number(0.0)  ->  "G0 X0.000"   无报错
+```
+
+对机床而言这不是「数据不准」，而是**错误的坐标**。设计见
+`docs/err-num-underflow-design.md`，判据经四次否决后收敛为「**实测解析器行为**」而非
+任何预测阈值（详见该文档附录 D7 的流程教训）。
+
+#### Fixed
+
+- **`serde_json` 通道**（`--params-file`、`/api/render`、`/api/validate`、
+  `/api/inspect`、`/api/part/generate`、`/api/presets`）：解析前先在文本层提取候选，
+  再用 `serde_json` **实测确认**得 `0.0`，命中即 **exit 2（kind `args`）/ HTTP 400
+  （kind `num_underflow`）** 硬失败，**不受 `--lenient` 豁免**。
+- **`serde_yaml` 通道**（模板清单 `params[].default`、变量库、预设文件
+  `load` / `import`）：同一两段式，但**确认必须用 `serde_yaml`** ——
+  两个解析器的舍入行为**不同**（`2.4703282292062328e-324` 在 `serde_json` 归零、
+  在 `serde_yaml` 得 `5e-324`），复用确认结果会误判。
+- **`--param` 通道**：确认用 `str::parse::<f64>`（与上述二者的阈值均不同）。
+  `k:s=` 显式字符串通道不解释数值，故不触发（`x:s=1e-400` 合法保留）。
+- **`cli/src/context.rs`：清单/变量库的下溢不再被降级为 warning**。「清单是可选文件、
+  损坏时降级」的既有策略保留，但**下溢单独拎出硬失败** —— 被归零的默认值会直接
+  写进 G-code，与「清单损坏」不是一类问题。
+
+#### Added
+
+- **`core::json_num`**（纯 `std`，**零新增 crate**）：`scan_underflow_candidates` /
+  `scan_underflow_candidates_yaml` / `confirm_underflow_yaml` / `UnderflowCandidate`。
+  预筛阈值取 `2^-1000`（仅作**宽松粗筛**，绝不漏报；裁决权在确认环节）。
+  扫描器跳过 JSON 字符串内容与键名、YAML 注释 / 引号串 / 块标量。
+- **`WriteError::NumUnderflow`**（`core::asset`，枚举本已 `#[non_exhaustive]`）。
+- **`ManifestError::Underflow`**。
+
+#### 关键行为（已有测试断言）
+
+- **真下溢必拒**：`1e-400`、`1e-324`、`1e-0350`、`100000e-405`、无指数长串。
+- **合法次正规数必放过**：`5e-324`（`2^-1074`）、`1e-323`、`2.5e-324`、`4.9e-324` ——
+  它们是**预筛候选**但经确认放过。此点曾是本修复最大的误伤风险：项目有 `nc_strip`
+  过滤器用 Rust `Display` 输出**完整 326 字符真值**（非 `0.000`），被真实模板
+  `machines/index_g420/dg_cal_ir9.j2` 使用，误拒会把本可正确渲染的合法值变成硬失败。
+- **字符串/注释不是数值**：`{"note":"1e-400"}`、`# note: 1e-400` → 零候选。
+
+#### 测试
+
+`core/src/json_num.rs` 22 例 + `cli/src/output.rs` 7 例 + `cli/src/args.rs` 8 例 +
+`cli/src/server.rs` 4 例 + `cli/src/context.rs` 4 例 + `core/src/manifest.rs` /
+`variables.rs` / `asset/preset.rs` 各若干。合计 **1020 passed / 0 failed**，
+生产口径行覆盖 **91.69%**。
+
+> **未随本批修复**（另开 issue）：`nc_strip` / `nc_fixed` 的格式化精度问题 ——
+> 次正规数即便被正确解析，`%f` 形式仍显示为 `0.000`（`ERR-NUM-PRECISION`）。
+
 ---
 
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18

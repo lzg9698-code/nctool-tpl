@@ -200,6 +200,13 @@ impl PresetStore {
             });
         }
         let text = std::fs::read_to_string(path).map_err(|e| super::map_io(e, path))?;
+        // ERR-NUM-UNDERFLOW：预设文件是 YAML，其中的数值（如 `value: 1e-400`）会被
+        // serde_yaml 静默归零 → 参与渲染就是错误坐标。**先**在文本层做候选提取，
+        // 再逐条用 serde_yaml 实测确认（本通道自己的解析器）。命中即硬失败，
+        // **不**降级为"损坏文件"警告（否则 1e-400 会被静默当 0 用）。
+        if let Some(err) = detect_underflow(path, &text) {
+            return Err(err);
+        }
         match serde_yaml::from_str::<PresetFile>(&text) {
             Ok(file) if file.version == PRESET_SCHEMA_VERSION => Ok(LoadOutcome {
                 file,
@@ -347,6 +354,11 @@ impl PresetStore {
         F: FnMut(&Preset) -> Result<(), E>,
         E: From<WriteError>,
     {
+        // ERR-NUM-UNDERFLOW：导入的 YAML 同样在解析前拦下溢（否则 `1e-400` 被静默
+        // 归零写回文件，静默损坏落盘）。导入来源无确定路径，用占位 `<导入文本>`。
+        if let Some(err) = detect_underflow(Path::new("<导入文本>"), text) {
+            return Err(E::from(err));
+        }
         let file: PresetFile = serde_yaml::from_str(text)
             .map_err(|e| E::from(WriteError::Corrupt(format!("导入内容解析失败：{e}"))))?;
         if file.version != PRESET_SCHEMA_VERSION {
@@ -512,6 +524,30 @@ impl PresetStore {
     }
 }
 
+/// 扫描 YAML 文本中的下溢字面量并用 **serde_yaml** 实测确认，命中则返回错误。
+///
+/// 两段式（ERR-NUM-UNDERFLOW，设计 §4.1 / 附录 D4）：
+/// 1. [`crate::json_num::scan_underflow_candidates_yaml`] 做文本层**候选提取**
+///    （宽松预筛 `|真值| < 2^-1000`，绝不漏报，且跳过注释 / 字符串 / 块标量）；
+/// 2. [`crate::json_num::confirm_underflow_yaml`] 用 **serde_yaml 实测**确认
+///    （解析得 `0.0` 而预筛已保证十进制真值非零 ⇒ 确认为下溢）。
+///
+/// 返回 `None` ⇒ 无命中（含"候选但经确认均为合法值"）。`path` 用于错误定位，
+/// 无确定来源时传占位路径。**不**降级为警告：下溢会污染参数值并产出错误 G-code。
+fn detect_underflow(path: &Path, text: &str) -> Option<WriteError> {
+    for cand in crate::json_num::scan_underflow_candidates_yaml(text) {
+        if crate::json_num::confirm_underflow_yaml(&cand) {
+            return Some(WriteError::NumUnderflow {
+                path: path.to_path_buf(),
+                literal: cand.literal,
+                line: cand.line,
+                column: cand.column,
+            });
+        }
+    }
+    None
+}
+
 /// 把预设文件路径的**默认位置**解析出来：配置目录（非模板根）。
 ///
 /// - Windows：`%APPDATA%`
@@ -670,6 +706,24 @@ mod tests {
         }
     }
 
+    /// 构造一份含指定数值字面量的合法预设文件 YAML（用于下溢测试）。
+    ///
+    /// 字段名用 serde 契约的 camelCase（`createdAt` / `specFingerprint`）。
+    fn preset_yaml(literal: &str) -> String {
+        format!(
+            "version: 1\n\
+             presets:\n\
+             \x20 - name: gap\n\
+             \x20   template: turning/a.j2\n\
+             \x20   params:\n\
+             \x20     x:\n\
+             \x20       type: number\n\
+             \x20       value: {literal}\n\
+             \x20   createdAt: \"2026-09-21T00:00:00Z\"\n\
+             \x20   specFingerprint: \"fnv1a64:0000000000000000\"\n"
+        )
+    }
+
     #[test]
     fn load_missing_file_is_empty_not_degraded() {
         let dir = tmpdir("missing");
@@ -689,6 +743,61 @@ mod tests {
         assert!(!got.warnings.is_empty());
         // 关键：降级时原文件不得被改动
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "presets: [ : : oops");
+    }
+
+    /// ERR-NUM-UNDERFLOW：预设文件里的 `1e-400` 必须**硬失败**（不得降级为 warning）
+    /// —— 否则会被静默归零成 `0.0` 当作"生效参数"喂给渲染（错误坐标）。
+    #[test]
+    fn underflow_literal_is_hard_error() {
+        let dir = tmpdir("preset_underflow");
+        let p = dir.join("presets.yaml");
+        std::fs::write(&p, preset_yaml("1e-400")).unwrap();
+        let err = PresetStore::load(&p).expect_err("含 1e-400 的预设文件必须硬失败");
+        match err {
+            WriteError::NumUnderflow {
+                literal,
+                line,
+                column,
+                ..
+            } => {
+                assert_eq!(literal, "1e-400");
+                assert!(line >= 1 && column >= 1);
+            }
+            other => panic!("应为 NumUnderflow，得到: {other:?}"),
+        }
+        // 原文件不得被改动（硬失败而非"忽略内容"）
+        assert!(std::fs::read_to_string(&p).unwrap().contains("1e-400"));
+    }
+
+    /// 负向对照：`5e-324`（合法最小次正规数）→ 照常加载，不得误拒。
+    #[test]
+    fn legal_subnormal_is_accepted() {
+        let dir = tmpdir("preset_subnormal");
+        let p = dir.join("presets.yaml");
+        std::fs::write(&p, preset_yaml("5e-324")).unwrap();
+        let got = PresetStore::load(&p).expect("合法次正规数不得被误拒");
+        assert!(!got.degraded);
+        assert_eq!(
+            got.file.get("gap").unwrap().params.get("x"),
+            Some(&ParamValue::Number(5e-324))
+        );
+    }
+
+    /// 导入通道同口径：`1e-400` → `import_presets` 返回 Err。
+    #[test]
+    fn import_rejects_underflow_literal() {
+        let err = PresetStore::import_presets::<WriteError, _>(&preset_yaml("1e-400"), |_| Ok(()))
+            .unwrap_err();
+        assert!(matches!(err, WriteError::NumUnderflow { .. }), "{err:?}");
+    }
+
+    /// 导入通道负向对照：`5e-324` → 正常导入。
+    #[test]
+    fn import_accepts_legal_subnormal() {
+        let got = PresetStore::import_presets::<WriteError, _>(&preset_yaml("5e-324"), |_| Ok(()))
+            .unwrap();
+        assert_eq!(got.len(), 1);
+        assert_eq!(got[0].params.get("x"), Some(&ParamValue::Number(5e-324)));
     }
 
     #[test]
