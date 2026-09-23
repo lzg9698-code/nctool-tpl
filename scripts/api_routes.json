@@ -67,13 +67,14 @@
       "path": "/api/render",
       "query": "",
       "body": "{}"
-    }
-  ],
-  "frontend_only": [
+    },
     {
       "method": "POST",
       "path": "/api/part/generate",
-      "reason": "零件级批量生成（规划于阶段 4）：后端 nctool part generate 仍是显式报 not_implemented 的占位，前端 demo 模式（file://）由本地 mock 执行，服务模式入口被 API.mode 守卫挡住。后端实现后必须把本条移入 routes，并删除这里的豁免。"
+      "query": "",
+      "body": "{\"part\":{\"name\":\"示例\",\"ops\":[]}}",
+      "note": "零件级批量生成：体 {\"part\":{name,default_machine,params,ops:[{template,params,machine,options}]}}，顶层还可带 lineNumbers/addHeader/stripBlank/ascii/lenient。**注意与 CLI 的语义差异**：CLI 是全有或全无（任一工序失败即不写出文件，exit 1），本端点则返回 200 + data.results（逐工序结果），因为前端 runBatch 需要按工序高亮错误；此时成功的工序带 skipped:true 且不带 output（不吐半成品程序）。请求体本身不合法（如缺 part 字段、ops 为空）才回 400 且不带 data。"
     }
-  ]
+  ],
+  "frontend_only": []
 }

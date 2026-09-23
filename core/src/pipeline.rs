@@ -70,6 +70,19 @@ pub struct GenerationOptions {
     pub line_number_step: u32,
     /// 行号上限（超过后不再编号）
     pub max_line_number: u32,
+    /// **编号起始值**：第一行编号从 `start + step` 开始，而非从 `step` 开始。
+    ///
+    /// 单模板渲染时保持 `0`（与历史行为逐字节一致）；多工序拼接时由
+    /// [`crate::part`] 传入上一工序的**末行号**，使 `N0010 / N0020` 跨工序
+    /// 连续续编而不是每段重来（E5 走查局限 5.1）。
+    ///
+    /// 取"上一段末行号"而非"上一段行数 × step"：段内可能有程序号行
+    /// （`O1001`）与已有行号行不参与编号，按行数推算会错位。
+    ///
+    /// **与 [`Self::max_line_number`] 的关系**：起始值本身不参与上限判断，
+    /// 只有实际要写入的 `start + n*step` 才会被上限拦下——上限是"程序里
+    /// 能出现多大的行号"，不是"这一段能编多少行"。
+    pub line_number_start: u32,
     /// 是否生成头部注释（模板名等）
     pub add_header_comment: bool,
     /// 是否删除空行
@@ -89,6 +102,7 @@ impl Default for GenerationOptions {
             line_numbers: false,
             line_number_step: 10,
             max_line_number: 9999,
+            line_number_start: 0,
             add_header_comment: false,
             strip_blank_lines: false,
             ascii_only: false,
@@ -146,6 +160,37 @@ impl GCodeGenerator {
         machine: &MachineConfig,
         opts: &GenerationOptions,
     ) -> Result<String, PipelineError> {
+        // 末行号对单模板渲染无用，丢弃
+        self.generate_impl(template, params, machine, opts)
+            .map(|(out, _cursor)| out)
+    }
+
+    /// 端到端生成并**返回末行号**，供多工序续编使用。
+    ///
+    /// 与 [`Self::generate`] 唯一区别是多回传一个游标：把上一段的返回值填进
+    /// 下一段的 [`GenerationOptions::line_number_start`]，即可让 `N0010 / N0020`
+    /// 跨工序连续（见 [`crate::part`]）。
+    ///
+    /// 返回的游标是**该段最后一个被写入的行号**；未开行号、或该段一行都未编号时
+    /// 等于传入的 `line_number_start`。
+    pub fn generate_with_cursor(
+        &self,
+        template: &str,
+        params: &ParameterSet,
+        machine: &MachineConfig,
+        opts: &GenerationOptions,
+    ) -> Result<(String, u32), PipelineError> {
+        self.generate_impl(template, params, machine, opts)
+    }
+
+    /// [`Self::generate`] 与 [`Self::generate_with_cursor`] 的共同实现。
+    fn generate_impl(
+        &self,
+        template: &str,
+        params: &ParameterSet,
+        machine: &MachineConfig,
+        opts: &GenerationOptions,
+    ) -> Result<(String, u32), PipelineError> {
         // 1. 模板存在性
         let entry = match self.registry.get(template) {
             Some(e) => e,
@@ -252,7 +297,7 @@ impl GCodeGenerator {
             .registry
             .render_template_lenient(template, &context)
             .map_err(PipelineError::Render)?;
-        Ok((postprocess(&rendered, template, opts, machine), report))
+        Ok((postprocess(&rendered, template, opts, machine).0, report))
     }
 
     /// 便捷：使用通用机床配置生成 G-code。
@@ -325,12 +370,23 @@ fn non_empty_config<'a>(machine: &'a MachineConfig, key: &str, fallback: &'a str
         .unwrap_or(fallback)
 }
 
+/// 后处理：行号 / 头部注释 / 空行清理 / ASCII 清洗。
+///
+/// 返回 `(G-code 文本, 末行号)`。第二个值是**跨工序续编的接口**
+/// （见 [`GenerationOptions::line_number_start`]）：调用方把上一段的末行号
+/// 传给下一段即可实现连续编号。未开行号或一行都未编号时返回传入的
+/// 起始值本身，语义是"编号游标未前进"。
+///
+/// 之所以由本函数回传末行号而不是让调用方自己算：**只有遍历过每一行的
+/// 本函数知道哪些行真的被编了号**（程序号行 `O1001`、已有行号行、空行都
+/// 跳过），按"段内行数 × step"推算必然错位。把游标交还调用方，是唯一
+/// 不会与编号逻辑脱节的做法。
 fn postprocess(
     rendered: &str,
     template: &str,
     opts: &GenerationOptions,
     machine: &MachineConfig,
-) -> String {
+) -> (String, u32) {
     let mut out = String::new();
 
     // 头部注释（两种格式均生效，由用户显式开启）；文本为 ASCII，
@@ -350,10 +406,10 @@ fn postprocess(
     // 用 match 而非 `if == Text`：新增输出格式时编译器强制在此表态，
     // 不会静默落到 G-code 后处理（加行号 / 清 ASCII）里产出错误程序。
     match opts.format {
-        // Text 格式：仅渲染，不做任何后处理
+        // Text 格式：仅渲染，不做任何后处理（也不推进编号游标）
         OutputFormat::Text => {
             out.push_str(rendered);
-            return out;
+            return (out, opts.line_number_start);
         }
         OutputFormat::Gcode => {}
     }
@@ -373,7 +429,8 @@ fn postprocess(
     let program_prefix = non_empty_config(machine, "program_prefix", "O");
     // step=0 视为 1：否则行号原地不动，产出重复的 N0000 行
     let step = opts.line_number_step.max(1);
-    let mut line_no: u32 = 0;
+    // 起始值：多工序续编用。单模板渲染时为 0，行为与历史一致。
+    let mut line_no: u32 = opts.line_number_start;
     for line in rendered.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -412,7 +469,7 @@ fn postprocess(
         out.push_str(content);
         out.push('\n');
     }
-    out
+    (out, line_no)
 }
 
 #[cfg(test)]

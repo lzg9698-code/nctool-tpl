@@ -817,15 +817,75 @@ impl ParamSpec {
 /// 参数集：一组具名参数值。
 ///
 /// 键为参数名，值为 [`ParamValue`]。内部用 `BTreeMap` 保证顺序稳定、可序列化。
-#[derive(Debug, Clone, Default, PartialEq, Serialize, Deserialize)]
+///
+/// # 序列化形式
+///
+/// **序列化**为带包装的形式（`{"values": {"x": ...}}`），这是派生实现的历史
+/// 行为，保持不动以免影响既有消费方（预设文件、`--format json` 输出）。
+///
+/// **反序列化**额外接受**扁平形式**（`{"x": 21.0, "n": 5}`）—— 这是本项目
+/// 所有面向用户的入口实际使用的形状：`--params-file`、HTTP 的
+/// `{"template","params"}` 请求体、前端 UI 提交的参数集，还有零件定义里的
+/// `params`。此前 `ParameterSet` 只有派生实现，扁平输入会被静默解析成**空集**
+/// （`values` 键缺失 + `#[serde(default)]`），于是"参数明明传了却全部缺失"，
+/// 报错还指向别处。手写扁平解析器是因为该坑在多个调用方各修一遍不现实
+/// ——统一在这里接受才是单一来源。
+///
+/// 两种形式混用时**以扁平键为准**（扁平键中出现的参数名覆盖 `values` 里的同名项）。
+#[derive(Debug, Clone, Default, PartialEq, Serialize)]
 pub struct ParameterSet {
     /// 参数名 → 参数值
     ///
     /// `#[serde(default)]`：允许手写配置里的空集写 `params: {}` 而非
     /// `params: {values: {}}`——后者是内部表示泄漏到用户面前，会让"没有参数的
     /// 预设"必须写成一坨机器码。缺省字段时按空集处理。
-    #[serde(default)]
     pub values: BTreeMap<String, ParamValue>,
+}
+
+impl<'de> Deserialize<'de> for ParameterSet {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ParameterSetVisitor;
+
+        impl<'de> serde::de::Visitor<'de> for ParameterSetVisitor {
+            type Value = ParameterSet;
+
+            fn expecting(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                f.write_str(
+                    "参数集：`{\"参数名\": 值}` 扁平映射，或 `{\"values\": {...}}` 包装形式",
+                )
+            }
+
+            fn visit_map<A>(self, mut map: A) -> Result<ParameterSet, A::Error>
+            where
+                A: serde::de::MapAccess<'de>,
+            {
+                let mut flat: BTreeMap<String, ParamValue> = BTreeMap::new();
+                // 延迟处理：`values` 键里的条目不应覆盖扁平键，故先收着
+                let mut wrapped: Option<BTreeMap<String, ParamValue>> = None;
+                while let Some(key) = map.next_key::<String>()? {
+                    if key == "values" {
+                        wrapped = Some(map.next_value()?);
+                    } else {
+                        flat.insert(key, map.next_value()?);
+                    }
+                }
+                let mut set = ParameterSet::new();
+                if let Some(w) = wrapped {
+                    set.values = w;
+                }
+                // 扁平键后插入，天然覆盖包装形式里的同名项
+                for (k, v) in flat {
+                    set.values.insert(k, v);
+                }
+                Ok(set)
+            }
+        }
+
+        deserializer.deserialize_map(ParameterSetVisitor)
+    }
 }
 
 /// 将 [`ParamValue`] 转为 minijinja 裸值（用于渲染上下文）。
@@ -1127,6 +1187,95 @@ mod tests {
         let x_val = v.get_attr("x").unwrap();
         assert!(x_val.is_number());
         assert_eq!(f64::try_from(x_val.clone()).ok(), Some(21.0));
+    }
+
+    // ---- 反序列化：扁平形式 vs 包装形式 ----
+    //
+    // 这一组是本模块最容易被改坏的地方：`ParameterSet` 的**序列化**是包装形式
+    // （`{"values": {...}}`，派生行为），而所有面向用户的入口（`--params-file`、
+    // HTTP 请求体、前端提交、零件定义里的 `params`）用的都是**扁平形式**。
+    // 此前只有派生实现，扁平输入被静默解析成空集 —— "参数传了却全部缺失"，
+    // 报错还指向模板。以下用例把两种形式都钉住。
+
+    #[test]
+    fn deserialize_accepts_flat_map() {
+        let ps: ParameterSet =
+            serde_json::from_str(r#"{"x":21.0,"tool":"D12","cool":true}"#).unwrap();
+        assert_eq!(ps.len(), 3, "扁平形式必须被识别，不能静默变成空集");
+        assert_eq!(ps.get("x"), Some(&ParamValue::Number(21.0)));
+        assert_eq!(ps.get("tool"), Some(&ParamValue::String("D12".into())));
+        assert_eq!(ps.get("cool"), Some(&ParamValue::Bool(true)));
+    }
+
+    /// 扁平形式里整数保持整数语义（`{{ tool_num }}` 输出 `5` 而非 `5.0`）。
+    #[test]
+    fn deserialize_flat_map_keeps_integer_kind() {
+        let ps: ParameterSet = serde_json::from_str(r#"{"n":8}"#).unwrap();
+        assert_eq!(ps.get("n"), Some(&ParamValue::Integer(8)));
+    }
+
+    #[test]
+    fn deserialize_accepts_wrapped_form_for_backward_compat() {
+        // 历史/内部形式：预设文件与 `--format json` 输出走这条
+        let json = r#"{"values":{"x":{"type":"number","value":1.0}}}"#;
+        let ps: ParameterSet = serde_json::from_str(json).unwrap();
+        assert_eq!(ps.get("x"), Some(&ParamValue::Number(1.0)));
+    }
+
+    #[test]
+    fn deserialize_empty_object_is_empty_set() {
+        let ps: ParameterSet = serde_json::from_str("{}").unwrap();
+        assert!(ps.is_empty(), "`params: {{}}` 必须是空集而非错误");
+    }
+
+    #[test]
+    fn deserialize_rejects_null_value_with_actionable_message() {
+        let err = serde_json::from_str::<ParameterSet>(r#"{"x":null}"#).unwrap_err();
+        let msg = err.to_string();
+        assert!(
+            msg.contains("null") && msg.contains("省略该键"),
+            "null 值应给出可操作提示（省略键或显式给值），实得: {msg}"
+        );
+    }
+
+    /// 两种形式混用时**扁平键优先**：这样"包装形式 + 一个覆盖项"不必重写整份 `values`。
+    #[test]
+    fn deserialize_flat_keys_win_over_wrapped() {
+        let json = r#"{"values":{"x":{"type":"number","value":1.0},"y":{"type":"number","value":2.0}},"x":9.0}"#;
+        let ps: ParameterSet = serde_json::from_str(json).unwrap();
+        assert_eq!(
+            ps.get("x"),
+            Some(&ParamValue::Number(9.0)),
+            "扁平键应覆盖包装内同名项"
+        );
+        assert_eq!(
+            ps.get("y"),
+            Some(&ParamValue::Number(2.0)),
+            "未冲突项应保留"
+        );
+    }
+
+    /// 序列化仍是包装形式（不因反序列化支持扁平而改变输出形状）。
+    #[test]
+    fn serialize_still_uses_wrapped_form() {
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", 1.0);
+        let v: serde_json::Value = serde_json::to_value(&ps).unwrap();
+        assert!(
+            v.get("values").is_some(),
+            "序列化形状应保持包装形式，否则会破坏既有消费方: {v}"
+        );
+    }
+
+    /// 往返：包装形式序列化后再解析回等值对象。
+    #[test]
+    fn wrapped_form_round_trips() {
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", 1.5);
+        ps.set_string("s", "v");
+        let json = serde_json::to_string(&ps).unwrap();
+        let back: ParameterSet = serde_json::from_str(&json).unwrap();
+        assert_eq!(back, ps);
     }
 
     #[test]

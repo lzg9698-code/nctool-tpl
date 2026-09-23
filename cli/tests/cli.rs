@@ -873,14 +873,45 @@ fn ui_serves_health_and_exits_when_killed() {
     assert!(healthy, "UI 服务应响应 GET /health");
 }
 
+/// `part generate` 走的是**带配置的 Ctx 路径**（而非 completion 那样无需配置的快路径），
+/// 因为零件定义里的工序要按 `--template-dir` / 配置里的模板目录解析。
+///
+/// 这里用一个只存在于临时目录的自定义模板来证明这一点：如果命令退回了不读配置的
+/// 快路径，模板就找不到 → 退出 5 而不是成功。
+///
+/// 注意模板名：**无清单条目时模板名保留 `.j2` 扩展名**（清单里显式声明的
+/// `drill_cycle` 等才是不带扩展名的短名），所以这里是 `op10.j2`。
 #[test]
-fn part_reports_not_implemented() {
+fn part_generate_resolves_templates_from_template_dir() {
+    let dir = tmp_dir("part_tpldir");
+    std::fs::create_dir_all(dir.join("tpl")).unwrap();
+    std::fs::write(dir.join("tpl/op10.j2"), "G0 X{{ x | default(0) }}\n").unwrap();
+    std::fs::write(
+        dir.join("part.json"),
+        r#"{"name":"p","ops":[{"template":"op10.j2","params":{"x":7}}]}"#,
+    )
+    .unwrap();
+
     nctool()
-        .args(["part", "generate", "x.json"])
+        .current_dir(&dir)
+        .args([
+            "part",
+            "generate",
+            "part.json",
+            "--template-dir",
+            "tpl",
+            "--out",
+            "out.nc",
+        ])
         .assert()
-        .failure()
-        .code(7)
-        .stderr(predicate::str::contains("尚未实现"));
+        .success();
+
+    let text = std::fs::read_to_string(dir.join("out.nc")).unwrap();
+    assert!(
+        text.contains("G0 X7"),
+        "自定义模板目录里的模板应被解析到；实际产物:\n{text}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ---------------------------------------------------------------------------

@@ -20,6 +20,11 @@
 - **批次二（修好度量闭环）**：覆盖率门禁口径、自证测试、MSRV 声明、CI 卫生。
   **不改变任何运行时行为**，只让既有的质量声明从「文档里的一句话」变成可验证的事实。
 
+**本段还收录两组后加的改动**（时序上晚于第三轮审查的批次一/二，故列于前）：
+
+- **零件级批量生成 `nctool part generate`**（Backlog F4 #2 落地）——见下方同名小节。
+- **第五轮代码审查的 2 条 P1 修复**（`docs/CODE_REVIEW_2026-09-23.md`）——见「批次十八」。
+
 ### 批次一：堵住静默出错
 
 #### Fixed
@@ -557,6 +562,147 @@
   = 撞刀级静默错误），合并属"改对了没收益、改错了很难发现"的重构。
 - **`derived_names` / `invalidate_analysis` 可见性收窄**：`nctool-core` 已发布到
   crates.io，收窄 `pub` 是破坏性变更，并入下一个 minor 版本一起做。
+
+### 零件级批量生成 `nctool part generate`（Backlog F4 #2 落地）
+
+> 输入是 E5 真实零件走查（`docs/REAL_PART_WALKTHROUGH.md` §5）暴露的三处局限。
+> 该走查用 5 个内置模板手工串简化法兰盘，结论是「能拼出来，但手工串不可持续」：
+> 行号每段重来、错误修一个报一个、公共参数每段重传。
+> 本次把「串多道工序」这件事故化为一个命令。
+
+#### Added
+
+- **`nctool part generate`**（CLI）：读一份零件定义 JSON，按顺序渲染其中的全部工序，
+  拼接为一份程序写出。新参数 `--out` / `--line-numbers` / `--header` / `--ascii` /
+  `--strip-blank` / `--lenient`（与 `render` 同名同义）。定义形状：
+
+  ```json
+  {
+    "name": "法兰盘",
+    "default_machine": "generic",
+    "params": { "part_name": "FLANGE" },
+    "ops": [
+      { "template": "program_header", "params": { "prog": 1001 } },
+      { "template": "drill_cycle", "params": { "x": 21 }, "machine": "wfl_m65",
+        "options": { "line_numbers": true } }
+    ]
+  }
+  ```
+
+  退出码：定义形状不合法 → 2；工序参数校验失败 → 1；定义文件读不到 → 3。
+
+- **`core::part` 模块**（`core/src/part.rs`，新）：`PartSpec` / `PartOp` / `PartOpOptions` /
+  `PartOptions` / `PartOutcome` / `OpOutcome` / `PartError` / `OpFailure`，
+  以及 `resolve_machine`。编排逻辑（参数合并、选项合并、游标传递、失败聚合）
+  全在 core，CLI 与 HTTP 共用同一份。
+
+- **`POST /api/part/generate`**（`cli/src/server.rs`）：Web UI 的批量入口。
+  请求体 `{"part": {...}}` + 顶层可选 `lineNumbers` / `addHeader` / `stripBlank` /
+  `ascii` / `lenient`；响应 `data.results` 逐工序对齐（失败项带 `error`，
+  整体未交付时成功项带 `skipped: true` 且不带 `output`）。
+
+- **`GenerationOptions.line_number_start`** 与 **`GCodeGenerator::generate_with_cursor`**
+  （`core/src/pipeline.rs`）：让「上一段用到哪个行号」可被调用方接续。
+  `postprocess` 的返回值由 `String` 改为 `(String, u32)`（后者是续编游标）。
+
+- **`ParameterSet` 的扁平/包裹双形态反序列化**（`core/src/model.rs`）。见下 Fixed。
+
+#### Fixed
+
+- **`ParameterSet` 把扁平 JSON 静默解析成空参数集**（`core/src/model.rs`）。
+  `ParameterSet` 序列化为 `{"values": {...}}`，但**所有面向用户的入口**
+  （`--params-file`、HTTP 的 `params`、前端表单、零件定义）用的都是扁平形式
+  `{"x": 21}`。派生 `Deserialize` 只认前者，于是后者被解析成一个**空集**，
+  不报错、不求救 —— 表现为「明明传了参数，却报必选参数缺失」。
+  改为手写 `visit_map` 访问器接受两种形态（同名冲突时扁平键优先），
+  序列化保持包裹形式不变（预设文件与 `--format json` 的形状不受影响）。
+
+#### Changed
+
+- **`/api/part/generate` 从 `scripts/api_routes.json` 的 `frontend_only` 豁免区移入
+  `routes`**，并删除豁免说明 —— 契约口子按 T02 的约定收回。
+- **解除 Web UI 批量弹窗的服务模式守卫**（`ui/src/32_script_ui.part.html`）：
+  原先 server 模式下点「批量生成」直接 toast「服务模式暂不支持」，现在发真实请求。
+- `README.md` 退出码表：删去「7 = `part generate`」这条现已无触发路径的说明。
+- `docs/ROADMAP.md`（D4 消项、F4 排期、新增 §F4.1）、`docs/PROJECT_STATUS.md`
+  （存量记账、Backlog 表、D4 债务）、`docs/REAL_PART_WALKTHROUGH.md`（新增 §6.1 收口）
+  同步更新。
+
+#### 一处刻意的语义分歧：CLI 与 HTTP 的失败呈现不同
+
+CLI **全有或全无**：任一工序失败即退出 1 且**不写出任何文件**。
+HTTP 则回 **200 + `data.results`**，逐工序给出结果。
+
+理由是通道用途不同：CLI 直接落盘，半截程序上机床就是撞刀，因此宁可不产出；
+HTTP 是给 Web UI 的 `runBatch` 用的，它需要按工序高亮错误，若只回一个整体错误
+就无法告诉用户是哪一道坏了。为不违背事务语义，HTTP 侧成功但因整体失败而未交付的
+工序标记 `skipped: true` 且**不带 `output`** —— 同样不吐半成品文本。
+两端共用 core 的同一个编排器，差异只在错误如何呈现。
+
+#### 测试
+
+- `core/src/part.rs` **37 项**：参数继承与工序级覆盖、行号跨工序续编
+  （含「程序号行不编号也不占游标」「整段无编号行则游标不动」两个边界）、
+  失败聚合（两道全报）、事务性（`PartError` 无 `outcome` 字段，类型上就拿不到半成品）、
+  机床解析（未知标识必须报错而非静默降级）、宽松模式下 NaN 仍硬拦且因继承而对每道工序都拦。
+- `core/src/model.rs` **9 项**：锁定扁平/包裹两种反序列化形态、类型保真
+  （扁平 `8` 仍是整数而非浮点）、冲突时扁平优先、序列化形状未变。
+- `cli/src/server.rs` **8 项**：端点逐条覆盖，含「部分失败回 200 带 results」
+  「`ops` 为空回 400 无 data」「`operations` 不是契约字段、应被拒」。
+- `cli/tests/cli_e2e.rs` **7 项**（替换原先断言「exit 7 / not_implemented」的 2 项
+  占位测试）：产物内容、行号严格递增、失败不落盘、一次报出全部失败工序、
+  文件缺失退 3、JSON 通道两种形态。
+- `cli/tests/cli.rs` 1 项：`part generate` 必须能解析 `--template-dir` 里的模板
+  （证明它走的是读配置的 `Ctx` 路径，而非 completion 那种免配置快路径）。
+- **反向验证**：`ParameterSet` 的扁平解析在修复前实测得到 0 个键；
+  实测 `part generate` 在修复前把 `{"x":1.0}` 解析为空集。
+- workspace 全量 **963 项**通过；fmt / clippy `-D warnings` / rustdoc `-D warnings` /
+  `build_ui.mjs --check` / 接口对拍 / 参数对拍 / 文档链接锚点 / doc tests / `cargo audit`
+  九道门禁均通过。
+- **覆盖率实测 91.55%**（7418/8103，生产口径；门禁 89%，余量 2.55pt）——
+  较 `part` 落地前的 91.29% **上升 0.26pt**，且新增的 `core/src/part.rs` 与
+  `cli/src/commands/part.rs` **均未进入覆盖最低 10 文件**（最低者仍是
+  `cli/src/commands/ui.rs` 18.75%，其生产本体为子进程启动路径）。
+- **实跑验证**（不只单测）：三工位法兰程序带 `--line-numbers` 生成，行号
+  `N0010`–`N0150` 严格递增无重复、`O1001` 正确不编号；坏定义退出 1 且产物文件不存在；
+  HTTP 端点实测 200/400 两种失败形态与逐工序对齐。
+
+### 发布包瘦身与发版流程定性（梳理 U-12 / U-22）
+
+#### Changed
+
+- **`nctool-tpl` 发布包收窄 59%**（`Cargo.toml` 的 `exclude`）：129 文件 / 553.2 KiB
+  → **83 文件 / 229.1 KiB**（压缩后）。新增排除 `output/`（原型截图与参数样本，401 KB，
+  本包最大冗余）、`scripts/`（CI 与 UI 构建脚本）、`templates/machines/`（CLI 侧配置数据）、
+  `CODE_REVIEW_AND_DEV_PLAN.md` / `overview.md` / `gcm-diagnose.log` / `lcov.info` /
+  `启动UI.bat`。
+
+  选 `exclude` 而非 `include`：排除法在新增目录时不会误删必需文件 ——
+  漏排是「包变大」，漏 `include` 是「包坏了」。**唯一必须随行的是 `templates/`**：
+  `examples/demo.rs` 用 `CARGO_MANIFEST_DIR` 在**运行时**读
+  `templates/turning/demo_gcode.j2`；根 crate 内没有任何 `include_str!`/`include_bytes!`。
+
+  验证方式：`cargo package -p nctool-tpl --list` 复核收录，再解包 `.crate`
+  跑 `cargo build` 与 `cargo test --no-run`（4 个测试二进制全部生成）均通过。
+
+#### 记录（发版流程的两项实测结论，**未改代码**）
+
+- **`release.yml` 一次 tag 只发布一个 crate**（三条 `Publish` 步骤各自带
+  `startsWith(github.ref_name, ...)` 守卫，无串联）。因此 `tpl → core → cli`
+  必须按序各推一次 tag，且 **core 必须早于 cli**：`cli` 依赖的
+  `MachinePreset::entries` 加入于 2026-09-19 15:33，晚于 `nctool-core 0.3.0`
+  的发布时刻（2026-09-18 05:01）。若跳发 core，`cargo publish -p nctool-cli`
+  会解析到 crates.io 上的旧 core 并**编译失败**（实测 28 个错误）。
+
+- **`nctool-cli` 发布包的 `cargo test` 必然失败，但 `cargo install` 不受影响。**
+  `cli/src/args.rs` 与 `cli/src/server.rs` 的两个测试用
+  `include_str!("../../scripts/*.json")` 跨出 crate 目录两级；cargo 只打包
+  crate 目录内的文件，故解包后跑测试报
+  `couldn't read src\../../scripts/param_parity_cases.json (os error 3)`。
+  但两处调用都在 `#[cfg(test)]` 内，不参与 `cargo build`／`cargo install`
+  —— `docs/PROJECT_STATUS.md` 关于「`cargo install nctool-cli` 验证通过」的
+  记录与此并不矛盾。是否把 fixture 复制进 `cli/tests/fixtures/`（代价是破坏
+  「单一来源」）留待决策。
 
 ### 批次十：收尾小项（第四轮批次 E 的一部分）
 

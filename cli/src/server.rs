@@ -178,6 +178,7 @@ pub fn route(ctx: &Ctx, method: &str, path: &str, query: &str, body: &[u8]) -> R
         ("POST", "/api/inspect") => inspect(ctx, body),
         ("POST", "/api/validate") => validate(ctx, body),
         ("POST", "/api/render") => render(ctx, body),
+        ("POST", "/api/part/generate") => part_generate(ctx, body),
         ("GET", p) => match p.strip_prefix("/api/templates/") {
             Some(raw) => template_detail(ctx, raw),
             None => Resp::Json(404, err("not_found", format!("未知接口: {method} {path}"))),
@@ -475,6 +476,9 @@ fn generation_options(value: &serde_json::Value) -> Result<(GenerationOptions, b
             line_numbers: get_bool("lineNumbers")?,
             line_number_step: get_u32("lineStep", 10)?,
             max_line_number: get_u32("maxLine", 9999)?,
+            // HTTP 单模板渲染恒从 0 起编号；跨工序续编只在 `part generate`
+            // 路径上发生（由 `part::PartSpec::generate` 传递游标）。
+            line_number_start: 0,
             add_header_comment: get_bool("addHeader")?,
             strip_blank_lines: get_bool("stripBlank")?,
             ascii_only: get_bool("ascii")?,
@@ -537,6 +541,135 @@ fn render(ctx: &Ctx, body: &[u8]) -> Resp {
             })),
         ),
         Err(e) => Resp::Json(400, err("render", e.to_string())),
+    }
+}
+
+/// `POST /api/part/generate` —— 零件级批量生成。
+///
+/// # 契约（与前端 `ui/src/31_script_api.part.html` 的 `doPart` mock 逐字段对齐）
+///
+/// 请求体：`{"part": {"name","default_machine","params","ops":[{"template","params","machine","options"}]}}`
+///
+/// 响应体：`{"ok":true,"data":{"results":[{"index","name","output"} | {"index","name","error"}]}}`
+///
+/// **逐工序返回而不是整体成败**：与 CLI 的"事务语义"看似矛盾，实为两个通道的
+/// 不同职责。CLI 写文件，半成品会被人误送上机床，故必须全成或全不成；HTTP 只
+/// 返回文本给浏览器，前端需要知道"哪几道好了、哪几道坏了"才能高亮定位。
+/// 端到端的一致性靠**同一个 core 编排**保证：参数继承、机床覆盖、行号续编
+/// 三条语义在两条通道上完全相同。
+///
+/// `options` 走与 `/api/render` 同一套键名（`lineNumbers` / `addHeader` /
+/// `stripBlank` / `ascii` / `lenient`），避免同一语义在两处各起一套名字。
+/// 工序级 `options` 只覆盖显式给出的字段。
+fn part_generate(ctx: &Ctx, body: &[u8]) -> Resp {
+    let value = match api_body(body) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    let Some(part_value) = value.get("part") else {
+        return Resp::Json(
+            400,
+            err("bad_request", "请求体缺少 `part` 字段（零件定义）"),
+        );
+    };
+    let spec: nctool_core::part::PartSpec = match serde_json::from_value(part_value.clone()) {
+        Ok(s) => s,
+        Err(e) => return Resp::Json(400, err("bad_request", format!("解析零件定义失败: {e}"))),
+    };
+    let gen = match ctx.build_registry() {
+        Ok(g) => g,
+        Err(e) => return internal_error(e),
+    };
+    let opts = nctool_core::part::PartOptions {
+        line_numbers: value
+            .get("lineNumbers")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        add_header_comment: value
+            .get("addHeader")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        strip_blank_lines: value
+            .get("stripBlank")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        ascii_only: value
+            .get("ascii")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+        lenient: value
+            .get("lenient")
+            .and_then(|v| v.as_bool())
+            .unwrap_or(false),
+    };
+
+    match spec.generate(&gen, ctx.default_machine.as_deref(), &opts) {
+        Ok(outcome) => {
+            let results: Vec<serde_json::Value> = outcome
+                .ops
+                .iter()
+                .map(|o| {
+                    serde_json::json!({
+                        "index": o.index,
+                        "name": o.template,
+                        "output": o.output,
+                        "endLineNumber": o.end_line_number,
+                    })
+                })
+                .collect();
+            Resp::Json(
+                200,
+                ok(serde_json::json!({
+                    "results": results,
+                    "program": outcome.program,
+                    "okCount": outcome.ops.len(),
+                    "failCount": 0,
+                })),
+            )
+        }
+        // 形状不合法（ops 空、template 空）是**请求本身有问题**，回 400 且无 data
+        // —— 前端 `runBatch` 走到这个分支只会提示"批量生成失败"，正合语义。
+        Err(nctool_core::part::PartError::InvalidSpec(msg)) => {
+            Resp::Json(400, err("bad_request", msg))
+        }
+        // 工序级失败仍回 **200**，因为前端需要 `data.results` 才能逐工序高亮
+        // （`runBatch` 检查 `res.data.results` 存在才渲染标签页，不存在则整体
+        // 丢弃 —— 那样用户只看到一句"批量生成失败"，完全不知道哪道坏了、为什么）。
+        //
+        // 这里与 CLI 的差异是**故意的**：CLI 写文件，半成品会被人误送上机床，
+        // 必须全成或全不成；HTTP 只回文本给浏览器，逐工序详情才是用户要的信息。
+        // 两通道共享同一个 core 编排，故参数继承/机床覆盖/行号续编语义完全一致。
+        Err(nctool_core::part::PartError::OperationsFailed { failures }) => {
+            // 成功工序的产出**按 index 对齐填回**，失败工序给 `error`：
+            // 前端按 `results[i]` 逐标签渲染，缺项会让标签与内容错位。
+            let failed: std::collections::BTreeMap<usize, &nctool_core::part::OpFailure> =
+                failures.iter().map(|f| (f.index, f)).collect();
+            let total = spec.ops.len();
+            let results: Vec<serde_json::Value> = (0..total)
+                .map(|i| match failed.get(&i) {
+                    Some(f) => serde_json::json!({
+                        "index": i,
+                        "name": f.name,
+                        "error": f.error,
+                    }),
+                    None => serde_json::json!({
+                        "index": i,
+                        "name": spec.ops[i].template,
+                        // 该工序未失败但整体未交付：不发文本，避免被当成可用产出
+                        "skipped": true,
+                    }),
+                })
+                .collect();
+            Resp::Json(
+                200,
+                ok(serde_json::json!({
+                    "results": results,
+                    "program": "",
+                    "okCount": total - failures.len(),
+                    "failCount": failures.len(),
+                })),
+            )
+        }
     }
 }
 
@@ -1547,6 +1680,295 @@ mod tests {
         assert_eq!(status, 200);
         assert_eq!(payload["ok"], true);
         assert_eq!(payload["data"]["status"], "ok");
+    }
+
+    // ---- POST /api/part/generate ----
+
+    /// 成功路径：逐工序返回 `{index,name,output}`，并给出拼接后的 `program`。
+    #[test]
+    fn part_generate_returns_per_op_results() {
+        let ctx = test_ctx();
+        let body = serde_json::json!({
+            "part": {
+                "name": "P",
+                "ops": [
+                    {"template": "program_header", "params": {"prog": 1001}},
+                    {"template": "safe_move", "params": {"x": 0, "y": 0, "z": 50}}
+                ]
+            }
+        });
+        let Resp::Json(status, payload) = route(
+            &ctx,
+            "POST",
+            "/api/part/generate",
+            "",
+            body.to_string().as_bytes(),
+        ) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "{payload}");
+        assert_eq!(payload["ok"], true);
+        let results = payload["data"]["results"]
+            .as_array()
+            .expect("results 应为数组");
+        assert_eq!(results.len(), 2, "两道工序应各有结果: {results:?}");
+        assert_eq!(results[0]["index"], 0);
+        assert_eq!(results[0]["name"], "program_header");
+        assert!(
+            results[0]["output"].as_str().unwrap().contains("O1001"),
+            "第一道应含程序号: {}",
+            results[0]["output"]
+        );
+        assert_eq!(results[1]["index"], 1);
+        assert!(results[1]["output"].as_str().unwrap().contains("G0 X0.000"));
+        assert_eq!(payload["data"]["failCount"], 0);
+        assert!(
+            payload["data"]["program"]
+                .as_str()
+                .unwrap()
+                .contains("O1001"),
+            "program 应是拼接产物"
+        );
+    }
+
+    /// 参数继承：顶层 `params` 对每道工序可见（E5 局限 5.3）。
+    #[test]
+    fn part_generate_inherits_part_level_params() {
+        let ctx = test_ctx();
+        let body = serde_json::json!({
+            "part": {
+                "params": {"prog": 1001, "part_name": "FLANGE"},
+                "ops": [
+                    {"template": "program_header"},
+                    {"template": "safe_move", "params": {"x": 0, "y": 0, "z": 50}}
+                ]
+            }
+        });
+        let Resp::Json(status, payload) = route(
+            &ctx,
+            "POST",
+            "/api/part/generate",
+            "",
+            body.to_string().as_bytes(),
+        ) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "{payload}");
+        let out0 = payload["data"]["results"][0]["output"].as_str().unwrap();
+        assert!(
+            out0.contains("O1001") && out0.contains("FLANGE"),
+            "第一道应看到继承来的 prog 与 part_name: {out0}"
+        );
+    }
+
+    /// 行号跨工序续编（E5 局限 5.1）：末行号随工序推进，整份程序无重复行号。
+    #[test]
+    fn part_generate_continues_line_numbers_across_ops() {
+        let ctx = test_ctx();
+        let body = serde_json::json!({
+            "lineNumbers": true,
+            "part": {
+                "ops": [
+                    {"template": "program_header", "params": {"prog": 1001}},
+                    {"template": "safe_move", "params": {"x": 0, "y": 0, "z": 50}}
+                ]
+            }
+        });
+        let Resp::Json(status, payload) = route(
+            &ctx,
+            "POST",
+            "/api/part/generate",
+            "",
+            body.to_string().as_bytes(),
+        ) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "{payload}");
+        let results = payload["data"]["results"].as_array().unwrap();
+        let last0 = results[0]["endLineNumber"].as_u64().unwrap();
+        let last1 = results[1]["endLineNumber"].as_u64().unwrap();
+        assert!(last0 >= 10, "第一道应已编号: {results:?}");
+        assert!(
+            last1 > last0,
+            "第二道末行号应大于第一道（续编生效）: {last0} -> {last1}"
+        );
+
+        // 整份程序的行号必须唯一 —— 每段重来会在这里出现重复
+        let program = payload["data"]["program"].as_str().unwrap();
+        let nums: Vec<&str> = program
+            .lines()
+            .filter_map(|l| l.split_whitespace().next())
+            .filter(|t| t.starts_with('N') && t.len() > 1)
+            .collect();
+        let mut uniq = nums.clone();
+        uniq.sort_unstable();
+        uniq.dedup();
+        assert_eq!(nums.len(), uniq.len(), "行号不得重复: {nums:?}");
+    }
+
+    /// 工序级失败仍回 **200 且带 `data.results`** —— 前端靠它逐工序高亮。
+    ///
+    /// 这是与 CLI 的关键差异：CLI 写文件必须全成或全不成，HTTP 只回文本，
+    /// 逐工序详情才是用户要的信息。若这里回 400 且不给 `data`，
+    /// 前端 `runBatch` 会整条丢弃，用户只看到一句"批量生成失败"。
+    #[test]
+    fn part_generate_partial_failure_keeps_results_for_per_op_highlighting() {
+        let ctx = test_ctx();
+        let body = serde_json::json!({
+            "part": {
+                "ops": [
+                    {"template": "program_header", "params": {"prog": 1001}},
+                    {"template": "no_such_template"}
+                ]
+            }
+        });
+        let Resp::Json(status, payload) = route(
+            &ctx,
+            "POST",
+            "/api/part/generate",
+            "",
+            body.to_string().as_bytes(),
+        ) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "部分失败也要回 200 带 results: {payload}");
+        let results = payload["data"]["results"]
+            .as_array()
+            .expect("必须有 results");
+        assert_eq!(
+            results.len(),
+            2,
+            "失败工序也要占位，否则标签与内容错位: {results:?}"
+        );
+        assert_eq!(results[0]["index"], 0);
+        assert!(
+            results[0]["skipped"].as_bool().unwrap_or(false),
+            "成功工序整体未交付应标 skipped: {}",
+            results[0]
+        );
+        assert!(
+            results[0].get("output").is_none(),
+            "整体未交付时不该发半成品文本: {}",
+            results[0]
+        );
+        assert_eq!(results[1]["index"], 1);
+        assert_eq!(results[1]["name"], "no_such_template");
+        assert!(
+            results[1]["error"].as_str().unwrap().contains("模板不存在"),
+            "{}",
+            results[1]
+        );
+        assert_eq!(payload["data"]["failCount"], 1);
+        assert_eq!(
+            payload["data"]["program"], "",
+            "整体未交付时 program 应为空"
+        );
+    }
+
+    /// `ops` 为空是**请求本身**不合法 → 400 且无 data（前端提示"批量生成失败"）。
+    #[test]
+    fn part_generate_empty_ops_is_400_without_data() {
+        let ctx = test_ctx();
+        let body = serde_json::json!({"part": {"ops": []}});
+        let Resp::Json(status, payload) = route(
+            &ctx,
+            "POST",
+            "/api/part/generate",
+            "",
+            body.to_string().as_bytes(),
+        ) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 400);
+        assert_eq!(payload["ok"], false);
+        assert!(
+            payload.get("data").is_none(),
+            "形状错误不应带 data: {payload}"
+        );
+        assert!(
+            payload["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("至少要有一道工序"),
+            "{payload}"
+        );
+    }
+
+    /// 缺 `part` 字段给出可操作提示，而不是含糊的 400。
+    #[test]
+    fn part_generate_missing_part_field_is_actionable_400() {
+        let ctx = test_ctx();
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/part/generate", "", b"{}")
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 400);
+        assert!(
+            payload["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("part"),
+            "应指出缺哪个字段: {payload}"
+        );
+    }
+
+    /// 零件定义里的 `params` 用**扁平形式**（与 `--params-file` 同形）。
+    ///
+    /// 回归：`ParameterSet` 只有派生 `Deserialize` 时，扁平输入会被静默解析成
+    /// 空集 —— "参数传了却全部缺失"，报错还指向模板。这条守卫住那个坑。
+    #[test]
+    fn part_generate_accepts_flat_params_without_silent_loss() {
+        let ctx = test_ctx();
+        let body = serde_json::json!({
+            "part": {
+                "ops": [{"template": "program_header", "params": {"prog": 4242, "part_name": "X"}}]
+            }
+        });
+        let Resp::Json(status, payload) = route(
+            &ctx,
+            "POST",
+            "/api/part/generate",
+            "",
+            body.to_string().as_bytes(),
+        ) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "扁平 params 应被识别: {payload}");
+        let out = payload["data"]["results"][0]["output"].as_str().unwrap();
+        assert!(
+            out.contains("O4242"),
+            "工序级 prog 必须真的送到渲染，不能静默变空集: {out}"
+        );
+        assert!(out.contains("X"), "{out}");
+    }
+
+    /// 旧键名 `operations` 不再被识别（前端契约定为 `ops`）。
+    ///
+    /// 这条是**防止悄悄兼容两种名字**：若哪天为兼容加了 alias，
+    /// 前端与后端就会各写一套而无人发现漂移。
+    #[test]
+    fn part_generate_legacy_operations_key_is_not_silently_accepted() {
+        let ctx = test_ctx();
+        let body = serde_json::json!({
+            "part": {"operations": [{"template": "program_header"}]}
+        });
+        let Resp::Json(status, payload) = route(
+            &ctx,
+            "POST",
+            "/api/part/generate",
+            "",
+            body.to_string().as_bytes(),
+        ) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 400, "`operations` 不是契约字段，应被拒: {payload}");
+        assert!(
+            payload["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("至少要有一道工序"),
+            "{payload}"
+        );
     }
 
     /// 守卫（第四轮 P0-2）：后端必须真的路由得了 `scripts/api_routes.json`

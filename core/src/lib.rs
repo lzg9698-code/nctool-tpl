@@ -18,6 +18,7 @@ pub mod derive;
 pub mod machine;
 pub mod manifest;
 pub mod model;
+pub mod part;
 pub mod pipeline;
 pub mod registry;
 pub mod validate;
@@ -53,5 +54,10 @@ pub use variables::{VariableLibrary, VARIABLES_FILE};
 pub use derive::DeriveError;
 // 生成管线
 pub use pipeline::{GCodeGenerator, GenerationOptions, OutputFormat, PipelineError};
+// 零件级批量生成（多工序一次生成：参数继承 / 行号续编 / 事务语义）
+pub use part::{
+    resolve_machine, OpFailure, OpOutcome, PartError, PartOp, PartOpOptions, PartOptions,
+    PartOutcome, PartSpec,
+};
 // 机床配置
 pub use machine::{MachineId, MachinePreset};

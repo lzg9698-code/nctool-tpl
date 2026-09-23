@@ -79,7 +79,11 @@
 - **两处"有意不改"的已知问题**：`--expect-hash` 格式校验在 `add` 与 `edit`/`rm` 上不对称（K-6）、
   `preflight` 与 `validate_config_keys` 各维护一份值级判定（文案不一致，K-7）——
   均在计划 §6.9 登记并有用例钉住现状。
-- **`part generate`** 仍未实现（Backlog #2）；`machine`/`templates` 的写能力未触及它。
+- **~~`part generate`~~ 已实现**（2026-09-22，Backlog #2 消项）：core 新增 `part` 模块（工序编排）
+  + CLI 子命令 + `POST /api/part/generate` + 前端服务模式入口解除守卫。E5 走查暴露的三处局限
+  （行号跨工序不续编 / 错误不聚合 / 参数无继承）全部解决。同批修掉一个既有静默缺陷：
+  `ParameterSet` 的派生 `Deserialize` 把用户实际使用的扁平 JSON（`{"x":21}`）解析成**空参数集**。
+  `machine`/`templates` 的写能力仍未触及它。
 
 ---
 
@@ -132,7 +136,7 @@ B1–B5 全部完成。**本轮新勾 B-Backlog**：CI coverage job 根因已修
 
 ### 1.3 阶段 C — UI 服务与前端联通（12/12）
 
-`nctool ui`（tiny_http，**仅回环**）+ 全部契约端点（templates / templates/{name} / machines / inspect / validate / render / part 占位）+ 前端 server 模式接线。**非回环地址现在是直接拒绝**（含 `localhost` 主机名，只接受 IP 字面量），比原规划「警告后允许」更严格。
+`nctool ui`（tiny_http，**仅回环**）+ 全部契约端点（templates / templates/{name} / machines / inspect / validate / render / **part/generate**）+ 前端 server 模式接线。**非回环地址现在是直接拒绝**（含 `localhost` 主机名，只接受 IP 字面量），比原规划「警告后允许」更严格。
 
 ### 1.4 阶段 D — 完整交互闭环（12/12）
 
@@ -161,10 +165,10 @@ CLI E2E 契约、HTTP 契约、21 组正向 golden + 3 组负向报告、错误�
 | 派生计算上移 | `core::derive`（查表换算从模板搬到规格，模板只做替换） | ✅ |
 | 参数规格系统 | 类型 / 候选值 / 区间 / 整数 / 条件必选 `required_if` / 派生 `derive` | ✅ |
 | 机床预设 | `generic` / `wfl_m65` / `index_ms40` + 20 键 schema + `nctool.toml` 自定义 | ✅ |
-| CLI 全命令 | templates / inspect / validate / render / generate / machine / config / ui / completion | ✅ 除 `part` 外全通 |
+| CLI 全命令 | templates / inspect / validate / render / generate / machine / config / ui / **part** / completion | ✅ 全通（`part` 于 2026-09-22 落地） |
 | Web UI | 服务模式全链路 + 跨站防护（Origin / Sec-Fetch-Site）+ CSP 等安全头 | ✅ 37/37 验收 |
 | golden 回归 | **21 组正向**（7 模板 × 3 预设，输出 + 校验报告）+ **3 组负向**（缺参/类型/越界报告） | ✅ 全绿 |
-| **未通** | `part` 命令（占位 exit 7）、`part generate` 批量生成（Backlog #2） | ❌ |
+| **未通** | ~~`part` 命令（占位 exit 7）、`part generate` 批量生成（Backlog #2）~~ → **2026-09-22 已通**；仍无退出码 7 的实际触发路径 | ✅ |
 
 **内置模板 7 个**：`program_header`、`program_footer`、`tool_change`、`safe_move`、`drill_cycle`、`facing`、`slot_milling`。
 **文件模板 25 个**：车削 5（含 `undercut` ES/FS 拆分版 + 内部片段）、切槽 1（`circlip_groove`）、机床 19（INDEX G420 方案包）。
@@ -289,7 +293,7 @@ CI 为此单列 `Doc tests` 步骤（`cargo test --workspace --doc`，当前 1 �
 
 | 编号 | 债务 | 状态 |
 |---|---|---|
-| D4 | `nctool part` 占位返回 `not_implemented`（`part generate` 为 Backlog #2） | ❌ 未清（Backlog） |
+| ~~D4~~ | ~~`nctool part` 占位返回 `not_implemented`（`part generate` 为 Backlog #2）~~ | ✅ **已清（2026-09-22）**：core `part` 模块 + CLI 子命令 + `POST /api/part/generate` + 前端服务模式入口；E5 三局限全解 |
 | D6 | 内置模板与机床预设未经**真实工艺评审** | ❌ 外部依赖（Q2=否） |
 | B4.2 | golden 变更保护步骤化（`NCTOOL_UPDATE_GOLDEN` 人工流程文档化） | ❌ Backlog |
 | P2-2~P2-4, P2-6 | 架构评审 P2 剩余项（数据表内联 / `model.rs` 拆分 / 扩展点 / 上下文复用） | ❌ 未动 |
@@ -342,7 +346,7 @@ CI 为此单列 `Doc tests` 步骤（`cargo test --workspace --doc`，当前 1 �
 | 排序 | 项 | 加权分 | 状态 |
 |---|---|---|---|
 | 1 | 内置模板库扩充（面铣/键槽铣/外圆车削/攻丝） | 37 | 🟡 `facing` ✅ + `slot_milling` ✅；余**外圆车削、攻丝** |
-| 2 | 零件级批量生成（`nctool part generate`） | 34 | ⬜ E5 走查暴露的 3 局限（行号跨工序不续编/错误不聚合/参数无继承）已作为设计输入 |
+| ~~2~~ | ~~零件级批量生成（`nctool part generate`）~~ | ~~34~~ | ✅ **2026-09-22 落地**：E5 走查暴露的 3 局限（行号跨工序不续编/错误不聚合/参数无继承）全部解决；CLI + HTTP 双通道，CLI 全有或全无、HTTP 逐工序结果 |
 | 2 | 参数集命名预设 | 34 | ⬜ 前端 localStorage 即可落地 |
 | 4 | 浏览器内模板编辑 | 21 | ⬜ 需写 API + 路径穿越/并发覆盖防护 |
 | 5 | i18n | 20 | ⬜ 取决于商业交付决策 |

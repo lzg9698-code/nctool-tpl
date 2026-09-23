@@ -586,25 +586,277 @@ fn ui_rejects_non_ip_host() {
 }
 
 // ---------------------------------------------------------------------------
-// part（阶段 4 占位）
+// part（零件级批量生成：多工序一次生成）
+//
+// 这些用例覆盖的是**跨组件的真实契约**，不是 core 的单元测试的重复：
+//   * core 单测用内存注册表；这里走 CLI 进程 → 真实模板目录 → 磁盘文件
+//   * 退出码 / 文件是否落盘 / 行号是否跨工序续编，只有端到端跑才看得到
+// 行号续编与事务语义这两条是本命令存在的理由（E5 §5.1 / §5.2），
+// 因此断言必须落在**产物内容**上，而不是只看退出码。
 // ---------------------------------------------------------------------------
 
-#[test]
-fn part_generate_exits_7_not_implemented() {
-    let (r, _dir) = run_isolated("part", &["part", "generate", "x.json"]);
-    assert_eq!(r.code, 7, "未实现功能应退出 7，而非假装成功");
-    r.stderr_contains(&["尚未实现"]);
+/// 造一份零件定义 JSON 并写入临时目录，返回零件文件路径。
+///
+/// `ops` 是「模板名 → 参数 JSON」的列表；`extra` 为顶层附加字段
+/// （如 `"default_machine"`）。用 `serde_json` 拼装而非手写字符串，
+/// 避免转义错误把测试失败伪装成功能缺陷。
+fn write_part(dir: &Path, name: &str, ops: &[(&str, serde_json::Value)]) -> PathBuf {
+    let ops: Vec<serde_json::Value> = ops
+        .iter()
+        .map(|(tpl, params)| serde_json::json!({ "template": tpl, "params": params }))
+        .collect();
+    let spec = serde_json::json!({ "name": name, "ops": ops });
+    let path = dir.join(format!("{name}.json"));
+    std::fs::write(&path, serde_json::to_string_pretty(&spec).unwrap()).expect("写出零件定义失败");
+    path
+}
+
+/// 三个工序的 drill_cycle 零件（drill_cycle 的必选参数见 DRILL_PARAMS）。
+fn drill_part_json() -> serde_json::Value {
+    serde_json::json!({ "x": 1, "y": 2, "r_plane": 3, "depth": -5, "feed": 100 })
 }
 
 #[test]
-fn part_generate_json_keeps_kind() {
-    let (r, _dir) = run_isolated(
-        "part_json",
-        &["--format", "json", "part", "generate", "x.json"],
+fn part_generate_concatenates_ops_and_writes_output() {
+    let dir = temp_dir("part_ok");
+    let part = write_part(
+        &dir,
+        "two_ops",
+        &[
+            ("drill_cycle", drill_part_json()),
+            ("drill_cycle", drill_part_json()),
+        ],
     );
-    assert_eq!(r.code, 7);
+    let out = dir.join("prog.nc");
+    let r = run_in(
+        &dir,
+        &[
+            "part",
+            "generate",
+            part.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(r.code, 0, "两工序零件应生成成功\nstderr:\n{}", r.stderr);
+
+    let text = std::fs::read_to_string(&out).expect("产物文件应存在");
+    // drill_cycle 的产物含 G81/G80 循环，两次渲染 → 关键指令出现两次
+    assert_eq!(
+        text.matches("G81").count(),
+        2,
+        "两个工序应各自产生一次钻孔循环；实际产物:\n{text}"
+    );
+}
+
+#[test]
+fn part_generate_continues_line_numbers_across_ops() {
+    // E5 §5.1：行号必须跨工序续编，每个工序不能各自从 N0010 重开
+    let dir = temp_dir("part_lineno");
+    let part = write_part(
+        &dir,
+        "lineno",
+        &[
+            ("drill_cycle", drill_part_json()),
+            ("drill_cycle", drill_part_json()),
+        ],
+    );
+    let out = dir.join("prog.nc");
+    let r = run_in(
+        &dir,
+        &[
+            "part",
+            "generate",
+            part.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+            "--line-numbers",
+        ],
+    );
+    assert_eq!(r.code, 0, "带行号生成应成功\nstderr:\n{}", r.stderr);
+
+    let text = std::fs::read_to_string(&out).expect("产物文件应存在");
+    // 取出所有 N 开头的行号，确认严格递增且无重复（重复 = 未续编）
+    let nums: Vec<u32> = text
+        .lines()
+        .filter_map(|l| l.strip_prefix('N'))
+        .filter_map(|rest| rest.split_whitespace().next())
+        .filter_map(|n| n.parse().ok())
+        .collect();
+    assert!(nums.len() >= 4, "应产生多行带号程序；实际产物:\n{text}");
+    for w in nums.windows(2) {
+        assert!(
+            w[1] > w[0],
+            "行号必须严格递增（跨工序续编），出现 {} → {}；实际产物:\n{text}",
+            w[0],
+            w[1]
+        );
+    }
+}
+
+#[test]
+fn part_generate_fails_atomically_when_an_op_is_broken() {
+    // E5 §5.2：任一工序失败 → 整体失败，且**不留下半个程序**
+    let dir = temp_dir("part_broken");
+    let part = write_part(
+        &dir,
+        "broken",
+        &[
+            ("drill_cycle", drill_part_json()),
+            // 缺 depth / feed —— 必选参数不全，该工序必然失败
+            (
+                "drill_cycle",
+                serde_json::json!({ "x": 1, "y": 2, "r_plane": 3 }),
+            ),
+        ],
+    );
+    let out = dir.join("prog.nc");
+    let r = run_in(
+        &dir,
+        &[
+            "part",
+            "generate",
+            part.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(
+        r.code, 1,
+        "工序校验失败应退出 1（validation）\nstdout:\n{}",
+        r.stdout
+    );
+    assert!(
+        !out.exists(),
+        "事务语义：任一工序失败时不得写出任何文件，实际写出了 {}",
+        out.display()
+    );
+    // 失败信息要指明是哪一道工序（索引从 1 数更符合人的直觉，这里只断言关键片段）
+    r.stderr_contains(&["工序"]);
+}
+
+#[test]
+fn part_generate_reports_every_failing_op_not_just_the_first() {
+    // 聚合而非短路：两个工序都坏，一次运行要报出两条，避免「修一个报一个」
+    let dir = temp_dir("part_aggregate");
+    let part = write_part(
+        &dir,
+        "two_broken",
+        &[
+            ("drill_cycle", serde_json::json!({ "x": 1 })),
+            ("definitely_no_such_template", serde_json::json!({})),
+        ],
+    );
+    let r = run_in(
+        &dir,
+        &[
+            "part",
+            "generate",
+            part.to_str().unwrap(),
+            "--out",
+            "unused.nc",
+        ],
+    );
+    assert_eq!(r.code, 1);
+    // 第一条：参数缺失；第二条：模板不存在 —— 两种不同根因都要出现
+    r.stderr_contains(&["definitely_no_such_template"]);
+}
+
+#[test]
+fn part_generate_missing_part_file_is_io_error() {
+    let (r, _dir) = run_isolated("part_missing", &["part", "generate", "no_such_part.json"]);
+    // 读文件失败 → 3（io），而不是 7 或 2：这不是「未实现」也不是「用法错」
+    assert_eq!(r.code, 3, "零件文件不存在应退出 3（io）");
+}
+
+#[test]
+fn part_generate_json_channel_reports_per_op_outcomes() {
+    // JSON 通道给自动化用：必须能拿到逐工序的结果，而不只是一句「失败」
+    let dir = temp_dir("part_json");
+    let part = write_part(
+        &dir,
+        "json_ok",
+        &[
+            ("drill_cycle", drill_part_json()),
+            ("drill_cycle", drill_part_json()),
+        ],
+    );
+    let out = dir.join("prog.nc");
+    let r = run_in(
+        &dir,
+        &[
+            "--format",
+            "json",
+            "part",
+            "generate",
+            part.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(r.code, 0, "JSON 通道应成功\nstderr:\n{}", r.stderr);
     let v: serde_json::Value = serde_json::from_str(&r.stdout).expect("stdout 应是合法 JSON");
-    assert_eq!(v["error"]["kind"], serde_json::json!("not_implemented"));
+    assert_eq!(v["ok"], serde_json::json!(true));
+    assert_eq!(v["data"]["op_count"], serde_json::json!(2));
+    let ops = v["data"]["ops"].as_array().expect("data.ops 应是数组");
+    assert_eq!(ops.len(), 2, "两个工序都应出现在结果里");
+    assert_eq!(ops[0]["index"], serde_json::json!(0));
+    assert_eq!(ops[1]["index"], serde_json::json!(1));
+    assert_eq!(ops[0]["template"], serde_json::json!("drill_cycle"));
+    // `--out` 模式下正文在磁盘上（与 `render` 的约定一致），故只有 output_file
+    assert_eq!(
+        v["data"]["output_file"],
+        serde_json::json!(out.display().to_string())
+    );
+    assert!(out.exists(), "应真的写出文件");
+}
+
+#[test]
+fn part_generate_json_channel_without_out_carries_program_and_cursor() {
+    // 不开 --out 时程序走 stdout/JSON；此时 `ops[].end_line_number` 是调用方
+    // 唯一能知道「每道工序占用了哪些行号」的途径，必须真的填上（不能恒为 0）。
+    let dir = temp_dir("part_json_stdout");
+    let part = write_part(
+        &dir,
+        "json_stdout",
+        &[
+            ("drill_cycle", drill_part_json()),
+            ("drill_cycle", drill_part_json()),
+        ],
+    );
+    let r = run_in(
+        &dir,
+        &[
+            "--format",
+            "json",
+            "part",
+            "generate",
+            part.to_str().unwrap(),
+            "--line-numbers",
+        ],
+    );
+    assert_eq!(r.code, 0, "应成功\nstderr:\n{}", r.stderr);
+    let v: serde_json::Value = serde_json::from_str(&r.stdout).expect("stdout 应是合法 JSON");
+    let ops = v["data"]["ops"].as_array().expect("data.ops 应是数组");
+    // 第一道工序 3 行 → 末行号 30；第二道接着到 60（续编）
+    assert_eq!(
+        ops[0]["end_line_number"],
+        serde_json::json!(30),
+        "第一道工序的末行号应被填上"
+    );
+    assert_eq!(
+        ops[1]["end_line_number"],
+        serde_json::json!(60),
+        "第二道工序的末行号应接着第一道（跨工序续编）"
+    );
+    // 未开 --out 时程序正文必须能被调用方拿到
+    let prog = v["data"]["output"]
+        .as_str()
+        .expect("data.output 应是字符串");
+    assert!(
+        prog.contains("N0010") && prog.contains("N0060"),
+        "程序正文应含首末行号；实际:\n{prog}"
+    );
 }
 
 // ---------------------------------------------------------------------------

@@ -491,10 +491,13 @@ nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param fe
 | 4 | 配置错误 | `config init` 时 `nctool.toml` 已存在 |
 | 5 | 模板/机床未找到 | `inspect nope`、`machine show nope` |
 | 6 | 渲染/注册表失败 | `templates new` 重名（重名是业务冲突，非 IO） |
-| 7 | 功能尚未实现 | `part generate`（规划于阶段 4） |
+| 7 | 功能尚未实现 | （当前无触发路径；保留给后续占位命令） |
 
-该矩阵是稳定的对外契约，由 `cli/tests/cli_e2e.rs` 的 44 个 E2E 用例逐条断言
+该矩阵是稳定的对外契约，由 `cli/tests/cli_e2e.rs` 的 E2E 用例逐条断言
 （覆盖全部 10 个子命令 × 正常/异常路径）；变更退出码必须同步更新该测试与 CHANGELOG。
+
+> `part generate` 的两种失败分别落在 **1**（工序参数校验未通过）与 **3**（零件定义文件读不到）；
+> 定义形状不合法（非 JSON、`ops` 为空）走 **2**。
 
 ## 可选 / 必选判定规则
 

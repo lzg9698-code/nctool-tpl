@@ -15,12 +15,31 @@ categories = ["template-engine", "parser-implementations", "development-tools::b
 repository = "https://github.com/lzg9698-code/nctool-tpl"
 # documentation = "https://docs.rs/nctool-tpl"  # docs.rs 自动生成，无需手动填写
 
-# 发布到 crates.io 时排除的文件
+# 发布到 crates.io 时排除的文件（P2-34 / 梳理 U-12）
+#
+# 根 crate 是**纯库**：`src/` + `benches/` + `examples/` 之外只依赖 `templates/`
+# —— `examples/demo.rs` 用 `CARGO_MANIFEST_DIR + "/templates/turning/demo_gcode.j2"`
+# 在**运行时**读该模板，所以 `templates/` 不能排除（这是本包唯一必须随行的资源）。
+# 根 crate 里**没有**任何 `include_str!`/`include_bytes!`，故其余目录均可安全排除。
+#
+# 用 `exclude` 而非 `include`：排除法在新增目录时不会误删必需文件
+# （踩过一次的教训 —— 漏排是"包变大"，漏 include 是"包坏了"）。
+# 改这个列表后用 `cargo package -p nctool-tpl --list` 复核实际收录。
 exclude = [
     ".github/",
+    ".gitattributes",
     "docs/",
     "target/",
     "*.probestmp",
+    # —— 以下为仓库级开发产物，与库的消费方无关 ——
+    "output/",              # 原型截图 / 参数样本 / 验收脚本（约 400 KB，本包最大冗余）
+    "scripts/",             # CI 与 UI 构建脚本（只在仓库内跑，不随包分发）
+    "templates/machines/",  # 机床方案包（CLI 侧配置数据，根 crate 用不到）
+    "CODE_REVIEW_AND_DEV_PLAN.md",
+    "overview.md",
+    "gcm-diagnose.log",
+    "lcov.info",
+    "启动UI.bat",
 ]
 
 [dependencies]

@@ -128,6 +128,21 @@ nctool --machine wfl_m65 render program_header --param prog=1001 \
 - [x] 同一输入可在不同机床预设下渲染（虽然本例差异为 0）
 - [x] 行号 / 错误聚合 / 参数继承三处局限已**明确登记到 Backlog F4 #2**
 - [x] 走查脚本在仓库，CI 可考虑后续接入（避免回归）
+- [x] **（2026-09-22）三处局限已全部解决** —— 见 §6.1
+
+## 6.1 三处局限的收口（2026-09-22）
+
+本节 §5 提出的三处局限已随 `nctool part generate` 落地，**本节的「当前建议」段已过时**，保留原文仅为记录当时的约束。对应关系：
+
+| 局限 | 当时的绕法 | 现在的做法 |
+| --- | --- | --- |
+| 5.1 行号不续编 | 不开行号，事后 `awk` 补 | `nctool part generate --line-numbers`：行号**跨工序连续**，程序号行（`O1001`）保持不编号且不占用游标 |
+| 5.2 错误不聚合 / 留半成品 | `set -e` + `trap ... EXIT rm` | 全部工序跑完再判定，一次报出**所有**失败工序；**任一失败则不写出任何文件**（失败路径根本不走到写盘） |
+| 5.3 参数无继承 | 每段重复传 `part_name` | 程序级 `params` 对所有工序可见，工序级 `params` 按名覆盖；`machine` 同样可工序级覆盖 |
+
+§5.3 里设想的 JSON schema **即是最终实现的形状**（顶层 `params` / `default_machine`，工序级 `params` / `machine` / `options`），仅把示例中的顶层 `part_name` 规整进 `params` 对象，以便与其他参数同构。
+
+用法与详细语义见 `docs/ROADMAP.md` §F4.1 与 `templates/README.md`。
 
 ## 7. 相关
 

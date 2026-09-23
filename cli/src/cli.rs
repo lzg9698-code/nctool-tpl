@@ -631,10 +631,28 @@ pub enum PartCommand {
 #[derive(Debug, Args)]
 pub struct PartGenerateArgs {
     /// 零件定义文件（JSON）
+    ///
+    /// 形状见 `docs/REAL_PART_WALKTHROUGH.md` §5.3：
+    /// `{"name", "default_machine", "params", "ops":[{"template","params",...}]}`
     pub part: PathBuf,
-    /// 输出目录
+    /// 输出文件（默认写 stdout）
     #[arg(long)]
     pub out: Option<PathBuf>,
+    /// 生成行号（**跨工序连续续编**，不重复出现 N0010）
+    #[arg(long)]
+    pub line_numbers: bool,
+    /// 头部注释
+    #[arg(long)]
+    pub header: bool,
+    /// 仅输出 ASCII（非 ASCII 替换为 ?）
+    #[arg(long)]
+    pub ascii: bool,
+    /// 清理空行
+    #[arg(long)]
+    pub strip_blank: bool,
+    /// 宽松模式：未定义变量渲染为空字符串（经过滤器引用的变量仍需具体值）
+    #[arg(long)]
+    pub lenient: bool,
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]

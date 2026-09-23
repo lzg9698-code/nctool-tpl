@@ -321,8 +321,59 @@ nctool validate turning/undercut_es.j2 --template-dir ./templates --params-file 
 
 # 渲染
 nctool render turning/undercut_es.j2 --template-dir ./templates --params-file p.json
+
+# 多工序一次生成（零件级批量）
+nctool part generate flange.json --template-dir ./templates --out flange.nc --line-numbers
 ```
 
 > `--template-dir` 的相对路径**基于当前工作目录**。若在仓库根执行，
 > `--template-dir ./templates` 即可；不传则读 `nctool.toml` 中的配置
 > （`nctool config show` 可确认）。
+
+## 7. 零件级批量生成（`part generate`）
+
+一道工序 = 一次 `render`。当零件有多道工序（程序头 → 粗车 → 钻孔 → 切断 …）时，
+逐个 `render` 再手工拼接会遇到三个问题：行号每段重来、错误修一个报一个、
+公共参数每段重传。`part generate` 就是把这件事故化。
+
+### 零件定义形状
+
+```json
+{
+  "name": "法兰盘",
+  "default_machine": "generic",
+  "params": { "part_name": "FLANGE_DEMO", "prog": 1001 },
+  "ops": [
+    { "template": "program_header", "params": { "op_name": "OP10" } },
+    { "template": "drill_cycle",
+      "params": { "x": 21, "y": 15, "r_plane": 3, "depth": -10, "feed": 100 },
+      "machine": "wfl_m65",
+      "options": { "line_numbers": true } },
+    { "template": "program_footer" }
+  ]
+}
+```
+
+| 层级 | 字段 | 语义 |
+| --- | --- | --- |
+| 程序级 | `name` | 零件名，出现在摘要与 JSON 结果里 |
+| 程序级 | `default_machine` | 兜底机床标识；工序级 `machine` 覆盖它 |
+| 程序级 | `params` | **对所有工序可见**（参数继承） |
+| 程序级 | `ops` | 工序数组，按顺序渲染后首尾相接 |
+| 工序级 | `template` | 模板名（**必填**；无清单条目时保留 `.j2` 后缀） |
+| 工序级 | `params` | 与程序级 `params` **按名合并**，同名以工序级为准 |
+| 工序级 | `machine` | 覆盖 `default_machine` |
+| 工序级 | `options` | 覆盖 `line_numbers` / `add_header_comment` / `strip_blank_lines` / `ascii_only` 中**显式给出**的字段 |
+
+> 字段名是 `ops`，**不是** `operations`（旧名不在契约内，写了会被拒 —— 免得
+> 静默忽略整份定义后产出一份空程序）。
+
+### 三条行为约定
+
+1. **行号跨工序续编**：加 `--line-numbers` 后，第二道工序从第一道的末行号接着编，
+   不会各自从 `N0010` 重开。程序号行（如 `O1001`）**不参与编号，也不占用游标**。
+2. **全有或全无**：任一工序失败 → 退出 1、**不写出任何文件**，且一次报出**所有**
+   失败工序（不必修一个跑一次）。
+3. **参数继承 + 覆盖**：程序级 `params` 对所有工序可见；工序级同名参数优先。
+   机床同理（`machine` 工序级 > `default_machine` > 调用方兜底），
+   机床标识写错**直接报错**，不会静默退回 `generic`。
