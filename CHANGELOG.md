@@ -1000,6 +1000,26 @@ minijinja 的 `sin` 按**弧度**解释（项目另有度制变体 `sin_d`）。
 - workspace 全量 **614 项**通过；fmt / clippy / doc / 四项对拍与守卫 / 文档链接均通过；
   覆盖率门 91% 通过（实测 92.35%）。
 
+### 批次二十二：注释/文档与实现对齐（收尾）
+
+第四轮审查 §3.3「注释与实现矛盾」的最后几条，逐条核实后处理：
+
+#### Fixed
+
+- **`core/src/pipeline.rs` 行号规则注释**：原注释写「程序号行（`O` 开头）…已有 `N`
+  前缀」，未反映两个前缀均可由机床配置（`program_prefix` / `line_number_prefix`），也未提及小写 `o`/`n` 的特判与空串回退。已改写为完整描述。
+- **`src/filters.rs` i64 上界注释**：补上边界说明 —— 入参已是 `f64`，
+  `(2^53, 2^63)` 的精度损失本函数管不到，只守「饱和到 `i64::MAX`」这条前沿
+  （NC 量级不可及），去除“过度承诺”。
+- **文档过时项**：`docs/PROJECT_STATUS.md` 的 Backlog 表挂上“参数集命名预设”
+  （实际 Web UI 早已用 `localStorage` 实现）、`check_docs_links.py` “未接入 CI”
+  （实际已在 CI）；`docs/CODE_REVIEW_2026-09-19.md` §3.3 的几项标记为已修
+  （`classify_by_path` 已在批次 A 改为穷尽匹配、`integration.rs` 已是 7 内置模板）。
+
+#### 验证
+
+- workspace 全量 **614 项**通过；fmt / clippy / doc / 覆盖率门 91% 均通过。
+
 ---
 
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18

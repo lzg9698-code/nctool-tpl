@@ -363,10 +363,10 @@ golden 测试在 `core/tests/integration.rs`（core 包）。裸 `cargo test` **
 - `core/src/derive.rs:221 derived_names`、`core/src/registry.rs:175 invalidate_analysis` **无生产调用点**；`TemplateEntry::source_text` 仍为 `pub`，「改写后须调 `invalidate_analysis`」靠调用方自觉（第三轮 P2-15 未清）
 
 **注释与实现矛盾（后续开发危害大）**
-- `core/src/pipeline.rs:293-294`：称「程序号行（`O` 开头）…已有 `N` 前缀」，未反映前缀已可配置（`program_prefix`/`line_number_prefix`）及小写 `o`/`n` 特判（`:374-377`）
-- `core/src/manifest.rs:566-572`：`classify_by_path` 文档表**漏了 `grooving`**（实现 `:584` 有）—— 新增目录时照文档改会漏
-- `src/filters.rs:140-145`：称 i64 上界检查防「静默输出错误程序号」，但入参先经 `f64`，`(2^53, 2^63)` 区间整数在检查前已被舍入（NC 量级不可及，属过度承诺）
-- `core/tests/integration.rs:132`：写「6 内置模板」，实际 7
+- ✅ **已修（2026-09-22）**：`core/src/pipeline.rs` 的行号规则注释已改写，明确两个前缀均可配置（`program_prefix` / `line_number_prefix`）、同时识别小写 `o`/`n`、空串回退默认值。
+- ✅ **已修（批次 A）**：`core/src/manifest.rs` 的 `classify_by_path` 已改为 `TemplateCategory::from_dir_name` 穷尽匹配，旧的文档表（漏 `grooving`）不再存在。
+- ✅ **已修（2026-09-22）**：`src/filters.rs` 的 i64 上界注释补了边界说明 —— 入参已是 `f64`，`(2^53, 2^63)` 的精度损失本函数管不到，只守“饱和到 `i64::MAX`”这条前沿（NC 量级不可及）。
+- ✅ **已修**：`core/tests/integration.rs` 已写「7 内置模板 × 3 预设 = 21 组」。
 
 **文档漂移**（实测 556 项 / 89.54% 生产口径 / 93.51% 原始口径）
 
