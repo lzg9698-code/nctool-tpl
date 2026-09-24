@@ -1616,6 +1616,37 @@ FORM_B 在实测中 `<` 恒为假（f64 真值与十进制字面量在 tie 上�
 
 ---
 
+### 批次二十八：发版可重复性（U-22 / U-24 / U-23 / U-25 / U-16）
+
+**无运行时行为改动**。全部落点在 `docs/RELEASE.md` 新增的「发版清单（Runbook）」
+（§2.5）与「破坏性变更归档」（§4.5）。
+
+| 项 | 处置 |
+| --- | --- |
+| **U-22** 发版入口 | 唯一入口 = **推 tag 交 CI**；本地手工发布路径废止。原因：上一轮「推 tag + 本地 publish」让 CI 重复发布同版本 → `crate version already uploaded`（发布物不受影响，但流程要消除这种"靠人分辨真假失败"） |
+| **U-24** 发版顺序 | `tpl → core → cli` 为**硬顺序**，前一个 Publish 绿了再推下一个；附三处**版本同步点**表（改 `Cargo.toml` 时必看的联动位） |
+| **U-23 / U-25** 发布包 | **显式声明发布包不含可运行测试资源**；`cargo install` 与下游库消费**不受影响**。给出**严重度前置检查**：先看该测试是否在 `#[cfg(test)]` 内跨 crate 目录读资源 → 是则降级为整洁项。迁移测试资源进各 crate 的方案**不做**（违反单一来源硬约束） |
+| **U-16** 破坏性变更 | 归档至 `nctool-core 0.4.0`：B-1 `derived_names` / `invalidate_analysis` 收窄（含迁移说明要点）；B-2 候选 `TemplateEntry::source_text` 私有化（B-1 的根因项，同窗口做） |
+
+#### 发版演练结果（2026-09-24，不真实发布）
+
+| crate | 结果 |
+| --- | --- |
+| `nctool-tpl` 0.4.0 | ✅ 66 files / 459.5KiB，验证编译通过 |
+| `nctool-core` 0.3.0 | ✅ 32 files / 824.8KiB，验证编译通过 |
+| `nctool-cli` 0.3.0 | ❌ **RC=101，46 个编译错误** |
+
+`cli` 失败**不是包内容问题**，而是 `cargo publish` 的验证步骤剥掉 `path` 依赖、
+改用 crates.io 上的已发布版本编译 —— 本地 HEAD 新增的 `asset` / `part` /
+`json_num` 模块与 `GenerationOptions::line_number_start` 在已发布的
+`nctool-core 0.3.0` 里都不存在。
+
+**这条把 U-24 的顺序约束从"经验"变成"实测"**：core / tpl 没发之前，cli **一定**
+发不出去，且失败形态是 46 条看似代码坏了的编译错误，而不是一句"依赖版本未发布"。
+故发版硬门槛定为：§2.6 三条 dry-run 全绿才允许推 cli 的 tag。
+
+---
+
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18
 
 「NCTool_V3 模板资产整合 + 参数规格系统 + 架构评估 P0/P1 收口」
