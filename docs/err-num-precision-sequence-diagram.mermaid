@@ -54,11 +54,19 @@ sequenceDiagram
     F->>F: mag = "0.001"; is_zero = false => 不报错
     F-->>MJ: Ok("0.001")
 
-    Note over Tpl,Out: 场景 5 — 唯一已知边界 0.5|nc_fixed(0) ★ 裁定不豁免
+    Note over Tpl,Out: 场景 5 — tie 点 0.5|nc_fixed(0) ★ 裁定不豁免
     Tpl->>MJ: {{ (U_RTRF/2) | nc_fixed(0) }}   (U_RTRF=1)
     MJ->>F: filter_nc_fixed(0.5, 0)
     F->>F: mag = "0" (银行家舍入对 0.5 取偶); is_zero = true
     F->>F: value != 0.0 && is_zero => 命中硬失败
     F-->>MJ: Err(...)
-    Note right of MJ: 与 0.4|nc_fixed(0) 同分支, 数值上不可分离 (设计 §1.5.1)
+    Note right of MJ: 依据是【舍入后确实得到零串】, 不是量级比较 (设计 §1.5.1/§3.1.0)
     Note right of MJ: 裁定: 不豁免 —— U_RTRF=1 mm/min 本身即不合理工艺值
+
+    Note over Tpl,Out: 场景 6 — 同为 tie 但舍入向上 ★ 必须 Ok (不误伤)
+    Tpl->>MJ: {{ 0.0005 | nc_fixed(3) }}
+    MJ->>F: filter_nc_fixed(0.0005, 3)
+    F->>F: mag = "0.001"; is_zero = false => 不报错
+    F-->>MJ: Ok("0.001")
+    Note right of MJ: 与场景 5 对照: 都是 0.5*10^(-N), 但舍入结果不同 => 行为必须不同
+    Note right of MJ: 这正是 FORM_A (字符串判零) 相对量级式的正确之处

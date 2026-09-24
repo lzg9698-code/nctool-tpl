@@ -22,10 +22,11 @@ classDiagram
         +decimals 上界校验 : >32 -> Err
         +舍入后判零 : mag = format(%, .N, value.abs)
         +is_zero = mag 全为 '0' 或 '.'
-        +【新】硬失败 : value != 0.0 && is_zero -> Err
+        +【新】硬失败 : value != 0.0 && is_zero -> Err  [FORM_A 字符串判零, 唯一判据]
         +【新】负零归一后置 : sign = if value < 0.0 && !is_zero { "-" } else { "" }
         --旧行为: 舍入前 value==0.0 判零 -> -1e-4 漏归一 -> "-0.000"--
         --旧行为: 真值非零舍入为全零 -> 静默输出 "0.000"--
+        --禁止: 用 |v| < 0.5*10^(-N) 量级式实现判据 (tie 点会错)--
     }
 
     class NcSignedHardFail {
@@ -37,9 +38,10 @@ classDiagram
 
     class NcFixedContract {
         <<文档契约 (写入 doc comment)>>
-        +丢值即报错 : v != 0.0 && |v| < 0.5 × 10^(-N) => Err
-        +边界用严格 "<" : 0.0005|nc_fixed(3) => "0.001" (舍入向上, 不报错)
-        +已知边界 : 0.5|nc_fixed(0) => Err (银行家舍入取偶, 不豁免)
+        +丢值即报错判据 [FORM_A]: v != 0.0 && 舍入后的输出串全为零 => Err
+        +禁止量级式 [FORM_B]: |v| < 0.5*10^(-N) 在 tie 点不一致, 不得实现
+        +tie 点行为: 0.5|nc_fixed(0) => Err (舍入后确实得 "0")
+        +tie 点行为: 0.0005|nc_fixed(3) => "0.001" (舍入后非零, 不报错)
         +负零归一必须在舍入之后
         +需要更小量级 : 用 nc_fixed(4+) 或 nc_strip
     }
