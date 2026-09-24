@@ -1459,6 +1459,46 @@ FORM_B 在实测中 `<` 恒为假（f64 真值与十进制字面量在 tie 上�
 
 ---
 
+### 批次二十四：派生参数未命中表项不再静默取 `fallback`（第五轮 P1-2）
+
+`docs/CODE_REVIEW_2026-09-23.md` P1-2。`core/src/derive.rs` 的 `compute()` 此前对
+**「源参数提供了取值但未命中表项」** 也走 `fallback`：
+
+| 源参数状态 | 修复前 | 修复后 |
+| --- | --- | --- |
+| **未提供**（`None`） | 取 `fallback` | **不变** —— 取 `fallback`，没有则 `MissingSource` |
+| **提供了但未命中表项** | 取 `fallback`（静默） | **一定报错** `NoMatch`，**不看** `fallback` |
+
+危害路径：纯派生链里 `tip_model` **不出现在模板正文**，`check_var_values` 不遍历它，
+于是白名单 / 类型 / 区间**一个都不跑**。用户把型号拼成 `DM99_UNDEFINED`，
+拿到的是 DM24 的深度（`fallback: 29.61`）且**无报错** ——
+中心孔深度错 = `I_R9[80]` 顶紧位置错 = 机床顶着工件走错位置。
+
+区分点不是数值、而是**调用方是否给过这个值**：「用户没选型号，按 DM24 处理」是工艺意图，
+必须保留；「给了一个表里没有的值」是输入有误，不能拿看似合理的默认值掩盖。
+
+#### Changed
+
+- `fallback` 语义收窄为**仅用于「源参数未提供」**；`DeriveError::NoMatch` 的文档
+  同步改为「提供了但未命中表项」（此前写的是"且规则没有 `fallback`"）。
+- 真实配置 `templates/variables.yaml` 的 `tip_depth` 规则**不受影响**：它有 `fallback`
+  且 `options` 即白名单，「未提供 → fallback」仍成立；「提供了未命中」此前无合法用途。
+
+#### 证据
+
+- **反向验证**（既有约定）：临时把 `None` 分支还原成 `rule.fallback.clone().ok_or_else(...)`
+  后，新用例 `provided_source_outside_whitelist_errors_instead_of_fallback` **如期变红**
+  （实得 `Ok(29.61)`，正是被修掉的静默兜底），恢复实现后转绿。
+- 边界钉子 `falls_back_when_source_is_not_provided`：**「未提供」仍走 fallback**，
+  防止修复顺手把工艺意图一起改成报错。
+- 夹具修订：`chained_derive_uses_derived_value_not_spec_default` 原给 `tip_model` 的
+  默认值是 `"未知型号"`（一个不在表项里的值），靠被修掉的兜底才得到 29.61；
+  改为合法型号 `DM24`，测试意图（派生值 vs 规格默认值）不变。
+- 全套 11 道门禁绿：测试 **1063 passed / 0 failed**（+2）、生产口径覆盖率
+  **92.62%**（阈值 91%）、`Cargo.lock` 零变化。
+
+---
+
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18
 
 「NCTool_V3 模板资产整合 + 参数规格系统 + 架构评估 P0/P1 收口」

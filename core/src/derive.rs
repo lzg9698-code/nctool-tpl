@@ -25,9 +25,12 @@
 //!
 //! # 失败不静默
 //!
-//! 源参数缺失且规则没有 `fallback`、或取值未命中表项且没有 `fallback`，一律
-//! **报错**而不是取 0 —— 中心孔深度取 0 会让 `I_R9[80]`（顶紧位置）算错，
-//! 机床顶着工件走错位置。
+//! 源参数缺失且规则没有 `fallback`、或取值未命中表项，一律**报错**而不是取 0
+//! —— 中心孔深度取 0 会让 `I_R9[80]`（顶紧位置）算错，机床顶着工件走错位置。
+//!
+//! ⚠️ **未命中表项时不再看 `fallback`**（P1-2，2026-09-24）：
+//! 「提供了表里没有的值」= 输入有误，此前会静默取 `fallback`（拼错型号 → 按 DM24
+//! 处理，深度错且无报错）。`fallback` 现在**只**用于「源参数未提供」。
 //!
 //! # 链式派生：源参数若本身也是派生参数，必须先算出它
 //!
@@ -51,7 +54,10 @@ pub enum DeriveError {
         /// 规则依赖的源参数名
         from: String,
     },
-    /// 源参数取值未命中表项，且规则没有 `fallback`
+    /// 源参数**提供了**取值但未命中表项
+    ///
+    /// 即使规则声明了 `fallback` 也报此错（P1-2）：给了一个表里没有的值
+    /// = 输入有误，取 fallback 等于用看似合理的默认值掩盖它。
     NoMatch {
         /// 派生目标参数名
         target: String,
@@ -177,7 +183,16 @@ pub fn apply(specs: &[ParamSpec], params: &ParameterSet) -> Result<ParameterSet,
     Ok(out)
 }
 
-/// 单条派生规则的取值：缺失/未命中一律走 `fallback`，没有 `fallback` 就报错。
+/// 单条派生规则的取值。
+///
+/// 两条路径语义**刻意不同**（P1-2，见 `docs/CODE_REVIEW_2026-09-23.md`）：
+///
+/// | 源参数状态 | 行为 | 理由 |
+/// | --- | --- | --- |
+/// | **未提供**（`None`） | 取 `fallback`；没有 `fallback` 则 `MissingSource` | "用户没选型号，按 DM24 处理"是**工艺意图**，必须保留 |
+/// | **提供了但未命中表项** | **一定报错** `NoMatch`，**不看** `fallback` | 给了一个表里没有的值 = 输入有误；静默取 fallback 会把"型号拼错"变成"按 DM24 处理"，深度错且无报错 |
+///
+/// 区分点不是数值，而是**调用方是否给过这个值**。
 fn compute(
     spec: &ParamSpec,
     rule: &DeriveRule,
@@ -207,7 +222,15 @@ fn compute(
                 .find(|(key, _)| key.matches_option(source_value))
             {
                 Some((_, v)) => Ok(v.clone()),
-                None => rule.fallback.clone().ok_or_else(|| DeriveError::NoMatch {
+                // 【P1-2】源参数**提供了**却没命中表项 = 输入有误，必须报错。
+                // 此前这里会静默取 `fallback`：纯派生链里 `tip_model` 不出现在模板
+                // 正文，`check_var_values` 不遍历它，白名单/类型/区间全都不跑，
+                // 于是"型号拼错"变成"按 DM24 处理" —— 深度错了还无报错。
+                //
+                // `fallback` 的语义收窄为**仅用于「源参数未提供」**（见上分支）：
+                // 那代表"用户没选型号，按 DM24 处理"的工艺意图，必须保留。
+                // 区分点不是数值、而是「调用方是否给过这个值」。
+                None => Err(DeriveError::NoMatch {
                     target: spec.name.clone(),
                     from: rule.from.clone(),
                     value: render_value(source_value),
@@ -270,19 +293,64 @@ mod tests {
         );
     }
 
+    /// **「未提供」必须继续走 fallback** —— 这是 P1-2 修复的边界：
+    /// 修复只收紧「提供了但查不到」，不能把「没选型号按 DM24 处理」的
+    /// 工艺意图也一起改成报错。先钉住它，再动实现。
     #[test]
-    fn falls_back_when_source_missing_or_unknown() {
+    fn falls_back_when_source_is_not_provided() {
         let specs = [tip_depth_spec()];
-        // 源参数未提供 → fallback
         let out = apply(&specs, &params(&[])).unwrap();
         assert_eq!(out.get("tip_depth"), Some(&ParamValue::Number(29.61)));
-        // 源参数未命中表项 → fallback
+    }
+
+    /// **「提供了但未命中表项」必须报错，即使规则声明了 fallback。**
+    ///
+    /// 这条是 P1-2 本体（`docs/CODE_REVIEW_2026-09-23.md` P1-2）：
+    /// 纯派生链里 `tip_model` 不出现在模板正文，`check_var_values` 不遍历它，
+    /// 于是白名单/类型/区间一个都不跑；此前未命中就静默取 fallback 29.61
+    /// —— 用户填了 `DM99_UNDEFINED`（拼错型号），拿到的是 DM24 的深度，无报错。
+    /// 中心孔深度错 = `I_R9[80]` 顶紧位置错 = 机床顶着工件走错位置。
+    #[test]
+    fn provided_source_outside_whitelist_errors_instead_of_fallback() {
+        let specs = [tip_depth_spec()];
+        // 拼写错误 / 未定义型号：即便有 fallback 也必须硬失败
+        let err = apply(
+            &specs,
+            &params(&[("tip_model", ParamValue::String("DM99_UNDEFINED".into()))]),
+        )
+        .unwrap_err();
+        match &err {
+            DeriveError::NoMatch {
+                target,
+                from,
+                value,
+            } => {
+                assert_eq!(target, "tip_depth");
+                assert_eq!(from, "tip_model");
+                assert_eq!(value, "\"DM99_UNDEFINED\"");
+            }
+            other => panic!("应为 NoMatch：{other:?}"),
+        }
+        assert!(
+            err.to_string().contains("未命中规则表项"),
+            "错误信息应指向未命中：{err}"
+        );
+    }
+
+    /// 未提供 → fallback，提供了合法型号 → 表项值，两条路径都不该碰到对方。
+    #[test]
+    fn provided_source_that_matches_uses_table_value_not_fallback() {
+        let specs = [tip_depth_spec()];
         let out = apply(
             &specs,
-            &params(&[("tip_model", ParamValue::String("未知型号".into()))]),
+            &params(&[("tip_model", ParamValue::String("B4".into()))]),
         )
         .unwrap();
-        assert_eq!(out.get("tip_depth"), Some(&ParamValue::Number(29.61)));
+        assert_eq!(
+            out.get("tip_depth"),
+            Some(&ParamValue::Number(8.51)),
+            "命中表项时应取表项值，而不是 fallback 的 29.61"
+        );
     }
 
     #[test]
@@ -393,9 +461,13 @@ mod tests {
 
     #[test]
     fn chained_derive_uses_derived_value_not_spec_default() {
-        // tip_depth 同时有「规格默认值 20.32」和「派生结果 29.61」（型号未命中表项
-        // 走 fallback）：tip_z 必须取派生结果。此前取的是规格默认值，
-        // 不报错但算出完全错误的数值。
+        // tip_depth 同时有「规格默认值 20.32」和「派生结果 29.61」（型号 DM24 命中表项）：
+        // tip_z 必须取派生结果。此前取的是规格默认值，不报错但算出完全错误的数值。
+        //
+        // 【2026-09-24 修订】原夹具给 `tip_model` 的默认值是 **"未知型号"**（一个
+        // 不在表项里的值），靠「未命中 → fallback」才得到 29.61。P1-2 收紧后
+        // 未命中即报错，该夹具会失效 —— 改为合法型号 DM24，测试意图不变
+        // （派生值 vs 规格默认值），且不再依赖被修掉的兜底行为。
         let mut tip_depth = tip_depth_spec();
         tip_depth.default = Some(ParamValue::Number(20.32));
         let tip_z_from_2961 = ParamSpec::new("tip_z", ParamKind::Number, "顶尖 Z 偏置")
@@ -409,7 +481,7 @@ mod tests {
             tip_depth,
             tip_z_from_2961,
             ParamSpec::new("tip_model", ParamKind::String, "顶尖型号")
-                .with_default(ParamValue::String("未知型号".into())),
+                .with_default(ParamValue::String("DM24".into())),
         ];
         let out = apply(&specs, &params(&[])).unwrap();
         assert_eq!(out.get("tip_depth"), Some(&ParamValue::Number(29.61)));
