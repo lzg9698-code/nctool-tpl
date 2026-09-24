@@ -35,6 +35,35 @@ const MAX_NC_PAD_WIDTH: usize = 1024;
 /// 这是刻意的：本过滤器要逐值对齐源项目 Python 的 `f"{v:.2f}"`（同样是就近取偶），
 /// 换成与 `round` 一致会让迁移过来的模板输出变化。需要舍入语义统一时，
 /// 别改这里，改模板。
+///
+/// # ⚠️ 丢值即报错（ERR-NUM-PRECISION）
+///
+/// 真值非零却渲染为全零时**返回 `Err`**（不再静默产出错误 G-code —— 坐标静默变 0
+/// 在机床上是撞刀）。判据是 **`value != 0.0 && 舍入后的输出串全为零`**
+/// （**字符串判零**，与 [`filter_nc_signed`] 同源）。
+///
+/// ⚠️ **不要改用 `0.5 × 10^(-N)` 之类的量级式判据**：它在 tie 点与真实舍入不一致。
+/// 例：`0.5 | nc_fixed(0)` 舍入后确实得 `"0"`（取偶），量级式 `|0.5| < 0.5` 却为假，
+/// 会**放过**这个本该报错的值；`5e-7 | nc_fixed(6)`、`5e-8 | nc_fixed(7)` 同理 ——
+/// 实测 N=0..=8 全部 tie 上，`0.5 * 10f64.powi(-N)` 的 f64 结果与字面量 `0.5e-N`
+/// **逐位相同**（`v == t` 恒真），故 `<` 恒为假、量级式**一律放过**，
+/// 而真实舍入在 N=0/6/7 恰好取到零串、在 N=1..5/8 舍入向上非零。
+/// 详见设计文档 §3.1.0。**判据只能有一条，即字符串判零。**
+///
+/// **tie 点行为（正确且有意保留，勿"修"）**：
+///   - `0.5 | nc_fixed(0)` → `Err`（舍入后确实得到 `"0"`）；
+///     `5e-7 | nc_fixed(6)`、`5e-8 | nc_fixed(7)` 同理 → `Err`。
+///   - `0.0005 | nc_fixed(3)` → `"0.001"`（舍入向上非零，不报错）；
+///     `0.05 | nc_fixed(1)` → `"0.1"`、`0.005 | nc_fixed(2)` → `"0.01"` 同理
+///     —— 这两组的 f64 真值略**高于**十进制中点，故舍入向上。
+///
+/// （设计 §1.5.1 / §9.3；判据实测见 §3.1.0）
+///
+/// 需要保留更小量级时：改用 `| nc_fixed(4)` 或 `| nc_strip`（后者用 Rust `Display`，
+/// 不截断，但输出非固定位）。
+///
+/// **负零归一必须在舍入之后**（对齐 [`filter_nc_signed`] 的 P2-3 修正）：用字符串判零，
+/// 舍入前浮点判零会漏掉 `-1e-4`（`-1e-4 != 0.0` 为真）而输出 `-0.000`。
 pub(crate) fn filter_nc_fixed(value: f64, decimals: usize) -> Result<String, minijinja::Error> {
     if !value.is_finite() {
         return Err(minijinja::Error::new(
@@ -48,11 +77,34 @@ pub(crate) fn filter_nc_fixed(value: f64, decimals: usize) -> Result<String, min
             format!("nc_fixed: 小数位 {decimals} 超出上限 {MAX_NC_FIXED_DECIMALS}"),
         ));
     }
-    // -0.0 归一到 +0.0：控制器对负零的处理不一致，而 "-0.000" 在图纸上无意义。
-    // 同一份逻辑换个过滤器（nc_signed 早已归一）就输出不同字节，是更实际的问题。
-    // `-0.0 == 0.0` 为真，故这一条同时覆盖 +0.0。
-    let value = if value == 0.0 { 0.0 } else { value };
-    Ok(format!("{:.*}", decimals, value))
+    // 先按小数位定值、再判零 —— 归一必须在**舍入之后**（对齐 nc_signed 的 P2-3 修正）。
+    // 舍入前判零（`if value == 0.0`）会漏掉 `-1e-4`：它 != 0.0，绕过归一，
+    // 随后 `{:.*}` 把 `-0.0001` 舍成 `-0.000`，输出带负号的零串 —— 与本节
+    // 「-0.0 归一到 +0.0」的承诺相悖。用字符串判零而不是浮点比较：
+    // `-0.0005` 这类值在"乘再除"里会抖到另一侧。
+    let mag = format!("{:.*}", decimals, value.abs());
+    let is_zero = mag.chars().all(|c| c == '0' || c == '.');
+    // ★ 硬失败（ERR-NUM-PRECISION）：真值非零却渲染为全零
+    //   => 调用方声明的精度不足以表达该值（契约违背），必须报错而非静默产出错误 G-code。
+    //   判据 = 「舍入后的输出串全为零」【FORM_A，字符串判零】。
+    //   ⚠️ 不要写成量级式 |v| < 0.5*10^(-N) —— 它在 tie 点与真实舍入不一致（设计 §3.1.0）。
+    if value != 0.0 && is_zero {
+        return Err(minijinja::Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            format!(
+                "nc_fixed: 值 {value} 在 {decimals} 位小数下归零（该值需要更多小数位才能表示）；\
+                 精度不足会静默产出错误 G-code。请提高小数位（如 nc_fixed(4)）或改用 nc_strip。"
+            ),
+        ));
+    }
+    // 符号在此决定：走到这里说明「真值非零且舍入后非零」或「真值确为零」。
+    // 后者（+0.0 / -0.0）在 `value < 0.0` 为假 → 输出无符号的 `mag`（如 "0.000"），
+    // 即负零归一到 +0.0（控制器对负零处理不一致，"-0.000" 在图纸上无意义）。
+    if value < 0.0 {
+        Ok(format!("-{mag}"))
+    } else {
+        Ok(mag)
+    }
 }
 
 /// 去尾零：`{{ x | nc_strip }}` → `21`（输入 21.0）或 `21.5`（输入 21.50）。
@@ -81,6 +133,16 @@ pub(crate) fn filter_nc_strip(value: f64) -> Result<String, minijinja::Error> {
 ///
 /// 与 [`filter_nc_fixed`] 的区别只有一个：正数与零也输出 `+`。
 /// 因此**不要**用它格式化本来就不带符号语义的值（如直径、进给）。
+///
+/// # ⚠️ 丢值即报错（ERR-NUM-PRECISION，与 [`filter_nc_fixed`] 同步）
+///
+/// 真值非零却渲染为全零时同样**返回 `Err`**。判据与 [`filter_nc_fixed`] **完全同源**：
+/// `value != 0.0 && 舍入后的输出串全为零`（字符串判零）。二者只差符号前缀，
+/// 因此「是否报错」对同一输入**必须一致** —— 这正是 P2-3 只修一半留下的教训，
+/// 本次以同一条判据消除分叉的可能。
+///
+/// `-0.0` 归一到 `+0.000`（既有行为，不变）；`-1e-4 | nc_signed(3)` 则与
+/// `nc_fixed` 一样报错，而**不再**输出 `+0.000`（那曾是静默丢值）。
 pub(crate) fn filter_nc_signed(value: f64, decimals: usize) -> Result<String, minijinja::Error> {
     if !value.is_finite() {
         return Err(minijinja::Error::new(
@@ -101,6 +163,18 @@ pub(crate) fn filter_nc_signed(value: f64, decimals: usize) -> Result<String, mi
     // 用字符串判零而不是再算一遍浮点：`-0.0005` 这类值在"乘再除"里会抖到另一侧。
     let mag = format!("{:.*}", decimals, value.abs());
     let is_zero = mag.chars().all(|c| c == '0' || c == '.');
+    // ★ 硬失败（ERR-NUM-PRECISION）：与 filter_nc_fixed 同源判据（字符串判零）。
+    //   真值非零却渲染为全零 => 精度不足以表达该值（契约违背），报错而非静默产出错误 G-code。
+    //   禁止改成量级式 |v| < 0.5*10^(-N)：tie 点与真实舍入不一致（设计 §3.1.0）。
+    if value != 0.0 && is_zero {
+        return Err(minijinja::Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            format!(
+                "nc_signed: 值 {value} 在 {decimals} 位小数下归零（该值需要更多小数位才能表示）；\
+                 精度不足会静默产出错误 G-code。请提高小数位（如 nc_signed(4)）或改用 nc_strip。"
+            ),
+        ));
+    }
     let sign = if value < 0.0 && !is_zero { "-" } else { "+" };
     Ok(format!("{sign}{mag}"))
 }
@@ -191,15 +265,181 @@ mod tests {
     }
 
     /// 回归（P2-3）：`nc_signed` 的负零归一必须在**舍入之后**。
-    /// `-0.0001` 保留 3 位就是 `0.000`，舍入前判零漏掉它，仍输出 `-0.000`，
-    /// 与本模块「-0.0 归一到 +0.000」的承诺相悖。
+    /// `-0.0` 保留 3 位仍是 `0.000`，必须输出 `+0.000` 而非 `-0.000`。
+    ///
+    /// **ERR-NUM-PRECISION 补充**：本测试原先用 `-0.0001 | nc_signed(3)` 验证归一，
+    /// 但 `-0.0001` 的**真值非零** —— 在新硬失败判据下它应**报错**（精度不足以表达），
+    /// 而非被"归一"成 `+0.000`（那正是静默丢值）。故改用真零 `-0.0` 钉住归一语义，
+    /// 真值非零的负小值改由 `nc_signed_errors_on_nonzero_that_renders_as_zero` 钉住报错。
     #[test]
     fn nc_signed_normalizes_zero_after_rounding() {
-        assert_eq!(filter_nc_signed(-0.0001, 3).unwrap(), "+0.000");
-        assert_eq!(filter_nc_signed(-0.4, 0).unwrap(), "+0");
+        // 真零（含负零）：舍入后仍为零串，且真值为零 → 不报错，归一到 +0.000
+        assert_eq!(filter_nc_signed(-0.0, 3).unwrap(), "+0.000");
+        assert_eq!(filter_nc_signed(-0.0, 0).unwrap(), "+0");
         // 舍入后真的非零 → 符号必须保留（别把归一做过火）
         assert_eq!(filter_nc_signed(-0.002, 3).unwrap(), "-0.002");
         assert_eq!(filter_nc_signed(-1.0, 0).unwrap(), "-1");
+    }
+
+    // -----------------------------------------------------------------------
+    // ERR-NUM-PRECISION：nc_fixed / nc_signed 丢值即报错（硬失败）
+    //
+    // 判据 = `value != 0.0 && 舍入后的输出串全为零`（字符串判零，FORM_A）。
+    // 禁止量级式判据（设计 §3.1.0）。以下测试是这一判据的**正反例钉子**。
+    // -----------------------------------------------------------------------
+
+    /// 硬失败正例（设计 §9.1）：真值非零但 `{:.*}` 渲染为全零 → `Err`。
+    ///
+    /// **反向验证**：若把实现里的硬失败分支删掉（退回旧的 `Ok(format!(...))`），
+    /// 下列每个 `is_err()` 都会变成 `Ok("0.000" / "0.0" / "0")`，**测试立即变红**。
+    #[test]
+    fn nc_fixed_errors_on_nonzero_that_renders_as_zero() {
+        // nc_fixed(3)：阈值附近与内部的真值非零值
+        assert!(filter_nc_fixed(1e-4, 3).is_err(), "1e-4 主缺陷");
+        assert!(filter_nc_fixed(4e-4, 3).is_err());
+        assert!(filter_nc_fixed(4.9e-4, 3).is_err());
+        assert!(filter_nc_fixed(5e-324, 3).is_err(), "最小次正规数");
+        assert!(filter_nc_fixed(1e-10, 3).is_err());
+        // 负值：原缺陷输出 "-0.000"（负零串）
+        assert!(filter_nc_fixed(-1e-4, 3).is_err(), "原负零串");
+        assert!(filter_nc_fixed(-4.9e-4, 3).is_err());
+        // 整数位：U_RC=0.04 的真实路径是 nc_fixed(1)
+        assert!(filter_nc_fixed(0.04, 1).is_err(), "U_RC 实路径");
+        assert!(filter_nc_fixed(0.049, 1).is_err());
+        assert!(filter_nc_fixed(-0.04, 1).is_err());
+        // N=0
+        assert!(filter_nc_fixed(0.4, 0).is_err());
+        assert!(filter_nc_fixed(0.049, 0).is_err());
+    }
+
+    /// `nc_signed` 同步硬失败（设计 §9.1）：与 `nc_fixed` 同源的判定。
+    ///
+    /// **反向验证**：删掉 `filter_nc_signed` 里新增的硬失败分支，
+    /// 下列 `is_err()` 会变 `Ok("+0.000" / "+0.0")`，测试立即变红。
+    #[test]
+    fn nc_signed_errors_on_nonzero_that_renders_as_zero() {
+        assert!(filter_nc_signed(1e-4, 3).is_err());
+        assert!(filter_nc_signed(-0.04, 1).is_err());
+        assert!(filter_nc_signed(4.9e-4, 3).is_err());
+    }
+
+    /// 真零路径不得误伤（设计 §9.2，最易误伤的分支）：`0.0` / `-0.0` 必须 `Ok`。
+    ///
+    /// **反向验证**：把判据误写成 `if is_zero { Err }`（漏掉 `value != 0.0` 前提），
+    /// 下列断言全部变 `Err`，测试立即变红。
+    #[test]
+    fn nc_fixed_allows_true_zero() {
+        assert_eq!(filter_nc_fixed(0.0, 0).unwrap(), "0");
+        assert_eq!(filter_nc_fixed(0.0, 3).unwrap(), "0.000");
+        assert_eq!(filter_nc_fixed(-0.0, 3).unwrap(), "0.000");
+        assert_eq!(filter_nc_fixed(-0.0, 0).unwrap(), "0");
+        // 逐字节相等（防止"两边一起错成别的样子"也算过）
+        assert_eq!(
+            filter_nc_fixed(-0.0, 3).unwrap(),
+            filter_nc_fixed(0.0, 3).unwrap()
+        );
+    }
+
+    /// 边界反例（设计 §9.2）：舍入向上、结果非零 → 必须 `Ok`，不得误报。
+    ///
+    /// **反向验证**：把判据误写成量级式 `|v| < 0.5*10^(-N)`（FORM_B），
+    /// 下列值会因 `0.0005f64` 真值恰等于阈值而使 `0.0005 < 0.0005` 为假 —— 单个值
+    /// 不会出错，但 `N=0` 的 `0.5` 会差异（见下面的 tie 钉子测试）。
+    /// 本测试主要钉住「舍入向上即放过」这条语义。
+    #[test]
+    fn nc_fixed_allows_rounding_up_at_boundary() {
+        assert_eq!(filter_nc_fixed(0.0005, 3).unwrap(), "0.001");
+        assert_eq!(filter_nc_fixed(0.05, 1).unwrap(), "0.1");
+        assert_eq!(filter_nc_fixed(0.005, 2).unwrap(), "0.01");
+        assert_eq!(filter_nc_fixed(-0.0005, 3).unwrap(), "-0.001");
+        assert_eq!(filter_nc_fixed(-0.05, 1).unwrap(), "-0.1");
+    }
+
+    /// 正常值路径（设计 §9.2）：均须 `Ok` 且字节精确。
+    ///
+    /// **反向验证**：任何"顺手放宽"的改动若把正常值也判成丢值，此处立即变红。
+    #[test]
+    fn nc_fixed_allows_normal_values() {
+        assert_eq!(filter_nc_fixed(0.001, 3).unwrap(), "0.001");
+        assert_eq!(filter_nc_fixed(-0.001, 3).unwrap(), "-0.001");
+        assert_eq!(filter_nc_fixed(21.0, 3).unwrap(), "21.000");
+        assert_eq!(filter_nc_fixed(0.4, 3).unwrap(), "0.400");
+        assert_eq!(filter_nc_fixed(1.0, 0).unwrap(), "1");
+        assert_eq!(filter_nc_fixed(1200.0, 0).unwrap(), "1200");
+        assert_eq!(filter_nc_fixed(200.0, 0).unwrap(), "200");
+        assert_eq!(filter_nc_fixed(-1.0, 0).unwrap(), "-1");
+        assert_eq!(filter_nc_signed(-0.0, 3).unwrap(), "+0.000");
+        assert_eq!(filter_nc_signed(0.001, 3).unwrap(), "+0.001");
+    }
+
+    /// ★ tie 点钉子（设计 §9.3，**必须 `Err`，不得被"修"掉**）。
+    ///
+    /// 三个 tie：`0.5|0`、`5e-7|6`、`5e-8|7`。它们的十进制值恰是 `0.5×10^(-N)`，
+    /// 但 f64 真值有的**恰等于**、有的**略小于**该十进制值，导致：
+    ///   - 字符串判零（FORM_A）：`{:.*}` 取偶后确实是零串 → **必须 Err**（正确）；
+    ///   - 量级式（FORM_B）：`|v| < 0.5×10^(-N)` 为假 → 会**放过**（错的）。
+    ///
+    /// 这**不是 bug**：`0.5 | nc_fixed(0)` 的真实来源 `U_RTRF=1`（进给 1 mm/min）
+    /// 本身即不合理工艺值。裁定不加豁免（设计 §1.5.1 / §13 决策点 6）。
+    ///
+    /// **反向验证**：把判据改成量级式 `|v| < 0.5*10f64.powi(-(N as i32))`，
+    /// 下面前两个断言立即变红（它们会变 `Ok`）。这是本缺陷最容易复发的点。
+    #[test]
+    fn nc_fixed_tie_points_must_error() {
+        // N=0：0.5f64 恰为 0.5，{:0} 取偶给 "0" → 零串 → Err
+        assert!(
+            filter_nc_fixed(0.5, 0).is_err(),
+            "0.5|nc_fixed(0)：取偶舍入给 0，与 0.4 同分支；设计 §1.5.1"
+        );
+        // N=6：0.0000005 的 f64 真值 = 4.99999999999999977374e-7，{:6} 给 "0.000000"
+        assert!(
+            filter_nc_fixed(5e-7, 6).is_err(),
+            "5e-7|nc_fixed(6)：设计 §3.1.0 分歧点 2"
+        );
+        // N=7：同理
+        assert!(
+            filter_nc_fixed(5e-8, 7).is_err(),
+            "5e-8|nc_fixed(7)：设计 §3.1.0 分歧点 3"
+        );
+        // 反向钉子：同为 tie 但舍入向上 → 必须 Ok（不得误报）
+        assert_eq!(filter_nc_fixed(0.05, 1).unwrap(), "0.1");
+        assert_eq!(filter_nc_fixed(0.005, 2).unwrap(), "0.01");
+        assert_eq!(filter_nc_fixed(0.0005, 3).unwrap(), "0.001");
+    }
+
+    /// `nc_fixed` 与 `nc_signed` 判据**同源**（设计 §9.6 第 7 条）：
+    /// 对同一组输入，「是否报错」必须完全一致（二者只差符号前缀）。
+    ///
+    /// **反向验证**：若只给其中一个加硬失败（P2-3 的历史错误），
+    /// 下列 `assert_eq!(a.is_err(), b.is_err())` 会在分歧点立即变红。
+    #[test]
+    fn nc_fixed_and_nc_signed_share_the_same_criterion() {
+        let cases: &[(f64, usize)] = &[
+            (1e-4, 3),
+            (4e-4, 3),
+            (4.9e-4, 3),
+            (5e-324, 3),
+            (0.0, 3),
+            (-0.0, 3),
+            (0.0005, 3),
+            (-0.0005, 3),
+            (0.001, 3),
+            (-0.001, 3),
+            (0.05, 1),
+            (0.5, 0),
+            (5e-7, 6),
+            (5e-8, 7),
+            (0.4, 0),
+            (21.0, 3),
+        ];
+        for &(v, n) in cases {
+            let fixed_err = filter_nc_fixed(v, n).is_err();
+            let signed_err = filter_nc_signed(v, n).is_err();
+            assert_eq!(
+                fixed_err, signed_err,
+                "nc_fixed({v}e,{n}) 与 nc_signed({v}e,{n}) 判据必须一致"
+            );
+        }
     }
 
     /// 回归（P2-4）：上界检查差一。
