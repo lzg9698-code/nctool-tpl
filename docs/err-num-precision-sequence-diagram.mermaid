@@ -1,0 +1,64 @@
+sequenceDiagram
+    %% ERR-NUM-PRECISION · 渲染调用序列 + nc_fixed 硬失败判定位置（v2 · 主理人已裁定）
+    %% 场景 1: 正常坐标 (golden 路径, 不变)
+    %% 场景 2: 落入丢失带 (uz_rkm_temp1 U_RC|nc_fixed(1)) —— ★ v2 改为【报错】
+    %% 场景 3: 负零串路径 (v2 亦报错, 不再归一到 "0.000")
+    %% 场景 4: 真零与边界值必须放过 (不误伤)
+    %% 场景 5: 唯一已知边界 0.5|nc_fixed(0) —— 裁定不豁免
+
+    participant Tpl as 模板 (.j2)
+    participant MJ as minijinja 引擎
+    participant F as filter_nc_fixed (filters.rs)
+    participant Out as 渲染输出 (G-code)
+
+    Note over Tpl,Out: 场景 1 — golden 路径 (x=21.0, nc_fixed(3)), 输出不变
+    Tpl->>MJ: {{ x | nc_fixed(3) }}
+    MJ->>F: filter_nc_fixed(21.0, 3)
+    F->>F: 有限性 OK; decimals<=32 OK
+    F->>F: mag = format!("{:.3}", 21.0.abs()) = "21.000"
+    F->>F: is_zero = false
+    F->>F: value != 0.0 && is_zero ? 否 => 不报错
+    F-->>MJ: Ok("21.000")
+    MJ-->>Out: X21.000
+
+    Note over Tpl,Out: 场景 2 — 丢失带 (U_RC=0.04, nc_fixed(1)) ★ v2 核心改动: 报错
+    Tpl->>MJ: {{ (-U_RC) | nc_fixed(1) }}
+    MJ->>F: filter_nc_fixed(-0.04, 1)
+    F->>F: mag = format!("{:.1}", 0.04) = "0.0"
+    F->>F: is_zero = true
+    F->>F: value(-0.04) != 0.0 && is_zero => ★ 命中硬失败
+    F-->>MJ: Err("nc_fixed: 值 -0.04 在 1 位小数下归零...")
+    MJ-->>Out: 渲染中止, 不产出 G-code
+    Note right of Out: v2: 丢值即报错 (设计 §1.5/§3.3)
+    Note right of Out: 旧行为是静默产出 "Z-0.0" (应为 Z-0.04) — 已消除
+    Note right of Out: 依据: nc_fixed(0) 真实调用面 14 类全为物理量, 合理值不落带
+
+    Note over Tpl,Out: 场景 3 — 负零串路径 (v = -0.0001, 真值非零) ★ 亦报错
+    Tpl->>MJ: {{ v | nc_fixed(3) }}
+    MJ->>F: filter_nc_fixed(-0.0001, 3)
+    F->>F: mag = format!("{:.3}", 0.0001) = "0.000"; is_zero = true
+    F->>F: value != 0.0 && is_zero => 命中硬失败
+    F-->>MJ: Err(...)
+    Note right of MJ: 旧行为是 Ok("-0.000") 负零串; v2 直接报错
+
+    Note over Tpl,Out: 场景 4 — 真零与边界值必须放过 (不误伤, 机械证明)
+    Tpl->>MJ: {{ 0.0 | nc_fixed(3) }}
+    MJ->>F: filter_nc_fixed(0.0, 3)
+    F->>F: mag = "0.000"; is_zero = true
+    F->>F: value == 0.0 => 硬失败条件【不成立】
+    F-->>MJ: Ok("0.000")
+    MJ-->>Out: 0.000
+    Note over Tpl,Out: 4b — 边界值 0.0005|nc_fixed(3) (舍入向上)
+    Tpl->>MJ: {{ 0.0005 | nc_fixed(3) }}
+    MJ->>F: filter_nc_fixed(0.0005, 3)
+    F->>F: mag = "0.001"; is_zero = false => 不报错
+    F-->>MJ: Ok("0.001")
+
+    Note over Tpl,Out: 场景 5 — 唯一已知边界 0.5|nc_fixed(0) ★ 裁定不豁免
+    Tpl->>MJ: {{ (U_RTRF/2) | nc_fixed(0) }}   (U_RTRF=1)
+    MJ->>F: filter_nc_fixed(0.5, 0)
+    F->>F: mag = "0" (银行家舍入对 0.5 取偶); is_zero = true
+    F->>F: value != 0.0 && is_zero => 命中硬失败
+    F-->>MJ: Err(...)
+    Note right of MJ: 与 0.4|nc_fixed(0) 同分支, 数值上不可分离 (设计 §1.5.1)
+    Note right of MJ: 裁定: 不豁免 —— U_RTRF=1 mm/min 本身即不合理工艺值
