@@ -542,18 +542,23 @@ fn render(ctx: &Ctx, body: &[u8]) -> Resp {
             })),
         );
     }
+    // 两条路径都取 `*_outcome` 变体：只有它回传**后处理告警**（P2-1，行号撞上限
+    // 后停止编号）。HTTP 通道把它放进 `warnings`，前端才能提示"程序生成了，
+    // 但后半段没有行号"—— 否则浏览器里看到的是一份看起来完全正常的 G-code。
     let output = if lenient {
-        gen.generate_lenient(&name, &params, &machine, &opts)
+        gen.generate_lenient_outcome(&name, &params, &machine, &opts)
+            .map(|(o, _report)| o)
     } else {
-        gen.generate(&name, &params, &machine, &opts)
+        gen.generate_outcome(&name, &params, &machine, &opts)
     };
     match output {
-        Ok(output) => Resp::Json(
+        Ok(outcome) => Resp::Json(
             200,
             ok(serde_json::json!({
                 "blocked": false,
                 "report": report_json,
-                "output": output,
+                "output": outcome.text,
+                "warnings": outcome.warnings,
                 "template": name,
                 "machine": machine.id,
             })),
@@ -642,6 +647,8 @@ fn part_generate(ctx: &Ctx, body: &[u8]) -> Resp {
                     "program": outcome.program,
                     "okCount": outcome.ops.len(),
                     "failCount": 0,
+                    // P2-1：程序生成了，但可能有工序的编号被上限截断
+                    "warnings": outcome.warnings,
                 })),
             )
         }

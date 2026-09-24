@@ -156,6 +156,11 @@ pub struct PartOutcome {
     pub ops: Vec<OpOutcome>,
     /// 拼接后的完整程序（各工序按顺序首尾相接）
     pub program: String,
+    /// **非阻断告警**（P2-1）：程序生成了，但某道工序的编号被截断之类。
+    ///
+    /// 逐条已带上「工序N（模板名）」前缀，可直接呈现给用户。与生成失败不同：
+    /// 这些情形下程序本身是完整可用的，**不阻断交付**。
+    pub warnings: Vec<String>,
 }
 
 impl PartOutcome {
@@ -340,6 +345,8 @@ impl PartSpec {
 
         let mut outcomes: Vec<OpOutcome> = Vec::with_capacity(self.ops.len());
         let mut failures: Vec<OpFailure> = Vec::new();
+        // 非阻断告警（P2-1）：逐工序收集，统一带上「工序N」前缀后交给调用方。
+        let mut warnings: Vec<String> = Vec::new();
         // 行号游标：跨工序传递（局限 5.1）。未开行号时恒为 0，无副作用。
         let mut cursor: u32 = 0;
 
@@ -365,15 +372,23 @@ impl PartSpec {
             let params = merge_params(&self.params, &op.params);
             let op_opts = op_options(opts, op.options.as_ref(), cursor);
 
+            // 两条路径都取 `*_outcome` 变体：只有它们回传后处理告警（P2-1）。
+            // 宽松路径仍沿用起始游标作为末行号（既有行为，勿改）——
+            // `generate_lenient` 不回传游标，且宽松模式下编号本就可能不完整。
             let result = if opts.lenient {
-                gen.generate_lenient(&op.template, &params, &machine, &op_opts)
-                    .map(|out| (out, cursor))
+                gen.generate_lenient_outcome(&op.template, &params, &machine, &op_opts)
+                    .map(|(o, _report)| (o.text, cursor, o.warnings))
             } else {
-                gen.generate_with_cursor(&op.template, &params, &machine, &op_opts)
+                gen.generate_outcome(&op.template, &params, &machine, &op_opts)
+                    .map(|o| (o.text, o.end_line_number, o.warnings))
             };
             match result {
-                Ok((output, end_line_number)) => {
+                Ok((output, end_line_number, op_warnings)) => {
                     cursor = end_line_number;
+                    // 带上工序位置再汇总：跨工序续编时"哪一段开始断的"才是可行动的信息
+                    for w in op_warnings {
+                        warnings.push(format!("工序{}（{}）：{}", index + 1, display_name, w));
+                    }
                     outcomes.push(OpOutcome {
                         index,
                         template: op.template.clone(),
@@ -399,6 +414,7 @@ impl PartSpec {
         Ok(PartOutcome {
             ops: outcomes,
             program,
+            warnings,
         })
     }
 }
@@ -1067,6 +1083,58 @@ mod tests {
             out.ops[0].output.contains("G0 X\n"),
             "未定义变量渲染为空: {:?}",
             out.ops[0].output
+        );
+    }
+
+    // ---- P2-1：撞行号上限的告警必须带上工序位置 ----
+
+    /// 撞上限在**多工序**场景下尤其隐蔽：行号跨工序续编，前一段用掉的行号会让
+    /// 后一段在中间某处突然断掉。告警必须说清是**哪一道工序**开始断的，
+    /// 否则用户面对一份几百行的程序无从下手。
+    #[test]
+    fn line_number_cap_warning_names_the_operation() {
+        // 600 行 × step 10 = 末行号 6000；第二道从 6000 续编，编到 9990 后撞
+        // 默认上限 9999 → 从那时起不再编号。
+        let g = gen_with(&[("a", "{% for i in range(600) %}G0 X{{ i }}\n{% endfor %}")]);
+        let part = spec_from(r#"{"ops":[{"template":"a"},{"template":"a"}]}"#);
+        let opts = PartOptions {
+            line_numbers: true,
+            ..Default::default()
+        };
+        let out = part.generate(&g, None, &opts).unwrap();
+        assert_eq!(
+            out.warnings.len(),
+            1,
+            "只有第二道会撞上限: {:?}",
+            out.warnings
+        );
+        assert!(
+            out.warnings[0].starts_with("工序2（a）"),
+            "告警必须指出是第几道工序: {}",
+            out.warnings[0]
+        );
+        // 第一道不应被牵连
+        assert!(
+            !out.warnings.iter().any(|w| w.starts_with("工序1")),
+            "第一道没撞上限: {:?}",
+            out.warnings
+        );
+    }
+
+    /// 对照组：程序短、不撞上限时**不许**有告警（告警本身不能变成噪声）。
+    #[test]
+    fn no_warnings_when_program_stays_under_cap() {
+        let g = gen_with(&[("a", "G0 X1\n"), ("b", "G0 Y1\n")]);
+        let part = spec_from(r#"{"ops":[{"template":"a"},{"template":"b"}]}"#);
+        let opts = PartOptions {
+            line_numbers: true,
+            ..Default::default()
+        };
+        let out = part.generate(&g, None, &opts).unwrap();
+        assert!(
+            out.warnings.is_empty(),
+            "短程序不应有告警: {:?}",
+            out.warnings
         );
     }
 

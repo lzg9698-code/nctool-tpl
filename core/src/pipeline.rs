@@ -115,6 +115,27 @@ impl Default for GenerationOptions {
     }
 }
 
+/// 生成结果：正文 + 末行号 + **后处理告警**。
+///
+/// # 为什么告警要单独回传
+///
+/// `warnings` 表达"程序已经生成，但**与用户预期不符**"的情形（P2-1：行号撞
+/// 上限后停止编号）。它**不能**混进正文 —— 正文是 G-code，往里塞提示会直接
+/// 产出非法程序；也**不该**是硬错误 —— 程序本身是完整可用的，只是后半段没有
+/// 行号，阻断渲染的代价大于收益。
+///
+/// 调用方（CLI / HTTP / `part generate`）负责把它呈现给用户：**静默丢弃等于
+/// 用户永远不知道自己拿到的是一份"半成品编号"的程序**。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GenerationOutcome {
+    /// 生成的正文（G-code 或纯文本）
+    pub text: String,
+    /// 该段最后一个被写入的行号（未开行号时为起始值）
+    pub end_line_number: u32,
+    /// 后处理告警（当前只有行号上限/溢出一类）
+    pub warnings: Vec<String>,
+}
+
 /// G-code 生成器。
 ///
 /// 持有 [`TemplateRegistry`]，提供端到端的模板 → G-code 生成能力。
@@ -165,9 +186,24 @@ impl GCodeGenerator {
         machine: &MachineConfig,
         opts: &GenerationOptions,
     ) -> Result<String, PipelineError> {
-        // 末行号对单模板渲染无用，丢弃
+        // 末行号对单模板渲染无用，丢弃。**告警同样被丢弃** —— 需要告警的调用方
+        // 请改用 [`Self::generate_outcome`]；本方法保持"只给正文"的既有契约，
+        // 免得四十余处调用点为了一个新增字段集体改签名。
+        Ok(self.generate_outcome(template, params, machine, opts)?.text)
+    }
+
+    /// 端到端生成并**连告警一起**返回（[`GenerationOutcome`]）。
+    ///
+    /// 与 [`Self::generate`] 的区别只是多回传 [`GenerationOutcome::warnings`]：
+    /// 呈现层要拿它告诉用户"程序生成了，但后半段没有行号"（P2-1）。
+    pub fn generate_outcome(
+        &self,
+        template: &str,
+        params: &ParameterSet,
+        machine: &MachineConfig,
+        opts: &GenerationOptions,
+    ) -> Result<GenerationOutcome, PipelineError> {
         self.generate_impl(template, params, machine, opts)
-            .map(|(out, _cursor)| out)
     }
 
     /// 端到端生成并**返回末行号**，供多工序续编使用。
@@ -186,6 +222,7 @@ impl GCodeGenerator {
         opts: &GenerationOptions,
     ) -> Result<(String, u32), PipelineError> {
         self.generate_impl(template, params, machine, opts)
+            .map(|o| (o.text, o.end_line_number))
     }
 
     /// [`Self::generate`] 与 [`Self::generate_with_cursor`] 的共同实现。
@@ -195,7 +232,7 @@ impl GCodeGenerator {
         params: &ParameterSet,
         machine: &MachineConfig,
         opts: &GenerationOptions,
-    ) -> Result<(String, u32), PipelineError> {
+    ) -> Result<GenerationOutcome, PipelineError> {
         // 1. 模板存在性
         let entry = match self.registry.get(template) {
             Some(e) => e,
@@ -273,6 +310,22 @@ impl GCodeGenerator {
         machine: &MachineConfig,
         opts: &GenerationOptions,
     ) -> Result<(String, ValidationReport), PipelineError> {
+        self.generate_lenient_outcome(template, params, machine, opts)
+            .map(|(o, report)| (o.text, report))
+    }
+
+    /// 宽松生成，连 [`GenerationOutcome::warnings`] 一起返回。
+    ///
+    /// 与 [`Self::generate_lenient_with_report`] 的区别只是多回传告警 ——
+    /// `part generate` 的逐工序路径要用它把「某道工序撞了行号上限」报出来
+    /// （P2-1），否则宽松模式下这类"程序看起来没问题"的隐患会彻底消失。
+    pub fn generate_lenient_outcome(
+        &self,
+        template: &str,
+        params: &ParameterSet,
+        machine: &MachineConfig,
+        opts: &GenerationOptions,
+    ) -> Result<(GenerationOutcome, ValidationReport), PipelineError> {
         let entry = match self.registry.get(template) {
             Some(e) => e,
             None => return Err(PipelineError::TemplateNotFound(template.to_string())),
@@ -302,7 +355,7 @@ impl GCodeGenerator {
             .registry
             .render_template_lenient(template, &context)
             .map_err(PipelineError::Render)?;
-        Ok((postprocess(&rendered, template, opts, machine).0, report))
+        Ok((postprocess(&rendered, template, opts, machine), report))
     }
 
     /// 便捷：使用通用机床配置生成 G-code。
@@ -396,7 +449,7 @@ fn postprocess(
     template: &str,
     opts: &GenerationOptions,
     machine: &MachineConfig,
-) -> (String, u32) {
+) -> GenerationOutcome {
     let mut out = String::new();
 
     // 头部注释（两种格式均生效，由用户显式开启）；文本为 ASCII，
@@ -419,7 +472,11 @@ fn postprocess(
         // Text 格式：仅渲染，不做任何后处理（也不推进编号游标）
         OutputFormat::Text => {
             out.push_str(rendered);
-            return (out, opts.line_number_start);
+            return GenerationOutcome {
+                text: out,
+                end_line_number: opts.line_number_start,
+                warnings: Vec::new(),
+            };
         }
         OutputFormat::Gcode => {}
     }
@@ -441,6 +498,12 @@ fn postprocess(
     let step = opts.line_number_step.max(1);
     // 起始值：多工序续编用。单模板渲染时为 0，行为与历史一致。
     let mut line_no: u32 = opts.line_number_start;
+    // 【P2-1】撞上限 / 溢出后**静默停止编号**是最坏的一类失败：产物看起来完全
+    // 正常（每行都还在），只是后半段没有行号 —— 用户从产物里看不出来。这里
+    // 记下**第一次**发生的位置，循环结束后转成一条告警交给调用方呈现。
+    // 只记第一次：第 2 行撞上限后第 3、4…行都会撞，逐行报会把报告刷爆。
+    let mut capped_after: Option<u32> = None;
+    let mut overflowed = false;
     for line in rendered.lines() {
         let trimmed = line.trim();
         if trimmed.is_empty() {
@@ -464,8 +527,8 @@ fn postprocess(
                 || (line_prefix == "N" && trimmed.starts_with('n'));
             if !is_program && !already_numbered {
                 // checked_add：防止 line_no + step 溢出（debug 构建 panic / release 回绕）
-                if let Some(next) = line_no.checked_add(step) {
-                    if next <= opts.max_line_number {
+                match line_no.checked_add(step) {
+                    Some(next) if next <= opts.max_line_number => {
                         line_no = next;
                         out.push_str(&format!(
                             "{line_prefix}{:0width$} ",
@@ -473,13 +536,37 @@ fn postprocess(
                             width = line_digits
                         ));
                     }
+                    // 撞上限：该行及之后都不再编号，但**内容照常写出**
+                    Some(_) => {
+                        if capped_after.is_none() {
+                            capped_after = Some(line_no);
+                        }
+                    }
+                    None => overflowed = true,
                 }
             }
         }
         out.push_str(content);
         out.push('\n');
     }
-    (out, line_no)
+
+    let mut warnings = Vec::new();
+    if let Some(at) = capped_after {
+        warnings.push(format!(
+            "行号在 N{at} 之后达到上限 {}，后续行不再编号：程序已生成，但后半段没有行号（提高 --max-line 或减小 --line-step 可避免）",
+            opts.max_line_number
+        ));
+    }
+    if overflowed {
+        warnings.push(format!(
+            "行号累加溢出 u32 上限（当前 N{line_no} + step {step}），后续行不再编号：请减小 --line-step 或降低起始行号"
+        ));
+    }
+    GenerationOutcome {
+        text: out,
+        end_line_number: line_no,
+        warnings,
+    }
 }
 
 #[cfg(test)]
@@ -907,6 +994,158 @@ mod tests {
         let out = g.generate("drill_cycle", &ps, &machine(), &opts).unwrap();
         // 第一行编号 3e9，第二次加法溢出 → 后续行不再编号（不 panic）
         assert!(out.contains("N3000000000 "), "首行应编号: {out}");
+    }
+
+    // ---- P2-1：撞上限/溢出不再静默 ----
+
+    /// 一个只有 5 行、无必选参数的模板，方便精确控制"会编几行"。
+    fn multi_line_generator(lines: usize) -> (GCodeGenerator, ParameterSet) {
+        let mut g = GCodeGenerator::new();
+        let src: String = (0..lines).map(|i| format!("G0 X{i}\n")).collect();
+        g.registry_mut()
+            .add_memory(
+                "plain",
+                crate::registry::TemplateCategory::General,
+                "",
+                &src,
+                vec![],
+            )
+            .unwrap();
+        (g, ParameterSet::new())
+    }
+
+    /// **P2-1 本体**：撞上限后必须留下一条告警，而不是"产物看起来正常、后半段
+    /// 没行号"却无人知晓。
+    #[test]
+    fn hitting_line_number_cap_warns_instead_of_going_silent() {
+        let (g, ps) = multi_line_generator(5);
+        let opts = GenerationOptions {
+            line_numbers: true,
+            line_number_step: 10,
+            // 只够编 2 行：N0010 / N0020，第 3 行起不再编号
+            max_line_number: 20,
+            ..Default::default()
+        };
+        let out = g.generate_outcome("plain", &ps, &machine(), &opts).unwrap();
+        assert_eq!(
+            out.warnings.len(),
+            1,
+            "应恰好一条告警（撞上限），实得 {:?}",
+            out.warnings
+        );
+        assert!(
+            out.warnings[0].contains("20"),
+            "告警应回显上限值，用户才知道该调哪个旋钮: {}",
+            out.warnings[0]
+        );
+        // 产物本身不变：前两行有号、后三行没有
+        assert!(out.text.contains("N0010 G0 X0"), "{:?}", out.text);
+        assert!(out.text.contains("N0020 G0 X1"), "{:?}", out.text);
+        assert!(
+            out.text.contains("G0 X4\n"),
+            "内容必须照常写出: {:?}",
+            out.text
+        );
+        assert_eq!(out.end_line_number, 20, "游标停在最后写入的行号");
+    }
+
+    /// 对照组：**没撞上限就不许有告警** —— 否则告警本身变成噪声，用户会学会忽略。
+    #[test]
+    fn no_warning_when_line_numbers_stay_under_cap() {
+        let (g, ps) = multi_line_generator(5);
+        let opts = GenerationOptions {
+            line_numbers: true,
+            line_number_step: 10,
+            max_line_number: 9999,
+            ..Default::default()
+        };
+        let out = g.generate_outcome("plain", &ps, &machine(), &opts).unwrap();
+        assert!(
+            out.warnings.is_empty(),
+            "未撞上限不应有告警: {:?}",
+            out.warnings
+        );
+    }
+
+    /// **只报一次**：第 3 行撞上限后第 4、5 行都会撞，逐行报会把报告刷爆。
+    #[test]
+    fn cap_warning_is_emitted_once_not_per_line() {
+        let (g, ps) = multi_line_generator(20);
+        let opts = GenerationOptions {
+            line_numbers: true,
+            line_number_step: 10,
+            max_line_number: 20,
+            ..Default::default()
+        };
+        let out = g.generate_outcome("plain", &ps, &machine(), &opts).unwrap();
+        assert_eq!(
+            out.warnings.len(),
+            1,
+            "18 行都撞上限也只应报一条: {:?}",
+            out.warnings
+        );
+    }
+
+    /// `checked_add` 溢出同样要留告警 —— 它与撞上限是同一种"编号静默停止"，
+    /// 只报一个会漏掉另一条路径。
+    #[test]
+    fn line_number_overflow_warns_instead_of_going_silent() {
+        let (g, ps) = multi_line_generator(3);
+        let opts = GenerationOptions {
+            line_numbers: true,
+            line_number_step: 3_000_000_000,
+            max_line_number: u32::MAX,
+            ..Default::default()
+        };
+        let out = g.generate_outcome("plain", &ps, &machine(), &opts).unwrap();
+        assert!(
+            out.warnings.iter().any(|w| w.contains("溢出")),
+            "溢出应留告警: {:?}",
+            out.warnings
+        );
+    }
+
+    /// 宽松通道**同样**要带告警：`generate_lenient` 是"先放行、再提示"的路径，
+    /// 若只有严格路径带告警，宽松模式下这类隐患就彻底消失了。
+    #[test]
+    fn lenient_outcome_also_carries_postprocess_warnings() {
+        let (g, ps) = multi_line_generator(5);
+        let opts = GenerationOptions {
+            line_numbers: true,
+            line_number_step: 10,
+            max_line_number: 20,
+            ..Default::default()
+        };
+        let (outcome, report) = g
+            .generate_lenient_outcome("plain", &ps, &machine(), &opts)
+            .unwrap();
+        assert!(
+            report.is_ok(),
+            "宽松模式下校验问题已降级，不应还有错误: {report:?}"
+        );
+        assert_eq!(
+            outcome.warnings.len(),
+            1,
+            "宽松路径也要带告警: {:?}",
+            outcome.warnings
+        );
+    }
+
+    /// 关行号时**任何**告警都不该出现：没编号就没有"编号被截断"这回事。
+    #[test]
+    fn no_warning_when_line_numbers_are_off() {
+        let (g, ps) = multi_line_generator(5);
+        let opts = GenerationOptions {
+            line_numbers: false,
+            max_line_number: 1, // 上限低到必然"撞"，但没开行号不该报
+            ..Default::default()
+        };
+        let out = g.generate_outcome("plain", &ps, &machine(), &opts).unwrap();
+        assert!(
+            out.warnings.is_empty(),
+            "未开行号不应有告警: {:?}",
+            out.warnings
+        );
     }
 
     #[test]

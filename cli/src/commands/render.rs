@@ -56,15 +56,28 @@ pub fn run(ctx: &Ctx, args: &RenderArgs) -> Result<(), CliError> {
         eprintln!("note: 校验报告\n{}", report.summary());
     }
     // 警告并入 JSON 成功输出（text 通道仅在 --verbose 时展示）
-    let warnings: Vec<String> = report.warnings().map(|w| w.message.clone()).collect();
+    let mut warnings: Vec<String> = report.warnings().map(|w| w.message.clone()).collect();
+    // 校验告警已在上文按 --verbose 打印过，这里只需打印**后处理**新增的那些
+    let validation_warning_count = warnings.len();
 
     // 渲染：严格走核心生成管线；宽松走核心宽松管线（规格默认值兜底与
-    // 后处理与严格模式完全一致，仅未定义变量留空、校验不阻断）
+    // 后处理与严格模式完全一致，仅未定义变量留空、校验不阻断）。
+    // 两条路径都取 `*_outcome` 变体，为的是拿回**后处理告警**（P2-1）。
     let out = if args.lenient {
-        gen.generate_lenient(&name, &params, &machine, &opts)?
+        let (o, _report) = gen.generate_lenient_outcome(&name, &params, &machine, &opts)?;
+        warnings.extend(o.warnings);
+        o.text
     } else {
-        gen.generate(&name, &params, &machine, &opts)?
+        let o = gen.generate_outcome(&name, &params, &machine, &opts)?;
+        warnings.extend(o.warnings);
+        o.text
     };
+    // 【P2-1】后处理告警**无条件**打印（不受 --verbose 控制）：这类问题的特征是
+    // "产物看起来完全正常"，只在细看时才发现后半段没有行号。静默 = 用户永远
+    // 不知道自己拿到的是一份编号不完整的程序，与"失败不静默"红线直接冲突。
+    for w in &warnings[validation_warning_count..] {
+        eprintln!("warning: {w}");
+    }
 
     // 输出：--out 写文件；否则写 stdout
     match &args.out {

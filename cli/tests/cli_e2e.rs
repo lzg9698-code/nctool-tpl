@@ -727,6 +727,78 @@ fn part_generate_concatenates_ops_and_writes_output() {
     );
 }
 
+/// P2-1：撞行号上限必须有一条**显式告警** —— 产物看起来完全正常，只是后半段
+/// 没有行号，用户从产物里看不出来，静默等于永远不知道。
+#[test]
+fn render_warns_when_line_number_cap_is_hit() {
+    let dir = temp_dir("lineno_cap_hit");
+    let r = run_in(
+        &dir,
+        &[
+            "render",
+            "drill_cycle",
+            "--param",
+            "x=21",
+            "--param",
+            "y=15",
+            "--param",
+            "r_plane=3",
+            "--param",
+            "depth=-10",
+            "--param",
+            "feed=100",
+            "--line-numbers",
+            "--line-step",
+            "10",
+            "--max-line",
+            "20",
+        ],
+    );
+    assert_eq!(r.code, 0, "撞上限不阻断生成\nstderr:\n{}", r.stderr);
+    assert!(
+        r.stderr.contains("warning:"),
+        "应输出显式告警:\n{}",
+        r.stderr
+    );
+    assert!(
+        r.stderr.contains("20"),
+        "告警应回显上限值，用户才知道调哪个旋钮:\n{}",
+        r.stderr
+    );
+    // 程序本身仍然产出（只是后半段没行号）
+    assert!(r.stdout.contains("G81"), "程序应照常生成:\n{}", r.stdout);
+}
+
+/// 对照组：没撞上限就不许有告警 —— 告警本身变成噪声，用户会学会忽略。
+#[test]
+fn render_stays_silent_when_line_numbers_are_under_cap() {
+    let dir = temp_dir("lineno_cap_free");
+    let r = run_in(
+        &dir,
+        &[
+            "render",
+            "drill_cycle",
+            "--param",
+            "x=21",
+            "--param",
+            "y=15",
+            "--param",
+            "r_plane=3",
+            "--param",
+            "depth=-10",
+            "--param",
+            "feed=100",
+            "--line-numbers",
+        ],
+    );
+    assert_eq!(r.code, 0, "\nstderr:\n{}", r.stderr);
+    assert!(
+        !r.stderr.contains("warning:"),
+        "未撞上限不应有告警:\n{}",
+        r.stderr
+    );
+}
+
 /// P2-3：零件定义里的**未知字段**必须让命令失败，而不是静默忽略。
 ///
 /// core 单测（`core/src/part.rs`）只断言 serde 会报错；这里补上端到端才看得到的

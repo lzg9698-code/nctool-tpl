@@ -80,15 +80,26 @@ pub fn run(ctx: &Ctx, args: &PartGenerateArgs) -> Result<(), CliError> {
                             result.ops.last().map(|o| o.end_line_number).unwrap_or(0)
                         ));
                     }
+                    // 【P2-1】非阻断告警无条件打印：产物已落盘，"后半段没有行号"
+                    // 这类问题只能靠这里说一声，否则用户拿到的是一份看起来
+                    // 完全正常、实则编号不完整的程序。
+                    for w in &result.warnings {
+                        eprintln!("warning: {w}");
+                    }
                     let mut data = data;
                     data["output_file"] = serde_json::json!(path.display().to_string());
+                    data["warnings"] = serde_json::json!(&result.warnings);
                     ctx.style.print_ok(&text, data);
                 }
                 None => {
                     // stdout 要留给 G-code，故摘要信息不进 stdout
                     // （与 `render` 的约定一致）。JSON 模式下 print_ok 输出结构化载荷。
+                    for w in &result.warnings {
+                        eprintln!("warning: {w}");
+                    }
                     let mut data = data;
                     data["output"] = serde_json::json!(result.program);
+                    data["warnings"] = serde_json::json!(&result.warnings);
                     ctx.style.print_ok(&result.program, data);
                 }
             }

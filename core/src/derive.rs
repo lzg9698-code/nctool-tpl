@@ -108,7 +108,10 @@ impl std::fmt::Display for DeriveError {
             ),
             DeriveError::NoMatch { target, from, value } => write!(
                 f,
-                "派生参数 {target} 无法计算：源参数 {from} = {value} 未命中规则表项，且规则未声明 fallback"
+                // 【P1-2】不再提 `fallback`：未命中表项时**有没有 fallback 都报错**，
+                // 带上这句会误导用户以为"声明个 fallback 就能放行"，从而把拼写错误
+                // 重新变回静默兜底。
+                "派生参数 {target} 无法计算：源参数 {from} = {value} 未命中规则表项（该值不合法，不接受回退值）"
             ),
             DeriveError::UnusableSource { target, from, value } => write!(
                 f,
