@@ -1542,6 +1542,80 @@ FORM_B 在实测中 `<` 恒为假（f64 真值与十进制字面量在 tie 上�
 
 ---
 
+### 批次二十六：行号撞上限不再静默（第五轮 P2-1）
+
+`docs/CODE_REVIEW_2026-09-23.md` P2-1。`postprocess` 在 `line_no + step` 超过
+`max_line_number`（或 `checked_add` 溢出）时**直接跳过编号**，程序照常生成 ——
+产物每行都还在、看起来完全正常，只是**后半段没有行号**。用户没有任何渠道察觉。
+
+#### Added
+
+- **`GenerationOutcome`**（`core/src/pipeline.rs`）：`{ text, end_line_number, warnings }`。
+  告警**不进正文**（正文是 G-code，塞提示会产出非法程序）、**也不是硬错误**
+  （程序本身完整可用，阻断渲染的代价大于收益），只能由调用方呈现。
+- 两个新的公开入口：`generate_outcome` / `generate_lenient_outcome`。
+  `generate` / `generate_with_cursor` / `generate_lenient_with_report` **签名不变**
+  —— 四十余处调用点不必为一个新增字段集体改签名。
+- **呈现落点**：`nctool render`（stderr `warning: …` + JSON `warnings`）、
+  `nctool part generate`（逐工序汇总，带「工序N（模板名）」前缀）、
+  `POST /api/render` 与 `/api/part/generate`（响应 `warnings` 数组）。
+  后处理告警**无条件打印**，不受 `--verbose` 控制 —— 静默正是本条缺陷的成因。
+
+#### Fixed
+
+- 派生未命中的错误文案去掉了「且规则未声明 fallback」（那是 P1-2 之前的行为）：
+  带上它会误导用户以为"声明个 fallback 就能放行"，把拼写错误重新变回静默兜底。
+
+#### 行为不变（有测试钉住）
+
+- 撞上限后**内容照常写出**、游标停在最后写入的行号、告警**只报一次**
+  （第 3 行撞上限后第 4、5…行都会撞，逐行报会刷爆报告）。
+- 未开行号 / 未撞上限 / 溢出以外的情形**一律无告警**（对照组测试）。
+
+#### 证据
+
+- **反向验证**：临时清空告警后，4 条新用例（`hitting_line_number_cap_warns_…`、
+  `cap_warning_is_emitted_once_…`、`line_number_overflow_warns_…`、
+  `part::line_number_cap_warning_names_the_operation`）**全部如期变红**。
+- 端到端新增 `render_warns_when_line_number_cap_is_hit` +
+  对照 `render_stays_silent_when_line_numbers_are_under_cap`
+  （`cli/tests/cli_e2e.rs`）：CLI 退出码 0、stderr 含 `warning:` 且回显上限值。
+- 全套门禁绿：测试 **1079 passed / 0 failed**（+10）、生产口径覆盖率
+  **92.55%**（阈值 91%，较上一批 −0.11pt，仍高于阈值 1.55pt）、`Cargo.lock` 零变化。
+
+---
+
+### 批次二十七：两项裁定（校验覆盖面缺口 / 覆盖率阈值）
+
+阶段二任务 ②⑤ 的收口，**均不含运行时行为改动**。
+
+#### 裁定一：校验覆盖面缺口 —— **不改遍历口径**，记为后续项
+
+`docs/CODE_REVIEW_2026-09-23.md` §6 提出"`check_var_values` 只查被引用的变量，
+导致只参与派生的参数约束全部失效"。结论是**原文举证不成立**，三条实测依据：
+
+1. `templates/machines/index_g420/dg_cal_ir9.j2:28` **确实引用了** `tip_model`，
+   白名单本来就拦（实测报 `取值 "DM99_UNDEFINED" 不在候选项内 …（第 28 行第 14 列引用）`）；
+   P1-2 之后派生又加了一道硬失败，两条路径都已覆盖。
+2. 覆盖面**传递解析 `{% include %}`**：漏传 `Z_START`（只在
+   `turning/_undercut_common.j2:17` 出现）时，`undercut_fs.j2` 照常报
+   `必选参数缺失（…）（第 17 行第 7 列引用）` —— 行号指向子模板。
+3. 剩下未覆盖的只有**全链路都未引用**的参数，其取值**不进入产物**；把它们的值级
+   错误升级为阻断渲染的 Error 是纯噪声，且与 `SpecInert` 现有的"只警告"口径冲突。
+
+裁定写入 `docs/CODE_REVIEW_2026-09-23.md` §6.1，含重开条件
+（出现"影响产物但静态提取看不到"的新形态时重开）。
+
+#### 裁定二：覆盖率阈值 —— **维持 `--min 91`**，本轮不上调
+
+实测 92.55%（8198/8858），余量 1.55pt ≈ 137 行。上调到 92% 会把余量压到 ~49 行，
+一次中等改动就红 —— "经常误报的门禁会被当成噪音忽略"，质量信号反而丢失。
+最低文件仍是 `cli/src/commands/lint.rs` 83.61%：单点洼地靠补测试解决，不靠抬门槛。
+下次评估触发条件：连续两个发布周期实测 ≥ 93%。
+裁定写入 `docs/CONTRIBUTING.md` 覆盖率一节。
+
+---
+
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18
 
 「NCTool_V3 模板资产整合 + 参数规格系统 + 架构评估 P0/P1 收口」
