@@ -253,8 +253,21 @@ impl ParamValue {
 
     /// 数值视图（跨 Number / Integer）：用于 min/max 等区间比较。
     ///
-    /// 非数值类型返回 `None`。`Integer` 转为 `f64`（i64 在 f64 的 53 位精度内
-    /// 可能丢精度，但 CNC 参数的量级远远不到，可接受）。
+    /// 非数值类型返回 `None`。
+    ///
+    /// # 精度上限（U-17，2026-09-24 文档化标注）
+    ///
+    /// `Integer` 转 `f64` 时 **`|v| > 2^53` 会丢精度**：f64 只能精确表示
+    /// `2^53 = 9_007_199_254_740_992` 以内的整数，超出后相邻可表示值的间距 ≥ 2，
+    /// 转换按"就近取偶"舍入。
+    ///
+    /// - **后果**：`min` / `max` 区间比较在该量级上最多**差 1**（不是差一个数量级，
+    ///   也不是符号错误）—— 间距在 `2^53 ~ 2^54` 上是 2，故误差上界是 1 个间距。
+    /// - **为什么不修**：CNC 参数的实际量级（坐标 mm、转速 rpm、进给 mm/min、
+    ///   程序号 ≤ 9999、行号 ≤ u32）**离 2^53 有 12 个数量级**。为一条到不了的路径
+    ///   引入 i64/f64 双比较分支，反而给真正会走的区间比较增加分叉。
+    /// - **需要精确比较时**：直接对 `ParamValue::Integer(v)` 做 `i64` 比较，
+    ///   不要走本方法。边界行为由 `as_f64_precision_limit_is_documented` 钉住。
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             ParamValue::Number(v) => Some(*v),
@@ -1076,6 +1089,34 @@ pub(crate) fn build_render_context(params: &ParameterSet, machine: &MachineConfi
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// **U-17：把「2^53 之上丢精度」钉在测试里 —— 不是要修它，而是防止有人**
+    /// **将来"顺手"改 `as_f64` 却不知道这条边界**（或反过来，以为它对任意 i64 都精确）。
+    ///
+    /// 断言的是**舍入方向**（就近取偶）而不是"会不会丢"：后者是 IEEE754 的
+    /// 必然结果，前者才是实现若被改写时可能悄悄变化的东西。
+    #[test]
+    fn as_f64_precision_limit_is_documented() {
+        let two_pow_53 = 1_i64 << 53;
+        // 边界本身可精确表示
+        assert_eq!(
+            ParamValue::Integer(two_pow_53).as_f64(),
+            Some(two_pow_53 as f64)
+        );
+        // 2^53 + 1 不可表示（此处间距已是 2）→ 舍回 2^53
+        assert_eq!(
+            ParamValue::Integer(two_pow_53 + 1).as_f64(),
+            Some(two_pow_53 as f64),
+            "2^53+1 应就近取偶回 2^53：这就是文档标注的精度上界"
+        );
+        // 负方向对称
+        assert_eq!(
+            ParamValue::Integer(-(two_pow_53 + 1)).as_f64(),
+            Some(-(two_pow_53 as f64))
+        );
+        // 非数值类型不受影响（与精度无关，防止改写时把这条路径也带偏）
+        assert_eq!(ParamValue::String("1".to_string()).as_f64(), None);
+    }
 
     /// `MachineConfig::META_KEYS` 必须与 `build_render_context` 实际注入的元信息
     /// 键**完全一致**——它是完整性检查（"模板引用的配置键是否齐全"）的排除依据，
