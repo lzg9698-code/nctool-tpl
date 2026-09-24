@@ -31,6 +31,14 @@
 //!
 //! **注意 `params` 是「参数名 → 参数值」的扁平表**（[`ParameterSet`]），
 //! 不是嵌套对象 —— 与 `nctool --params-file` 同一格式，刻意复用以免多一套 schema。
+//!
+//! # 未知字段一律拒绝（P2-3）
+//!
+//! [`PartSpec`] / [`PartOp`] / [`PartOpOptions`] 都带 `#[serde(deny_unknown_fields)]`。
+//! 字段名写错（`params` → `parameters`、`default_machine` → `defaultMachine`）**不再静默忽略**：
+//! 顶层写错 → 整份定义解析失败；`ops[]` 里写错 → 该工序「少一道」却照常成功，
+//! 产出的是**缺工序的零件程序**却不报错 —— 与本项目其余规格类型
+//! （`ParamSpec` / `ParamOverride` / 清单）的收紧口径一致。
 
 use serde::{Deserialize, Serialize};
 
@@ -41,7 +49,11 @@ use crate::pipeline::{GCodeGenerator, GenerationOptions, PipelineError};
 /// 零件定义：一个零件由若干**按顺序执行**的工序组成。
 ///
 /// 字段名与前端契约一致（见模块文档）。
+///
+/// **未知字段一律拒绝**（P2-3，见模块文档）：顶层字段名写错不再静默忽略，
+/// 而是让整份定义解析失败。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PartSpec {
     /// 零件名（仅用于呈现与错误文案，不参与渲染上下文）
     #[serde(default)]
@@ -64,7 +76,11 @@ pub struct PartSpec {
 }
 
 /// 单道工序：一个模板 + 它的参数（+ 可选机床与输出选项覆盖）。
+///
+/// **未知字段一律拒绝**（P2-3）：`ops[]` 里写错字段名会让该工序「少一道」却照常
+/// 成功 —— 缺工序的零件程序比解析失败危险得多。
 #[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PartOp {
     /// 模板名（内置模板名 / 目录模板名 / 文件路径，与 `render` 的解析规则一致）
     pub template: String,
@@ -82,7 +98,11 @@ pub struct PartOp {
 }
 
 /// 工序级输出选项覆盖。字段与 [`PartOptions`] 同名同义，`None` 表示"不覆盖"。
+///
+/// **未知字段一律拒绝**（P2-3）：`options` 里的开关名写错会静默变成"不覆盖"，
+/// 用户以为开了行号，实际没有。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PartOpOptions {
     /// 覆盖行号开关
     #[serde(default)]
@@ -404,9 +424,12 @@ fn describe_pipeline_error(err: &PipelineError) -> String {
     }
 }
 
-/// 兼容性别名：`ops` 字段在旧设计文档中叫 `operations`。
+/// 旧设计文档里 `ops` 字段曾叫 `operations`。
 ///
-/// 仅用于文档/迁移提示，不参与序列化（`serde` 走 [`PartSpec`] 的字段名）。
+/// **它不是一个被接受的别名**（P2-3 之后更不可能）：`PartSpec` 带
+/// `deny_unknown_fields`，写 `operations` 会直接解析失败并列出可用字段 ——
+/// 这正是「不让用户以为自己传了工序」的正确行为。此常量只用于文档/迁移提示，
+/// 不参与序列化（`serde` 走 [`PartSpec`] 的字段名）。
 pub const LEGACY_OPS_FIELD: &str = "operations";
 
 #[cfg(test)]
@@ -527,6 +550,87 @@ mod tests {
     fn malformed_json_reports_parse_failure() {
         let err = serde_json::from_str::<PartSpec>("{not json").unwrap_err();
         assert!(err.to_string().contains("key must be a string"), "{err}");
+    }
+
+    // ---- 未知字段拒绝（P2-3）----
+
+    /// 断言 `PartSpec` / `PartOp` / `PartOpOptions` 都拒绝未知字段。
+    ///
+    /// 三个 struct 共用同一条判据（都带 `deny_unknown_fields`），故抽成一个助手，
+    /// 免得三处断言各自漂移。
+    fn assert_unknown_field_rejected<T: serde::de::DeserializeOwned>(json: &str, field: &str) {
+        let err = serde_json::from_str::<T>(json)
+            .err()
+            .unwrap_or_else(|| panic!("含未知字段 `{field}` 的 JSON 应解析失败：{json}"));
+        let msg = err.to_string();
+        assert!(
+            msg.contains("unknown field") && msg.contains(field),
+            "错误应点名未知字段 `{field}`：{msg}"
+        );
+    }
+
+    /// 顶层字段名写错（如 `parameters`）不再静默忽略 —— 否则整份定义的程序级参数
+    /// 全部丢失却照常生成，产出的是缺参数的零件程序。
+    #[test]
+    fn unknown_top_level_field_is_rejected() {
+        assert_unknown_field_rejected::<PartSpec>(
+            r#"{"name":"P","parameters":{"a":1},"ops":[{"template":"a"}]}"#,
+            "parameters",
+        );
+        // 驼峰写法同样要挡 —— `default_machine` → `defaultMachine` 是最容易犯的一种
+        assert_unknown_field_rejected::<PartSpec>(
+            r#"{"defaultMachine":"wfl_m65","ops":[{"template":"a"}]}"#,
+            "defaultMachine",
+        );
+    }
+
+    /// 旧字段名 `operations` 不是别名，必须被拒（否则用户以为传了工序，实际一道都没有）。
+    #[test]
+    fn legacy_operations_key_is_rejected_not_silently_ignored() {
+        assert_unknown_field_rejected::<PartSpec>(
+            r#"{"name":"P","operations":[{"template":"a"}]}"#,
+            LEGACY_OPS_FIELD,
+        );
+    }
+
+    /// `ops[]` 里写错字段名才是**最危险**的一档：该工序会被整段忽略或降级，
+    /// 零件少一道工序却不报错 —— 缺工序的零件程序比解析失败危险得多。
+    #[test]
+    fn unknown_op_field_is_rejected() {
+        assert_unknown_field_rejected::<PartSpec>(r#"{"ops":[{"template":"a","tpl":"b"}]}"#, "tpl");
+        // `params` 写成 `parameters`：参数静默丢失，模板拿到空值/默认值
+        assert_unknown_field_rejected::<PartSpec>(
+            r#"{"ops":[{"template":"a","parameters":{"x":1}}]}"#,
+            "parameters",
+        );
+    }
+
+    /// `options` 里的开关名写错会静默变成"不覆盖"：用户以为开了行号，实际没有。
+    #[test]
+    fn unknown_op_option_field_is_rejected() {
+        assert_unknown_field_rejected::<PartSpec>(
+            r#"{"ops":[{"template":"a","options":{"lineNumber":true}}]}"#,
+            "lineNumber",
+        );
+    }
+
+    /// 收紧的边界：**已知的四个字段必须照常解析**，不能把「拒绝未知」做成「拒绝一切」。
+    /// 与 [`Self::parses_full_spec_with_all_fields`] 互补：那条走成功路径并逐字段断言，
+    /// 这条在收紧后立刻复验一次，防止 `deny_unknown_fields` 加错位置导致全量拒绝。
+    #[test]
+    fn known_fields_still_parse_after_unknown_field_lockdown() {
+        let part = spec_from(
+            r#"{"name":"P","default_machine":"wfl_m65","params":{"a":1},
+                "ops":[{"template":"a","params":{"b":2},"machine":"generic",
+                        "options":{"line_numbers":true,"add_header_comment":false,
+                                   "strip_blank_lines":true,"ascii_only":false}}]}"#,
+        );
+        assert_eq!(part.ops.len(), 1);
+        let o = part.ops[0].options.as_ref().expect("options 应解析出来");
+        assert_eq!(o.line_numbers, Some(true));
+        assert_eq!(o.add_header_comment, Some(false));
+        assert_eq!(o.strip_blank_lines, Some(true));
+        assert_eq!(o.ascii_only, Some(false));
     }
 
     // ---- 机床解析 ----

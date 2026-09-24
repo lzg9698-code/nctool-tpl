@@ -110,8 +110,9 @@ nctool --machine wfl_m65 render program_header --param prog=1001 \
 
 ```json
 {
-  "part_name": "FLANGE_DEMO",
+  "name": "FLANGE_DEMO",
   "default_machine": "wfl_m65",
+  "params": { "part_name": "FLANGE_DEMO" },
   "ops": [
     { "template": "program_header", "params": { "prog": 1001 } },
     { "template": "drill_cycle",    "params": { "x": 20, "y": 0, ... }, "machine": "generic" },
@@ -120,7 +121,13 @@ nctool --machine wfl_m65 render program_header --param prog=1001 \
 }
 ```
 
-`part_name` 自动对所有 op 可见；`machine` 可在工序级覆盖程序级。
+顶层 `params` 自动对所有 op 可见；`machine` 可在工序级覆盖程序级。
+
+> ⚠️ **（2026-09-24 更正）** 上面是 §5.3 **当时设想**的形状，顶层 `part_name` 现已
+> 规整进 `params`（见 §6.1）。**顶层只接受 `name` / `default_machine` / `params` / `ops`**
+> 四个字段，工序级只接受 `template` / `params` / `machine` / `options` ——
+> 其余字段名一律**解析失败**并列出可用字段（P2-3，见 `docs/CODE_REVIEW_2026-09-23.md`），
+> 不再静默忽略。照抄上方旧形状会直接报错。
 
 ## 6. 走查通过标准
 

@@ -727,6 +727,47 @@ fn part_generate_concatenates_ops_and_writes_output() {
     );
 }
 
+/// P2-3：零件定义里的**未知字段**必须让命令失败，而不是静默忽略。
+///
+/// core 单测（`core/src/part.rs`）只断言 serde 会报错；这里补上端到端才看得到的
+/// 两件事：**CLI 真的非零退出**，且**错误信息点名写错的字段名** ——
+/// 后者决定了用户是去改字段名、还是被"缺少参数"之类的话引到错误方向。
+#[test]
+fn part_generate_rejects_unknown_field_in_part_file() {
+    let dir = temp_dir("part_unknown_field");
+    // `params` 误写成 `parameters`：程序级参数会全部丢失，却仍能生成出一份零件程序
+    let spec = serde_json::json!({
+        "name": "typo",
+        "parameters": { "x": 1 },
+        "ops": [{ "template": "drill_cycle", "params": drill_part_json() }],
+    });
+    let part = dir.join("typo.json");
+    std::fs::write(&part, serde_json::to_string_pretty(&spec).unwrap()).expect("写出零件定义失败");
+    let out = dir.join("prog.nc");
+
+    let r = run_in(
+        &dir,
+        &[
+            "part",
+            "generate",
+            part.to_str().unwrap(),
+            "--out",
+            out.to_str().unwrap(),
+        ],
+    );
+    assert_ne!(r.code, 0, "未知字段应让命令失败，而不是静默忽略后照常生成");
+    assert!(
+        !out.exists(),
+        "解析失败时不得写出任何产物: {}",
+        out.display()
+    );
+    let combined = format!("{}\n{}", r.stdout, r.stderr);
+    assert!(
+        combined.contains("parameters"),
+        "错误应点名写错的字段名: {combined}"
+    );
+}
+
 #[test]
 fn part_generate_continues_line_numbers_across_ops() {
     // E5 §5.1：行号必须跨工序续编，每个工序不能各自从 N0010 重开

@@ -1499,6 +1499,49 @@ FORM_B 在实测中 `<` 恒为假（f64 真值与十进制字面量在 tie 上�
 
 ---
 
+### 批次二十五：零件定义未知字段一律拒绝（第五轮 P2-3）
+
+`docs/CODE_REVIEW_2026-09-23.md` P2-3。`PartSpec` / `PartOp` / `PartOpOptions`
+**都没有 `deny_unknown_fields`**，而 `ParamSpec` / `ParamOverride` 有 —— 同一套规格类型
+里收紧口径不一致。字段名写错的后果分三档，逐档比「解析失败」更危险：
+
+| 写错位置 | 写错前的后果 | 危害 |
+| --- | --- | --- |
+| 顶层（`params` → `parameters`） | 静默忽略 | 整份定义的程序级参数全丢，仍照常生成 |
+| `ops[]`（`template` → `tpl`） | 静默忽略 | **该工序「少一道」却照常成功**，产出缺工序的零件程序 |
+| `ops[].options`（`line_numbers` → `lineNumber`） | 静默变成"不覆盖" | 以为开了行号，实际没有 |
+
+#### Changed
+
+- 三个 struct 均加 `#[serde(deny_unknown_fields)]`；旧键名 `operations`
+  **不是别名**，写它现在直接解析失败并列出可用字段（`LEGACY_OPS_FIELD` 的文档
+  同步改为明确"不被接受"）。
+- **接受字段清单**：顶层 `name` / `default_machine` / `params` / `ops`；
+  工序级 `template` / `params` / `machine` / `options`；
+  `options` 内 `line_numbers` / `add_header_comment` / `strip_blank_lines` / `ascii_only`。
+- 既有测试 `part_generate_legacy_operations_key_is_not_silently_accepted`
+  （`cli/src/server.rs`）断言改写：失败原因从「解析成功但 `ops` 为空 → 缺少工序」
+  变为**解析阶段点名未知字段** —— 后者才是对的，用户写错的是**字段名**，
+  说"你没给工序"会把人引到错误方向。
+
+#### 证据
+
+- **反向验证**：临时移除三处 `deny_unknown_fields`，新增的 4 条拒绝用例
+  **全部如期变红**（`unknown field` 判定失效），对照组
+  `known_fields_still_parse_after_unknown_field_lockdown` 仍绿；恢复后转绿。
+- 端到端新增 `part_generate_rejects_unknown_field_in_part_file`
+  （`cli/tests/cli_e2e.rs`）：CLI **非零退出**且**不写出任何产物**。
+- **全仓扫描对拍**：既有的零件 JSON 夹具（`cli/tests/cli.rs`、`cli_e2e.rs`）、
+  前端契约与示例（`ui/src/31_script_api.part.html`、`32_script_ui.part.html`
+  的 `BATCH_EXAMPLE`）都只用已知字段，无一处需改。
+- 文档订正：`docs/REAL_PART_WALKTHROUGH.md` §5.3 的 JSON 样例顶层还写着
+  `part_name`（§6.1 已说明它已被规整进 `params`）—— 收紧后照抄该样例会直接报错，
+  已改为正确形状并加注。
+- 全套门禁绿：测试 **1069 passed / 0 failed**（+6）、生产口径覆盖率
+  **92.66%**（阈值 91%，较上一批 +0.04pt）、`Cargo.lock` 零变化。
+
+---
+
 ## [nctool-tpl 0.4.0] · [nctool-core 0.3.0] · [nctool-cli 0.3.0] - 2026-09-18
 
 「NCTool_V3 模板资产整合 + 参数规格系统 + 架构评估 P0/P1 收口」

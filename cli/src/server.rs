@@ -2055,6 +2055,11 @@ mod tests {
     ///
     /// 这条是**防止悄悄兼容两种名字**：若哪天为兼容加了 alias，
     /// 前端与后端就会各写一套而无人发现漂移。
+    ///
+    /// 【2026-09-24 收紧，P2-3】`PartSpec` 加了 `deny_unknown_fields` 后，失败原因
+    /// 从「解析成功但 `ops` 为空 → 形状校验报『至少要有一道工序』」变成
+    /// **解析阶段就点名未知字段** —— 后者才是对的：用户写错的是**字段名**，
+    /// 说「你没给工序」会把人引到错误的方向。断言改为要求错误点名 `operations`。
     #[test]
     fn part_generate_legacy_operations_key_is_not_silently_accepted() {
         let ctx = test_ctx();
@@ -2071,12 +2076,14 @@ mod tests {
             panic!("应返回 JSON")
         };
         assert_eq!(status, 400, "`operations` 不是契约字段，应被拒: {payload}");
+        let msg = payload["error"]["message"].as_str().unwrap();
         assert!(
-            payload["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains("至少要有一道工序"),
-            "{payload}"
+            msg.contains("operations"),
+            "错误应点名写错的字段名（而不是笼统说缺少工序）: {msg}"
+        );
+        assert!(
+            msg.contains("unknown field") || msg.contains("未知字段"),
+            "应明确这是未知字段而非缺工序: {msg}"
         );
     }
 
