@@ -687,6 +687,16 @@ P2-36 `check_docs_links.py` 接入 CI。
 
 - **P2-8 / P2-10 / P2-9 同族**（`src/extract.rs`）：注释已改（不再断言 minijinja 的
   缓存行为），但 `extract_both` 与死代码清理未做 —— 属性能/整洁，无正确性影响。
+
+  > **【2026-09-24 复核（U-15）：两项都关闭，不做。】**
+  > - **`extract_both`**：它本来就是"合并两套遍历"的**手段**，而合并这件事
+  >   已由 **U-14 裁定"有意不做"**（`extract.rs` 是最安全敏感的组件，合并属
+  >   "改对了没收益、改错了很难发现"）。手段随目的一起取消，不再单独挂账。
+  > - **死代码**：`clippy --workspace --all-targets -- -D warnings` 是**阻断门禁**，
+  >   未使用的私有项直接编译失败；全仓 grep `#[allow(dead_code)]` / `#[allow(unused…)]`
+  >   **零命中** —— 说明没有被豁免的已知死代码。公共 API 里"无生产调用点"的
+  >   （如 `derived_names` / `invalidate_analysis`）不是死代码而是**可见性问题**，
+  >   已归入 `docs/RELEASE.md` §4.5 B-1（下一次 minor 窗口收窄）。
 - **P2-11 / P2-12**（`src/error.rs`）：原报告标 `[待验证]`，需先构造用例确认是否
   真存在，不宜照单改。
 - **P2-16 / P2-24**（`validate_with_vars` 的名字参数、`ui --open` 与 `--port 0`）：
