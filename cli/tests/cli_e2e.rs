@@ -14,9 +14,9 @@
 //! | 6 | 渲染/注册表失败 | `render` / `pipeline` / `registry` / `template_*` |
 //! | 7 | 功能尚未实现 | `not_implemented` |
 //!
-//! 覆盖的 10 个顶层子命令：`templates` / `inspect` / `validate` / `render` /
+//! 覆盖的 11 个顶层子命令：`templates` / `inspect` / `lint` / `validate` / `render` /
 //! `generate` / `machine` / `config` / `ui` / `part` / `completion`
-//! （ROADMAP 记为 9 个，`generate` 为后加的规范入口，故实际为 10 个）。
+//! （ROADMAP 记为 9 个，`generate` 为后加的规范入口、`lint` 为 2026-09-22 新增，故实际为 11 个）。
 //!
 //! 说明：`ui` 为阻塞服务，E2E 只覆盖其启动前的安全守卫（非回环地址拒绝），
 //! 保证用例不会挂起；服务的 HTTP 行为由 `cli/src/server.rs` 的单元测试覆盖。
@@ -392,6 +392,24 @@ fn render_missing_params_exits_1() {
 }
 
 #[test]
+fn lint_clean_template_exits_0() {
+    // 内置模板不含弧度三角函数 → 无发现项
+    let r = run_in(repo_root().as_path(), &["lint", "drill_cycle"]);
+    assert_eq!(r.code, 0, "干净模板应退出 0: {}", r.stderr);
+    r.stdout_contains(&["静态检查通过"]);
+}
+
+#[test]
+fn lint_radian_trig_exits_1() {
+    let dir = temp_dir("lint_trig");
+    let path = dir.join("t.j2");
+    std::fs::write(&path, "G0 X{{ angle | sin }}\n").unwrap();
+    let r = run_in(&dir, &["lint", path.to_str().unwrap()]);
+    assert_eq!(r.code, 1, "有发现应退出 1");
+    r.stdout_contains(&["弧度", "sin_d"]);
+}
+
+#[test]
 fn render_writes_out_file_and_creates_parent_dirs() {
     let dir = temp_dir("render_out");
     let out = dir.join("nested").join("deeper").join("out.nc");
@@ -422,6 +440,31 @@ fn render_missing_params_file_exits_3() {
 }
 
 #[test]
+fn render_oversized_params_file_is_rejected() {
+    // 回归（第四轮 P1-10）：`--params-file` 曾无上限地 `read_to_string`，
+    // 指向大文件 / 网络盘时会把内容整体读进内存。现改为 1 MiB 上限，超限即报错。
+    let dir = temp_dir("big_params");
+    let path = dir.join("huge.json");
+    let f = std::fs::File::create(&path).unwrap();
+    f.set_len(1024 * 1024 + 1).unwrap(); // 上限 + 1 字节
+    drop(f);
+
+    let r = run_in(
+        dir.as_path(),
+        &[
+            "render",
+            "program_header",
+            "--param",
+            "prog=1001",
+            "--params-file",
+            path.to_str().unwrap(),
+        ],
+    );
+    assert_eq!(r.code, 3, "参数文件超限属 IO 类失败");
+    r.stderr_contains(&["过大", "上限"]);
+}
+
+#[test]
 fn render_accepts_all_postprocess_flags() {
     let mut args = vec![
         "render",
@@ -435,6 +478,41 @@ fn render_accepts_all_postprocess_flags() {
     let r = run_in(repo_root().as_path(), &args);
     assert_eq!(r.code, 0);
     r.stdout_contains(&["G98 G81"]);
+}
+
+#[test]
+fn render_line_step_and_max_line_are_honored() {
+    // 隐患修复：`--line-step` / `--max-line` 曾只存在于 Web UI，CLI 无法复现
+    // 同一份带自定义步进的输出。现 CLI 与 API 共用同一份 GenerationOptions 映射。
+    let mut args = vec![
+        "render",
+        "drill_cycle",
+        "--line-numbers",
+        "--line-step",
+        "100",
+        "--max-line",
+        "250",
+    ];
+    args.extend_from_slice(DRILL_PARAMS);
+    let r = run_in(repo_root().as_path(), &args);
+    assert_eq!(r.code, 0, "stderr: {}", r.stderr);
+
+    // 按 token 抽出行号，相邻差值恒为 100，且不超过上限 250
+    let nums: Vec<u32> = r
+        .stdout
+        .split_whitespace()
+        .filter_map(|t| t.strip_prefix('N'))
+        .filter_map(|t| t.parse().ok())
+        .collect();
+    assert!(nums.len() >= 2, "应有多行带行号: {}", r.stdout);
+    assert!(
+        nums.windows(2).all(|w| w[1] - w[0] == 100),
+        "步进应为 100: {nums:?}"
+    );
+    assert!(
+        nums.iter().all(|&n| n <= 250),
+        "行号不应超过上限 250: {nums:?}"
+    );
 }
 
 #[test]

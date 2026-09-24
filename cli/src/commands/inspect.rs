@@ -455,4 +455,17 @@ mod tests {
         let width = long.chars().count().min(MAX_NAME_WIDTH);
         assert_eq!(width, MAX_NAME_WIDTH);
     }
+
+    // ---- 分组展示顺序（自远程线合并保留）----
+
+    /// 分组顺序是用户看到的顺序，锁定以防意外重排。
+    #[test]
+    fn bucket_all_has_stable_display_order() {
+        let titles: Vec<&str> = Bucket::all().iter().map(|b| b.title()).collect();
+        assert_eq!(titles.len(), 4);
+        assert!(titles[0].contains("必选参数"));
+        assert!(titles[1].contains("条件必选"));
+        assert!(titles[2].contains("派生"));
+        assert!(titles[3].contains("可选参数"));
+    }
 }

@@ -821,7 +821,7 @@ CI 转绿后从 run 的 `rust-coverage-lcov` 产物里取到 lcov，用项目自
 #### 验证
 
 - `cargo +1.85 check --workspace --locked` 通过（独立 target 目录，未污染主缓存）
-- workspace 全量 **569 项**通过；fmt / clippy 门禁通过
+- workspace 全量 **571 项**通过；fmt / clippy 门禁通过
 - `ci.yml` YAML 解析校验通过
 
 ### 批次十二：服务层两项的实测定性（第四轮批次 G，纯测量，无代码改动）
@@ -911,7 +911,7 @@ CI 转绿后从 run 的 `rust-coverage-lcov` 产物里取到 lcov，用项目自
   并显式守住两种**不属于**本缺陷、必须保持原样的情形（`InvalidOperation` 归 `Render`；
   `{{ missing ~ "x" }}` 必须继续恢复出 `missing`）。
 - **反向验证**：移除 `|` 判据 → 报 `应留空而不是报 "upper"` → FAILED → 恢复。
-- workspace 全量 **569 项**通过；fmt / clippy 门禁均通过。
+- workspace 全量 **571 项**通过；fmt / clippy 门禁均通过。
 
 #### 一处更正
 
@@ -919,6 +919,252 @@ CI 转绿后从 run 的 `rust-coverage-lcov` 产物里取到 lcov，用项目自
 `name` 与 `source` 在紧随其后的 `.map_err(|err| from_minijinja_error(err, &name, Some(&source)))`
 里仍被借用，而 `add_template_owned` 按值接管两者，两个 `clone()` 都必需。
 报告已同步更正，**不要按原文去"修"**。
+
+### 批次十五：本地文件读取上限 + 错误链补全（第四轮批次 D）
+
+第四轮审查（`docs/CODE_REVIEW_2026-09-19.md`）批次 D 的剩余项。核实后其中
+两项（`registry.rs` 的 `try_iter().ok()?` 静默吞错、`RegistryError::Io` 丢路径）
+**已于前批次修复**，本批次处理真正开放的 P1-10 与 P1-11 的 `source()` 缺口。
+
+#### Fixed
+
+- **CLI 侧本地文件读取加上限**（第四轮 P1-10）：此前 HTTP 侧有 1 MiB 请求体上限，
+  而 CLI 侧的 `nctool.toml`、`--params-file`、模板目录下的 `*.j2` 三处
+  `read_to_string` **全部无上限**——`--template-dir` 指向网络盘或大文件时会把
+  内容整体读进内存。新增 `cli/src/limits.rs`（`MAX_LOCAL_TEXT_BYTES = 1 MiB`）
+  与 `read_text_limited`，先用 `metadata` 在读取前拒绝超大文件（避免先读进内存
+  再判断），三处入口统一走它。超限时报 `io` 类错误并**同时给出路径、实际大小
+  与上限**，不静默截断（截断会产出语法不完整的内容，更难排查）。
+- **`PipelineError::source()` 补上 `Derive` 变体**（第四轮 P1-11）：`DeriveError`
+  已 `impl Error`，但 `source()` 的 `match` 漏了该变体，导致派生失败时错误链分叉、
+  调用方无法沿 `source()` 拿到根因。`Validation` 仍为 `None`（`ValidationReport`
+  是聚合报告，不 `impl Error`），保留现状。
+
+#### Added
+
+- `cli/src/limits.rs` 4 项单元测试：小文件可读 / 超限拒绝（带路径与上限文案）/ 
+  **恰好等于上限则通过**（边界包含）/ 文件缺失报 `io`。
+- `cli/tests/cli_e2e.rs` 1 项 E2E：`--params-file` 指向超限文件时真实二进制
+  退出码 3 且 stderr 含「过大」「上限」。
+- `core/src/pipeline.rs` 1 项回归：构造派生成环的规格，断言
+  `PipelineError::Derive` 的 `source()` 能 `downcast_ref` 回 `DeriveError::Circular`。
+
+#### 验证
+
+- workspace 全量 **577 项**通过；`cargo fmt --all -- --check`、
+  `cargo clippy --workspace --all-targets -- -D warnings`、
+  `cargo test --workspace --doc` 均通过。
+
+### 批次十六：消除 CLI ↔ Web UI 生成选项隐患
+
+审计（手动走查 CLI 与 UI 功能覆盖）发现两类「同一份参数在两个入口产出不同结果」
+的隐患，均与「静默不一致」同族：
+
+#### Fixed
+
+- **CLI 补充 `--line-step` / `--max-line`**：`GenerationOptions` 的
+  `line_number_step` / `max_line_number` 此前**只能由 Web UI 设置**（API 已接受
+  `lineStep` / `maxLine`），CLI 无法复现同一份带自定义步进的输出 —— UI 上设
+  步进 100 生成的程序，用 CLI 默认步进 10 重跑得到不同 G-code。现
+  `render` / `generate` 均支持 `--line-step <N>`（默认 10）与 `--max-line <N>`
+  （默认 9999），与 UI 映射到同一份结构体（`cli/src/commands/render.rs`）。
+  ⚠️ 此修复后 `..Default::default()` 不再需要，clippy `needless_update` 会报错，
+  已一并去除。
+
+#### Added
+
+- **生成选项对拍门禁**（新 fixture + 双向消费点）：
+  `scripts/option_parity_cases.json` 是 CLI 选项与 Web API `options` 映射的单一来源。
+  Rust 侧由 `cli/src/server.rs::option_mapping_matches_shared_fixture` 消费（断言
+  JSON 侧 `generation_options` 与 CLI 字段构造出同一份 `GenerationOptions`）；
+  前端侧由新增的 `scripts/check_option_parity.mjs` 消费（从两份 UI 抠出
+  `normalizeOpts` 对拍）。CI 新增 `Option parity (CLI <-> UI)` 步骤。
+  两侧均做反向验证：故意改 fixture / 改 UI 默认值 → 立刻红。
+- `cli/tests/cli_e2e.rs` 1 项：`--line-step 100 --max-line 250` 实测行号步进为
+  100、且不超过上限。
+
+#### 说明（非缺陷，保留现状）
+
+- **自定义机床的两处入口**：Web UI 的 localStorage 自定义机床**只在演示模式生效**，
+  服务模式已明确 toast「服务模式使用服务端机床配置」（服务端机床来自 `nctool.toml`
+  经 `/api/machines` 下发）—— 属有意设计（浏览器无法写服务器文件），非静默失效。
+
+#### 验证
+
+- workspace 全量 **579 项**通过；fmt / clippy / doc / 三项对拍脚本 / 文档链接均通过。
+
+### 批次十七：覆盖率洼地补齐（A3）
+
+三处「全项目最低」的覆盖洼地在 2026-09-22 集中补齐；均为**纯增测试/可测性重构**，
+不改运行时行为（`serve` 的拆分是等价重构）。
+
+#### 覆盖率变化（生产口径）
+
+| 文件 | 之前 | 之后 | 做法 |
+|---|---|---|---|
+| `cli/src/commands/ui.rs` | 20.00% | **98%** | 把 `run` 拆成 `prepare` + 注入式 `run_with_serve`，阻塞的 `serve` 成为参数；新增 9 项单测 |
+| `cli/src/commands/inspect.rs` | 80.79% | **93%** | 新增 4 项单测（`render_line`/`constraint_summary`/`options_summary`/Bucket）+ 2 项 E2E（include 穿透 / 无变量） |
+| `core/src/variables.rs` | 83.70% | **97%** | 新增 5 项错误路径测试（非法 YAML / 序列坏元素 / 缺文件 / IO 错误 / 正常加载） |
+| 全项目 | 90.47% | **92.19%** | +18 项测试（579 → 597） |
+
+#### Changed
+
+- **`server::serve` 拆出借用版 `serve_requests`**（等份重构）：`serve` 按值接管后，
+  测试进程无法再持有句柄调 `Server::unblock()` 让循环**干净退出** —— 而 llvm-cov
+  只在干净退出时才落盘覆盖数据，被 kill 的子进程（现有 spawn-and-kill E2E）
+  覆盖**全部丢失**（实测 `serve()` 循环体 0 覆盖）。拆分后新增
+  `serve_handles_real_request_then_unblocks_cleanly`：进程内跑真服务、发真请求、
+  `unblock()` 干净关停。
+- **`ui::run` 拆出 `run_with_serve`**：把阻塞的 `serve` 作为参数注入，
+  从而在单测里覆盖「prepare → 横幅 → `--open` 分支 → 移交 serve」完整启动序列。
+- **覆盖率门禁 89% → 91%**（`.github/workflows/ci.yml`）：补齐洼地后本机 92.19%，
+  余量 1.19pt ≈ 60 行。沿用「不贴着实测值设阈值」的原则。
+
+#### 验证
+
+- workspace 全量 **597 项**通过；fmt / clippy / doc / 三项对拍 / 文档链接均通过；
+  覆盖率门 91% 通过（实测 92.19%）。
+
+### 批次十八：收窄发布包（A5）
+
+`nctool-tpl` 是**库**，但仓库里同时住着 CLI / Web UI / 开发脚本 / 原型产物，
+此前 `Cargo.toml` 的 `exclude` 只挡了 `.github/` `docs/` `target/`，其余全部
+被打进 `.crate`：**120 个文件 / 498 KiB**（原型 PNG、验收脚本、模型交接 HTML…）。
+
+#### Changed
+
+- **扩充 `nctool-tpl` 的 `package.exclude`**：新增 `output/`、`scripts/`、`ui/`、
+  `examples/multi_op_demo.sh`、`启动UI.bat`、`overview.md`、`CODE_REVIEW_AND_DEV_PLAN.md`
+  以及 `templates/` 下除演示模板外的内容。
+  效果：**120 → 63 个文件，498 KiB → 126 KiB（−75%）**。
+- **保留 `templates/turning/demo_gcode.j2`**：`examples/demo.rs` 运行时会读它，
+  整目录排除会让发布物的 `cargo run --example demo` 运行时报错。该模板自包含
+  （无 include），保留成本极小。
+
+#### Added
+
+- **发布包内容守卫**（`scripts/check_package_contents.py` + CI 步骤
+  `Package contents`）：对 `cargo package --list --offline` 做**黑名单断言**
+  （而非白名单——白名单会在库合法新增文件时误报），另加正向断言确保
+  `src/lib.rs` / `Cargo.toml` / `LICENSE` / `README.md` 仍在包里（防 exclude 写过头）。
+  正反向均实测：把 `output/` 从 exclude 移除 → 守卫立即报错列出 16 个文件。
+
+#### Fixed（CI 首次运行的回归）
+
+- **守卫步骤的两个环境假设不成立，导致 CI 红**（`no matching package named
+  'minijinja' found`）：
+  1. 步骤被插在 `Install Rust` **之前**，而 `--offline` 要求注册表已 populate
+     → 已移到 `Test` 之后（依赖已拉取），并给脚本加**联网回退**（`--offline`
+     失败则重试不带 `--offline`），无论置于何处都能工作；
+  2. 脚本 subprocess 用只含 `PATH` 的**干净环境**调用 cargo，丢掉
+     `HOME`/`CARGO_HOME`/`RUSTUP_HOME` → 改为**继承**当前环境，仅覆盖
+     `CARGO_INCREMENTAL`。
+
+#### 验证
+
+- workspace 全量 **597 项**通过；fmt / clippy / doc / 四项对拍与守卫 / 文档链接均通过。
+- `cargo package` 验证通过（发布物可独立编译）。
+
+### 批次十九：golden 基线变更保护步骤化（A6 / B4.2）
+
+刷新机制（`NCTOOL_UPDATE_GOLDEN=1`）与 Rust 侧的「CI 拒刷」assert 早已存在（P2-30），
+但**人工流程未成步骤** —— 直接敲环境变量命令存在三个风险：误在 CI 触发、在脏工作区
+刷新导致 diff 混杂、误删基线而不自知。
+
+#### Added
+
+- **`scripts/refresh_golden.sh`**：把刷新包成带守卫的步骤。
+  1. **拒绝 CI**（检测 `CI`/`CI_NAME`/`GITHUB_ACTIONS`）——与 Rust 侧 `assert!` 双重兑底；
+  2. golden 之外的改动未提交时提示先处理（避免 diff 混杂）；
+  3. 刷新前展示当前基线 diff 概览；刷新后展示变化概览（含新增/删除文件）；
+  4. 刷新后校验基线文件数 **≥ 45**，防误删导致防线缩水；
+  5. 支持 `--yes` 非交互与 `--help`。
+- **CI 步骤 `Golden refresh script guards`**：`bash -n` 语法检查 + 带 `CI=1`
+  运行必须退出非 0（自测「CI 拒刷」这条最关键的行为）。
+
+#### Fixed
+
+- **文档数据漂移**：`CONTRIBUTING.md` 的 golden 一节记「42 个基线文件」（实为 **45**），
+  且刷新命令未提「必须 `--workspace`」。已改为 45 并重写为完整流程。
+
+#### 验证
+
+- 脚本正反向均实测：`CI=1` → 退出 1；删一个基线文件 → 测试阶段（`golden_files_are_lf_only`
+  的 ≥ 45 断言）与 shell 守卫均报错；正常（no-op）刷新 ✓。
+- workspace 全量 **597 项**通过；fmt / clippy / doc / 守卫 / 文档链接均通过。
+
+### 批次二十：弱断言补强（A8）
+
+第四轮审查（`CODE_REVIEW_2026-09-19.md` §3.3）列出的三处「测试质量」问题，
+其中两处已在早前批次修复（`all_math_filters_render` 的精确断言、CLI golden 读基线），
+本轮处理剩余的 fuzz 弱断言。
+
+#### Changed
+
+- **fuzz 测试从「不 panic」提升到「不 panic 且产出自洽」**：
+  - `fuzz_random_templates_no_panic`：把内联的不变量检查抽为共享的
+    `assert_extract_invariants`（名字非空 / 按名去重 / 行列 1 起 / span 有序 /
+    未声明 ⊆ 全集）。
+  - `deeply_nested_100_levels_no_stack_overflow`：此前 `let _ = extract_*(&ast)`
+    丢弃返回值；现同样跑 `assert_extract_invariants`。
+  - `fuzz_random_render_no_panic`：此前 `let _ = renderer.render(...)`；现断言返回
+    形状恒定 —— 失败（`Err`）必须携带**非空**可读消息。
+
+#### 验证
+
+- **反向验证**：把 `extract.rs` 的 `Variable { start, end }` 写反（模拟 span 回归）
+  → `fuzz_random_templates_no_panic` 立即 FAILED 并报「span 应有序」；
+  而旧的 `let _ =` 版本不会发现。恢复后转绿。
+- workspace 全量 **597 项**通过；fmt / clippy / 覆盖率门 91% 均通过。
+
+### 批次二十一：新增 `nctool lint`（三角函数度制风险检查）
+
+Backlog 里唯一带**安全性质**的未实现功能：模板里写 `{{ 30 | sin }}` 时，
+minijinja 的 `sin` 按**弧度**解释（项目另有度制变体 `sin_d`）。写错**不会报错**，
+只会静默产出错误坐标（撞刀级）。`lint` 在渲染前把这类用法拦下。
+
+#### Added
+
+- **`nctool lint <模板>`**：静态检查模板。首个检查项：标准三角函数
+  `sin`/`cos`/`tan`/`asin`/`acos`/`atan`（弧度制）给出警告并建议改用
+  `sin_d` 等度制变体。支持内置/目录模板名与文件路径、`--format json`。
+  退出码：无发现 0；有发现 1；语法错误 6。
+- **`nctool_tpl::lint` / `LintFinding`**（`src/lint.rs`）：遍历 minijinja AST
+  的**全部**语句 / 表达式形态收集过滤器用法；公开供其他前端复用。
+- 测试：`src/lint.rs` 11 项单测（含“把 | sin 放进每一种 AST 形态”的遍历完整性用例
+  + raw 块不误报）、`cli/tests/cli.rs` 4 项、`cli/tests/cli_e2e.rs` 2 项。
+
+#### 说明
+
+- 遍历完整性用例暴露了一个 parser 细节：minijinja **只为链式比较（2+ 运算符）
+  构造 `Expr::Compare`**，单次 `>` 走 `Expr::BinOp` —— walker 必须两个分支都覆盖。
+- 弧度可能是刻意的，故为**警告**而非错误。`nctool-tpl` 的 `src/lint.rs` 生产口径
+  覆盖率 **100%**。
+
+#### 验证
+
+- workspace 全量 **614 项**通过；fmt / clippy / doc / 四项对拍与守卫 / 文档链接均通过；
+  覆盖率门 91% 通过（实测 92.35%）。
+
+### 批次二十二：注释/文档与实现对齐（收尾）
+
+第四轮审查 §3.3「注释与实现矛盾」的最后几条，逐条核实后处理：
+
+#### Fixed
+
+- **`core/src/pipeline.rs` 行号规则注释**：原注释写「程序号行（`O` 开头）…已有 `N`
+  前缀」，未反映两个前缀均可由机床配置（`program_prefix` / `line_number_prefix`），也未提及小写 `o`/`n` 的特判与空串回退。已改写为完整描述。
+- **`src/filters.rs` i64 上界注释**：补上边界说明 —— 入参已是 `f64`，
+  `(2^53, 2^63)` 的精度损失本函数管不到，只守「饱和到 `i64::MAX`」这条前沿
+  （NC 量级不可及），去除“过度承诺”。
+- **文档过时项**：`docs/PROJECT_STATUS.md` 的 Backlog 表挂上“参数集命名预设”
+  （实际 Web UI 早已用 `localStorage` 实现）、`check_docs_links.py` “未接入 CI”
+  （实际已在 CI）；`docs/CODE_REVIEW_2026-09-19.md` §3.3 的几项标记为已修
+  （`classify_by_path` 已在批次 A 改为穷尽匹配、`integration.rs` 已是 7 内置模板）。
+
+#### 验证
+
+- workspace 全量 **614 项**通过；fmt / clippy / doc / 覆盖率门 91% 均通过。
 
 ---
 

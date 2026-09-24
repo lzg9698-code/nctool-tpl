@@ -59,6 +59,8 @@ pub enum Command {
     Templates(TemplatesArgs),
     /// 变量提取：必选/可选参数 + 行列定位
     Inspect(InspectArgs),
+    /// 静态检查：在渲染前发现会导致错误 G-code 的常见笔误
+    Lint(LintArgs),
     /// 渲染前参数校验，输出结构化报告
     Validate(ValidateArgs),
     /// 渲染生成 G-code
@@ -263,6 +265,13 @@ pub struct InspectArgs {
     pub template: String,
 }
 
+/// `lint` 的参数。目前只需一个模板，独立成结构体便于后续加检查项开关。
+#[derive(Debug, Args)]
+pub struct LintArgs {
+    /// 模板名或模板文件路径
+    pub template: String,
+}
+
 /// 校验/渲染共享的参数输入选项。
 #[derive(Debug, Args)]
 pub struct ParamInputArgs {
@@ -300,6 +309,14 @@ pub struct RenderArgs {
     /// 生成行号
     #[arg(long)]
     pub line_numbers: bool,
+
+    /// 行号步进（默认 10；`--line-numbers` 时生效，0 视为 1）
+    #[arg(long, value_name = "N", default_value_t = 10)]
+    pub line_step: u32,
+
+    /// 行号上限（默认 9999；超过后不再编号）
+    #[arg(long, value_name = "N", default_value_t = 9999)]
+    pub max_line: u32,
 
     /// 头部注释
     #[arg(long)]

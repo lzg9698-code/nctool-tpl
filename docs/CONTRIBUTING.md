@@ -79,15 +79,15 @@ CI（`.github/workflows/ci.yml`）在 **ubuntu / windows / macos** 三平台各�
 rustup component add llvm-tools-preview
 cargo install cargo-llvm-cov        # 本地复现 CI 覆盖率门需要这两步
 cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
-python scripts/check_coverage_caliber.py lcov.info --min 89
+python scripts/check_coverage_caliber.py lcov.info --min 91
 ```
 
-阈值是**生产代码**行覆盖 ≥ 89%（2026-09-19 由 88% 上调），当前基线 **90.34%**（Ubuntu CI 实测；本机 Windows 数字会略低，以 CI 为准）。
+阈值是**生产代码**行覆盖 ≥ 91%（2026-09-22 由 89% 上调），当前基线 **92.35%**（本机实测）。
 
 > **不要用 `--fail-under-lines`。** llvm-cov 把 `src/*.rs` 内的 `#[cfg(test)]` 段本身
 > 也计入分母（本仓库 `src/lib.rs` 1824 行里测试段占 1760 行），于是「新增测试」会
 > **推高**覆盖率数字、「新增未覆盖的生产代码」反被稀释 —— 原始口径 94.04%，而剔除
-> 测试段后的生产代码只有 90.34%（2026-09-19 实测），**门禁绿 ≠ 生产代码达标**。
+> 测试段后的生产代码只有 92.35%（2026-09-22 实测），**门禁绿 ≠ 生产代码达标**。
 > `--ignore-filename-regex` 只能按文件路径排除，管不到 `src/` 内部的测试段，故改由
 > `scripts/check_coverage_caliber.py` 从 lcov 数据剔除测试段后重新统计。该脚本会
 > 同时打印两种口径的数字，便于核对。
@@ -101,10 +101,10 @@ python scripts/check_coverage_caliber.py lcov.info --min 89
 >     --strip-prefix /home/runner/work/nctool-tpl/nctool-tpl/
 > ```
 
-余量约 68 行未覆盖生产代码（阈值 89% vs 实测 90.34%）。**刻意不贴着实测值设阈值**：
+余量约 60 行未覆盖生产代码（阈值 91% vs 实测 92.35%）。**刻意不贴着实测值设阈值**：
 余量只剩十几行时任何一次小改动都可能误触，而"经常误报的门禁会被当成噪音忽略"。
 **覆盖率提升后请上调这个数字** —— 只改 `ci.yml` 里 `python3 scripts/check_coverage_caliber.py
-lcov.info --min 89` 那一行的 `--min`，一处。
+lcov.info --min 91` 那一行的 `--min`，一处。
 门禁失败时 job summary 与 lcov 产物仍会产出（那两步带 `if: always()`）——
 排查"覆盖为什么掉下去"正需要它们。
 
@@ -159,14 +159,28 @@ cargo bench -p nctool-core --bench pipeline   # 后处理与端到端管线
 
 ### golden 基线
 
-G-code 输出是逐字节比对的（`tests/golden/`，42 个基线文件）。
+G-code 输出与校验报告都是逐字节比对的（`tests/golden/`，**45 个文件 = 21 组正向
+×2 + 3 份负向报告**）。
+
+刷新基线**必须**走带守卫的脚本，不要直接敲 `NCTOOL_UPDATE_GOLDEN=1 cargo test`：
 
 ```bash
-NCTOOL_UPDATE_GOLDEN=1 cargo test --workspace # 刷新基线（必须 --workspace：golden 在 core 包）
-git diff tests/golden                         # 必须人工逐行复核
+bash scripts/refresh_golden.sh        # 交互确认，展示 diff 概览
 ```
 
-**禁止**用刷新基线掩盖非预期回归 —— 每次刷新都要在 PR/commit 里说明「为什么输出变了」。
+脚本的守卫（B4.2 step 化）：
+
+1. **拒绝在 CI 中执行**（检测 `CI`/`GITHUB_ACTIONS`）—— 刷新会跳过全部 golden 断言，
+   Rust 侧 `assert_golden` 也有 `assert!(CI.is_none())` 兜底，shell 侧再挡一道。
+2. 若 `tests/golden/` 之外的改动未提交，提示先提交/暂存（避免 diff 混杂）。
+3. 刷新后校验基线文件数 ≥ 45，防止误删导致防线缩水。
+
+```bash
+git diff tests/golden                  # **必须**人工逐行复核
+```
+
+**禁止**用刷新基线掩盖非预期回归 —— 每次刷新都要在 commit message 里说明
+「为什么输出变了」。`tests/golden/*.nc` 的字节变化是**对外契约**（见 §5）。
 
 ---
 

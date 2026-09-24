@@ -15,12 +15,13 @@ categories = ["template-engine", "parser-implementations", "development-tools::b
 repository = "https://github.com/lzg9698-code/nctool-tpl"
 # documentation = "https://docs.rs/nctool-tpl"  # docs.rs 自动生成，无需手动填写
 
-# 发布到 crates.io 时排除的文件（P2-34 / 梳理 U-12）
+# 发布到 crates.io 时排除的文件（P2-34 / 梳理 U-12，两条开发线合并后的并集）
 #
-# 根 crate 是**纯库**：`src/` + `benches/` + `examples/` 之外只依赖 `templates/`
-# —— `examples/demo.rs` 用 `CARGO_MANIFEST_DIR + "/templates/turning/demo_gcode.j2"`
-# 在**运行时**读该模板，所以 `templates/` 不能排除（这是本包唯一必须随行的资源）。
-# 根 crate 里**没有**任何 `include_str!`/`include_bytes!`，故其余目录均可安全排除。
+# 根 crate 是**纯库**（nctool-tpl）：`src/` + `benches/` + `examples/` 之外
+# 只需要 `templates/turning/demo_gcode.j2` —— `examples/demo.rs` 用
+# `CARGO_MANIFEST_DIR` 在**运行时**读该模板，这是本包唯一必须随行的模板资产。
+# 其余模板（含 grooving/、undercut 系列、variables.yaml 等）属于 core / CLI
+# 的资产或仓库开发用例；`ui/` 由 cli 通过 `include_str!` 打包，均不随本库分发。
 #
 # 用 `exclude` 而非 `include`：排除法在新增目录时不会误删必需文件
 # （踩过一次的教训 —— 漏排是"包变大"，漏 include 是"包坏了"）。
@@ -34,7 +35,17 @@ exclude = [
     # —— 以下为仓库级开发产物，与库的消费方无关 ——
     "output/",              # 原型截图 / 参数样本 / 验收脚本（约 400 KB，本包最大冗余）
     "scripts/",             # CI 与 UI 构建脚本（只在仓库内跑，不随包分发）
+    "ui/",                  # Web UI 单文件（cli 通过 include_str! 打包，不在本库）
+    "examples/multi_op_demo.sh",
+    "templates/README.md",
+    "templates/templates.yaml",
+    "templates/variables.yaml",
+    "templates/grooving/",
     "templates/machines/",  # 机床方案包（CLI 侧配置数据，根 crate 用不到）
+    "templates/turning/_undercut_common.j2",
+    "templates/turning/undercut.j2",
+    "templates/turning/undercut_es.j2",
+    "templates/turning/undercut_fs.j2",
     "CODE_REVIEW_AND_DEV_PLAN.md",
     "overview.md",
     "gcm-diagnose.log",

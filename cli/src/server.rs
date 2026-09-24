@@ -1076,6 +1076,16 @@ pub fn bind(addr: SocketAddr) -> Result<(tiny_http::Server, SocketAddr), CliErro
 /// 之后才准确），也不负责开浏览器，两者都由 [`crate::commands::ui`] 在绑定
 /// 成功之后完成。
 pub fn serve(server: tiny_http::Server, addr: SocketAddr, ctx: Ctx) -> Result<(), CliError> {
+    serve_requests(&server, addr, &ctx)
+}
+
+/// [`serve`] 的实际请求循环，按**借用**接收服务实例。
+///
+/// 拆出借用版是为了可测：`serve` 按值接管后，测试进程无法再持有句柄调用
+/// `Server::unblock()` 来让循环干净退出（而 llvm-cov 只在**干净退出**时才落盘
+/// 覆盖数据——被 kill 的子进程数据全丢）。测试用借用版 + `unblock()` 覆盖
+/// 请求循环（见 `serve_handles_real_request_then_unblocks_cleanly`）。
+fn serve_requests(server: &tiny_http::Server, addr: SocketAddr, ctx: &Ctx) -> Result<(), CliError> {
     let allowed = allowed_origins(&addr);
 
     for mut request in server.incoming_requests() {
@@ -1112,7 +1122,7 @@ pub fn serve(server: tiny_http::Server, addr: SocketAddr, ctx: Ctx) -> Result<()
                     if too_large {
                         Resp::Json(413, err("payload_too_large", "请求体超过 1 MiB 上限"))
                     } else {
-                        route(&ctx, &method, &path, &query, &body)
+                        route(ctx, &method, &path, &query, &body)
                     }
                 }
             }
@@ -2139,6 +2149,52 @@ mod tests {
         );
     }
 
+    /// 进程内真实服务测试（补 `ui.rs` / `serve()` 覆盖率，A3）。
+    ///
+    /// 为什么不用 `cli/tests/` 里的 spawn-and-kill E2E：llvm-cov 只在**进程干净退出**
+    /// 时才落盘 profile 数据；E2E 里服务被杀掉中途 kill，其 `run()` / `serve()` 的
+    /// 覆盖永远丢失（实测 `serve()` 循环体 0 覆盖，而 E2E 确实发过 HTTP 请求）。
+    /// 这里在**测试进程内**跑 `serve`，用 `Server::unblock()` 让它干净退出循环。
+    #[test]
+    fn serve_handles_real_request_then_unblocks_cleanly() {
+        use std::io::{Read, Write};
+        use std::net::TcpStream;
+        use std::time::Duration;
+
+        let (srv, actual) = bind("127.0.0.1:0".parse().unwrap()).expect("绑定回环应成功");
+        let port = actual.port();
+        // 借用版：serve 完成后测试侧仍持有 srv，才能调 unblock() 让循环干净退出
+        // （scoped thread 借用 srv，作用域结束即 join，天然同步）。
+        let handle = std::thread::scope(|scope| {
+            let srv_ref = &srv;
+            let t = scope.spawn(move || serve_requests(srv_ref, actual, &Ctx::for_test()));
+
+            // 真实 HTTP 请求：GET /health（走完 route() 的 JSON 分支）
+            let mut stream = TcpStream::connect_timeout(
+                &format!("127.0.0.1:{port}").parse().unwrap(),
+                Duration::from_millis(500),
+            )
+            .expect("应能连上服务");
+            stream
+                .write_all(b"GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n")
+                .unwrap();
+            stream
+                .set_read_timeout(Some(Duration::from_millis(1000)))
+                .unwrap();
+            let mut buf = String::new();
+            let _ = stream.read_to_string(&mut buf);
+            assert!(
+                buf.contains("HTTP/1.1 200") && buf.contains("\"status\":\"ok\""),
+                "应返回 200 与健康数据: {buf}"
+            );
+
+            // 干净关停：unblock 让 incoming_requests() 返回 None，循环正常结束
+            srv.unblock();
+            t.join().expect("serve 线程应正常结束")
+        });
+        assert!(handle.is_ok(), "serve 应返回 Ok: {handle:?}");
+    }
+
     #[test]
     fn route_templates_list() {
         let Resp::Json(status, payload) = route(&test_ctx(), "GET", "/api/templates", "", &[])
@@ -2464,6 +2520,95 @@ mod tests {
         assert_eq!(status, 200);
         assert_eq!(payload["data"]["blocked"], false);
         assert_eq!(payload["data"]["template"], "drill_cycle");
+    }
+
+    /// 选项对拍门禁（隐患修复）：CLI 的生成选项与 Web API 的 `options` 对象必须
+    /// 映射到同一份 `GenerationOptions`。fixture 是唯一来源，两侧各有一份消费点：
+    /// 本测试跑 JSON 侧（`generation_options`），并与 CLI 侧对照
+    /// （`RenderArgs` 的字段由 `commands::render` 1:1 赋值）。
+    ///
+    /// 背景：`--line-step` / `--max-line` 曾只存在于 Web UI，CLI 无法复现
+    /// 同一份带自定义步进的输出 —— 同一份参数在两个入口产出不同 G-code。
+    #[test]
+    fn option_mapping_matches_shared_fixture() {
+        let fixture: serde_json::Value =
+            serde_json::from_str(include_str!("../../scripts/option_parity_cases.json"))
+                .expect("option_parity_cases.json 必须是合法 JSON");
+        let cases = fixture["cases"]
+            .as_array()
+            .expect("fixture 需有 cases 数组");
+        assert!(!cases.is_empty(), "fixture 不应为空");
+
+        for (i, case) in cases.iter().enumerate() {
+            let name = case["name"].as_str().unwrap_or("?");
+            let json = &case["json"];
+
+            // —— JSON 侧：走真实函数 —————————————————————————
+            let body = serde_json::json!({ "options": json });
+            let (opts, lenient) = generation_options(&body)
+                .unwrap_or_else(|_| panic!("case #{i} {name}: generation_options 失败"));
+
+            let e = &case["expect"];
+            assert_eq!(
+                opts.line_numbers,
+                e["line_numbers"].as_bool().unwrap(),
+                "case #{i} {name}: line_numbers"
+            );
+            assert_eq!(
+                opts.line_number_step,
+                e["line_number_step"].as_u64().unwrap() as u32,
+                "case #{i} {name}: line_number_step"
+            );
+            assert_eq!(
+                opts.max_line_number,
+                e["max_line_number"].as_u64().unwrap() as u32,
+                "case #{i} {name}: max_line_number"
+            );
+            assert_eq!(
+                opts.add_header_comment,
+                e["add_header_comment"].as_bool().unwrap(),
+                "case #{i} {name}: add_header_comment"
+            );
+            assert_eq!(
+                opts.strip_blank_lines,
+                e["strip_blank_lines"].as_bool().unwrap(),
+                "case #{i} {name}: strip_blank_lines"
+            );
+            assert_eq!(
+                opts.ascii_only,
+                e["ascii_only"].as_bool().unwrap(),
+                "case #{i} {name}: ascii_only"
+            );
+            assert_eq!(
+                lenient,
+                e["lenient"].as_bool().unwrap(),
+                "case #{i} {name}: lenient"
+            );
+
+            // —— CLI 侧：从 cli 字段构出同一结构，必须与 JSON 侧一致 ——————
+            // （cli 字段名 = RenderArgs 的 snake_case；commands::render 把
+            //   它们 1:1 赋给 GenerationOptions，因此这里直接构造即代表 CLI 行为）
+            let cli = &case["cli"];
+            let cli_opts = GenerationOptions {
+                format: OutputFormat::Gcode,
+                line_numbers: cli["line_numbers"].as_bool().unwrap_or(false),
+                line_number_step: cli["line_step"].as_u64().unwrap_or(10) as u32,
+                max_line_number: cli["max_line"].as_u64().unwrap_or(9999) as u32,
+                // 两个入口都是单段渲染，起始行号恒为 0（续编游标只属于 `part generate`）
+                line_number_start: 0,
+                add_header_comment: cli["header"].as_bool().unwrap_or(false),
+                strip_blank_lines: cli["strip_blank"].as_bool().unwrap_or(false),
+                ascii_only: cli["ascii"].as_bool().unwrap_or(false),
+            };
+            let cli_lenient = cli["lenient"].as_bool().unwrap_or(false);
+
+            assert_eq!(
+                cli_opts, opts,
+                "case #{i} {name}: CLI 与 API 映射到不同的 GenerationOptions\n\
+                 cli={cli_opts:?}\napi={opts:?}"
+            );
+            assert_eq!(cli_lenient, lenient, "case #{i} {name}: lenient 不一致");
+        }
     }
 
     #[test]

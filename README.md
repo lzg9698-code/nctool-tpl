@@ -443,12 +443,19 @@ nctool preset import preset.json
 # 提取模板必选/可选参数（含行列定位）
 nctool inspect drill_cycle
 
+# 静态检查：发现会导致错误 G-code 的笔误（如三角函数度制风险）
+nctool lint my_op.j2            # 有发现 → 退出码 1；干净 → 0
+
 # 参数校验（缺失必选 → 退出码 1 + 结构化报告）
 nctool validate drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100
 
 # 生成 G-code：行号 + 头部注释 + 写文件
 nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100 \
     --line-numbers --header --out demo.nc
+
+# 行号步进与上限可调（与 Web UI 的选项一一对应，默认 10 / 9999）
+nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100 \
+    --line-numbers --line-step 100 --max-line 500
 
 # `generate` 与 `render` 同签名，是后处理全开时的规范入口（默认输出逐字节一致）
 nctool generate drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100
@@ -493,8 +500,9 @@ nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param fe
 | 6 | 渲染/注册表失败 | `templates new` 重名（重名是业务冲突，非 IO） |
 | 7 | 功能尚未实现 | （当前无触发路径；保留给后续占位命令） |
 
-该矩阵是稳定的对外契约，由 `cli/tests/cli_e2e.rs` 的 E2E 用例逐条断言
-（覆盖全部 10 个子命令 × 正常/异常路径）；变更退出码必须同步更新该测试与 CHANGELOG。
+该矩阵是稳定的对外契约，由 `cli/tests/cli_e2e.rs` 的 **53 个** E2E 用例逐条断言
+（覆盖全部 **11** 个子命令 × 正常/异常路径）；变更退出码必须同步更新该测试与 CHANGELOG。
+用例数会随功能增删变化，改动该表时以 `cli_e2e.rs` 的实际断言为准。
 
 > `part generate` 的两种失败分别落在 **1**（工序参数校验未通过）与 **3**（零件定义文件读不到）；
 > 定义形状不合法（非 JSON、`ops` 为空）走 **2**。
@@ -579,17 +587,19 @@ cargo test --workspace --all-targets
 cargo test --workspace --doc          # --all-targets 不跑 doctest，CI 为此单列一步
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 node scripts/check_param_parity.mjs   # --param 归一规则的 Rust/前端对拍
+node scripts/check_option_parity.mjs  # 生成选项（行号/步进/上限/…）的 CLI/前端对拍
+python3 scripts/check_package_contents.py  # 发布包不得含非库资产（--offline）
 cargo audit
 
 # 覆盖率门（与 CI 同款；需先装 rustup component add llvm-tools-preview
 # 与 cargo install cargo-llvm-cov，另需 python）
 cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
-python scripts/check_coverage_caliber.py lcov.info --min 88
+python scripts/check_coverage_caliber.py lcov.info --min 91
 ```
 
 > 覆盖率门判定的是**生产代码**口径，**不是** `cargo llvm-cov` 的原始口径 ——
 > llvm-cov 把 `src/*.rs` 内的 `#[cfg(test)]` 段本身计入分母，新增测试会推高数字、
-> 新增未覆盖的生产代码反被稀释（2026-09-19 实测：原始口径 94.04%，生产口径 90.34%）。
+> 新增未覆盖的生产代码反被稀释（2026-09-22 实测：生产口径 92.35%）。
 > 故由 `scripts/check_coverage_caliber.py` 剔除测试段后重新统计，细节见
 > [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) §3。
 
@@ -607,11 +617,13 @@ python scripts/check_coverage_caliber.py lcov.info --min 88
 | --- | --- |
 | 公共 API / 错误类型 / 行为 | `CHANGELOG.md` 的 `Added` / `Changed` 节 + 相关文档；破坏性变更要写迁移方式 |
 | CLI 退出码或 `--format json` 字段 | `cli/tests/cli_e2e.rs`（44 个用例）+ CHANGELOG —— 这两者是对外**稳定契约** |
-| G-code 输出字节 | golden 基线（`tests/golden/`，45 个文件 = 21 组正向 ×2 + 3 份负向报告）：`NCTOOL_UPDATE_GOLDEN=1 cargo test --workspace` 刷新，**必须人工 diff 复核**后再提交 |
+| G-code 输出字节 | golden 基线（`tests/golden/`，45 个文件 = 21 组正向 ×2 + 3 份负向报告）：走 `bash scripts/refresh_golden.sh` 刷新（带 CI 拒刷/数量守卫），**必须人工 diff 复核**后再提交 |
 | 架构 / 模块职责 / 数据流 | `docs/ARCHITECTURE.md` |
 | 机床配置键 | `docs/MACHINE_CONFIG_GUIDE.md`（键清单、未知键告警） |
 | 新增内置模板 | golden 用例 + `docs/PROCESS_CHECKLIST.md` 登记，并声明未经工艺评审 |
 | `--param` 取值归一规则（`cli/src/args.rs` 或 UI 的 `coerceParamValue`） | 另一侧实现 + 共享 fixture `scripts/param_parity_cases.json`；两侧漂移会让 CLI 与 Web UI 对同一输入产出不同 G-code |
+| 生成选项（`--line-numbers`/`--line-step`/`--max-line`/`--header`/`--strip-blank`/`--ascii`/`--lenient` 或 UI 的 `normalizeOpts`） | 共享 fixture `scripts/option_parity_cases.json` + Rust 侧测试 `option_mapping_matches_shared_fixture`；CLI 与 Web API 必须映射到同一份 `GenerationOptions` |
+| 发布包内容（`Cargo.toml` 的 `package.exclude`） | `scripts/check_package_contents.py` 的黑名单；新增仓库级资产（如新的 `output/` 子目录）时同步该列表，否则 CI 的 `Package contents` 步骤会红 |
 
 ### 提交与分支
 

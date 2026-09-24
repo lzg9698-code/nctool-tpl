@@ -317,6 +317,12 @@ golden 测试在 `core/tests/integration.rs`（core 包）。裸 `cargo test` **
 
 #### P1-10｜CLI 侧文件读取无大小上限，与 HTTP 侧的 1 MiB 上限不对称
 
+> ✅ **已修复（2026-09-22，批次十五）**：新增 `cli/src/limits.rs`
+> （`MAX_LOCAL_TEXT_BYTES = 1 MiB` + `read_text_limited`），三处入口
+> （`config.rs` / `context.rs` / `args.rs`）统一走它；先用 `metadata` 在读取前
+> 拒绝超大文件，超限报 `io` 错误并带路径 / 实际大小 / 上限，**不静默截断**。
+> 守卫：4 项单元测试 + 1 项 E2E（`--params-file` 超限退出码 3）。
+
 - 位置：`cli/src/config.rs:85`、`cli/src/context.rs:199`（读全部 `.j2`）、`cli/src/args.rs:129`（`--params-file`）
 - HTTP 侧已有 `MAX_BODY`（`server.rs:40`）+ 413，CLI 侧全部 `read_to_string` 无上限。本地工具定位下风险可控，但 `--template-dir` 指向网络盘/大目录时会整体读入内存。
 - 修复：至少 `load_params_file` 加上限并给出明确的错误文案。
@@ -324,6 +330,17 @@ golden 测试在 `core/tests/integration.rs`（core 包）。裸 `cargo test` **
 ---
 
 #### P1-11｜静默吞错与错误上下文丢失　`指纹 ERR-CONTEXT-LOST`
+
+> ✅ **已全部收口**：
+> - `registry.rs` 的 `try_iter().ok()?` **已重建为 fail-closed**（`.map_err(...)?`，
+>   注释明写「一个防非法坐标的闸门不该有这种失败模式」）—— 早于本批次。
+> - `RegistryError::Io` 丢路径 **已在构造处把路径并进 `io::Error` 消息**，
+>   并有回归测试 `add_file_io_error_includes_the_path` —— 早于本批次。
+> - `PipelineError::source()` 漏 `Derive` **已修复（2026-09-22，批次十五）**，
+>   回归测试 `derive_error_is_reachable_through_source_chain`。
+> - 生产 `expect` 3 处**保留**：均有不变量守护（内置模板源码应为合法、
+>   `derive.is_some()` 已过滤、作用域栈由 `push_scope` 配对），改为
+>   `unwrap_or` 反而会掩盖真正的编程错误；属低危，未动。
 
 - `core/src/registry.rs:716/725` `try_iter().ok()?` —— 迭代失败时被当作「无非有限数」返回，**安全闸门静默失效**（这是防 NaN 进 G-code 的最后一道）。
 - `core/src/registry.rs:336` `.map_err(RegistryError::Io)` 丢掉文件路径，`Display`（`:236`）只印 `{err}`；而 `ManifestError::Io{path,source}` 带路径 —— 两处口径不一致，用户看不到是哪个模板文件出错。
@@ -346,10 +363,10 @@ golden 测试在 `core/tests/integration.rs`（core 包）。裸 `cargo test` **
 - `core/src/derive.rs:221 derived_names`、`core/src/registry.rs:175 invalidate_analysis` **无生产调用点**；`TemplateEntry::source_text` 仍为 `pub`，「改写后须调 `invalidate_analysis`」靠调用方自觉（第三轮 P2-15 未清）
 
 **注释与实现矛盾（后续开发危害大）**
-- `core/src/pipeline.rs:293-294`：称「程序号行（`O` 开头）…已有 `N` 前缀」，未反映前缀已可配置（`program_prefix`/`line_number_prefix`）及小写 `o`/`n` 特判（`:374-377`）
-- `core/src/manifest.rs:566-572`：`classify_by_path` 文档表**漏了 `grooving`**（实现 `:584` 有）—— 新增目录时照文档改会漏
-- `src/filters.rs:140-145`：称 i64 上界检查防「静默输出错误程序号」，但入参先经 `f64`，`(2^53, 2^63)` 区间整数在检查前已被舍入（NC 量级不可及，属过度承诺）
-- `core/tests/integration.rs:132`：写「6 内置模板」，实际 7
+- ✅ **已修（2026-09-22）**：`core/src/pipeline.rs` 的行号规则注释已改写，明确两个前缀均可配置（`program_prefix` / `line_number_prefix`）、同时识别小写 `o`/`n`、空串回退默认值。
+- ✅ **已修（批次 A）**：`core/src/manifest.rs` 的 `classify_by_path` 已改为 `TemplateCategory::from_dir_name` 穷尽匹配，旧的文档表（漏 `grooving`）不再存在。
+- ✅ **已修（2026-09-22）**：`src/filters.rs` 的 i64 上界注释补了边界说明 —— 入参已是 `f64`，`(2^53, 2^63)` 的精度损失本函数管不到，只守“饱和到 `i64::MAX`”这条前沿（NC 量级不可及）。
+- ✅ **已修**：`core/tests/integration.rs` 已写「7 内置模板 × 3 预设 = 21 组」。
 
 **文档漂移**（实测 556 项 / 89.54% 生产口径 / 93.51% 原始口径）
 
@@ -364,13 +381,18 @@ golden 测试在 `core/tests/integration.rs`（core 包）。裸 `cargo test` **
 建议：文档一律不写硬数字，改指 CI job summary。
 
 **测试质量**
-- `src/lib.rs:1609-1634`：两个 fuzz 测试 `let _ =` 丢弃返回值，只断言不 panic（易造成「提取器已被 fuzz 验证」的错觉）
-- `tests/parsing.rs:363-366`：`all_math_filters_render` 用 `assert!(out.contains("2"))`，且 `:363` 与 `:366` 重复断言同一个 `"2"`
-- `cli/tests/cli.rs:256-272`：硬编码 stdout 字符串，不读 `tests/golden/*.nc`，模板一改需手工同步两处且无测试能发现
-- 覆盖薄弱：`cli/src/commands/ui.rs` **23.08%**、`cli/src/cli.rs` 66.67%、`core/src/variables.rs` 83.70%；`commands/render.rs`、`commands/templates.rs` 各仅 2 个测试
+- ✅ **已修（A8，2026-09-22）**：`src/lib.rs` 的 fuzz 测试不再 `let _ =`。
+  `fuzz_random_templates_no_panic` / `deeply_nested_100_levels_no_stack_overflow` 改用
+  共享的 `assert_extract_invariants`（名字非空/去重、行列 1 起、span 有序、未声明 ⊆ 全集）；
+  `fuzz_random_render_no_panic` 改为断言返回形状（Err 必带非空消息）。
+  反向验证：把 `Variable.start/end` 写反 → fuzz 立即报「span 应有序」——旧 `let _ =` 不会发现。
+- ✅ **已修（批次 A）**：`tests/parsing.rs:363-366` 的 `all_math_filters_render` 已改为
+  9 个过滤器逐个按数值精确断言（改后立刻抓到 `sqrt(4)` 渲染成 `"2.0"`）。
+- ✅ **已修（第四轮 P2-32）**：`cli/tests/cli.rs` 的 golden 测试改读 `tests/golden/*.nc`。
+- 覆盖薄弱：`ui.rs` 已 20% → **98%**；`cli.rs` 66.67%；`variables.rs` 83.70% → **97%**。
 
 **工程化**
-- `.github/workflows/release.yml:35`、`:93`：`cargo test --workspace` 缺 `--locked` 与 `--all-targets`（CI 内已合规，发布流漏了）
+- ✅ **已修**：`.github/workflows/release.yml` 两处 `cargo test` 已补 `--locked` / `--all-targets`。
 - `docs/DEV_PLAN_CLI_UI.md:149`：`cargo clippy -D warnings` 漏 `--workspace`（历史计划文档，建议标注为存档）
 - `ui/index.html`：P2-24/25/26 仍未做 —— `--open` 先于 bind（`commands/ui.rs:16-20`）、`--port 0` 时 `browser_url` 恒显示 `:0`、Bool 参数恒提交 `false`（`:1974`，而 CLI 省略该键 → 条件必选判定可能分歧）、无 `AbortController`（后端阻塞时旧请求堆积）
 - `server` 模式列表卡片只回 name/category/description（`server.rs:212-216`），缺 `builtin`/`params` → 前端恒显「示例」、必选数 0，直到 detail 拉回
@@ -483,7 +505,12 @@ SF 路径（本次就是先这么做的），属于"有数据但拿不到"的隐
 
 > 四处修复均经反向验证：临时还原实现后 4 项测试全部 FAILED，恢复后全绿。
 
-### 批次 D：服务层与去重 ⚠️ **去重部分已完成（2026-09-19），服务层仍开放**
+### 批次 D：服务层与去重 ✅ **服务层 P1-10/P1-11 已收口（2026-09-22，批次十五）；P1-4/P1-5 已定量判定不修**
+
+> **2026-09-22 补做**：批次的最后两个真开放项（P1-10 CLI 文件读取上限、
+> P1-11 的 `PipelineError::source()` 漏 `Derive`）已随 `CHANGELOG.md`「批次十五」
+> 完成；P1-11 另两项（`try_iter().ok()?`、`RegistryError::Io` 路径）经核实早于本批次
+> 已修，不再开放。详见下方 §3.2 的 ✅ 标记。
 
 **已完成**
 
@@ -595,7 +622,7 @@ SF 路径（本次就是先这么做的），属于"有数据但拿不到"的隐
 | P1-18 全树 stat / P1-19 读超时 | ❌ 仍存在 → 本轮 P1-5 / P1-4 |
 | P1-14 文档矛盾 | ⚠️ 部分（CI/RELEASE 已改，数字仍漂移） |
 | P2-11 / P2-12 / P2-24 / P2-25 / P2-26 | 本轮 P1-9 / P1-8 / P2 逐项处理：P2-11 ✅ 已修（实际形态是过滤器名，非原描述的 `a + missing`）；P2-12 ⛔ 判定不修（根因已在消息里、无调用方需要细分变体）；P2-24 ✅ 已修；P2-25 / P2-26 ❌ 仍开放（需浏览器验证） |
-| P2-14 / P2-31 / P2-32 / P2-33 | ❌ 仍存在 → 本轮 P2（P2-31 升级为 P0-3） |
+| P2-14 / P2-31 / P2-32 / P2-33 | 审查当时仍存在 → 均已清：P2-31 升级为 P0-3（批次 A 修）；P2-14/P2-33 弱断言已改精确断言（批次 B）+ fuzz 不变量（A8）；P2-32 CLI golden 改读基线（批次 E） |
 | P2-15 / P2-23 可见性收敛 | ❌ 仍存在 → 本轮 P2 |
 
 **本轮新增的高价值项集中在第三轮没覆盖的维度：扩展接缝（P0-1）、前后端契约漂移（P0-2）、基线的实际信息量（P0-3）。** 这三类的共同点是——它们不会让现有功能出错，但会让**下一个功能加得心惊胆战**。

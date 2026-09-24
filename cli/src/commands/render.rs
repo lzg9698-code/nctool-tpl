@@ -29,10 +29,14 @@ pub fn run(ctx: &Ctx, args: &RenderArgs) -> Result<(), CliError> {
     let opts = GenerationOptions {
         format: OutputFormat::Gcode,
         line_numbers: args.line_numbers,
+        line_number_step: args.line_step,
+        max_line_number: args.max_line,
+        // 单模板渲染始终从 0 起编；跨工序续编的游标只有 `part generate` 用
+        // （见 `core::part` 的 `generate`），CLI 侧不暴露该项
+        line_number_start: 0,
         add_header_comment: args.header,
         strip_blank_lines: args.strip_blank,
         ascii_only: args.ascii,
-        ..Default::default()
     };
 
     // 渲染前校验（宽松模式不阻断，仅提示）
