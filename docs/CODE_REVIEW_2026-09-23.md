@@ -7,6 +7,10 @@
 > **与第四轮的关系**：第四轮（`CODE_REVIEW_2026-09-19.md`，3 P0 / 11 P1）**§4 已收口**，
 > 本轮不重复其已修项；本轮聚焦「第四轮之后新增的功能」与「从未被审查覆盖的维度」。
 
+> **【2026-09-24 处置总览】** P1-1（提交 `04558e1`）、P1-2（`a721f38`）、P2-1（`263a361`）、
+> P2-3（`8d99cc6`）**均已修复**；校验覆盖面结构性缺口**已裁定**（见 §6.1：维持"只查被引用变量"口径，
+> 附重开条件）；前端 P2-4 / P2-5 / U-8 三项**整体延后**（见 §6.2，需浏览器验证）。
+
 ---
 
 ## 0. TL;DR
@@ -57,6 +61,10 @@ P1-2 实测非白名单输入被静默换算为 `29.61`，且白名单检查因
 ## 2. P1 项（2 条，均建议尽快修）
 
 ### P1-1｜JSON 极小数值静默下溢为 `0.0`，并**直接写进 G-code** 🔴
+
+> ✅ **【已修复 · 2026-09-24】** 提交 `04558e1`「fix(num): 堵住 JSON/YAML 数值下溢静默归零」：
+> 在解析边界对原始 JSON 文本做数值检查，"真值非零但结果为零"即硬失败（ERR-NUM-UNDERFLOW，400），
+> 下溢对抗用例已入 CI；下方为修复前的问题记录。
 
 **指纹**：`ERR-NUM-UNDERFLOW`
 
@@ -302,6 +310,10 @@ serde_json 的 feature，且它会改变 `Number` 的行为（`as_f64` 仍可用
 
 ### P1-2｜`DeriveRule.fallback` 绕过源参数白名单：非白名单输入被**静默换算**成默认规格的值
 
+> ✅ **【已修复 · 2026-09-24】** 提交 `a721f38`「fix(derive): 源参数提供了但未命中表项即报错」：
+> `compute` 区分"源参数未提供"（走 fallback，保留"未选择按 DM24"的原始意图）与"提供了但未命中"
+> （Err(NoMatch) 硬失败）；校验覆盖面缺口的裁定见 §6.1。
+
 **指纹**：`ERR-DERIVE-FALLBACK-UNVALIDATED`
 
 **位置**：`core/src/derive.rs:190-204`（`compute`）、`templates/variables.yaml:143-144` 与 `:167-168`
@@ -383,11 +395,19 @@ tip_model=B4               -> tip_depth=Some(Number(8.51))
 
 | # | 项 | 位置 | 说明 |
 | --- | --- | --- | --- |
-| P2-1 | `postprocess` 的 `checked_add` 溢出静默降级为"不编号" | `core/src/pipeline.rs:457-466` | `if let Some(next) = line_no.checked_add(step)` 在 `None` 时**什么都不做**（不编号、不报错、不警告），行号就此静默消失且**后续行号全部错位**。建议：溢出或超上限时给出**一次**显式告警（"已达行号上限 9999，后续行不再编号"），而不是无声跳过。现有注释已说明 `max_line_number` 是刻意"不编号"，但**用户无法从产物看出自己撞了上限** |
+| ✅ P2-1 | `postprocess` 的 `checked_add` 溢出静默降级为"不编号" | `core/src/pipeline.rs:457-466` | `if let Some(next) = line_no.checked_add(step)` 在 `None` 时**什么都不做**（不编号、不报错、不警告），行号就此静默消失且**后续行号全部错位**。建议：溢出或超上限时给出**一次**显式告警（"已达行号上限 9999，后续行不再编号"），而不是无声跳过。现有注释已说明 `max_line_number` 是刻意"不编号"，但**用户无法从产物看出自己撞了上限** |
 | P2-2 | 两个 crate 的发布包内测试必然失败 | `cli/Cargo.toml` / `core/Cargo.toml` | 第四轮已实测（cli 的 `include_str!("../../scripts/…")` 编译期断、core 的 golden 运行时断）。**均 `#[cfg(test)]` 内，不影响 `cargo build`/`install`**。三种修法已列在记忆里，**属设计取舍，本轮仍建议保持待决**，但值得在 `README` 或 `Cargo.toml` 注释里**显式记一句**"发布包不含可运行的测试资源"，免得下一个人重新排查 |
-| P2-3 | `PartSpec` 缺"未知字段"拒绝 | `core/src/part.rs:44-64` | `PartSpec` / `PartOp` 都**没有 `deny_unknown_fields`**，而 `ParamOverride` / `ParamSpec` 有。字段名写错（如把 `params` 写成 `parameters`、`default_machine` 写成 `defaultMachine`）**静默忽略**。对 `ops` 这类数组字段，写错会让零件"少一道工序"却照常成功——**又一次同类静默失败**。建议加 `#[serde(deny_unknown_fields)]` |
+| ✅ P2-3 | `PartSpec` 缺"未知字段"拒绝 | `core/src/part.rs:44-64` | `PartSpec` / `PartOp` 都**没有 `deny_unknown_fields`**，而 `ParamOverride` / `ParamSpec` 有。字段名写错（如把 `params` 写成 `parameters`、`default_machine` 写成 `defaultMachine`）**静默忽略**。对 `ops` 这类数组字段，写错会让零件"少一道工序"却照常成功——**又一次同类静默失败**。建议加 `#[serde(deny_unknown_fields)]` |
 | P2-4 | 前端对 `skipped` 工序的呈现是空面板 | `ui/src/32_script_ui.part.html:886-887` | HTTP 分支把"整体未交付但该工序本身没失败"的工序标为 `{skipped:true}` 且**不带 `output`**（设计正确）。但前端 `showBatch` 只判 `r.error`：无 `error`、无 `output` → `highlightGcode(undefined)`，用户看到**一个空白面板**，误以为"这道工序成功了但没内容"。建议显式渲染"⚠ 该工序未失败，但因其他工序失败而整体未交付" |
 | P2-5 | 前端 mock 与后端的失败语义仍不完全对齐 | `ui/src/31_script_api.part.html:152-175` | mock 的 `doPart` 是**逐工序尽力而为**：坏工序进 `error`，好工序**照常给 `output`**（不回 `skipped`）。后端则整体不交付。demo 模式（`file://`）下用户会看到"部分工序有产出"的界面，切到 server 模式后变成"全空白"——**同一份零件 JSON 两种观感**。属前端 demo 的既有简化，但与本轮刚统一的语义有落差，建议在 mock 上补 `skipped` 以保持一致 |
+
+---
+
+> **P2 状态更新（2026-09-24）：**
+> - ✅ **P2-1 已修复**：提交 `263a361`「fix(pipeline): 行号撞上限不再静默」——撞上限时显式报出，不再无声停编号。
+> - ✅ **P2-3 已修复**：提交 `8d99cc6`「fix(part): 零件定义未知字段一律拒绝」——PartSpec / PartOp 未知字段硬拒绝。
+> - ⏸ **P2-4 / P2-5 整体延后**：需浏览器验证，见 §6.2。
+> - P2-2：维持设计取舍（发布包内测试不运行，不影响 build / install）。
 
 ---
 
