@@ -42,3 +42,6 @@ gui/frontend/dist/
 # tauri-build 生成的 ACL/权限 schema（每次构建自动重建，不提交）
 gui/gen/schemas/
 
+
+# Vite 打包配置时生成的临时文件（vite.config.ts.timestamp-*.mjs）
+*.timestamp-*
