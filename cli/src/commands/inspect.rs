@@ -63,16 +63,17 @@ impl Bucket {
 
 /// `inspect <template>`：解析模板并提取其引用的外部变量，附上已声明的规格。
 pub fn run(ctx: &Ctx, args: &InspectArgs) -> Result<(), CliError> {
-    let (name, source, _, system_vars) = resolve_source(ctx, &args.template)?;
+    let (name, source, resolved_specs, system_vars) = resolve_source(ctx, &args.template)?;
     // 已注册模板走**参数闭包**提取（穿透 include/extends）：组合模板若只列
     // 主模板自身的变量，用户按表填参会漏掉片段所需的参数，渲染才报错。
     // 未注册的文件路径无法解析 include，退化为单模板提取。
     let gen = ctx.build_registry()?;
-    let specs: Vec<ParamSpec> = gen
-        .registry()
-        .get(&name)
-        .map(|e| e.params.clone())
-        .unwrap_or_default();
+    // 规格来源（P1-10）：此前这里只查注册表，而**文件路径模板不在注册表里**
+    // （`name` 是文件名）→ 退化成空规格 → `inspect <路径>` 的每个变量只剩
+    // "必选/可选"，看不到类型/区间/白名单，与 `render <路径>` 的实际校验口径
+    // 不一致。`resolve_source` 现在对两条路径都给规格，直接用它（对注册表命中
+    // 的分支，它就是注册表里那一份，行为不变）。
+    let specs: Vec<ParamSpec> = resolved_specs.unwrap_or_default();
     let (vars, from_closure) = match gen.registry().extract_params(&name) {
         Ok(vars) => (vars, true),
         Err(_) => (extract_variables(&source, &name, &system_vars)?, false),
@@ -245,6 +246,7 @@ mod tests {
             default: None,
             min: None,
             max: None,
+            max_from: None,
             integer: false,
             unit: None,
             options: None,

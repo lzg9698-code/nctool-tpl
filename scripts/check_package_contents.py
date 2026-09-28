@@ -28,6 +28,7 @@ FORBIDDEN = [
     "output/",  # UI 原型 PNG / 验收脚本 / 工艺参数 JSON
     "scripts/",  # CI 对拍脚本与 fixture
     "ui/",  # Web UI 单文件（归 cli 打包）
+    "gui/",  # 桌面 GUI（Tauri 2 + React）——独立 crate，其 frontend/** 非库资产
     "docs/",  # 仓库文档（Cargo.toml 已 exclude）
     "examples/multi_op_demo.sh",  # 面向整个 workspace 的演示脚本
     "启动UI.bat",

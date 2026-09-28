@@ -2,17 +2,20 @@
 //!
 //! 每个模板条目携带分类、描述与参数规格，支持：
 //! - 按分类列出/筛选模板
-//! - 渲染前参数校验（委托 [`validate_template`]）
+//! - 渲染前参数校验（委托 [`crate::validate::validate_template`]）
 //! - 渲染（含 `{% include %}` / `{% extends %}` 等模板间引用）
 
 use std::cell::OnceCell;
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::path::{Path, PathBuf};
+use std::sync::{Mutex, OnceLock};
 
 use nctool_tpl::{Renderer, Value, ValueKind};
 
 use crate::model::ParamSpec;
-use crate::validate::{validate_template, ValidationReport};
+use crate::validate::{
+    validate_template_with_machine, validate_with_vars_with_machine, ValidationReport,
+};
 
 /// 模板分类。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
@@ -311,6 +314,20 @@ impl std::error::Error for RegistryError {
     }
 }
 
+/// 内置模板安装失败的记录（降级方案的**可见性出口**）。
+///
+/// 背景（P1-4）：[`TemplateRegistry::new`] 内部曾对内置模板注册用
+/// `.expect()`——一次编译失败就让进程在**启动瞬间** panic 且无诊断。现改为
+/// 「跳过该模板 + 记录」；但**降级比 panic 更危险**（崩溃立刻可见，某个内置
+/// 模板悄悄缺失不会），故每条失败必须可查、必经 stderr / `/health` 暴露。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct BuiltinWarning {
+    /// 未安装的内置模板名。
+    pub name: String,
+    /// 失败原因（[`RegistryError`] 的 Display；`Compile` 变体已含模板名与行列）。
+    pub message: String,
+}
+
 /// 模板注册表。
 ///
 /// 内部持有 [`Renderer`]（注册模板并复用其编译缓存），是模板的单一权威来源。
@@ -328,6 +345,8 @@ pub struct TemplateRegistry {
     /// 重新编译一遍——成本与模板数成正比，且发生在每个宽松渲染请求上。
     /// 改为惰性构建一次；失败原因（某模板编译不过）一并缓存，语义不变。
     lenient_cache: OnceCell<Result<Renderer, nctool_tpl::TplError>>,
+    /// 内置模板安装失败列表（P1-4 降级方案的结构化留痕；正常恒为空）。
+    builtin_warnings: Vec<BuiltinWarning>,
 }
 
 impl TemplateRegistry {
@@ -338,6 +357,7 @@ impl TemplateRegistry {
             renderer: Renderer::new(),
             system_vars: vec!["machine".to_string()],
             lenient_cache: OnceCell::new(),
+            builtin_warnings: Vec::new(),
         };
         registry.install_builtins();
         registry
@@ -396,16 +416,21 @@ impl TemplateRegistry {
     ) -> Result<(), RegistryError> {
         let name = name.into();
         let path = path.as_ref().to_path_buf();
-        let source_text = std::fs::read_to_string(&path).map_err(|e| {
-            // 把路径并进 io::Error 的消息里：`RegistryError::Io` 只装 io::Error，
-            // 不补路径时用户看到的是「文件读取失败: 系统找不到指定的文件」——
-            // 完全不知道是哪个文件。改变体形状是破坏性变更（crate 已发布），
-            // 故在构造处补，`source()` 与变体形状都不变。
-            RegistryError::Io(std::io::Error::new(
-                e.kind(),
-                format!("{}: {e}", path.display()),
-            ))
-        })?;
+        // 上限读取（P1-1）：模板源码后续会走 `nctool_tpl::parse`，且清单/变量库
+        // 侧还要交给 `serde_yaml`（别名展开无预算）。上限必须在读入时就生效。
+        let source_text =
+            crate::io_limit::read_text_capped(&path, crate::io_limit::MAX_SOURCE_BYTES).map_err(
+                |e| {
+                    // 把路径并进 io::Error 的消息里：`RegistryError::Io` 只装 io::Error，
+                    // 不补路径时用户看到的是「文件读取失败: 系统找不到指定的文件」——
+                    // 完全不知道是哪个文件。改变体形状是破坏性变更（crate 已发布），
+                    // 故在构造处补，`source()` 与变体形状都不变。
+                    RegistryError::Io(std::io::Error::new(
+                        e.kind(),
+                        format!("{}: {e}", path.display()),
+                    ))
+                },
+            )?;
         self.add_entry(TemplateEntry::new(
             name,
             category,
@@ -531,6 +556,21 @@ impl TemplateRegistry {
         name: &str,
         params: &crate::model::ParameterSet,
     ) -> Result<ValidationReport, RegistryError> {
+        self.validate_with_machine(name, params, None)
+    }
+
+    /// 机床联动校验（P0-2/Q-01）：`machine` 参与规格 `max_from` 声明的动态
+    /// 上界（如 `tool_change` 的 `spindle_speed` 按机床 `max_spindle_rpm` 收紧）。
+    ///
+    /// `machine = None` 等价于 [`Self::validate`]（纯静态上界）。渲染管线与
+    /// render/validate/machine test 等命令应传 `Some`，让"校验通过"与"渲染用的
+    /// 机床"是同一台。
+    pub fn validate_with_machine(
+        &self,
+        name: &str,
+        params: &crate::model::ParameterSet,
+        machine: Option<&crate::model::MachineConfig>,
+    ) -> Result<ValidationReport, RegistryError> {
         let entry = self
             .entries
             .get(name)
@@ -543,12 +583,13 @@ impl TemplateRegistry {
         let analysis = match entry.analysis() {
             Ok(a) => a,
             Err(_) => {
-                return Ok(validate_template(
+                return Ok(validate_template_with_machine(
                     &entry.source_text,
                     &entry.name,
                     &entry.params,
                     params,
                     &system,
+                    machine,
                 ))
             }
         };
@@ -557,8 +598,8 @@ impl TemplateRegistry {
         let mut specs = entry.params.clone();
         let mut visited = std::collections::BTreeSet::from([entry.name.clone()]);
         self.collect_include_closure(entry, &mut vars, &mut specs, &mut visited);
-        Ok(crate::validate::validate_with_vars(
-            &vars, &specs, params, &system,
+        Ok(validate_with_vars_with_machine(
+            &vars, &specs, params, &system, machine,
         ))
     }
 
@@ -719,6 +760,11 @@ impl TemplateRegistry {
     }
 
     /// 安装内置模板库。
+    ///
+    /// 单个内置模板注册失败**不再 panic**（P1-4 降级方案，不改 `new()`/`Default`
+    /// 签名）：跳过该模板、`eprintln!` 告警、记入 [`Self::builtin_warnings`]。
+    /// `add_entry` 是「先校验后入库」（编译过才 `entries.insert`），失败不会留下
+    /// 半入库状态。
     fn install_builtins(&mut self) {
         for (name, category, description, source, params) in builtin_templates() {
             let entry = TemplateEntry::new(
@@ -729,9 +775,43 @@ impl TemplateRegistry {
                 params,
                 source,
             );
-            // 内置模板注册失败视为编程错误（源码应为合法模板）
-            self.add_entry(entry).expect("内置模板注册失败");
+            if let Err(e) = self.add_entry(entry) {
+                self.note_builtin_failure(name, &e);
+            }
         }
+    }
+
+    /// 记录一次内置模板安装失败（降级方案的可见性出口）。
+    ///
+    /// - **stderr 每进程每个模板只打一次**：HTTP 通道按请求构建注册表
+    ///   （`Ctx::build_registry` 失效即重建），无去重会把同一告警刷屏；
+    ///   去重用**进程级**静态集合——「至少有一次可见输出」不依赖调用方接不接
+    ///   [`Self::builtin_warnings`]（SUMMARY §5 约束 C ①）。
+    /// - 结构化留痕进 `self.builtin_warnings`，由 `/health`、`doctor` 等出口暴露。
+    fn note_builtin_failure(&mut self, name: &str, err: &RegistryError) {
+        static PRINTED: OnceLock<Mutex<BTreeSet<String>>> = OnceLock::new();
+        let message = err.to_string();
+        let first_time = PRINTED
+            .get_or_init(|| Mutex::new(BTreeSet::new()))
+            .lock()
+            .map(|mut s| s.insert(name.to_string()))
+            .unwrap_or(true);
+        if first_time {
+            eprintln!("nctool: 内置模板 {name} 注册失败，已跳过：{message}");
+        }
+        self.builtin_warnings.push(BuiltinWarning {
+            name: name.to_string(),
+            message,
+        });
+    }
+
+    /// 内置模板安装失败列表；正常情况下为空。
+    ///
+    /// **非空即意味着有内置模板缺失**，必须经 stderr / `/health`
+    /// （`builtinWarnings`）暴露，不得静默——某个内置模板悄悄不存在比 panic
+    /// 更难察觉（「静默产出错误程序」红线）。
+    pub fn builtin_warnings(&self) -> &[BuiltinWarning] {
+        &self.builtin_warnings
     }
 }
 
@@ -948,7 +1028,13 @@ fn builtin_templates() -> Vec<(
                     None,
                     "主轴转速（S 值，正整数）",
                 )
+                // 静态 6000 是**无机床上下文时的兜底**；有机床上下文时以
+                // `machine.max_spindle_rpm` 为准（WFL=3500 / INDEX=5000，
+                // 见 `core::machine` 预设）。两者缺一不可：只留静态值 =
+                // 按机床校验的承诺失灵（P0-2）；只留动态值 = 无机床上下文
+                // 的调用方（旧签名/预设检查）失去上界。
                 .with_range(1.0, 6000.0)
+                .with_max_from("machine.max_spindle_rpm")
                 .with_unit("r/min"),
             ],
         ),
@@ -1300,7 +1386,7 @@ mod tests {
 
     #[test]
     fn validate_accepts_system_vars() {
-        // machine 是系统注入变量，校验时不应误报缺失
+        // machine 是系统注入变量，校验时不应误报缺失参数
         let r = TemplateRegistry::new();
         let mut ps = ParameterSet::new();
         ps.set_number("prog", 1.0); // program_header 引用了 machine.xxx
@@ -1309,6 +1395,135 @@ mod tests {
             report.is_ok(),
             "machine 不应被当作缺失参数: {}",
             report.summary()
+        );
+    }
+
+    /// P0-2/Q-01（SUMMARY §8 行1）：`tool_change` 的 `spindle_speed` 上界必须
+    /// 随机床 `max_spindle_rpm` 联动——同一取值在不同机床上结论不同。
+    /// 修复前是静态 `.with_range(1.0, 6000.0)`：`wfl_m65 + 3501`（上限 3500）
+    /// 会**通过**，本测试必须红。
+    #[test]
+    fn spindle_speed_bound_follows_machine_max_spindle_rpm() {
+        let r = TemplateRegistry::new();
+        // (机床 id, 转速 r/min, 应通过)
+        let cases = [
+            ("wfl_m65", 3499, true),
+            ("wfl_m65", 3500, true),
+            ("wfl_m65", 3501, false),
+            ("wfl_m65", 5000, false),
+            ("index_ms40", 5000, true),
+            ("index_ms40", 5001, false),
+            ("generic", 6000, true),
+            ("generic", 6001, false),
+        ];
+        for (id, rpm, should_pass) in cases {
+            let machine = crate::machine::MachinePreset::from_id(id)
+                .unwrap_or_else(|| panic!("未知内置机床 {id}"))
+                .config();
+            let bound = machine
+                .get("max_spindle_rpm")
+                .expect("内置机床必有 max_spindle_rpm")
+                .to_string();
+            let mut ps = ParameterSet::new();
+            ps.set_integer("tool_num", 1)
+                .set_integer("spindle_speed", rpm);
+            let report = r
+                .validate_with_machine("tool_change", &ps, Some(&machine))
+                .unwrap();
+            assert_eq!(
+                report.has_errors(),
+                !should_pass,
+                "{id} + S{rpm} 判定错误（应{}）：{}",
+                if should_pass { "通过" } else { "拒绝" },
+                report.summary()
+            );
+            if !should_pass {
+                assert!(
+                    report.errors().any(|e| {
+                        e.kind == crate::validate::IssueKind::OutOfRange
+                            && e.message.contains(&bound)
+                            && e.message.contains(&format!("机床 {id}"))
+                    }),
+                    "{id} + S{rpm} 应报 OutOfRange 且标注来自该机床的 {bound}：{}",
+                    report.summary()
+                );
+            }
+        }
+    }
+
+    /// P0-2/Q-12 配套：机床上限**非法或缺失**时回退静态上界（6000）并发警告，
+    /// 绝不以 0/负数为上界（全量误杀 S 值），也绝不静默回退（红线）。
+    #[test]
+    fn invalid_machine_max_spindle_rpm_falls_back_with_warning() {
+        let r = TemplateRegistry::new();
+        let base = crate::machine::MachinePreset::from_id("wfl_m65")
+            .expect("wfl_m65 是内置预设")
+            .config();
+
+        let mut m_zero = base.clone();
+        m_zero.config.insert("max_spindle_rpm".into(), "0".into());
+        let mut m_neg = base.clone();
+        m_neg.config.insert("max_spindle_rpm".into(), "-100".into());
+        let mut m_txt = base.clone();
+        m_txt.config.insert("max_spindle_rpm".into(), "abc".into());
+        let mut m_missing = base.clone();
+        m_missing.config.remove("max_spindle_rpm");
+
+        let mut ps = ParameterSet::new();
+        ps.set_integer("tool_num", 1)
+            .set_integer("spindle_speed", 5000);
+        let mut ps_over = ParameterSet::new();
+        ps_over
+            .set_integer("tool_num", 1)
+            .set_integer("spindle_speed", 6001);
+
+        for (label, broken) in [
+            ("0", &m_zero),
+            ("-100", &m_neg),
+            ("abc", &m_txt),
+            ("缺失", &m_missing),
+        ] {
+            let report = r
+                .validate_with_machine("tool_change", &ps, Some(broken))
+                .unwrap();
+            assert!(
+                !report.has_errors(),
+                "机床上限 {label} 时 5000 必须按静态上界 6000 放行（禁止全量误杀）：{}",
+                report.summary()
+            );
+            assert!(
+                report
+                    .warnings()
+                    .any(|w| w.message.contains("max_spindle_rpm")
+                        && w.message.contains("回退")
+                        && w.message.contains(&broken.id)),
+                "机床上限 {label} 必须产生回退警告（含机床 id）：{}",
+                report.summary()
+            );
+            // 静态兜底本身仍然生效：6001 > 6000 照样拒
+            let over = r
+                .validate_with_machine("tool_change", &ps_over, Some(broken))
+                .unwrap();
+            assert!(
+                over.has_errors(),
+                "机床上限 {label} 时静态上界 6000 仍应拦截 6001：{}",
+                over.summary()
+            );
+        }
+
+        // 合法机床上限：动态值生效（wfl 3500），无回退警告、无任何问题
+        let mut ps_ok = ParameterSet::new();
+        ps_ok
+            .set_integer("tool_num", 1)
+            .set_integer("spindle_speed", 3499);
+        let ok = r
+            .validate_with_machine("tool_change", &ps_ok, Some(&base))
+            .unwrap();
+        assert!(ok.is_ok(), "wfl_m65 + S3499 应通过：{}", ok.summary());
+        assert!(
+            !ok.warnings().any(|w| w.message.contains("回退")),
+            "机床上限合法时不应有回退警告：{}",
+            ok.summary()
         );
     }
 
@@ -1722,5 +1937,44 @@ mod tests {
         let names: Vec<&str> = vars.iter().map(|v| v.name.as_str()).collect();
         assert!(names.contains(&"A_VAR"));
         assert!(names.contains(&"B_VAR"));
+    }
+
+    /// **P1-4 守卫**：真实内置模板库必须全部安装成功——「minijinja/nctool-tpl
+    /// 升级踩雷」应在 CI 变红，而不是用户运行时 panic（旧 `.expect` 即崩）。
+    #[test]
+    fn builtin_registry_has_no_warnings() {
+        let r = TemplateRegistry::new();
+        assert!(
+            r.builtin_warnings().is_empty(),
+            "内置模板应全部安装成功: {:?}",
+            r.builtin_warnings()
+        );
+        assert!(!r.list(None).is_empty(), "注册表不应为空");
+    }
+
+    /// 每个内置模板**单独**过一遍解析器：把"升级后某个模板编译不过"精确到模板名，
+    /// 不依赖 registry 构建路径（SUMMARY §5 契约2 配套③）。
+    #[test]
+    fn every_builtin_template_parses_standalone() {
+        for (name, _category, _description, source, _params) in builtin_templates() {
+            nctool_tpl::parse(source, name)
+                .unwrap_or_else(|e| panic!("内置模板 {name} 解析失败: {e}"));
+        }
+    }
+
+    /// 降级路径本身可测：失败**结构化记录**、经 `builtin_warnings()` 可查，
+    /// 进程不 panic（P1-4）。stderr 告警有进程级去重，此处不断言输出。
+    #[test]
+    fn builtin_failure_is_recorded_not_panicking() {
+        let mut r = TemplateRegistry::new();
+        r.note_builtin_failure("bad_tpl", &RegistryError::EmptySource("bad_tpl".into()));
+        let w = r.builtin_warnings();
+        assert_eq!(w.len(), 1, "失败应被记录: {w:?}");
+        assert_eq!(w[0].name, "bad_tpl");
+        assert!(
+            w[0].message.contains("bad_tpl"),
+            "消息应含模板名（可诊断）: {}",
+            w[0].message
+        );
     }
 }

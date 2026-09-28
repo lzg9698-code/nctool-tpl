@@ -51,7 +51,7 @@ P2 决定了 compute-heavy 模板（如 `machines/index_g420/` 下的同步车�
 | 变量库 | `templates/variables.yaml`，58 条按名全局规格（源自 NCTool_V3 的 62 个变量） |
 | 机床预设 | 3 个内置（`generic` / `wfl_m65` / `index_ms40`）+ 配置文件自定义 |
 | 测试 | **项数不在此硬编码**（每加一个测试就过期）——**以 CI run 的 job summary 为准**；本机复现约 3 分钟，须后台跑 |
-| 覆盖率 | 门禁 = **生产口径行覆盖 ≥ 91%**（`scripts/check_coverage_caliber.py`）；实测值以 CI 的 coverage job summary 为准，不在本文档写死 |
+| 覆盖率 | 门禁 = **生产口径行覆盖 ≥ 92%**（`scripts/check_coverage_caliber.py`；2026-09-26 口径修订后由 91% 上调）；实测值以 CI 的 coverage job summary 为准，不在本文档写死 |
 | CLI | 完整：`templates` / `inspect` / `lint` / `validate` / `render` / `machine` / `preset` / `config` / `ui` / `part` / `completion` |
 | Web UI | `nctool ui` 已可用：本地 `tiny_http` 服务 + 只读/渲染 API + 单文件前端 |
 

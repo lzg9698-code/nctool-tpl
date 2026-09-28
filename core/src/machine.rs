@@ -344,13 +344,19 @@ pub fn validate_config_keys(cfg: &MachineConfig) -> Vec<String> {
                 "未知配置键: {k}（{{{{ machine.{k} }}}} 引用前请确认拼写；内建键见 `nctool machine show`）"
             )),
             Some(s) => match s.kind {
-                MachineKeyKind::Integer => {
-                    if v.parse::<i64>().is_err() {
-                        warnings.push(format!(
-                            "配置键 {k} 期望整数，实际为 {v:?}（模板做 | int 转换时会失败或取默认值）"
-                        ));
+                MachineKeyKind::Integer => match v.parse::<i64>() {
+                    Err(_) => warnings.push(format!(
+                        "配置键 {k} 期望整数，实际为 {v:?}（模板做 | int 转换时会失败或取默认值）"
+                    )),
+                    // 只判"是不是整数"还不够（Q-12）：`0`/`-100`/`999999999`
+                    // 都能解析。`max_spindle_rpm` 一旦按机床校验联动，0/负数
+                    // 会让所有转速被判为越界 = 全量误杀。
+                    Ok(n) => {
+                        if let Some(w) = integer_range_warning(k, n) {
+                            warnings.push(w);
+                        }
                     }
-                }
+                },
                 MachineKeyKind::Choice(opts) => {
                     if !opts.contains(&v.as_str()) {
                         warnings.push(format!(
@@ -380,6 +386,37 @@ pub fn validate_config_keys(cfg: &MachineConfig) -> Vec<String> {
         }
     }
     warnings
+}
+
+/// Integer 键的**取值范围**校验（Q-12 前置，P0-2 按机床上限联动的安全边界）。
+///
+/// 返回 `None` = 通过；`Some` = 警告文案。规则（与 Q-12 改进建议一致）：
+/// - `max_spindle_rpm`：`1..=100000`。`0`/负数一旦被按机床校验采用，所有
+///   转速都会被判为越界（全量误杀）；`>100000` 疑似笔误（转速上界是安全相关值）。
+/// - `program_digits` / `line_number_digits`：`≥ 1`（0/负数让位数填充失效）。
+///
+/// **单一来源**：`validate_config_keys`（`machine show` 展示）与
+/// `MachineWriter::preflight`（保存时告警，`line_number_digits` 除外——它在
+/// preflight 里有含渲染期夹紧说明的专用提示，见 AC-2.9）共用本函数。
+///
+/// 级别一律是**警告而非阻断**（Q-12："非法时报 warning 并提示回退默认值"）：
+/// 非法值在校验层会被回退（`validate::resolve_bound` 绝不以 0/负数为上界），
+/// 不会带着错误的上界生效；同时警告要求用户改配置。
+pub fn integer_range_warning(key: &str, value: i64) -> Option<String> {
+    match key {
+        "max_spindle_rpm" if value < 1 => Some(format!(
+            "配置键 {key}={value} 应为 1..=100000 的正整数\
+             （0/负数会让所有主轴转速被判为超程；校验时回退模板静态上界）"
+        )),
+        "max_spindle_rpm" if value > 100_000 => Some(format!(
+            "配置键 {key}={value} 超出合理上限 100000（疑似笔误；\
+             转速上界是安全相关值）"
+        )),
+        "program_digits" | "line_number_digits" if value < 1 => Some(format!(
+            "配置键 {key}={value} 应为正整数（0/负数会让位数填充失效）"
+        )),
+        _ => None,
+    }
 }
 
 /// 通用编程约定默认值（所有预设的基础）。
@@ -532,6 +569,65 @@ mod tests {
             assert!(
                 validate_config_keys(&p.config()).is_empty(),
                 "内建预设 {} 不应有配置告警",
+                p.id()
+            );
+        }
+    }
+
+    /// Q-12 补充用例：Integer 键的**范围**校验——修复前只判"是不是整数"，
+    /// `0` / `-100` / `999999999` 全部静默通过；一旦按机床校验联动（P0-2），
+    /// `0` 会让所有转速被判为越界 = 全量误杀。
+    #[test]
+    fn zero_or_negative_max_spindle_rpm_warns() {
+        for bad in ["0", "-100", "999999999"] {
+            let mut c = MachinePreset::Generic.config();
+            c.config.insert("max_spindle_rpm".into(), bad.into());
+            let warnings = validate_config_keys(&c);
+            assert!(
+                warnings.iter().any(|w| w.contains("max_spindle_rpm")),
+                "max_spindle_rpm={bad} 必须告警（Q-12）：{warnings:?}"
+            );
+        }
+        // 位数键同理（0/负数让位数填充失效，Q-12 列出的另外两个 Integer 键）
+        let mut c = MachinePreset::Generic.config();
+        c.config.insert("program_digits".into(), "0".into());
+        c.config.insert("line_number_digits".into(), "-1".into());
+        let warnings = validate_config_keys(&c);
+        assert!(
+            warnings.iter().any(|w| w.contains("program_digits")),
+            "program_digits=0 必须告警：{warnings:?}"
+        );
+        assert!(
+            warnings.iter().any(|w| w.contains("line_number_digits")),
+            "line_number_digits=-1 必须告警：{warnings:?}"
+        );
+        // 合法值不产生范围告警（generic 基线自身就是合法值）
+        assert!(
+            validate_config_keys(&MachinePreset::Generic.config()).is_empty(),
+            "合法配置不应有告警"
+        );
+    }
+
+    /// SUMMARY §8 行4（P0-2 防回归闸门）：内置预设的 `max_spindle_rpm` 不得
+    /// 超过 generic 基线——把 WFL 的 3500 改回 6000（或更大）必须被拦住。
+    #[test]
+    fn preset_max_spindle_rpm_is_at_most_generic() {
+        let generic_rpm: i64 = generic_config()
+            .get("max_spindle_rpm")
+            .expect("generic 必有 max_spindle_rpm")
+            .parse()
+            .expect("generic 的 max_spindle_rpm 应是整数");
+        for p in MachinePreset::all() {
+            let cfg = p.config();
+            let Some(v) = cfg.get("max_spindle_rpm") else {
+                continue;
+            };
+            let rpm: i64 = v
+                .parse()
+                .unwrap_or_else(|_| panic!("预设 {} 的 max_spindle_rpm 非整数: {v}", p.id()));
+            assert!(
+                rpm <= generic_rpm,
+                "预设 {} 的 max_spindle_rpm={rpm} 不得超过 generic 基线 {generic_rpm}",
                 p.id()
             );
         }

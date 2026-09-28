@@ -816,13 +816,25 @@ fn wait_for_ui(port: u16) -> std::process::Child {
 }
 
 fn http_request(port: u16, method: &str, path: &str, body: &str) -> std::io::Result<Vec<u8>> {
+    http_request_with_host(port, method, path, body, "localhost")
+}
+
+/// 同 [`http_request`]，但可指定 `Host` —— 用于 DNS rebinding 用例
+/// （浏览器按地址栏主机名填 Host，`cross_site_guard` 对同源 GET 无感）。
+fn http_request_with_host(
+    port: u16,
+    method: &str,
+    path: &str,
+    body: &str,
+    host: &str,
+) -> std::io::Result<Vec<u8>> {
     let mut stream = TcpStream::connect_timeout(
         &format!("127.0.0.1:{port}").parse().unwrap(),
         Duration::from_millis(300),
     )?;
     stream.set_read_timeout(Some(Duration::from_millis(500)))?;
     let request = format!(
-        "{method} {path} HTTP/1.1\r\nHost: localhost\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
+        "{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",
         body.len()
     );
     stream.write_all(request.as_bytes())?;
@@ -886,6 +898,51 @@ fn ui_http_contracts_and_frontend_mode() {
         response_text(&http_request(port, "POST", "/api/inspect", &oversized).unwrap());
     assert!(oversized_response.starts_with("HTTP/1.1 413"));
     assert!(oversized_response.contains("payload_too_large"));
+
+    child.kill().unwrap();
+    child.wait().unwrap();
+}
+
+/// DNS rebinding：重绑后的浏览器对本服务发**同源 GET**（不带 `Origin`、
+/// `Sec-Fetch-Site: same-origin`），`cross_site_guard` 两条分支都放行 ——
+/// 只有 `Host` 头能拦住。伪造 Host 必须 403，且连静态页 `/` 也不给读。
+#[test]
+fn ui_rejects_rebinding_host_header() {
+    let port = reserve_port();
+    let mut child = wait_for_ui(port);
+
+    // 回环 Host（正常访问形态）照常工作
+    let ok = response_text(
+        &http_request_with_host(
+            port,
+            "GET",
+            "/api/templates",
+            "",
+            &format!("127.0.0.1:{port}"),
+        )
+        .unwrap(),
+    );
+    assert!(ok.starts_with("HTTP/1.1 200"), "回环 Host 应放行: {ok}");
+
+    // 重绑主机名：API 与静态页都必须 403
+    for path in ["/api/templates", "/", "/api/presets"] {
+        let resp = response_text(
+            &http_request_with_host(port, "GET", path, "", &format!("attacker.example:{port}"))
+                .unwrap(),
+        );
+        assert!(
+            resp.starts_with("HTTP/1.1 403"),
+            "重绑 Host 应被拒（{path}）: {}",
+            &resp[..resp.len().min(200)]
+        );
+        assert!(resp.contains("forbidden_host"), "{path}");
+        assert!(!resp.contains("drill_cycle"), "{path} 不得泄漏正文");
+    }
+
+    // 大小写变体的合法 Host 仍放行
+    let mixed =
+        response_text(&http_request_with_host(port, "GET", "/health", "", "LOCALHOST").unwrap());
+    assert!(mixed.starts_with("HTTP/1.1 200"), "{mixed}");
 
     child.kill().unwrap();
     child.wait().unwrap();

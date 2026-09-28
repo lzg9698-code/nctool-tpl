@@ -23,7 +23,7 @@
 
 | 项目 | 要求 |
 | --- | --- |
-| Rust | **1.85+**（MSRV = workspace 各 crate 的 `rust-version`）。CI 在 stable 上跑质量门，另有 `msrv` job 在 1.85 上 `cargo check --workspace --locked`，让这个承诺可验证。**抬 MSRV 前先看该 job**：1.82 时代它是红的（`clap_derive` 需要 `edition2024`），本机 stable 不会暴露这种问题 |
+| Rust | **1.89+**（MSRV = workspace 各 crate 的 `rust-version`）。CI 在 stable 上跑质量门，另有 `msrv` job 在 1.89 上 `cargo check --locked`（发布 crate，不含 gui），让这个承诺可验证。**抬 MSRV 前先看该 job**：1.82 时代它是红的（`clap_derive` 需要 `edition2024`），1.85→1.89 系 P0-1 跨进程写锁采用 std `File::try_lock`（1.89 稳定）所致 —— 本机 stable 不会暴露这种问题 |
 | 组件 | `rustfmt`、`clippy`（CI 用 `dtolnay/rust-toolchain@stable` 安装） |
 | 可选工具 | `cargo-audit`（安全审计）、`cargo-llvm-cov` + `python`（覆盖率，CI **阻断**项） |
 | 平台 | Linux / macOS / Windows 均需可用（CI 三平台矩阵） |
@@ -63,6 +63,7 @@ cargo test --workspace --all-targets
 cargo test --workspace --doc          # --all-targets 不跑 doctest，CI 为此单列一步
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 node scripts/check_param_parity.mjs   # --param 归一规则的 Rust / 前端对拍
+node scripts/check_gui_parity.mjs     # 端点契约 ↔ GUI Tauri command 封装的双向对拍
 cargo audit
 ```
 
@@ -78,48 +79,96 @@ CI（`.github/workflows/ci.yml`）在 **ubuntu / windows / macos** 三平台各�
 ```bash
 rustup component add llvm-tools-preview
 cargo install cargo-llvm-cov        # 本地复现 CI 覆盖率门需要这两步
-cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
-python scripts/check_coverage_caliber.py lcov.info --min 91
+# 与 CI 逐字同款；`--ignore-filename-regex` 同时接受 `/` 与 `\`（CI 正斜杠、Windows 反斜杠）
+cargo llvm-cov --workspace --lcov --output-path lcov.info --ignore-filename-regex '(^|[\\/])gui[\\/]'
+python3 scripts/check_coverage_caliber.py lcov.info --min 92
 ```
 
-阈值是**生产代码**行覆盖 **≥ 91%**（2026-09-22 由 89% 上调；2026-09-24 复核后维持）。
+阈值是**生产代码**行覆盖 **≥ 92%**（2026-09-22 由 89% 上调至 91%；2026-09-26 口径修订后上调至 92%，见下方裁定）。
 **实测基线不在此硬编码** —— 它每加一个测试就变一次，写死只会过期；
 **以 CI 的 coverage job summary 为准**（本机复现用上面两条命令）。
 
-> **不要用 `--fail-under-lines`。** llvm-cov 把 `src/*.rs` 内的 `#[cfg(test)]` 段本身
-> 也计入分母（本仓库 `src/lib.rs` 1824 行里测试段占 1760 行），于是「新增测试」会
-> **推高**覆盖率数字、「新增未覆盖的生产代码」反被稀释 —— 原始口径约 95%，而剔除
-> 测试段后的生产代码只有 92% 上下（2026-09-24 实测 92.55%），**门禁绿 ≠ 生产代码达标**。
-> `--ignore-filename-regex` 只能按文件路径排除，管不到 `src/` 内部的测试段，故改由
-> `scripts/check_coverage_caliber.py` 从 lcov 数据剔除测试段后重新统计。该脚本会
-> 同时打印两种口径的数字，便于核对。
+> **不要用 `--fail-under-lines`。** llvm-cov 会把两类**不该进分母**的行也算进去：
+>
+> 1. `src/*.rs` 内的 `#[cfg(test)]` 段本身（本仓库 `src/lib.rs` 1824 行里测试段占
+>    1760 行）——于是「新增测试」会**推高**覆盖率数字、「新增未覆盖的生产代码」反被稀释；
+> 2. **非可执行行**（注释 / 空行 / 纯分隔符）——llvm-cov 会给它们也写 `DA:0`（实测：
+>    某命中 388 次的函数，其函数体内紧跟的注释行仍是 `DA:137,0`；`impl Ctx {` 是
+>    `DA:62,0`）。计入分母的话，门禁测的其实是「注释 + 空行的覆盖率」，且该数字会随
+>    llvm-cov / rustc 版本漂移，不反映真实代码覆盖率。
+>
+> `--ignore-filename-regex` 只能按文件路径排除，管不到 `src/` 内部，故改由
+> `scripts/check_coverage_caliber.py` 从 lcov 数据**同时剔除**这两类行后重新统计。
+> 该脚本会**并排打印三档口径**，便于逐档核对「每多剔一类行」的效果：
+> ① 原始口径（不剔任何行，llvm-cov 原样，随新增测试虚涨、仅参考）→
+> ② 中间口径（剔 `#[cfg(test)]` 段，保留不可执行行）→
+> ③ 生产口径（再剔不可执行行，**门禁判定用**）。
 >
 > 要分析 **CI 产物**（而不是本地生成的 lcov）时加 `--strip-prefix`：runner 上记录的
 > 是绝对路径（`/home/runner/work/<repo>/<repo>/cli/src/args.rs`），本地没有该路径，
 > 剥掉前缀才能映射到本仓库。可在 CI run 的 Artifacts 里下载 `rust-coverage-lcov`：
 >
 > ```bash
-> python scripts/check_coverage_caliber.py lcov.info \
+> python3 scripts/check_coverage_caliber.py lcov.info \
 >     --strip-prefix /home/runner/work/nctool-tpl/nctool-tpl/
 > ```
 
 **刻意不贴着实测值设阈值**：余量只剩十几行时任何一次小改动都可能误触，
 而"经常误报的门禁会被当成噪音忽略"。
 **覆盖率提升后请上调这个数字** —— 只改 `ci.yml` 里 `python3 scripts/check_coverage_caliber.py
-lcov.info --min 91` 那一行的 `--min`，一处。
+lcov.info --min 92` 那一行的 `--min`，一处。
 门禁失败时 job summary 与 lcov 产物仍会产出（那两步带 `if: always()`）——
 排查"覆盖为什么掉下去"正需要它们。
 
-> **【2026-09-24 裁定】维持 `--min 91`，本轮不上调。**
+> **【2026-09-24 裁定】维持 `--min 91`，不上调。**
 >
-> 实测基线 92.55%（8198/8858），阈值 91%，余量 **1.55pt ≈ 137 行**。
-> 不上调到 92% 的理由是**余量会被压到 ~49 行**：一次中等改动（如本轮 P2-1 新增
-> 一个 `GenerationOutcome` 加三条呈现落点）就会让门禁变红，而"经常误报的门禁
-> 会被当成噪音忽略"，质量信号反而丢失 —— 这正是阈值存在的反面用法。
-> 同时最低文件仍是 `cli/src/commands/lint.rs` 83.61%，单点洼地不会因为
-> 整体上调而得到改善，该补的测试是补测试，不是抬门槛。
+> 当时的实测基线 92.55%（8198/8858，**旧口径**：只剔除 `#[cfg(test)]` 段），
+> 阈值 91%，余量 1.55pt ≈ 137 行。不上调到 92% 的理由是余量会被压到 ~49 行：
+> 一次中等改动（如 P2-1 新增一个 `GenerationOutcome` 加三条呈现落点）就会让
+> 门禁变红，而"经常误报的门禁会被当成噪音忽略"，质量信号反而丢失。
+> 同时最低文件仍是 `cli/src/commands/lint.rs` 83.61%，单点洼地不会因为整体
+> 上调而改善 —— 该补的测试是补测试，不是抬门槛。
 >
-> **下次评估触发条件**：连续两个发布周期实测 **≥ 93%** 时再考虑上调到 92%
+> **【口径测量差异说明】** 上面裁定的 **92.55%（8198/8858）**、下方新表的 **92.57%（8226/8886）**、
+> 以及历史对照表曾用的 **92.58%（8230/8890）**，是**同一份基线 lcov 在三个脚本修订版下**的测量
+> 结果，差异 < 0.03pt，全部来自「是否剔除非 mod 的 `#[cfg(test)]` 项」这一处规则变化（旧脚本不剔
+> 该类项，行数与命中数都偏多）。本文一律采用**当前脚本**的口径（**92.57%** / 余量 **1.57pt**）。
+>
+> **【2026-09-26 已被取代】** 本裁定被下方「2026-09-26 口径修订 + 阈值上调到 92%」取代。
+> 原因：口径修正改变了「余量语义」—— 同一份基线代码在旧口径下为 92.57%、新口径下为
+> **92.90%**，故 91% 的余量由 1.57pt 变为 1.90pt（比当初设 91% 时更松），等于门禁被
+> 悄悄放松。故按「**只上调、不下调**」政策上调到 92%。
+> **原裁定文字保留以溯因，不再作为当前口径。**
+>
+> **【2026-09-26 口径修订 + 阈值上调到 92%】基线 92.88%（6600/7106）。**
+>
+> 旧口径把 llvm-cov 给注释 / 空行 / 纯分隔符写的 `DA:0` 也算进了分母（实测：
+> 某命中 388 次的函数，其函数体内紧跟的注释行仍是 `DA:137,0`；`impl Ctx {`
+> 是 `DA:62,0`；`cli/src/server.rs` 900/901/904/905 为 1 而其续行 902/903 为 0），
+> 于是门禁测的其实是「注释覆盖率」，且数值随 llvm-cov / rustc 版本漂移。
+> 修订后分母只含**可执行**生产代码，**当前代码**的 ②→③ 差值（本机约 4.1pt：88.76% → 92.88%）全部来自非可执行行。
+>
+> **三口径 × 两基线对照**（本仓库实测，本次修复最有力的证据；基线 lcov 无 gui、当前 lcov 已排除 gui，两者可比）：
+>
+> | 口径 | 09-24 旧基线 | 当前（补测后） |
+> | --- | --- | --- |
+> | ① 原始 llvm-cov | 17121/17999 = 95.12% | 17438/19230 = 90.68% |
+> | ② 剔 `#[cfg(test)]` 段 | 8226/8886 = 92.57% | 8262/9308 = 88.76% |
+> | **③ 生产（再剔不可执行行）** | **6278/6758 = 92.90%** | **6600/7106 = 92.88%** ← 门禁判定 |
+>
+> → **③ 生产口径下当前代码与 GUI 之前的基线持平（92.90% → 92.88%，−0.02pt）**；
+> **② 口径下看似下滑 −3.81pt（92.57% → 88.76%）**，成因是**库化把 `cli` 的插桩范围
+> 扩大了**（bin target 下被死代码消除的 `pub`/`pub(crate)` 项成为 lib 的公开 API 面后
+> 被完整插桩，约 404 行此前从未被度量的生产代码进入分母），**不是覆盖质量退化**。
+>
+> **阈值随之由 91% 上调到 92%**：口径修正对**同一份代码**的抬高幅度取决于该代码里
+> 注释/空行的占比：当前代码为 **+4.12pt**（88.76% → 92.88%），09-24 基线为 **+0.33pt**
+> （92.57% → 92.90%）。就**阈值**而言，相关的量是**基线的变化**：同一份基线代码由旧口径
+> 92.57% 变为新口径 92.90%，因此 91% 的余量语义由 1.57pt 变成 1.90pt —— 比当初设 91% 时
+> 更松。按本项目「**只上调、不下调**」的政策，此处**保守地只上调 1pt** 到 **92%**：
+> 余量 **0.88pt ≈ 63 行**，仍是项目自述「本机与 CI 差 ~0.3pt」的约 3 倍。
+>
+> **下次评估触发条件**：连续两个发布周期实测 **≥ 93%** 时再考虑上调到 93%
 > （届时余量仍有 ~1pt）；单次冲高不算，避免把一次性的补测红利固化成门槛。
 
 已知平台问题：
@@ -132,7 +181,7 @@ lcov.info --min 91` 那一行的 `--min`，一处。
 文档改动后顺手跑一次链接自检（无第三方依赖，Python 3.8+）：
 
 ```bash
-python scripts/check_docs_links.py README.md docs
+python3 scripts/check_docs_links.py README.md docs
 ```
 
 它检查 Markdown 里的相对链接文件是否存在、heading 锚点是否可解析（当前 `docs/` 全量已通过）。

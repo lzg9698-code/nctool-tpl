@@ -31,8 +31,11 @@ jobs:
       - name: Cache cargo
         uses: Swatinem/rust-cache@v2
 
-      - name: Verify (test)
-        run: cargo test --workspace --all-targets --locked
+      # 只测三只发布 crate：`--workspace` 会把 nctool-gui 也拉进来，而本 runner
+      # 没装 Tauri 的 Linux 系统库（libwebkit2gtk 等），ubuntu 上必编译失败；
+      # 发布物也不含 GUI，跑它的测试没有意义。
+      - name: Verify (test publish crates)
+        run: cargo test -p nctool-tpl -p nctool-core -p nctool-cli --all-targets --locked
 
       - name: Publish nctool-tpl
         if: startsWith(github.ref_name, 'nctool-tpl-') && env.CARGO_REGISTRY_TOKEN != ''

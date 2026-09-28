@@ -5,21 +5,17 @@
 //!
 //! 所有真实逻辑都在 `nctool-core`，CLI 只做参数解析、配置加载与结果展示，
 //! 不复制业务逻辑。
-
-mod args;
-mod cli;
-mod commands;
-mod config;
-mod context;
-mod output;
-mod server;
+//!
+//! **注意**：本文件（bin target）**不得**再声明 `mod args/cli/commands/config/
+//! context/output/server` —— 这些模块已迁到 `cli/src/lib.rs`（lib target）。
+//! 若在此重复声明，7 个模块会被 lib 与 bin **各编译一次**、测试**跑两遍**。
 
 use std::process::ExitCode;
 
 use clap::Parser;
 
-use crate::cli::Cli;
-use crate::output::OutputStyle;
+use nctool_cli::cli::Cli;
+use nctool_cli::output::OutputStyle;
 
 fn main() -> ExitCode {
     // 解析命令行。`Cli::parse` 在参数错误时由 clap 自行退出（--help / 用法错误）。

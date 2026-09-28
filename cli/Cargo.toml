@@ -2,7 +2,7 @@
 name = "nctool-cli"
 version = "0.3.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.89"
 description = "nctool 命令行工具：模板浏览 / 变量提取 / 参数校验 / G-code 生成"
 license = "MIT"
 repository = "https://github.com/lzg9698-code/nctool-tpl"
@@ -27,6 +27,12 @@ tiny_http = "0.12"
 [dev-dependencies]
 assert_cmd = "2"
 predicates = "3"
+
+# 库形态（T01 契约层库化）：GUI（nctool-gui）复用 `server::route` / `Ctx` /
+# `config` / `output`。显式声明 [lib] 以求清晰（cargo 本可自动发现 src/lib.rs）。
+[lib]
+name = "nctool_cli"
+path = "src/lib.rs"
 
 [[bin]]
 name = "nctool"

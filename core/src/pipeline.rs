@@ -240,11 +240,12 @@ impl GCodeGenerator {
         };
 
         // 2. 参数校验（渲染前）。校验阶段的失败情形理论上只有模板不存在
-        //    （第 1 步已拦截）；保留原始 RegistryError 而非吞掉，防止未来
-        //    新增错误变体时信息静默丢失
+        //    （第 1 步已拦截）；保留原始 RegistryError 而非吞掉，防止未
+        //    新增错误变体时信息静默丢失。带机床上下文（P0-2：转速上界
+        //    按 `machine.max_spindle_rpm` 联动），与下面渲染用的机床同源。
         let report = self
             .registry
-            .validate(template, params)
+            .validate_with_machine(template, params, Some(machine))
             .map_err(PipelineError::Registry)?;
         if report.has_errors() {
             return Err(PipelineError::Validation(report));
@@ -332,11 +333,12 @@ impl GCodeGenerator {
         };
 
         // 宽松模式同样跑校验：NaN/Inf 必须拦截，其余问题降级为提示。
-        // 早期实现直接跳过 validate，导致 X{{ x }} 能吐出 XNaN —— 校验层
-        // 唯一的"防非法数值写入 G-code"防线在宽松路径上完全失效。
+        // 早期实现直接跳过 validate，导致 `X{{ x }}` 能吐出 XNaN —— 校验是
+        // 唯一"防非法数值写进 G-code"防线在宽松路径上完全失效。
+        // 与严格路径同口径带上机床上下文（P0-2）。
         let mut report = self
             .registry
-            .validate(template, params)
+            .validate_with_machine(template, params, Some(machine))
             .map_err(PipelineError::Registry)?;
         // 硬失败集合由 IssueKind::is_hard_fail 的穷尽匹配决定（NaN/Inf、派生失败），
         // 而不是在这里写死类别 —— 新增硬失败类别不必改本函数。

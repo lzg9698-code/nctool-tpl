@@ -15,7 +15,7 @@ use std::io::{Read, Write};
 use std::net::{TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
 use std::sync::atomic::{AtomicU32, Ordering};
-use std::time::Duration;
+use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use assert_cmd::Command;
 
@@ -88,18 +88,120 @@ fn run_in(dir: &Path, cfg: &Path, args: &[&str]) -> Run {
 }
 
 /// 建唯一临时目录（位于系统临时区）。
+///
+/// 唯一性由 `pid + tag + 自增计数 + 纳秒时间戳` 共同保证：即便上一次运行被中断、
+/// 在 `%TEMP%` 下留下了同名残留目录，本次也**不可能**复用（时间戳单调递增），
+/// 从根本上隔离 —— 这比「先删干净再建」更可靠。
+///
+/// 删除旧目录前**递归清除只读属性**：Windows 上 `remove_dir_all` 遇到只读文件会
+/// 失败（os error 5），而本文件的 `write_failure_on_readonly_target_leaves_no_residue`
+/// 用例正会造只读 `nctool.toml`。此前用 `let _ = ...` 吞掉删除失败，残留的只读目录
+/// 被复用时会让新用例误报「目标只读或无写入权限」—— 偶发红。现改为：先去只读 → 删除；
+/// 失败则去只读后重试一次；仍失败则带诊断信息 panic（**绝不静默吞掉**）。
 fn temp_dir(tag: &str) -> PathBuf {
     static COUNTER: AtomicU32 = AtomicU32::new(0);
     let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
     let dir = std::env::temp_dir().join(format!(
-        "nctool_machine_{}_{}_{}",
+        "nctool_machine_{}_{}_{}_{}",
         std::process::id(),
         tag,
-        n
+        n,
+        nanos
     ));
-    let _ = std::fs::remove_dir_all(&dir);
+
+    // 纳秒时间戳已使残留复用几乎不可能；万一命中，也要能删掉只读残留而非静默失败。
+    if dir.exists() {
+        remove_dir_all_force(&dir);
+    }
     std::fs::create_dir_all(&dir).expect("创建临时目录失败");
     dir
+}
+
+/// 尽力删除目录：先递归清只读，再 `remove_dir_all`；失败则清只读后重试一次；
+/// 仍失败则 panic（带路径与两次错误，便于诊断）—— 绝不静默吞掉失败。
+fn remove_dir_all_force(dir: &Path) {
+    clear_readonly_recursive(dir);
+    match std::fs::remove_dir_all(dir) {
+        Ok(()) => {}
+        Err(first) => {
+            // 只读属性可能在清理与删除之间被重新置上（或清理未覆盖到），重试一次。
+            clear_readonly_recursive(dir);
+            if let Err(second) = std::fs::remove_dir_all(dir) {
+                panic!(
+                    "清理残留临时目录失败（已两次尝试清除只读属性）：{}（首次错误: {first}；重试错误: {second}）",
+                    dir.display()
+                );
+            }
+        }
+    }
+}
+
+/// 递归清除目录树下所有条目（含目录本身）的只读属性，使 `remove_dir_all` 可成功。
+///
+/// **目录本身也要去只读**：Windows 上父目录带只读属性时删不掉其子项。
+fn clear_readonly_recursive(dir: &Path) {
+    let Ok(entries) = std::fs::read_dir(dir) else {
+        return; // 不存在 / 不可读：无可清理，交给 remove_dir_all 去报错
+    };
+    for e in entries.flatten() {
+        let p = e.path();
+        if p.is_dir() {
+            clear_readonly_recursive(&p);
+        }
+        let _ = clear_readonly(&p);
+    }
+    let _ = clear_readonly(dir);
+}
+
+/// 清除单个路径的只读属性（失败忽略：调用方靠后续 `remove_dir_all` 的错误兜底）。
+fn clear_readonly(p: &Path) -> std::io::Result<()> {
+    let mut perms = std::fs::metadata(p)?.permissions();
+    if perms.readonly() {
+        // 该 lint 面向 Unix 的 world-writable 语义，此处仅为还原可写以完成清理
+        // （本文件 `write_failure_on_readonly_target_leaves_no_residue` 已有同样先例）。
+        #[allow(clippy::permissions_set_readonly_false)]
+        perms.set_readonly(false);
+        std::fs::set_permissions(p, perms)?;
+    }
+    Ok(())
+}
+
+/// 反向验证：`remove_dir_all_force` 必须能删掉**含只读文件与只读子目录**的残留树。
+///
+/// 这是本次修复的核心断言 —— 没有它，`clear_readonly_recursive` 只是"看起来对"。
+/// Windows 上 `remove_dir_all` 遇到只读文件会以 os error 5 失败，故先递归去只读。
+#[test]
+fn remove_dir_all_force_clears_readonly_residue() {
+    let nanos = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos())
+        .unwrap_or(0);
+    let dir = std::env::temp_dir().join(format!(
+        "nctool_machine_roclean_{}_{}",
+        std::process::id(),
+        nanos
+    ));
+    std::fs::create_dir_all(dir.join("sub")).unwrap();
+    std::fs::write(dir.join("nctool.toml"), "readonly residue").unwrap();
+    std::fs::write(dir.join("sub").join("f.txt"), "nested").unwrap();
+
+    // 递归置只读：文件 + 子目录（Windows 上目录带只读属性会挡住删除其子项）。
+    for target in [
+        dir.join("nctool.toml"),
+        dir.join("sub").join("f.txt"),
+        dir.join("sub"),
+    ] {
+        let mut perms = std::fs::metadata(&target).unwrap().permissions();
+        perms.set_readonly(true);
+        std::fs::set_permissions(&target, perms).unwrap();
+    }
+
+    remove_dir_all_force(&dir);
+    assert!(!dir.exists(), "只读残留树应被清理干净：{}", dir.display());
 }
 
 /// 断言目录内无 `.nctool-tmp-` 残留（写盘内核的"无半成品"契约）。
@@ -200,6 +302,27 @@ impl Env {
         let mut tail = vec!["machine", "add", id];
         tail.extend_from_slice(extra);
         self.run(&tail)
+    }
+}
+
+/// 用例结束即回收整个临时目录树。
+///
+/// 每轮测试会建约 39 个 `%TEMP%\nctool_machine_*`（QA 实测：开工前 1352 → 跑完
+/// 1559）。纳秒命名已保证**不复用**（所以不会互相干扰），但磁盘会持续堆积 ——
+/// 加 `Drop` 后每个用例一结束就回收自己的目录。**实测（2026-09-26）**：跑完一轮
+/// 39 个用例，`%TEMP%\nctool_machine_<pid>_*` 的计数增量为 **0**（修复前为 +39）。
+///
+/// 用 [`remove_dir_all_force`] 而非裸 `remove_dir_all`：本文件有**故意**把目标文件
+/// 置只读的用例（`write_failure_on_readonly_target_leaves_no_residue`），裸删在
+/// Windows 上会以 os error 5 失败。`remove_dir_all_force` 先递归清只读再删，
+/// 因此那些"故意造出异常状态"的用例留下的残留也能被清干净。
+///
+/// 与 `UiServer` 的析构顺序：`ac_2_6_http_sees_machines_written_by_cli` 里
+/// `UiServer` 在 `Env` 之后声明 → 先析构（kill + wait 子进程），再析构 `Env`
+/// 删目录，不会出现"删掉仍在被服务进程占用的目录"。
+impl Drop for Env {
+    fn drop(&mut self) {
+        remove_dir_all_force(&self.work);
     }
 }
 

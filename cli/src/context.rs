@@ -1,4 +1,11 @@
 //! 命令执行上下文：解析全局选项、构建模板注册表、解析机床配置。
+//!
+//! T01 库化后本模块为 `pub mod context`（GUI 复用 `Ctx::for_embedded`）；公开方法
+//! [`Ctx::project_config_path`] 的文档交叉引用**私有**辅助项
+//! `config::find_project_config`，公开文档中不生成链接 → 显式放行
+//! `rustdoc::private_intra_doc_links`（保留读源码时的跳转价值）。
+
+#![allow(rustdoc::private_intra_doc_links)]
 
 use std::cell::RefCell;
 use std::collections::BTreeSet;
@@ -76,6 +83,31 @@ impl Ctx {
             loaded,
             registry_cache: RefCell::new(None),
         })
+    }
+
+    /// 嵌入式（GUI / 库）构造器：**不读盘、不向 stderr 打印 warning**。
+    ///
+    /// - `template_dir` / `default_machine`：调用方已解析好的值（显式参数优先于配置）。
+    /// - `loaded`：一次性加载的层叠配置（GUI 侧在启动时 `config::load()` 得到）。
+    ///
+    /// 配置层的降级 warning 不打印，由调用方从 `ctx.loaded.warnings` 读取并自行呈现。
+    ///
+    /// 与 [`Ctx::from_global`] 的区别仅在"不读配置、不打 stderr"：本构造器是
+    /// **纯数据填充**，无 IO、无 `Result`。`registry_cache` 每命令新建 → 首次
+    /// `build_registry` 即重建（GUI 采用"每命令重建"，见 `spike_registry_build_cost`）。
+    pub fn for_embedded(
+        template_dir: Option<PathBuf>,
+        default_machine: Option<String>,
+        loaded: config::LoadedConfig,
+    ) -> Self {
+        Self {
+            style: OutputStyle::Text,
+            verbose: false,
+            template_dir,
+            default_machine,
+            loaded,
+            registry_cache: RefCell::new(None),
+        }
     }
 
     /// 构建（或复用）模板注册表：内置模板 + 模板目录中的 `*.j2` 文件（**递归**）。
@@ -791,6 +823,248 @@ mod tests {
             "消息应带 yaml: 前缀: {}",
             err.message
         );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    // =======================================================================
+    // 门槛项 spike 的常驻测量探针
+    //
+    // 决策依据见 docs/gui-design/nctool-gui-设计方案.html §4.6 与附录 A-2：
+    // 桌面 GUI 是否值得为注册表加共享缓存，此前只是"需实测"的假设。
+    //
+    // 跑法（`#[ignore]`，不进常规 CI）：
+    //   cargo test -p nctool-cli --bin nctool --release -- --ignored --nocapture \
+    //     spike_registry_build_cost
+    //
+    // 记录值（2026-09-25，32 条模板 = 25 个文件模板 + 内置模板库）：
+    //   debug   : 重建 16.07ms / 缓存命中 0.95ms / 指纹 0.13ms
+    //             渲染(热缓存) 0.35ms / 渲染(每命令重建) 15.91ms
+    //   release : 重建  5.72ms / 缓存命中 0.42ms / 指纹 0.12ms
+    //             渲染(热缓存) 0.20ms / 渲染(每命令重建)  5.44ms
+    //
+    // 结论：共享缓存每命令只省约 5ms，不足以抵消 Mutex/Arc 改造与"不能跨
+    // await 持锁"的约束 —— GUI 采用「每命令重建」。
+    //
+    // 注：低于 1ms 的几项在 Windows 上属噪声量级（热缓存渲染甚至测出低于
+    // 缓存命中的值），只有量级可信，不要拿它们做回归阈值。
+    // =======================================================================
+    #[test]
+    #[ignore]
+    fn spike_registry_build_cost() {
+        // 该断言是「每命令重建」方案的编译期约束：生成器要能在工作线程上
+        // 构造与使用（GCodeGenerator 是 Send 但**不是** Sync —— 根因是 core
+        // 里两处 std::cell::OnceCell，故 Arc<GCodeGenerator> 不可用；若日后
+        // core 换成 OnceLock，可改走共享缓存，见设计文档 §4.6 (b)）。
+        fn assert_send<T: Send>() {}
+        assert_send::<GCodeGenerator>();
+
+        let repo_templates = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .parent()
+            .expect("cli 的上级目录")
+            .join("templates");
+        assert!(
+            repo_templates.is_dir(),
+            "模板目录不存在: {}",
+            repo_templates.display()
+        );
+
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(repo_templates);
+
+        // 预热一次，排除冷启动的文件系统缓存影响
+        let warm = ctx.build_registry_fresh().expect("预热构建");
+        let n_templates = warm.registry().list(None).len();
+        drop(warm);
+        assert!(n_templates > 0, "模板目录里应有模板");
+
+        const N: u32 = 20;
+
+        let t = std::time::Instant::now();
+        for _ in 0..N {
+            let _ = ctx.build_registry_fresh().expect("重建");
+        }
+        let fresh_ms = t.elapsed().as_secs_f64() * 1000.0 / f64::from(N);
+
+        // 缓存命中路径：目录指纹（只读 metadata）+ 复用，不重解析模板
+        let t = std::time::Instant::now();
+        for _ in 0..N {
+            let _ = ctx.build_registry().expect("缓存命中");
+        }
+        let hit_ms = t.elapsed().as_secs_f64() * 1000.0 / f64::from(N);
+
+        // 仅目录指纹本身（缓存命中路径的支配项）
+        let root = std::fs::canonicalize(ctx.template_dir.as_ref().expect("模板目录已设置"))
+            .expect("规范化");
+        let t = std::time::Instant::now();
+        for _ in 0..N {
+            let _ = tree_stamp(&root);
+        }
+        let stamp_ms = t.elapsed().as_secs_f64() * 1000.0 / f64::from(N);
+
+        // 端到端：一次 POST /api/render 的真实耗时（守卫 + 校验 + 渲染全在内）
+        let body = br#"{"template":"drill_cycle","params":{"x":21,"y":15,"depth":-10,"feed":100}}"#;
+        let t = std::time::Instant::now();
+        for _ in 0..N {
+            let r = crate::server::route(&ctx, "POST", "/api/render", "", body);
+            assert!(
+                matches!(r, crate::server::Resp::Json(200, _)),
+                "render 应返回 200"
+            );
+        }
+        let render_warm_ms = t.elapsed().as_secs_f64() * 1000.0 / f64::from(N);
+
+        // 对照：每条命令新建一个 Ctx（= 每命令重建注册表，方案 A 的实际形态）
+        let dir = ctx.template_dir.clone();
+        let t = std::time::Instant::now();
+        for _ in 0..N {
+            let mut fresh_ctx = Ctx::for_test();
+            fresh_ctx.template_dir = dir.clone();
+            let r = crate::server::route(&fresh_ctx, "POST", "/api/render", "", body);
+            assert!(
+                matches!(r, crate::server::Resp::Json(200, _)),
+                "render 应返回 200"
+            );
+        }
+        let render_rebuild_ms = t.elapsed().as_secs_f64() * 1000.0 / f64::from(N);
+
+        println!(
+            "SPIKE templates={n_templates} fresh_build={fresh_ms:.3}ms cache_hit={hit_ms:.3}ms \
+             tree_stamp={stamp_ms:.3}ms render_warm={render_warm_ms:.3}ms \
+             render_rebuild_per_cmd={render_rebuild_ms:.3}ms"
+        );
+    }
+
+    // =======================================================================
+    // 覆盖率补测（P1-2c）：`Ctx` 的**降级 / 报错**分支
+    //
+    // 这些路径此前只在磁盘异常或特殊模板/清单内容下才走到，常规用例碰不到。
+    // 全部沿用本文件既有的临时目录夹具（`temp_template_dir`）。
+    // =======================================================================
+
+    /// 模板目录不存在 → `build_registry` 报 `io`（而不是静默返回空注册表）。
+    ///
+    /// 静默返回空注册表会让所有模板"消失"，用户只会看到"模板不存在"而找不到根因。
+    #[test]
+    fn missing_template_dir_is_io_error() {
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(std::env::temp_dir().join("nctool_ctx_does_not_exist_xyz"));
+
+        let err = ctx.build_registry().expect_err("不存在的模板目录必须报错");
+        assert_eq!(err.kind, "io");
+        assert!(
+            err.message.contains("模板目录不存在"),
+            "消息应说明目录不存在: {}",
+            err.message
+        );
+        // 每次重建（不走缓存）同样报错
+        assert!(ctx.build_registry_fresh().is_err());
+    }
+
+    /// `find_template_file`：模板目录内的相对名应被解析到真实路径。
+    ///
+    /// 该方法只给 CLI 命令按路径定位用（HTTP 侧不得调用，它只认逻辑模板名）。
+    #[test]
+    fn find_template_file_resolves_inside_template_dir() {
+        let (dir, tpl) = temp_template_dir("findfile");
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(dir.clone());
+
+        let found = ctx
+            .find_template_file("turning/a.j2")
+            .expect("应能在模板目录内定位相对名");
+        assert_eq!(
+            std::fs::canonicalize(&found).unwrap(),
+            std::fs::canonicalize(&tpl).unwrap()
+        );
+
+        // 直接给存在的绝对路径也认
+        assert!(ctx.find_template_file(tpl.to_str().unwrap()).is_some());
+        // 两边都不存在 → None
+        assert!(ctx.find_template_file("no/such.j2").is_none());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 变量库**语法损坏** → 降级为 warning + 空库，不阻断注册表（与清单同口径）。
+    ///
+    /// 与下溢（ERR-NUM-UNDERFLOW，硬失败）不同：语法损坏属"可选文件坏了"，
+    /// 只告警、不阻断——这样模板仍可用，用户也能看到问题所在。
+    #[test]
+    fn variable_library_syntax_damage_degrades_to_warning() {
+        use nctool_core::variables::VARIABLES_FILE;
+        let (dir, _tpl) = temp_template_dir("varlib_damage");
+        // `variables` 应为列表，这里写成映射 → serde 解析失败（Parse，非 Underflow）
+        std::fs::write(
+            dir.join(VARIABLES_FILE),
+            "variables:\n  name: x\n  kind: number\n",
+        )
+        .expect("写损坏变量库");
+
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(dir.clone());
+        ctx.build_registry()
+            .expect("损坏的变量库应降级为 warning，不阻断");
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 模板头部 `{# PARAMS: #}` 里的**无法解析行** → 提示但不阻断加载。
+    ///
+    /// 静默跳过等于静默少一条参数约束（类型/白名单就不再校验了），故必须提示。
+    #[test]
+    fn param_header_bad_line_warns_but_still_loads() {
+        let (dir, _tpl) = temp_template_dir("badparams");
+        std::fs::write(
+            dir.join("turning").join("a.j2"),
+            "{# PARAMS:\n   这一行不是合法的参数声明\n#}\nG0 X{{ x }}\n",
+        )
+        .expect("写模板");
+
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(dir.clone());
+        let gen = ctx
+            .build_registry()
+            .expect("无法解析的 PARAMS 行不应阻断加载");
+        assert!(
+            gen.registry().get("turning/a.j2").is_some(),
+            "模板仍应被注册"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 隐藏文件（`.` 开头）不得被当作模板收集（否则会扫到 `.git` 之类）。
+    #[test]
+    fn hidden_template_files_are_skipped() {
+        let (dir, _tpl) = temp_template_dir("hidden");
+        std::fs::write(dir.join("turning").join(".secret.j2"), "G0 X0\n").expect("写隐藏模板");
+
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(dir.clone());
+        let gen = ctx.build_registry().expect("构建应成功");
+        assert!(gen.registry().get("turning/a.j2").is_some());
+        assert!(
+            gen.registry().get("turning/.secret.j2").is_none(),
+            "隐藏文件不得进注册表"
+        );
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 清单键规范化碰撞（`turning\a.j2` vs `turning/a.j2`）→ 只提示不阻断。
+    #[test]
+    fn manifest_key_collision_warns_but_loads() {
+        let (dir, _tpl) = temp_template_dir("dupkeys");
+        std::fs::write(
+            dir.join(MANIFEST_FILE),
+            "templates:\n  \"turning\\\\a.j2\":\n    name: A\n  \"turning/a.j2\":\n    name: B\n",
+        )
+        .expect("写清单");
+
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(dir.clone());
+        ctx.build_registry().expect("键碰撞应只提示，不阻断");
 
         let _ = std::fs::remove_dir_all(&dir);
     }

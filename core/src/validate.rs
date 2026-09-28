@@ -10,7 +10,7 @@
 
 use std::collections::BTreeSet;
 
-use crate::model::{ParamKind, ParamSpec, ParameterSet};
+use crate::model::{MachineConfig, ParamKind, ParamSpec, ParameterSet};
 
 /// 校验问题级别。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -99,6 +99,33 @@ pub enum IssueKind {
 }
 
 impl IssueKind {
+    /// 机器可读类别名（`snake_case`）。
+    ///
+    /// **这是对外契约字段**：HTTP（`/api/validate`、`/api/render`）与 CLI
+    /// （`validate --format json`）的 JSON 都会带上它，Web UI 按它分支展示。
+    /// 改名即破坏协议，须同步更新 [`ValidationIssueJson`] 的冻结测试。
+    ///
+    /// 存在意义见本枚举的文档：调用方需要按**类别**而非消息文本决策。此前
+    /// 契约里没有这个字段，消费方只能退回 `message.contains("NaN")` 这类
+    /// 文本匹配 —— 改一次文案就会静默破坏前端分支。
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            IssueKind::Missing => "missing",
+            IssueKind::TypeMismatch => "type_mismatch",
+            IssueKind::NonFinite => "non_finite",
+            IssueKind::OutOfRange => "out_of_range",
+            IssueKind::NotInteger => "not_integer",
+            IssueKind::NotInOptions => "not_in_options",
+            IssueKind::ConditionalSkipped => "conditional_skipped",
+            IssueKind::DeriveFailed => "derive_failed",
+            IssueKind::Unused => "unused",
+            IssueKind::SpecInert => "spec_inert",
+            IssueKind::ShadowedSystemVar => "shadowed_system_var",
+            IssueKind::ParseError => "parse_error",
+            IssueKind::Other => "other",
+        }
+    }
+
     /// 宽松生成模式下**仍然阻断**的类别（NaN/Inf 会写出非法坐标，没有放行理由）。
     ///
     /// 存在意义：把"哪些问题必须硬失败"从调用方的白名单（`downgrade_errors_except`）
@@ -335,6 +362,28 @@ pub fn validate_template(
     params: &ParameterSet,
     system_vars: &[&str],
 ) -> ValidationReport {
+    validate_template_with_machine(
+        template_source,
+        template_name,
+        specs,
+        params,
+        system_vars,
+        None,
+    )
+}
+
+/// 机床联动版（P0-2/Q-01）：`machine` 参与声明了 [`ParamSpec::max_from`] 的
+/// 动态上界判定（见 [`check_dynamic_bounds`] / [`resolve_bound`]）。
+///
+/// 传 `None` 等价于 [`validate_template`]（纯静态上界，旧行为）。
+pub fn validate_template_with_machine(
+    template_source: &str,
+    template_name: &str,
+    specs: &[ParamSpec],
+    params: &ParameterSet,
+    system_vars: &[&str],
+    machine: Option<&MachineConfig>,
+) -> ValidationReport {
     // 1. 解析并提取模板引用的变量
     let vars = match nctool_tpl::parse(template_source, template_name) {
         Ok(ast) => nctool_tpl::extract_undeclared(&ast),
@@ -349,7 +398,14 @@ pub fn validate_template(
         }
     };
     // 2. 共享校验核心
-    check_vars(&vars, specs, params, system_vars, Some(template_name))
+    check_vars(
+        &vars,
+        specs,
+        params,
+        system_vars,
+        Some(template_name),
+        machine,
+    )
 }
 
 /// 从 nctool-tpl 的 `Variable` 列表直接校验（跳过重新解析）。
@@ -361,7 +417,18 @@ pub fn validate_with_vars(
     params: &ParameterSet,
     system_vars: &[&str],
 ) -> ValidationReport {
-    check_vars(vars, specs, params, system_vars, None)
+    check_vars(vars, specs, params, system_vars, None, None)
+}
+
+/// 机床联动版（P0-2/Q-01），见 [`validate_template_with_machine`]。
+pub fn validate_with_vars_with_machine(
+    vars: &[nctool_tpl::Variable],
+    specs: &[ParamSpec],
+    params: &ParameterSet,
+    system_vars: &[&str],
+    machine: Option<&MachineConfig>,
+) -> ValidationReport {
+    check_vars(vars, specs, params, system_vars, None, machine)
 }
 
 /// 校验共享核心：对照变量列表、规格与参数集逐项检查。
@@ -375,19 +442,24 @@ pub fn validate_with_vars(
 /// - **类型**：参数规格声明类型与参数集实际类型不匹配 → 错误
 /// - **有限性**：数值参数为 NaN/Inf（会污染 G-code）→ 错误
 /// - **白名单**：规格声明了 `options` 而值不在其中 → 错误
-/// - **区间**：数值超出规格声明的 `min`/`max`（含边界比较）→ 错误
+/// - **区间**：数值超出规格声明的 `min`/`max`（含边界比较）→ 错误；声明了
+///   `max_from` 且调用方提供了机床上下文时以机床值为准（见 [`resolve_bound`]）
 /// - **整数性**：规格标记 `integer` 但值带小数（如 `5.5`）→ 错误
 /// - **规格默认值自洽**：`spec.default` 自身违反类型/区间/整数/白名单约束 → 错误
+/// - **动态上界兜底**：声明了 `max_from` 但机床上限缺失/非法 → 警告
+///   （实际生效的是静态 `max`，见 [`check_dynamic_bounds`]）
 /// - **冗余**：参数集提供了模板未引用的参数 → 警告
 ///
 /// `system_vars` 由系统在渲染时注入，视为已提供，不参与缺失/冗余检查。
 /// `template_name`：仅供错误消息定位（`validate_with_vars` 场景可为 `None`）。
+/// `machine`：机床上下文（P0-2）；`None` = 纯静态上界（旧签名入口）。
 fn check_vars(
     vars: &[nctool_tpl::Variable],
     specs: &[ParamSpec],
     params: &ParameterSet,
     system_vars: &[&str],
     template_name: Option<&str>,
+    machine: Option<&MachineConfig>,
 ) -> ValidationReport {
     // 规格索引：参数名 → ParamSpec
     let spec_map: std::collections::HashMap<&str, &ParamSpec> =
@@ -422,9 +494,17 @@ fn check_vars(
         }
     };
 
-    check_spec_defaults(specs, &mut report);
+    // 规格 default 自洽（参数无关）；声明类警告（SpecInert）需 referenced 集合。
+    // 注意：**不在此处跑 `check_spec_consistency` 的悬空 required_if/derive 检查**——
+    // 控制/源参数没有声明规格并不等于失效（`required_if_decision` 先查
+    // `params.get(控制参数)`，用户提供了就照常生效），按 Error 拦会误杀
+    // "控制参数是模板普通变量、不进 PARAMS" 这种合法配置。
+    check_spec_defaults(specs, machine, &mut report);
     check_spec_declarations(specs, &referenced, &mut report);
-    check_var_values(vars, &spec_map, params, template_name, &mut report);
+    // 动态上界兜底告警（每规格至多一条，先于取值检查入报告——它是"配置侧"
+    // 问题，与上面的规格声明检查同类；放在取值检查前让报告先讲因、再讲果）。
+    check_dynamic_bounds(specs, machine, &mut report);
+    check_var_values(vars, &spec_map, params, machine, template_name, &mut report);
     check_missing(
         vars,
         &spec_map,
@@ -466,7 +546,11 @@ fn check_derive_shadowed(
 /// 规格默认值自身的自洽性：`default` 写错（类型不符 / 越界 / 非整数 / 不在
 /// 候选项内）时，它会在渲染前被静默注入上下文，用户提供的合法值反而用不上。
 /// 这类错误只源于模板作者，必须在校验阶段暴露。
-fn check_spec_defaults(specs: &[ParamSpec], report: &mut ValidationReport) {
+fn check_spec_defaults(
+    specs: &[ParamSpec],
+    machine: Option<&MachineConfig>,
+    report: &mut ValidationReport,
+) {
     for spec in specs {
         if let Some(default) = &spec.default {
             // 类型必须单独把门：`check_value_constraints` 对非数值类型在
@@ -490,9 +574,25 @@ fn check_spec_defaults(specs: &[ParamSpec], report: &mut ValidationReport) {
             // 于是校验全绿，NaN 却在渲染前被静默注入上下文。
             check_finite_value(&spec.name, default, "", "（规格默认值）", report, 0);
             check_value_options(spec, default, report, "（规格默认值）");
-            check_value_constraints(spec, default, report, "（规格默认值）");
+            check_value_constraints(spec, default, machine, report, "（规格默认值）");
         }
     }
+}
+
+/// [`check_spec_defaults`] 的报告形式（参数无关，独立成报告）。
+///
+/// 供 HTTP `POST /api/inspect` 在**不提交任何参数**时把规格问题放进
+/// `issues`——此前该字段是硬编码 `[]`，等于永远宣称"规格没问题"。
+/// 与 `validate` 走同一份实现，不另起一份（单一来源）。
+///
+/// 刻意**不**用 [`check_spec_consistency`]：它的悬空 `required_if`/`derive`
+/// 判定只看规格名单，而实际求值先查 `params`（控制/源参数由用户直接提供时
+/// 照常生效），按 Error 展示会把合法配置标成有问题。
+pub fn check_spec_defaults_report(specs: &[ParamSpec]) -> ValidationReport {
+    let mut report = ValidationReport::default();
+    // 参数无关的独立报告（inspect/模板编辑路径拿不到机床上下文）：纯静态上界
+    check_spec_defaults(specs, None, &mut report);
+    report
 }
 
 /// **不依赖参数值**的规格自洽校验（供 `templates edit` 保存前 L2 级使用）。
@@ -511,12 +611,25 @@ fn check_spec_defaults(specs: &[ParamSpec], report: &mut ValidationReport) {
 ///
 /// 返回的报告可能含 Error 级问题；调用方据 [`ValidationReport::has_errors`]
 /// 决定是否阻断。
+///
+/// 调用方：`templates edit` 保存前的 L2 检查（`commands/templates.rs`）。
+/// **`validate` / `registry.validate` 刻意不跑本函数的悬空判定**：只看规格
+/// 名单会误杀"控制/源参数是模板普通变量、不进 PARAMS"的合法配置——
+/// `required_if_decision` / `derive::apply` 实际先查 `params`，用户提供了
+/// 控制/源参数时条件必选与派生都照常生效。
 pub fn check_spec_consistency(specs: &[ParamSpec]) -> ValidationReport {
-    let names: BTreeSet<&str> = specs.iter().map(|s| s.name.as_str()).collect();
     let mut report = ValidationReport::default();
+    check_spec_consistency_into(specs, &mut report);
+    report
+}
 
-    // 复用唯一的 default 判定实现（不得另起一份）
-    check_spec_defaults(specs, &mut report);
+/// [`check_spec_consistency`] 的可扩展形式：把问题**追加**进既有报告。
+fn check_spec_consistency_into(specs: &[ParamSpec], report: &mut ValidationReport) {
+    let names: BTreeSet<&str> = specs.iter().map(|s| s.name.as_str()).collect();
+
+    // 复用唯一的 default 判定实现（不得另起一份）；模板编辑路径无机床上下文：
+    // 纯静态上界（与 `check_spec_defaults_report` 同口径）
+    check_spec_defaults(specs, None, report);
 
     for spec in specs {
         if let Some(ri) = &spec.required_if {
@@ -544,8 +657,6 @@ pub fn check_spec_consistency(specs: &[ParamSpec]) -> ValidationReport {
             }
         }
     }
-
-    report
 }
 
 /// 规格声明**自身**的两类静默失效（与取值无关，只看规格与模板的对应关系）。
@@ -611,6 +722,7 @@ fn check_var_values(
     vars: &[nctool_tpl::Variable],
     spec_map: &std::collections::HashMap<&str, &ParamSpec>,
     params: &ParameterSet,
+    machine: Option<&MachineConfig>,
     template_name: Option<&str>,
     report: &mut ValidationReport,
 ) {
@@ -645,7 +757,7 @@ fn check_var_values(
         // 处提前返回，放在它们之后等于永不执行。
         let at = location_suffix(template_name, var);
         check_value_options(spec, value, report, &at);
-        check_value_constraints(spec, value, report, &at);
+        check_value_constraints(spec, value, machine, report, &at);
     }
 }
 
@@ -693,7 +805,9 @@ pub fn check_param_values(specs: &[ParamSpec], params: &ParameterSet) -> Validat
         }
         // 白名单先于区间/整数：后两者对字符串枚举在 `as_f64()` 处提前返回。
         check_value_options(spec, value, &mut report, "");
-        check_value_constraints(spec, value, &mut report, "");
+        // 本入口不携带机床上下文（预设/模板编辑路径，规格值与机床无关）：
+        // 声明了 `max_from` 的规格退回静态 `max` 兜底，与旧行为一致
+        check_value_constraints(spec, value, None, &mut report, "");
     }
 
     report
@@ -875,14 +989,45 @@ fn value_kind_label(value: &crate::model::ParamValue) -> &'static str {
 /// 这些约束是 CNC 工艺安全的主要承载处：进给率必须为正、切削深度符号、
 /// 主轴转速上界、程序号/刀具号必须为整数等，全部由 `ParamSpec` 的
 /// `min` / `max` / `integer` 字段表达。
+///
+/// 上界经 [`resolve_bound`] 解析：声明了 `max_from` 且机床上下文可用时以
+/// 机床值为准（错误消息标注来源）；机床上限缺失/非法时回退静态 `max`。
 fn check_value_constraints(
     spec: &ParamSpec,
     value: &crate::model::ParamValue,
+    machine: Option<&MachineConfig>,
     report: &mut ValidationReport,
     suffix: &str,
 ) {
-    let Some(n) = value.as_f64() else {
-        return; // 非数值类型无区间/整数约束
+    // 非数值类型无区间/整数约束。
+    //
+    // Q-05：数值取值这里走 `as_exact_f64` 而不是 `as_f64` —— 后者对 `Integer`
+    // 做无条件 `as f64`，`|v| > 2^53` 时按就近取偶舍入，于是会出现
+    // 「值实际越界但比较通过」。拿不到精确值时**响亮告警**而非拿近似值判定。
+    let n = match value {
+        crate::model::ParamValue::Number(v) => *v,
+        crate::model::ParamValue::Integer(v) => match value.as_exact_f64() {
+            Some(f) => f,
+            None => {
+                // 只在规格确实声明了数值约束时才告警：没声明约束时本来就无从失效。
+                if spec.integer
+                    || spec.min.is_some()
+                    || spec.max.is_some()
+                    || spec.max_from.is_some()
+                {
+                    report.issues.push(ValidationIssue::warning_kind(
+                        IssueKind::Other,
+                        &spec.name,
+                        format!(
+                            "参数值 {v} 超出 f64 可精确比较范围（|v| > 2^53），\
+                             无法精确判定区间/整数约束，已跳过比较{suffix}"
+                        ),
+                    ));
+                }
+                return;
+            }
+        },
+        _ => return,
     };
 
     // 整数约束：规格要求整数但值带小数。
@@ -902,7 +1047,7 @@ fn check_value_constraints(
         ));
     }
 
-    // 区间约束（含边界）
+    // 区间约束（含边界）；下界暂无动态来源（P0-2 范围只联动上界）
     if let Some(min) = spec.min {
         if n < min {
             report.issues.push(ValidationIssue::error_kind(
@@ -912,14 +1057,94 @@ fn check_value_constraints(
             ));
         }
     }
-    if let Some(max) = spec.max {
+    let (max, max_origin) = resolve_bound(spec, machine);
+    if let Some(max) = max {
         if n > max {
+            let origin = max_origin
+                .map(|o| format!("（来自{o}）"))
+                .unwrap_or_default();
             report.issues.push(ValidationIssue::error_kind(
                 IssueKind::OutOfRange,
                 &spec.name,
-                format!("参数值 {n}{} 超出上界 {max}{suffix}", spec.unit_suffix()),
+                format!(
+                    "参数值 {n}{} 超出上界 {max}{origin}{suffix}",
+                    spec.unit_suffix()
+                ),
             ));
         }
+    }
+}
+
+/// 解析生效上界（P0-2/Q-01）：静态 [`ParamSpec::max`] 与动态
+/// [`ParamSpec::max_from`]（机床配置键）的合成。
+///
+/// - 未声明 `max_from` → 静态 `max`；
+/// - 声明了且有机床上下文、键取值为**有限正数** → 机床值覆盖静态值，
+///   第二元素给出来源描述（`机床 <id> 的 <键>`，供错误消息标注）；
+/// - 机床上下文缺失 / 键缺失 / 取值非法（Q-12：`0`/负数/`abc`/NaN/Inf）
+///   → 回退静态 `max`，第二元素为 `None`。**绝不以机床上的非法值为界**——
+///   以 `0` 为上界会把所有正取值判为越界 = 全量误杀；键缺失/非法的告警
+///   由 [`check_dynamic_bounds`] 每规格发一次，不在这里重复刷屏。
+fn resolve_bound(
+    spec: &ParamSpec,
+    machine: Option<&MachineConfig>,
+) -> (Option<f64>, Option<String>) {
+    let static_max = spec.max;
+    let (Some(machine), Some(key)) = (machine, spec.max_from.as_deref()) else {
+        return (static_max, None);
+    };
+    // `machine.` 前缀是文档/诊断用的路径写法；实际查找键是其余段
+    let lookup = key.strip_prefix("machine.").unwrap_or(key);
+    match machine
+        .get(lookup)
+        .and_then(|raw| raw.trim().parse::<f64>().ok())
+    {
+        Some(n) if n.is_finite() && n > 0.0 => {
+            (Some(n), Some(format!("机床 {} 的 {lookup}", machine.id)))
+        }
+        _ => (static_max, None),
+    }
+}
+
+/// 动态上界的兜底告警（P0-2/Q-12）：规格声明了 [`ParamSpec::max_from`]、
+/// 调用方也给了机床上下文，但机床值**缺失或非法**——实际生效的是静态
+/// `max`，等于"按机床上限校验"这句声明静默失效，必须响亮告知。
+///
+/// 每规格每次校验至多一条（不随取值检查重复）；无机床上下文的调用方
+/// （旧签名入口 / 预设值检查）没有可告知的对象，保持静默、沿用静态上界。
+/// 机床上限合法时**不产生**任何问题项（动态值直接生效，见 [`resolve_bound`]）。
+fn check_dynamic_bounds(
+    specs: &[ParamSpec],
+    machine: Option<&MachineConfig>,
+    report: &mut ValidationReport,
+) {
+    let Some(machine) = machine else {
+        return;
+    };
+    for spec in specs {
+        let Some(key) = spec.max_from.as_deref() else {
+            continue;
+        };
+        let lookup = key.strip_prefix("machine.").unwrap_or(key);
+        let static_txt = match spec.max {
+            Some(m) => format!("模板静态上界 {m}"),
+            None => "模板亦未声明静态上界，该参数将不受上界约束".to_string(),
+        };
+        let reason = match machine.get(lookup) {
+            None => format!("未配置该键，回退{static_txt}"),
+            Some(raw) => match raw.trim().parse::<f64>() {
+                Ok(n) if n.is_finite() && n > 0.0 => continue, // 合法：动态值生效，无需告警
+                _ => format!("取值 {raw:?} 非法（须为有限正数），回退{static_txt}"),
+            },
+        };
+        report.issues.push(ValidationIssue::warning_kind(
+            IssueKind::Other,
+            &spec.name,
+            format!(
+                "机床 {} 的 {lookup} {reason}（该键是参数 {} 声明的动态上界来源）",
+                machine.id, spec.name
+            ),
+        ));
     }
 }
 
@@ -1037,6 +1262,7 @@ pub fn spec(
         default,
         min: None,
         max: None,
+        max_from: None,
         integer: false,
         unit: None,
         options: None,
@@ -1074,6 +1300,8 @@ pub struct ValidationReportJson<'a> {
 pub struct ValidationIssueJson<'a> {
     /// 级别：`error` / `warning` / `info`（见 [`ValidationLevel::as_str`]）
     pub level: &'static str,
+    /// 结构化类别（见 [`IssueKind::as_str`]）——**对外契约字段，改名即破坏协议**
+    pub kind: &'static str,
     /// 涉及的参数名（无则 `null`）
     pub param: Option<&'a str>,
     /// 问题描述
@@ -1093,6 +1321,7 @@ impl ValidationReport {
                 .iter()
                 .map(|i| ValidationIssueJson {
                     level: i.level.as_str(),
+                    kind: i.kind.as_str(),
                     param: i.param.as_deref(),
                     message: i.message.as_str(),
                 })
@@ -1149,6 +1378,10 @@ mod tests {
         let issues = v["issues"].as_array().expect("应有 issues 数组");
         assert_eq!(issues.len(), 1);
         assert_eq!(issues[0]["level"], "error", "level 是对外契约取值");
+        assert_eq!(
+            issues[0]["kind"], "missing",
+            "kind 是对外契约取值（消费方按它分支，不靠 message 文本）"
+        );
         assert_eq!(issues[0]["param"], "z");
         assert!(
             issues[0]["message"]
@@ -1178,6 +1411,112 @@ mod tests {
         let warn = &v["issues"].as_array().expect("应有 issues")[0];
         assert_eq!(warn["level"], "warning");
         assert_eq!(warn["param"], "extra");
+    }
+
+    /// Q-06：`IssueKind` 的设计目的是"调用方按类别决策"，但此前 JSON 契约里
+    /// 没有 `kind` 字段 → 消费方只能退回 `message.contains("NaN")` 这类文本匹配。
+    /// 本用例钉住三条：类别可被程序化定位、各类别互不混淆、类别名是稳定契约。
+    #[test]
+    fn json_view_exposes_issue_kind_for_programmatic_decisions() {
+        // ① NonFinite —— 宽松模式下唯一硬失败项，消费方必须能直接按 kind 识别
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", f64::NAN).set_number("z", 5.0);
+        let rep = validate_template(TPL, "t.j2", &[], &ps, &[]);
+        let v = serde_json::to_value(rep.json_view("t.j2")).expect("应可序列化");
+        let issues = v["issues"].as_array().expect("应有 issues");
+        let nf = issues
+            .iter()
+            .find(|i| i["kind"] == "non_finite")
+            .unwrap_or_else(|| panic!("应按 kind 定位 NonFinite，实际 {issues:?}"));
+        assert_eq!(nf["level"], "error");
+        assert_eq!(nf["param"], "x");
+
+        // ② 区间越界有独立类别（前端要与"缺参"分开展示）
+        let specs = vec![
+            spec("x", ParamKind::Number, true, None, "").with_max(5.0),
+            spec("z", ParamKind::Number, true, None, ""),
+        ];
+        let mut ps = ParameterSet::new();
+        ps.set_number("x", 99.0).set_number("z", 5.0);
+        let rep = validate_template(TPL, "t.j2", &specs, &ps, &[]);
+        let v = serde_json::to_value(rep.json_view("t.j2")).expect("应可序列化");
+        let issues = v["issues"].as_array().expect("应有 issues");
+        let oor = issues
+            .iter()
+            .find(|i| i["kind"] == "out_of_range")
+            .unwrap_or_else(|| panic!("应按 kind 定位 OutOfRange，实际 {issues:?}"));
+        assert_eq!(oor["param"], "x");
+
+        // ③ 类别名穷举断言：改名即破坏协议，新增变体必须在此表态
+        for (kind, want) in [
+            (IssueKind::Missing, "missing"),
+            (IssueKind::TypeMismatch, "type_mismatch"),
+            (IssueKind::NonFinite, "non_finite"),
+            (IssueKind::OutOfRange, "out_of_range"),
+            (IssueKind::NotInteger, "not_integer"),
+            (IssueKind::NotInOptions, "not_in_options"),
+            (IssueKind::ConditionalSkipped, "conditional_skipped"),
+            (IssueKind::DeriveFailed, "derive_failed"),
+            (IssueKind::Unused, "unused"),
+            (IssueKind::SpecInert, "spec_inert"),
+            (IssueKind::ShadowedSystemVar, "shadowed_system_var"),
+            (IssueKind::ParseError, "parse_error"),
+            (IssueKind::Other, "other"),
+        ] {
+            assert_eq!(kind.as_str(), want, "{kind:?} 的对外类别名被改动");
+            assert!(
+                want.chars().all(|c| c.is_ascii_lowercase() || c == '_'),
+                "{want} 必须是 snake_case"
+            );
+        }
+    }
+
+    /// Q-05：超出 f64 精确比较范围的整数**不得被近似比较静默放行**。
+    ///
+    /// `as_f64()` 对 `Integer` 做 `as f64`，`|v| > 2^53` 时按就近取偶舍入；
+    /// 拿它判 `max` 会出现「值实际越界但比较通过」。现在改为走
+    /// `as_exact_f64()`：拿不到精确值就产出一条告警说明"无法精确判定"。
+    ///
+    /// 同时断言**不得**产出 `OutOfRange` —— 既然没做比较，就不该假装做过。
+    #[test]
+    fn integer_beyond_f53_precision_is_reported_not_silently_compared() {
+        let specs = vec![
+            spec("x", ParamKind::Integer, true, None, "").with_max(99_999.0),
+            spec("z", ParamKind::Number, true, None, ""),
+        ];
+        let mut ps = ParameterSet::new();
+        ps.set_integer("x", i64::MAX).set_number("z", 5.0);
+        let rep = validate_template(TPL, "t.j2", &specs, &ps, &[]);
+        let v = serde_json::to_value(rep.json_view("t.j2")).expect("应可序列化");
+        let issues = v["issues"].as_array().expect("应有 issues");
+
+        assert!(
+            issues.iter().any(|i| {
+                i["param"] == "x"
+                    && i["message"]
+                        .as_str()
+                        .is_some_and(|m| m.contains("可精确比较"))
+            }),
+            "必须响亮告知无法精确判定，而不是静默通过: {issues:?}"
+        );
+        assert!(
+            !issues.iter().any(|i| i["kind"] == "out_of_range"),
+            "未做比较时不应产出越界结论: {issues:?}"
+        );
+
+        // 对照组：边界内的同一规格照常走精确比较并正确报越界。
+        // 没有这一条，上面"没有 out_of_range"可能只是区间检查整体没跑。
+        let mut ps = ParameterSet::new();
+        ps.set_integer("x", 100_000).set_number("z", 5.0);
+        let rep = validate_template(TPL, "t.j2", &specs, &ps, &[]);
+        let v = serde_json::to_value(rep.json_view("t.j2")).expect("应可序列化");
+        let issues = v["issues"].as_array().expect("应有 issues");
+        assert!(
+            issues
+                .iter()
+                .any(|i| i["param"] == "x" && i["kind"] == "out_of_range"),
+            "2^53 以内的整数必须照常判越界: {issues:?}"
+        );
     }
 
     #[test]

@@ -421,18 +421,39 @@ impl PartSpec {
 
 /// 把管线错误渲染成单行、面向用户的描述。
 ///
-/// 校验类错误**只取首行摘要**：完整报告是多行的，塞进单行 `error` 字段会把
-/// 聚合后的错误列表冲散；完整报告由调用方按需另行展示。
+/// 校验类错误**列出前几条 + 总数**，但保持单行：完整报告是多行的，整份塞进
+/// `error` 字段会把聚合后的错误列表冲散；完整报告由调用方按需另行展示。
+///
+/// Q-07：此前这里只取 `issues.first()`，与 [`PartError::OperationsFailed`]
+/// 「一次报全，而不是修一个跑一次又冒一个」的设计初衷**自相矛盾**——跨工序
+/// 做到了全报，单工序内却只报 1 条，一道工序缺 3 个参数用户要跑 3 轮。
+/// 现在改为「前 3 条 + 总数」，仍是单行。
 fn describe_pipeline_error(err: &PipelineError) -> String {
+    /// 单行里最多展开几条校验问题（超出只报总数）。
+    const MAX_SHOWN: usize = 3;
     match err {
         PipelineError::TemplateNotFound(name) => format!("模板不存在: {name}"),
         PipelineError::Validation(report) => {
-            let first = report
-                .issues
-                .first()
-                .map(|i| i.message.clone())
-                .unwrap_or_else(|| "参数校验未通过".to_string());
-            format!("参数校验未通过：{first}")
+            if report.issues.is_empty() {
+                return "参数校验未通过".to_string();
+            }
+            let mut msg = format!("参数校验未通过（共 {} 条）：", report.issues.len());
+            for (i, iss) in report.issues.iter().take(MAX_SHOWN).enumerate() {
+                if i > 0 {
+                    msg.push('；');
+                }
+                // 带上参数名：`Missing` 一类的 `message` 本身不含参数名，
+                // 只有 `param` 字段有 —— 不拼进来，用户看到 3 条"必选参数缺失"
+                // 却不知道缺的是哪 3 个，等于没"报全"。
+                match iss.param.as_deref() {
+                    Some(p) => msg.push_str(&format!("{p}: {}", iss.message)),
+                    None => msg.push_str(&iss.message),
+                }
+            }
+            if report.issues.len() > MAX_SHOWN {
+                msg.push_str(&format!("；…等共 {} 条", report.issues.len()));
+            }
+            msg
         }
         PipelineError::Derive(e) => format!("派生参数失败：{e}"),
         PipelineError::Render(e) => format!("渲染失败：{e}"),
@@ -986,6 +1007,70 @@ mod tests {
                     "{}",
                     failures[0].error
                 );
+            }
+            other => panic!("应报 OperationsFailed，实得 {other:?}"),
+        }
+    }
+
+    /// Q-07：单工序内的多条校验问题必须**一次报全**。
+    ///
+    /// 此前 `describe_pipeline_error` 只取 `issues.first()`，与
+    /// [`PartError::OperationsFailed`]「一次报全，而不是修一个跑一次又冒出一个」
+    /// 的设计初衷自相矛盾 —— 跨工序做到了全报，单工序内却只报 1 条。
+    #[test]
+    fn op_failure_lists_more_than_one_validation_issue() {
+        let g = gen_with(&[("t", "G0 X{{ alpha }} Y{{ bravo }} Z{{ charlie }}\n")]);
+        let part = spec_from(r#"{"ops":[{"template":"t"}]}"#);
+        match part
+            .generate(&g, None, &PartOptions::default())
+            .unwrap_err()
+        {
+            PartError::OperationsFailed { failures } => {
+                assert_eq!(failures.len(), 1, "只有一道工序");
+                let msg = &failures[0].error;
+                assert!(msg.contains("共 3 条"), "应给出问题总数: {msg}");
+                // 三个缺参名都要出现 —— 只报条数不报名字等于没报全
+                for name in ["alpha", "bravo", "charlie"] {
+                    assert!(msg.contains(name), "应列出 {name}: {msg}");
+                }
+                assert_eq!(
+                    msg.matches("必选参数缺失").count(),
+                    3,
+                    "三条问题都应展开: {msg}"
+                );
+                assert!(!msg.contains('\n'), "聚合错误必须保持单行: {msg}");
+            }
+            other => panic!("应报 OperationsFailed，实得 {other:?}"),
+        }
+    }
+
+    /// 单行展示有上限：超过 3 条时列出前 3 条 + 总数，
+    /// 既不丢信息（总数在），也不把聚合列表冲散。
+    #[test]
+    fn op_failure_truncates_long_validation_list_but_keeps_total() {
+        let g = gen_with(&[(
+            "t",
+            "{{ alpha }}{{ bravo }}{{ charlie }}{{ delta }}{{ echo }}\n",
+        )]);
+        let part = spec_from(r#"{"ops":[{"template":"t"}]}"#);
+        match part
+            .generate(&g, None, &PartOptions::default())
+            .unwrap_err()
+        {
+            PartError::OperationsFailed { failures } => {
+                let msg = &failures[0].error;
+                assert!(msg.contains("共 5 条"), "总数必须是完整条数: {msg}");
+                assert_eq!(
+                    msg.matches("必选参数缺失").count(),
+                    3,
+                    "只展开前 3 条: {msg}"
+                );
+                assert!(msg.contains("…等共 5 条"), "应有截断提示: {msg}");
+                assert!(
+                    !msg.contains("delta") && !msg.contains("echo"),
+                    "第 4、5 条不应展开: {msg}"
+                );
+                assert!(!msg.contains('\n'), "必须保持单行: {msg}");
             }
             other => panic!("应报 OperationsFailed，实得 {other:?}"),
         }

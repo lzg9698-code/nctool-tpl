@@ -1,0 +1,6 @@
+{
+  "identifier": "default",
+  "description": "nctool GUI 默认能力：核心 + 保存对话框",
+  "windows": ["main"],
+  "permissions": ["core:default", "dialog:allow-save"]
+}

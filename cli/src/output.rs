@@ -36,6 +36,121 @@ pub struct CliError {
     pub silent: bool,
 }
 
+/// 写内核错误的**单一分类表**（P1-11）。
+///
+/// 此前 `WriteError` → 分类/状态码的映射散落 6 处（`CliError::from_write_error`、
+/// `From<WriteError>`、`preset::map_write_err`、`templates::map_write_err`、
+/// `templates::map_create_err` 的委托臂、HTTP `write_error_resp`），彼此口径
+/// 冲突且 `#[non_exhaustive]` 新增变体时 6 处都要手工同步——漏一处即静默错分。
+/// 现全部查本表。
+///
+/// - `cli_kind`：CLI 分类（经 [`CliError::exit_code`] 得退出码）。
+/// - `http_status` / `http_kind`：HTTP 响应的状态码与 `error.kind`。
+/// - `cli_msg_with_path`：**仅** CLI/stderr 通道允许在消息里带 `path.display()`；
+///   HTTP 通道一律脱敏（P1-17 / cli-review P1-3），响应体绝不含绝对路径。
+pub(crate) struct WriteErrClass {
+    /// CLI 侧 [`CliError::kind`]
+    pub(crate) cli_kind: &'static str,
+    /// HTTP 状态码
+    pub(crate) http_status: u16,
+    /// HTTP 侧 `error.kind`
+    pub(crate) http_kind: &'static str,
+    /// CLI/stderr 消息是否可携带 `path.display()`（HTTP 恒不可）
+    pub(crate) cli_msg_with_path: bool,
+}
+
+/// 分类查表：`not_found_kind` / `corrupt_kind` 由调用方按上下文传入
+/// （preset → `"preset_not_found"` / `"io"`；machine 的 `nctool.toml` →
+/// `"machine_not_found"` / `"config"`），不再靠"谁调哪个 From"隐式决定。
+///
+/// `WriteError` 为 `#[non_exhaustive]`：新增变体**必须**在此显式登记一行。
+/// `_` 臂只做**留声**兜底（eprintln 警告 + `io`），绝不静默归类。
+/// 已登记的 `LockBusy`（P0-1 跨进程锁）按契约同 `Conflict`
+/// （`write_conflict` / 409 / `cli_msg_with_path: true`）—— 两者都可重试。
+pub(crate) fn classify_write_error(
+    e: &nctool_core::asset::WriteError,
+    not_found_kind: &'static str,
+    corrupt_kind: &'static str,
+) -> WriteErrClass {
+    use nctool_core::asset::WriteError;
+    match e {
+        // 乐观锁冲突：可重试 → 409；退出码 6
+        WriteError::Conflict { .. } => WriteErrClass {
+            cli_kind: "write_conflict",
+            http_status: 409,
+            http_kind: "write_conflict",
+            cli_msg_with_path: true,
+        },
+        // 锁争用（P0-1）：另一进程正在写，稍后重试同一操作 → 同 Conflict
+        //（409 / write_conflict / 退出码 6），不新增 kind、退出码矩阵零改动
+        WriteError::LockBusy { .. } => WriteErrClass {
+            cli_kind: "write_conflict",
+            http_status: 409,
+            http_kind: "write_conflict",
+            cli_msg_with_path: true,
+        },
+        // 重名（upsert/rename 目标已存在）：对用户是"名字不可用" → 409 name_conflict
+        WriteError::PathEscape { reason, .. } if reason.contains("已存在") => WriteErrClass {
+            cli_kind: "name_conflict",
+            http_status: 409,
+            http_kind: "name_conflict",
+            cli_msg_with_path: false,
+        },
+        WriteError::PathEscape { .. } => WriteErrClass {
+            cli_kind: "args",
+            http_status: 400,
+            http_kind: "bad_request",
+            cli_msg_with_path: false,
+        },
+        // 目标只读/无权限：本地环境问题，调用方无从修正 → 500；CLI 可带路径
+        WriteError::ReadOnly { .. } => WriteErrClass {
+            cli_kind: "io",
+            http_status: 500,
+            http_kind: "internal",
+            cli_msg_with_path: true,
+        },
+        // 条目不存在：调用方问题 → 404，kind 由上下文给出
+        WriteError::NotFound(_) => WriteErrClass {
+            cli_kind: not_found_kind,
+            http_status: 404,
+            http_kind: not_found_kind,
+            cli_msg_with_path: false,
+        },
+        // "目标不可用"（如同名目录占位）：preset 归 io(3)、machine 配置归 config(4)；
+        // HTTP 一律 500 内部错误（正文不回显细节）
+        WriteError::Corrupt(_) => WriteErrClass {
+            cli_kind: corrupt_kind,
+            http_status: 500,
+            http_kind: "internal",
+            cli_msg_with_path: false,
+        },
+        // ERR-NUM-UNDERFLOW：数值正确性问题 → args(2)，HTTP 400 num_underflow
+        WriteError::NumUnderflow { .. } => WriteErrClass {
+            cli_kind: "args",
+            http_status: 400,
+            http_kind: "num_underflow",
+            cli_msg_with_path: false,
+        },
+        WriteError::Io(_) => WriteErrClass {
+            cli_kind: "io",
+            http_status: 500,
+            http_kind: "internal",
+            cli_msg_with_path: false,
+        },
+        // 留声兜底：未登记变体不得静默退化（新增变体必须回本表登记）
+        #[allow(unreachable_patterns)]
+        _ => {
+            eprintln!("warning: 未登记的 WriteError 变体，已按 io 兜底：{e}");
+            WriteErrClass {
+                cli_kind: "io",
+                http_status: 500,
+                http_kind: "internal",
+                cli_msg_with_path: false,
+            }
+        }
+    }
+}
+
 impl CliError {
     pub fn new(kind: &'static str, message: impl Into<String>) -> Self {
         Self {
@@ -51,66 +166,92 @@ impl CliError {
         self
     }
 
-    /// 写内核错误 → CLI 错误（**共享映射**，消除 preset / machine 两份漂移）。
+    /// 写内核错误 → CLI 错误（**共享映射**，kind/status 查
+    /// [`classify_write_error`] 单表，消除 preset / machine / templates 三份漂移）。
     ///
-    /// `not_found_kind` 由调用方指定条目不存在的分类
-    /// （preset → `"preset_not_found"`；machine → `"machine_not_found"`），
-    /// 二者都归退出码 5。
+    /// 两个上下文参数由调用方显式传入，不再靠"谁调哪个 From"隐式决定：
     ///
-    /// 分类口径（`WriteError` 为 `#[non_exhaustive]`，未来变体走 `_` 归 `io`）：
+    /// - `not_found_kind`：条目不存在的分类（preset → `"preset_not_found"`；
+    ///   machine → `"machine_not_found"`；templates → `"template_not_found"`），
+    ///   均归退出码 5。
+    /// - `corrupt_kind`："目标不可用"的分类（machine 的 `nctool.toml` 损坏是
+    ///   **配置**问题 → `"config"`(4)；preset / templates 是资产 → `"io"`(3)
+    ///   ——二者有意不同，见设计 D4）。
+    ///
+    /// 分类口径（单一来源 = [`classify_write_error`]）：
     ///
     /// - `Conflict` → `write_conflict`(6)
+    /// - `LockBusy`（P0-1 锁争用）→ `write_conflict`(6)，与 `Conflict` 同类
     /// - `PathEscape`（reason 含"已存在"）→ `name_conflict`(6)；其余 → `args`(2)
     /// - `ReadOnly` / `Io` / `_` → `io`(3)
     /// - `NotFound` → `not_found_kind`(5)
-    /// - `Corrupt` → `config`(4)：**配置文件本身**不可用（如 `nctool.toml` 损坏）。
+    /// - `Corrupt` → `corrupt_kind`
     ///
-    /// 注意：预设的 `map_write_err` **有意**把 `Corrupt` 归 `io`(3)（预设是资产、
-    /// 非配置），故它只对 `Corrupt` 覆写、其余委托本函数。
+    /// 消息文案按变体逐臂构建；是否携带 `path.display()` 以表的
+    /// `cli_msg_with_path` 为准（`NumUnderflow` 为 false：只给行/列/字面量，
+    /// 不把文件路径经消息外带）。
     pub fn from_write_error(
         err: nctool_core::asset::WriteError,
         not_found_kind: &'static str,
+        corrupt_kind: &'static str,
     ) -> CliError {
         use nctool_core::asset::WriteError;
-        match err {
-            WriteError::Conflict { path, .. } => CliError::new(
-                "write_conflict",
+        let cls = classify_write_error(&err, not_found_kind, corrupt_kind);
+        let message = match &err {
+            WriteError::Conflict { path, .. } => {
+                debug_assert!(cls.cli_msg_with_path, "Conflict 应允许 CLI 消息带路径");
                 format!(
                     "写入冲突：{} 已被外部修改，未覆盖。可选：① 重试以当前内容为基线 \
                      ② 放弃 ③ 另存为其它名称",
                     path.display()
-                ),
-            ),
+                )
+            }
+            // 锁争用（P0-1）：文案与 Conflict 严格区分 —— 锁争用≠内容被改，
+            // 处置提示也不同（稍后重试同一操作，无需以新内容为基线）。
+            WriteError::LockBusy { path } => {
+                debug_assert!(cls.cli_msg_with_path, "LockBusy 应允许 CLI 消息带路径");
+                format!(
+                    "文件正被另一个 nctool 进程写入：{}（本次未改动，稍后重试即可）",
+                    path.display()
+                )
+            }
             WriteError::PathEscape { rel, reason } => {
-                // 重名（`rename` 的新名已存在 / upsert 目标已存在）也走这里 ——
-                // 对用户是"名字不可用"，与 preset 同语义。
                 if reason.contains("已存在") {
-                    CliError::new("name_conflict", format!("{reason}：{rel}"))
+                    format!("{reason}：{rel}")
                 } else {
-                    CliError::new("args", format!("名称非法：{rel}（{reason}）"))
+                    format!("名称非法：{rel}（{reason}）")
                 }
             }
             WriteError::ReadOnly { path } => {
-                CliError::new("io", format!("目标只读或无写入权限：{}", path.display()))
+                debug_assert!(cls.cli_msg_with_path, "ReadOnly 应允许 CLI 消息带路径");
+                format!("目标只读或无写入权限：{}", path.display())
             }
-            WriteError::NotFound(m) => CliError::new(not_found_kind, m),
-            // 配置文件损坏是**配置**问题（拒绝覆盖），归 `config`(4) —— 与 preset
-            // 把损坏预设文件归 io(3) 有意不同（见本函数文档与设计 D4/D7）。
-            WriteError::Corrupt(m) => CliError::new("config", m),
+            WriteError::NotFound(m) | WriteError::Corrupt(m) => m.clone(),
             // ERR-NUM-UNDERFLOW：下溢是**数值正确性**问题，不是"文件损坏"。
             // 归 `args`(2)，与 `--params-file` / `--param` 通道一致（用户在命令行上
             // 处理的是同一类问题），且**不**参与"损坏文件降级"策略。
-            WriteError::NumUnderflow { .. } => CliError::new("args", err.to_string()),
-            WriteError::Io(e) => CliError::new("io", format!("读写失败：{e}")),
-            _ => CliError::new("io", "读写失败"),
-        }
+            // 行/列/字面量足够定位（文件由命令上下文给出），不带路径（表 flag=false）。
+            WriteError::NumUnderflow {
+                literal,
+                line,
+                column,
+                ..
+            } => format!(
+                "第 {line} 行第 {column} 列：数值 yaml:{literal} 低于 f64 最小可表示正数\
+                 （会被静默变 0，G-code 将产出错误坐标）。请改用可表示的数值。"
+            ),
+            WriteError::Io(e) => format!("读写失败：{e}"),
+            // 未登记变体已由 classify 留声警告；正文保持泛化。
+            _ => "读写失败".to_string(),
+        };
+        CliError::new(cls.cli_kind, message)
     }
 
     /// 命令失败对应的进程退出码。
     ///
     /// 矩阵：`0` 成功；`1` 参数校验未通过；`2` 参数/用法错误（与 clap 一致）；
     /// `3` IO 失败；`4` 配置错误；`5` 模板/机床/**预设**未找到；`6` 渲染/注册表/写冲突失败
-    /// （含 `write_conflict` 乐观锁冲突、`name_conflict` 名称已存在）；
+    /// （含 `write_conflict` 乐观锁冲突**与锁争用 `LockBusy`**、`name_conflict` 名称已存在）；
     /// `7` 功能尚未实现；未知分类兜底归 `1`。
     ///
     /// `config`(4) 的判据：**配置文件本身**不可用（如 `nctool.toml` 损坏）。
@@ -239,42 +380,12 @@ impl From<std::io::Error> for CliError {
     }
 }
 
-/// 写内核错误 → CLI 错误。
-///
-/// **单一来源**：`templates` / `preset`（后续 `machine`）的写路径共用此实现，
-/// 避免各命令族各写一份映射导致同一错误在不同命令下退出码不同。
-///
-/// 分类口径：乐观锁冲突 → `write_conflict`(6)；目标只读 / 一般 IO → `io`(3)；
-/// 路径越界与名称非法 → `args`(2)；"目标不可用" → `io`(3)。
-/// `WriteError` 为 `#[non_exhaustive]`，新增变体走 `_` 臂归 `io`，
-/// 因此**必须**同步检查本函数的分类是否需要细分（编译器不会报错）。
-impl From<nctool_core::asset::WriteError> for CliError {
-    fn from(err: nctool_core::asset::WriteError) -> Self {
-        use nctool_core::asset::WriteError;
-        match err {
-            WriteError::Conflict { path, .. } => CliError::new(
-                "write_conflict",
-                format!(
-                    "写入冲突：{} 已被外部修改，未覆盖。可选：① 重试以当前内容为基线 \
-                     ② 放弃 ③ 另存为其它名称",
-                    path.display()
-                ),
-            ),
-            WriteError::PathEscape { rel, reason } => {
-                CliError::new("args", format!("路径越界被拒绝：{rel}（{reason}）"))
-            }
-            WriteError::ReadOnly { path } => {
-                CliError::new("io", format!("目标只读或无写入权限：{}", path.display()))
-            }
-            // 目标不可用（如同名目录占位）≠ "数据损坏"：payload 已自述。
-            WriteError::Corrupt(m) => CliError::new("io", m),
-            // ERR-NUM-UNDERFLOW：下溢是数值正确性问题 → `args`(2)，与其它 CLI 通道一致。
-            WriteError::NumUnderflow { .. } => CliError::new("args", err.to_string()),
-            WriteError::Io(e) => CliError::new("io", format!("写入失败：{e}")),
-            _ => CliError::new("io", "写入失败"),
-        }
-    }
-}
+// P1-11：`impl From<WriteError> for CliError` 已移出本文件——它无法携带
+// `not_found_kind` / `corrupt_kind` 上下文，放在"通用层"只会与
+// `from_write_error` 构成两份漂移的口径。现仅存于 `commands::preset`
+// （唯一消费者 = `PresetStore::import_presets` 的 `E: From<WriteError>`
+// 泛型约束，语义为预设口径）；其它命令族一律显式调用
+// `CliError::from_write_error(e, "<上下文>")`，由编译器强制传入上下文。
 
 impl From<RegistryError> for CliError {
     fn from(err: RegistryError) -> Self {
@@ -421,6 +532,144 @@ mod tests {
     use nctool_tpl::TplError;
 
     // -----------------------------------------------------------------------
+    // P1-11：classify_write_error 单一分类表
+    // -----------------------------------------------------------------------
+
+    /// 表把 8 个已登记变体的 CLI kind / HTTP 状态 / HTTP kind / 路径策略全部
+    /// 写死；`not_found_kind` / `corrupt_kind` 按上下文传入（同一变体在
+    /// preset 与 machine 下允许不同 CLI kind，但 HTTP kind 与状态码一致）。
+    /// 新增变体（含后续演进）必须在此同步加一行（见 classify 文档）。
+    #[test]
+    fn classify_write_error_locks_the_full_table() {
+        use nctool_core::asset::WriteError;
+        let mk =
+            |e: WriteError, nf: &'static str, ck: &'static str| classify_write_error(&e, nf, ck);
+
+        let c = mk(
+            WriteError::Conflict {
+                path: "p.yaml".into(),
+                expected: None,
+                actual: None,
+            },
+            "preset_not_found",
+            "io",
+        );
+        assert_eq!(
+            (c.cli_kind, c.http_status, c.http_kind, c.cli_msg_with_path),
+            ("write_conflict", 409, "write_conflict", true)
+        );
+
+        // 锁争用（P0-1）：与 Conflict 完全同类（409 / write_conflict / 可带路径）
+        let c = mk(
+            WriteError::LockBusy {
+                path: "p.yaml".into(),
+            },
+            "preset_not_found",
+            "io",
+        );
+        assert_eq!(
+            (c.cli_kind, c.http_status, c.http_kind, c.cli_msg_with_path),
+            ("write_conflict", 409, "write_conflict", true)
+        );
+
+        // 重名：name_conflict / 409；消息（CLI/HTTP）都不带路径
+        let c = mk(
+            WriteError::PathEscape {
+                rel: "x".into(),
+                reason: "同名预设已存在".into(),
+            },
+            "preset_not_found",
+            "io",
+        );
+        assert_eq!(
+            (c.cli_kind, c.http_status, c.http_kind, c.cli_msg_with_path),
+            ("name_conflict", 409, "name_conflict", false)
+        );
+
+        // 其它越界：args / 400 bad_request
+        let c = mk(
+            WriteError::PathEscape {
+                rel: "../x".into(),
+                reason: "路径越界".into(),
+            },
+            "preset_not_found",
+            "io",
+        );
+        assert_eq!(
+            (c.cli_kind, c.http_status, c.http_kind),
+            ("args", 400, "bad_request")
+        );
+
+        let c = mk(
+            WriteError::ReadOnly {
+                path: "p.yaml".into(),
+            },
+            "preset_not_found",
+            "io",
+        );
+        assert_eq!(
+            (c.cli_kind, c.http_status, c.http_kind, c.cli_msg_with_path),
+            ("io", 500, "internal", true)
+        );
+
+        // NotFound：CLI kind 由上下文决定，HTTP 跟随且为 404
+        let c = mk(
+            WriteError::NotFound("没有这个".into()),
+            "preset_not_found",
+            "io",
+        );
+        assert_eq!(
+            (c.cli_kind, c.http_status, c.http_kind),
+            ("preset_not_found", 404, "preset_not_found")
+        );
+        let c = mk(
+            WriteError::NotFound("没有这个".into()),
+            "machine_not_found",
+            "config",
+        );
+        assert_eq!(c.cli_kind, "machine_not_found");
+
+        // Corrupt：CLI kind 由 corrupt_kind 决定（preset=io、machine 配置=config）；
+        // HTTP 一律 500 internal 且不回显细节
+        let c = mk(WriteError::Corrupt("m".into()), "preset_not_found", "io");
+        assert_eq!(
+            (c.cli_kind, c.http_status, c.http_kind),
+            ("io", 500, "internal")
+        );
+        let c = mk(
+            WriteError::Corrupt("m".into()),
+            "machine_not_found",
+            "config",
+        );
+        assert_eq!((c.cli_kind, c.http_kind), ("config", "internal"));
+
+        let c = mk(
+            WriteError::NumUnderflow {
+                path: "p.yaml".into(),
+                literal: "1e-400".into(),
+                line: 3,
+                column: 9,
+            },
+            "preset_not_found",
+            "io",
+        );
+        assert_eq!(
+            (c.cli_kind, c.http_status, c.http_kind, c.cli_msg_with_path),
+            ("args", 400, "num_underflow", false)
+        );
+
+        let c = mk(
+            WriteError::Io(std::io::Error::other("磁盘")),
+            "preset_not_found",
+            "io",
+        );
+        assert_eq!(
+            (c.cli_kind, c.http_status, c.http_kind),
+            ("io", 500, "internal")
+        );
+    }
+
+    // -----------------------------------------------------------------------
     // ERR-NUM-UNDERFLOW：各通道确认器
     // -----------------------------------------------------------------------
 
@@ -435,6 +684,24 @@ mod tests {
         // 最小次正规数不受影响
         assert!(!confirm_json_underflow("5e-324"));
         assert!(!confirm_json_underflow("1e-323"));
+    }
+
+    /// 阈值分裂对照（SUMMARY §8-9）：`2.4703282292062328e-324` 在 **JSON 侧必须
+    /// 归零确认**（`serde_json` 非正确舍入），与 **YAML 侧放过**（`serde_yaml`
+    /// 正确舍入，见 `json_num::tests::yaml_confirmation_matches_serde_yaml`）
+    /// 形成对照——钉住「两个解析器分别确认」的设计，防止将来合并确认器。
+    #[test]
+    fn confirm_json_underflow_flags_2470e_324() {
+        assert!(
+            confirm_json_underflow("2.4703282292062328e-324"),
+            "serde_json 把该字面量解析为 0.0 → 必须确认"
+        );
+        assert!(
+            nctool_core::json_num::scan_underflow_candidates(r#"{"x":2.4703282292062328e-324}"#)
+                .len()
+                == 1,
+            "扫描层也应把它提为候选"
+        );
     }
 
     #[test]
@@ -500,6 +767,7 @@ mod tests {
             ("config", 4),
             ("template_not_found", 5),
             ("machine_not_found", 5),
+            ("preset_not_found", 5),
             ("render", 6),
             ("pipeline", 6),
             ("registry", 6),
@@ -516,9 +784,41 @@ mod tests {
 
     #[test]
     fn unknown_kind_falls_back_to_1() {
-        // 新增分类若忘了进矩阵，退出码会悄悄变成 1（与"校验未通过"撞车）——
-        // 这个兜底是有意的，但不能是"没想过"的结果
+        // 未来新增分类必须显式更新退出码表，否则会落到这个 1（"校验未通过"）而不是
+        // 默认值 —— 这里锁死行为：新分类必须可测，不能"没有就"的静默通过
         assert_eq!(CliError::new("brand_new_kind", "x").exit_code(), 1);
+    }
+
+    /// 锁争用（P0-1）→ CLI 错误：kind 归 `write_conflict`（退出码 6，与乐观锁
+    /// 同类），消息带路径供终端用户定位，且与 Conflict 文案严格区分 ——
+    /// 锁争用=稍后重试同一操作，冲突=以新内容为基线重试。
+    #[test]
+    fn lock_busy_maps_to_write_conflict_with_distinct_message() {
+        use nctool_core::asset::WriteError;
+        let e = CliError::from_write_error(
+            WriteError::LockBusy {
+                path: std::path::PathBuf::from("C:/data/presets.yaml"),
+            },
+            "preset_not_found",
+            "io",
+        );
+        assert_eq!(e.kind, "write_conflict");
+        assert_eq!(e.exit_code(), 6);
+        assert!(
+            e.message.contains("另一个 nctool 进程"),
+            "应说明锁争用: {}",
+            e.message
+        );
+        assert!(
+            e.message.contains("presets.yaml"),
+            "CLI/stderr 通道应带路径: {}",
+            e.message
+        );
+        assert!(
+            !e.message.contains("外部修改"),
+            "锁争用不得复用 Conflict 文案: {}",
+            e.message
+        );
     }
 
     #[test]

@@ -15,6 +15,9 @@
 
 pub mod asset;
 pub mod derive;
+// 文本文件读取的字节上限（内存放大防护）：YAML 别名展开无预算，几十 KB 的
+// "锚点套锚点"清单可展开出 GB 级节点树 —— 所有 YAML 读入口都必须先过上限。
+pub mod io_limit;
 // JSON/YAML 数字字面量下溢候选提取（ERR-NUM-UNDERFLOW）：文本层扫描 + 十进制真值预筛。
 // 只提取候选；最终是否下溢由持解析器的调用方确认（JSON 在 cli、YAML 在 core）。
 pub mod json_num;
@@ -45,7 +48,9 @@ pub use validate::{
     ValidationReport,
 };
 // 模板注册表
-pub use registry::{Analysis, TemplateCategory, TemplateEntry, TemplateRegistry, TemplateSource};
+pub use registry::{
+    Analysis, BuiltinWarning, TemplateCategory, TemplateEntry, TemplateRegistry, TemplateSource,
+};
 // 模板清单（templates.yaml）
 pub use manifest::{
     extract_header_meta, merge_params, HeaderMeta, ManifestError, ParamOverride, ResolvedMeta,

@@ -37,12 +37,29 @@ pub const PRESET_FILE: &str = "presets.yaml";
 /// 当前支持的预设文件 schema 版本。
 pub const PRESET_SCHEMA_VERSION: u32 = 1;
 
+/// 预设文件读取上限：1 MiB（与 CLI `MAX_CLI_FILE_BYTES`、HTTP `MAX_BODY_BYTES` 同口径）。
+///
+/// **为什么必须有**：`presets.yaml` 是小型 YAML，正常远不到这个量级；无上限的
+/// `read_to_string` 在文件被误指到大文件 / 网络盘 / 备份副本时会一次性吃进全部
+/// 内存，OOM 或 YAML 解析崩溃都指不到病因。按 `Take` 流式读到上限 + 1 字节，
+/// 超出即**硬失败**（不走"内容损坏降级"——文件没坏，是拿错了）。
+///
+/// 取值与实现自 2026-09-27 起统一到 [`crate::io_limit::MAX_CONFIG_BYTES`] 与
+/// [`crate::io_limit::read_text_capped`]（P1-1：同一套逻辑此前在清单 / 模板 /
+/// 机床配置三条读路径上各缺一份，只有预设这里做了）。
+pub const MAX_PRESET_FILE_BYTES: u64 = crate::io_limit::MAX_CONFIG_BYTES;
+
 // ---------------------------------------------------------------------------
 // 模型
 // ---------------------------------------------------------------------------
 
 /// 单个参数预设：绑定某模板的一组参数值 + 落盘规格指纹。
+///
+/// `deny_unknown_fields`：条目里拼错的键（`tempalte` / `specFingerPrint`）必须
+/// 响亮失败（`load` → 解析警告 + 拒写），而不是被静默忽略后当成"没有该字段"
+/// 的预设继续用——那会静默丢掉模板绑定或指纹，陈旧检测从此失明。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct Preset {
     /// 预设名（同时是文件内的唯一键，受 [`validate_asset_name`] 约束）。
     pub name: String,
@@ -86,7 +103,12 @@ mod params_map {
 }
 
 /// 预设文件整体结构（版本 1）。
+///
+/// `deny_unknown_fields`：顶层拼错的键（`preset` / `version1`）同样响亮失败
+/// ——`version` 拼错若被忽略，解析出的默认版本会把"版本不支持"这一可操作的
+/// 提示换成"读到空文件"的静默降级。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct PresetFile {
     /// schema 版本。
     pub version: u32,
@@ -199,7 +221,11 @@ impl PresetStore {
                 degraded: false,
             });
         }
-        let text = std::fs::read_to_string(path).map_err(|e| super::map_io(e, path))?;
+        // 上限读取（见 `MAX_PRESET_FILE_BYTES`）：走共用原语 `io_limit::read_text_capped`
+        // —— `Take` 截断而非先读完再判断，免得 metadata 与 read 之间的文件增长
+        // （TOCTOU）绕过检查。
+        let text = crate::io_limit::read_text_capped(path, MAX_PRESET_FILE_BYTES)
+            .map_err(|e| super::map_io(e, path))?;
         // ERR-NUM-UNDERFLOW：预设文件是 YAML，其中的数值（如 `value: 1e-400`）会被
         // serde_yaml 静默归零 → 参与渲染就是错误坐标。**先**在文本层做候选提取，
         // 再逐条用 serde_yaml 实测确认（本通道自己的解析器）。命中即硬失败，
@@ -232,16 +258,31 @@ impl PresetStore {
         }
     }
 
-    /// 全量写回预设文件（原子写 + 乐观锁）。
+    /// 全量写回预设文件（原子写 + 跨进程互斥锁 + 乐观锁）。
     ///
     /// `expect`：`None` = 要求文件不存在（首次创建）；`Some(fp)` = 要求指纹一致。
     /// 调用方应先 [`Self::load`] 并用 [`WriteKernel::read_fingerprint`] 取快照。
     ///
     /// **降级载入的路径禁止调用本函数**——那会把被忽略的内容永久覆盖掉。
+    ///
+    /// 锁等待 = [`super::CLI_LOCK_WAIT`]（CLI）；服务侧走 [`Self::save_with_wait`]。
     pub fn save(
         path: &Path,
         file: &PresetFile,
         expect: Option<FileFingerprint>,
+    ) -> Result<WriteOutcome, WriteError> {
+        Self::save_with_wait(path, file, expect, super::CLI_LOCK_WAIT)
+    }
+
+    /// 与 [`Self::save`] 相同，但锁等待时长由调用方注入：
+    /// 服务侧（`nctool ui` / GUI 内嵌 route）传 `std::time::Duration::ZERO`
+    /// （try-lock，拿不到即 [`WriteError::LockBusy`]）—— serve 循环单线程，
+    /// 阻塞等锁会钉死整个 UI。
+    pub fn save_with_wait(
+        path: &Path,
+        file: &PresetFile,
+        expect: Option<FileFingerprint>,
+        wait: std::time::Duration,
     ) -> Result<WriteOutcome, WriteError> {
         if let Some(rel) = path.file_name().and_then(|s| s.to_str()) {
             validate_asset_name(rel).map_err(|reason| WriteError::PathEscape {
@@ -257,13 +298,33 @@ impl PresetStore {
         if let Some(parent) = path.parent() {
             std::fs::create_dir_all(parent).map_err(|e| super::map_io(e, parent))?;
         }
-        WriteKernel::write_guarded(path, text.as_bytes(), expect)
+        WriteKernel::write_guarded_with_wait(path, text.as_bytes(), expect, wait)
     }
 
     /// 插入或替换一个预设（按名），返回写结果。
     ///
     /// 目标文件存在则先取快照作为乐观锁 `expect`；不存在则 `expect = None`。
+    ///
+    /// 预设名经 [`validate_asset_name`]：与 [`Self::rename`] / [`Self::import_presets`]
+    /// 同一条口径 —— 本文件对 [`Preset`] 的文档承诺"名字受 `validate_asset_name`
+    /// 约束"，此前 4 条写入路径里只有 rename / import 满足，`save`/`upsert`
+    /// 是漏网（含控制字符的名字会被 `preset list` 回显到终端）。
     pub fn upsert(path: &Path, preset: Preset) -> Result<WriteOutcome, WriteError> {
+        Self::upsert_with_wait(path, preset, super::CLI_LOCK_WAIT)
+    }
+
+    /// 与 [`Self::upsert`] 相同，但锁等待时长由调用方注入：
+    /// 服务侧（`nctool ui` / GUI 内嵌 route）传 `std::time::Duration::ZERO`
+    /// （try-lock，拿不到即 [`WriteError::LockBusy`] → HTTP 409）。
+    pub fn upsert_with_wait(
+        path: &Path,
+        preset: Preset,
+        wait: std::time::Duration,
+    ) -> Result<WriteOutcome, WriteError> {
+        validate_asset_name(&preset.name).map_err(|reason| WriteError::PathEscape {
+            rel: preset.name.clone(),
+            reason,
+        })?;
         let loaded = Self::load(path)?;
         let expect = WriteKernel::read_fingerprint(path)?;
         let mut file = if loaded.degraded {
@@ -279,7 +340,7 @@ impl PresetStore {
             Some(slot) => *slot = preset,
             None => file.presets.push(preset),
         }
-        Self::save(path, &file, expect)
+        Self::save_with_wait(path, &file, expect, wait)
     }
 
     /// 重命名预设（保留模板绑定与参数），返回写结果。
@@ -315,7 +376,20 @@ impl PresetStore {
         Self::save(path, &file, expect)
     }
     /// 删除预设。
+    ///
+    /// 锁等待 = [`super::CLI_LOCK_WAIT`]（CLI）；服务侧走 [`Self::remove_with_wait`]。
     pub fn remove(path: &Path, name: &str) -> Result<WriteOutcome, WriteError> {
+        Self::remove_with_wait(path, name, super::CLI_LOCK_WAIT)
+    }
+
+    /// 与 [`Self::remove`] 相同，但锁等待时长由调用方注入：
+    /// 服务侧（`nctool ui` / GUI 内嵌 route）传 `std::time::Duration::ZERO`
+    /// （try-lock，拿不到即 [`WriteError::LockBusy`] → HTTP 409）。
+    pub fn remove_with_wait(
+        path: &Path,
+        name: &str,
+        wait: std::time::Duration,
+    ) -> Result<WriteOutcome, WriteError> {
         let loaded = Self::load(path)?;
         if loaded.degraded {
             return Err(WriteError::Corrupt(format!(
@@ -330,7 +404,7 @@ impl PresetStore {
         }
         // 动作要报 `Deleted` 而不是透传 `save` 的 `Updated`：删一个预设，
         // 消费方看到的应当是"删除"（详见 `WriteAction::Deleted` 的说明）。
-        let mut out = Self::save(path, &file, expect)?;
+        let mut out = Self::save_with_wait(path, &file, expect, wait)?;
         out.action = WriteAction::Deleted;
         Ok(out)
     }
@@ -573,32 +647,71 @@ pub fn default_preset_path() -> PathBuf {
 /// 校验「预设文件位置不得落在模板根内」（红线 9 / R-9）。
 ///
 /// 相等或位于其下均拒绝：预设进模板根会被注册表当成模板目录扫描。
+///
+/// **错误文案不带绝对路径**（P1-17 口径）：这条 reason 会被 `presets_path`
+/// 经 `cli_error` 原样回显进 HTTP 400 响应体（见 `server.rs` 的
+/// `presets_path_refuses_inside_template_root`）。两个路径 CLI 侧都是
+/// 调用方自己配置的（`--file` / `template_dir`），不给路径不损失可修正性，
+/// 却不把磁盘布局经 API 泄露出去。
 pub fn ensure_outside_template_root(
     preset_path: &Path,
     template_root: &Path,
 ) -> Result<(), String> {
     let a = normalize(preset_path);
     let b = normalize(template_root);
-    if a.starts_with(&b) {
-        return Err(format!(
-            "预设文件不得落在模板目录内：{} 位于 {} 之下。\
-             请改用配置目录（默认 %APPDATA%\\nctool\\presets.yaml），或指定模板目录之外的路径",
-            preset_path.display(),
-            template_root.display()
-        ));
+    if path_starts_with_ci(&a, &b) {
+        return Err(
+            "预设文件不得落在模板目录内（等价于把 presets.yaml 交给模板扫描器）。\
+             请改用配置目录（默认 %APPDATA%\\nctool\\presets.yaml），\
+             或指定模板目录之外的路径"
+                .to_string(),
+        );
     }
     Ok(())
 }
 
-/// 路径归一（不依赖文件存在）：先转绝对路径，再逐段消解 `..`。
+/// 前缀包含判定：**Windows 上大小写不敏感**。
 ///
-/// **为什么不能直接 `canonicalize`**——两个都会让红线**静默失效**的坑：
+/// `Path::starts_with` 按 `OsStr` 逐段字节比较、大小写敏感；而 Windows 的文件
+/// 系统不敏感 —— 于是 `--file TEMPLATES/presets.yaml` 对根 `templates` 会**恒假**，
+/// 红线被静默绕过（预设真被写进模板根）。这里在 Windows 上先做 **ASCII** 小写
+/// 归一：非 ASCII 段保持原样，避免 `str::to_lowercase` 的 locale 歧义
+/// （`İ` 之类的大小写映射依赖区域设置，拿它做路径比较会引入新的不确定性）。
+fn path_starts_with_ci(child: &Path, parent: &Path) -> bool {
+    if child.starts_with(parent) {
+        return true;
+    }
+    if !cfg!(windows) {
+        return false;
+    }
+    let norm = |p: &Path| -> Vec<String> {
+        p.components()
+            .map(|c| c.as_os_str().to_string_lossy().to_ascii_lowercase())
+            .collect()
+    };
+    let c = norm(child);
+    let b = norm(parent);
+    c.len() >= b.len() && c[..b.len()] == b[..]
+}
+
+/// 路径归一（不依赖文件存在）：先转绝对路径，再消解 `..` / 符号链接。
+///
+/// **为什么不能直接 `canonicalize`**——三个都会让红线**静默失效**的坑：
 ///
 /// 1. **相对路径**：待校验的预设文件通常**还不存在**（"保存前校验"正是常态），
 ///    `canonicalize` 必然失败。若此时退回手写的相对路径 `templates/presets.yaml`，
 ///    而根 `templates` 能被 canonicalize 成绝对路径，两边 `starts_with` 比较
 ///    **恒假** → "预设不得落模板根"这条红线永不触发。故先按 cwd 定基转绝对。
-/// 2. **Windows verbatim 前缀**：`canonicalize` 返回 `\\?\C://...` 形式，与
+/// 2. **目标不存在时不做父目录归一**（P1-2，2026-09-27 修）：`canonicalize(&abs)`
+///    失败后若直接返回消 `..` 的结果，那条路径**完全没有做大小写 / 8.3 短名 /
+///    符号链接归一**，而模板根通常存在、被 canonicalize 过 → 两侧"分辨率"不同，
+///    `starts_with` 同样恒假。典型场景：`templates` 是 junction / symlink 时，
+///    根被解析成 `D:\real\tpl`，预设侧却仍是 `C:\proj\templates\presets.yaml`。
+///    **修法：只对父目录 canonicalize，文件名原样保留** —— 父目录不存在时再退到
+///    逐段消 `..`。反过来对"完整路径"做 canonicalize 是错的：目标不存在时必然
+///    失败，存在时又会拼出重复文件名（旧 `(Ok(base), Some(name)) => base.join(name)`
+///    分支即此，已删）。
+/// 3. **Windows verbatim 前缀**：`canonicalize` 返回 `\\?\C://...` 形式，与
 ///    未 canonicalize 的 `C://...` 前缀不同，同样导致比较恒假。故末尾统一剥离。
 fn normalize(p: &Path) -> PathBuf {
     // 先转绝对（不要求存在）：消除"一边相对、一边绝对"的口径差。
@@ -609,24 +722,31 @@ fn normalize(p: &Path) -> PathBuf {
             .map(|cwd| cwd.join(p))
             .unwrap_or_else(|_| p.to_path_buf())
     };
-    let resolved = std::fs::canonicalize(&abs).unwrap_or_else(|_| {
-        // 目标不存在：逐段压栈、`..` 弹栈（起点已是绝对路径）。
-        let mut out = PathBuf::new();
-        for comp in abs.components() {
-            match comp {
-                std::path::Component::ParentDir => {
-                    out.pop();
-                }
-                other => out.push(other.as_os_str()),
+    if let Ok(c) = std::fs::canonicalize(&abs) {
+        return strip_verbatim(c);
+    }
+    // 目标不存在（常态）：拆成「父目录 + 文件名」，只归一父目录。
+    let (parent, name) = match (abs.parent(), abs.file_name()) {
+        (Some(pa), Some(n)) => (pa, n),
+        // 没有文件名（根 / `..` 结尾等）：退回逐段消 `..`
+        _ => return strip_verbatim(resolve_dots(&abs)),
+    };
+    let base = std::fs::canonicalize(parent).unwrap_or_else(|_| resolve_dots(parent));
+    strip_verbatim(base.join(name))
+}
+
+/// 逐段压栈消解 `..`（起点须为绝对路径；不要求路径存在）。
+fn resolve_dots(abs: &Path) -> PathBuf {
+    let mut out = PathBuf::new();
+    for comp in abs.components() {
+        match comp {
+            std::path::Component::ParentDir => {
+                out.pop();
             }
+            other => out.push(other.as_os_str()),
         }
-        // 再试一次 canonicalize：父目录若存在，可顺带消掉大小写 / 8.3 短名差异。
-        match (std::fs::canonicalize(&out), out.file_name()) {
-            (Ok(base), Some(name)) => base.join(name),
-            _ => out,
-        }
-    });
-    strip_verbatim(resolved)
+    }
+    out
 }
 
 /// 剥掉 Windows `\\?\` verbatim 前缀（含 `\\?\UNC\` 形式）。
@@ -745,6 +865,67 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&p).unwrap(), "presets: [ : : oops");
     }
 
+    /// 超过 [`MAX_PRESET_FILE_BYTES`] 的文件在**解析之前**硬失败（不降级为
+    /// "内容损坏"警告——文件没坏，是拿错了），且逐块截断读取、不整文件进内存；
+    /// 恰好等于上限的文件照常读取（不误杀边界）。
+    #[test]
+    fn oversized_file_is_hard_error_and_limit_boundary_loads() {
+        let dir = tmpdir("oversized");
+        let big = dir.join("big.yaml");
+        let mut text = String::from("version: 1\npresets: []\n#");
+        // 全部用注释填充：内容是**合法 YAML**，确保拒绝来自大小而非解析失败
+        while text.len() as u64 <= MAX_PRESET_FILE_BYTES {
+            text.push('x');
+        }
+        std::fs::write(&big, &text).unwrap();
+        let err = PresetStore::load(&big).expect_err("超限必须硬失败");
+        let WriteError::Io(e) = &err else {
+            panic!("应为 Io（过大），实际：{err:?}");
+        };
+        assert!(e.to_string().contains("过大"), "{e}");
+
+        // 恰好等于上限 → 正常读取
+        let exact = dir.join("exact.yaml");
+        let mut pad = String::from("version: 1\npresets: []\n#");
+        while pad.len() < MAX_PRESET_FILE_BYTES as usize {
+            pad.push('x');
+        }
+        assert_eq!(
+            pad.len() as u64,
+            MAX_PRESET_FILE_BYTES,
+            "边界用例必须恰好等于上限"
+        );
+        std::fs::write(&exact, &pad).unwrap();
+        let got = PresetStore::load(&exact).expect("恰好等于上限应可读取");
+        assert!(!got.degraded, "{}", got.warnings.join("；"));
+        assert_eq!(got.file.version, PRESET_SCHEMA_VERSION);
+    }
+
+    /// 条目/顶层键拼错 → 解析失败 → 降级警告 + 拒写，而不是静默忽略该键
+    /// （`tempalte` 拼错若被忽略，预设会绑到空模板上，陈旧检测彻底失明）。
+    #[test]
+    fn unknown_keys_degrade_loudly_instead_of_being_ignored() {
+        let dir = tmpdir("unknown_key");
+        let p = dir.join("presets.yaml");
+        std::fs::write(
+            &p,
+            "version: 1\npresets:\n  - name: p\n    tempalte: t.j2\n    params: {}\n    createdAt: x\n    specFingerprint: y\n",
+        )
+        .unwrap();
+        let got = PresetStore::load(&p).unwrap();
+        assert!(got.degraded, "未知键应判为解析失败并降级");
+        assert!(
+            got.warnings.iter().any(|w| w.contains("tempalte")),
+            "警告应点名拼错的键：{}",
+            got.warnings.join("；")
+        );
+        // 降级期间拒写：不给"读到空内容 → 覆盖写回"的机会
+        let mut s = sample();
+        s.name = "p".into();
+        let err = PresetStore::upsert(&p, s).unwrap_err();
+        assert!(matches!(err, WriteError::Corrupt(_)), "{err:?}");
+    }
+
     /// ERR-NUM-UNDERFLOW：预设文件里的 `1e-400` 必须**硬失败**（不得降级为 warning）
     /// —— 否则会被静默归零成 `0.0` 当作"生效参数"喂给渲染（错误坐标）。
     #[test]
@@ -845,6 +1026,26 @@ mod tests {
         let ia = text.find("- name: a").unwrap();
         let ib = text.find("- name: b").unwrap();
         assert!(ia < ib, "预设应按名排序写出：\n{text}");
+    }
+
+    /// `upsert` 的名字校验发生在**任何读写之前**：非法名（路径穿越 / 控制字符）
+    /// 既不落盘、也不创建文件。CLI `preset save` 与 HTTP `POST /api/presets`
+    /// 都经这条路径（见 `upsert` 文档）。
+    #[test]
+    fn upsert_rejects_illegal_name_without_touching_disk() {
+        let dir = tmpdir("upsert_bad_name");
+        let p = dir.join("presets.yaml");
+        let mut bad = sample();
+        bad.name = "../evil".into();
+        let err = PresetStore::upsert(&p, bad).unwrap_err();
+        assert!(matches!(err, WriteError::PathEscape { .. }), "{err:?}");
+        assert!(!p.exists(), "非法名不得创建文件：{}", p.display());
+
+        let mut ctrl = sample();
+        ctrl.name = "p\u{7}1".into();
+        let err = PresetStore::upsert(&p, ctrl).unwrap_err();
+        assert!(matches!(err, WriteError::PathEscape { .. }), "{err:?}");
+        assert!(!p.exists(), "控制字符名同样不得落盘");
     }
 
     #[test]
@@ -1066,6 +1267,99 @@ mod tests {
             Path::new("templates")
         )
         .is_err());
+    }
+
+    /// **P1-2**：Windows 上大小写不同的路径必须**照样**命中红线。
+    ///
+    /// `Path::starts_with` 是逐段字节比较、大小写敏感，而 NTFS 不敏感 —— 于是
+    /// `--file TEMPLATES/presets.yaml` 对根 `templates` 会恒假，预设被静默写进模板根。
+    ///
+    /// 用例刻意让两侧都**不存在**：存在时 `canonicalize` 会把大小写一并归一，
+    /// 掩盖掉比较函数本身的问题（那正是旧实现"看起来能用"的原因）。
+    #[test]
+    fn ensure_outside_template_root_is_case_insensitive_on_windows() {
+        let dir = tmpdir("case_ci");
+        let upper_root = dir.join("TPL");
+        let lower_file = dir.join("tpl").join("presets.yaml");
+        if cfg!(windows) {
+            assert!(
+                ensure_outside_template_root(&lower_file, &upper_root).is_err(),
+                "大小写不同的同一路径必须命中红线（两侧均不存在时）：{}",
+                lower_file.display()
+            );
+        } else {
+            // Unix 上 `TPL` 与 `tpl` 是两个不同目录，红线**不应**命中
+            assert!(ensure_outside_template_root(&lower_file, &upper_root).is_ok());
+        }
+    }
+
+    /// **P1-2（符号链接根）**：模板根是 symlink 时，写在**链接路径**下的预设
+    /// 也必须被拒。
+    ///
+    /// 旧实现里 `canonicalize(链接下的文件)` 失败（文件不存在）后直接返回消了
+    /// `..` 的**未解析**路径，而根 `link_tpl` 被 canonicalize 成 `real_tpl`
+    /// → 两侧分辨率不同、`starts_with` 恒假 → 红线绕过。修法是只归一父目录。
+    #[cfg(unix)]
+    #[test]
+    fn ensure_outside_template_root_resolves_symlinked_root() {
+        let dir = tmpdir("symlink_root");
+        let real = dir.join("real_tpl");
+        let link = dir.join("link_tpl");
+        std::fs::create_dir_all(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        // 文件**不存在**（保存前校验的常态），路径经链接进入
+        let via_link = link.join("presets.yaml");
+        assert!(
+            ensure_outside_template_root(&via_link, &link).is_err(),
+            "链接根下的预设必须被拒"
+        );
+        assert!(
+            ensure_outside_template_root(&via_link, &real).is_err(),
+            "链接路径与真实根指向同一目录，也必须被拒"
+        );
+        // 真实根下、经链接指定根 —— 同样必须拒
+        assert!(ensure_outside_template_root(&real.join("presets.yaml"), &link).is_err());
+        // 对照：根之外的路径照常放行
+        assert!(ensure_outside_template_root(&dir.join("elsewhere.yaml"), &link).is_ok());
+    }
+
+    /// 回归（P2-3）：归一后**文件名不得出现两次**。
+    ///
+    /// 旧实现在消 `..` 之后对**完整路径**再 canonicalize 并 `join(name)`：
+    /// 该路径存在时会得到 `.../presets.yaml/presets.yaml`。分支几乎不可达，
+    /// 但一旦可达就是"路径凭空多一层"，且不会有任何报错。
+    #[test]
+    fn normalize_never_duplicates_file_name() {
+        let dir = tmpdir("norm_dup");
+        let existing = dir.join("presets.yaml");
+        std::fs::write(&existing, "version: 1\npresets: []\n").unwrap();
+
+        for (label, p) in [
+            ("已存在", existing.clone()),
+            ("不存在", dir.join("nope.yaml")),
+            (
+                "不存在+父目录含..",
+                dir.join("a").join("..").join("nope2.yaml"),
+            ),
+        ] {
+            let n = normalize(&p);
+            let s = n.to_string_lossy().replace('\\', "/");
+            let name = n
+                .file_name()
+                .expect("归一结果必须有文件名")
+                .to_string_lossy()
+                .into_owned();
+            assert!(
+                !s.ends_with(&format!("{name}/{name}")),
+                "{label}：文件名被拼了两遍：{s}"
+            );
+            assert_eq!(
+                s.matches(&name).count(),
+                1,
+                "{label}：文件名应只出现一次：{s}"
+            );
+        }
     }
 
     #[test]

@@ -11,7 +11,13 @@ use serde::{Deserialize, Serialize};
 use crate::output::CliError;
 
 /// nctool 配置文件内容。
+///
+/// `deny_unknown_fields`：拼错的键（`templte_dir`）必须**响亮失败**（解析错误
+/// → `read_config_file_lossy` 记 warning 并提示是哪个键），而不是被 serde
+/// 静默忽略后回落到内置模板集 —— 后者正是本仓库零容忍的"配置没生效却看不出来"
+/// （与 `PartSpec` / `ManifestFile` 的收紧口径一致）。
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct NctoolConfig {
     /// 默认模板目录（加载其中 *.j2）
     #[serde(default)]
@@ -85,13 +91,31 @@ fn read_config_file(path: &Path) -> Result<Option<NctoolConfig>, CliError> {
         return Ok(None);
     }
     let text = crate::args::read_text_capped(path, "配置文件")?;
-    let cfg: NctoolConfig = toml::from_str(&text).map_err(|e| {
+    let mut cfg: NctoolConfig = toml::from_str(&text).map_err(|e| {
         CliError::new(
             "config",
             format!("配置文件解析失败 {}: {e}", path.display()),
         )
     })?;
+    // 相对 `template_dir` **相对配置文件所在目录**解析，而不是留给 `Ctx` 按
+    // cwd 解析：`find_project_config` 从 cwd 向上找，子目录执行时会命中仓库根
+    // 的配置，却把 `template_dir = "templates"` 拼到 `<子目录>/templates` ——
+    // 若该处恰好存在同名目录就**静默换了一套模板集**（产出错误 G-code），
+    // 不存在则报"模板目录不存在"、位置与文档（"子目录执行也能用"）矛盾。
+    // 绝对路径原样通过；解析一次后与 cwd 无关。
+    if let Some(dir) = cfg.template_dir.take() {
+        cfg.template_dir = Some(resolve_against_config(path, dir));
+    }
     Ok(Some(cfg))
+}
+
+/// 把配置文件里的相对目录解析为绝对路径（相对**配置文件所在目录**）。
+fn resolve_against_config(cfg_path: &Path, dir: PathBuf) -> PathBuf {
+    if dir.is_absolute() {
+        return dir;
+    }
+    let base = cfg_path.parent().unwrap_or_else(|| Path::new("."));
+    base.join(dir)
 }
 
 /// 读取配置的容错入口：损坏 TOML 降级为空配置并记录警告。
@@ -157,6 +181,7 @@ pub const EXAMPLE_CONFIG: &str = r#"# nctool 配置示例
 # 配置层级：项目 ./nctool.toml 覆盖全局 ~/.config/nctool/config.toml
 
 # 默认模板目录（加载其中 *.j2 模板）
+# 相对路径**相对本配置文件所在目录**解析（与执行命令时的 cwd 无关）
 # template_dir = "templates"
 
 # 默认机床标识（内置 generic / wfl_m65 / index_ms40，或下方自定义机床）
@@ -237,5 +262,46 @@ linear = "G1"
         let err = init_config(&path).unwrap_err();
         assert!(err.message.contains("已存在"));
         std::fs::remove_file(&path).ok();
+    }
+
+    /// 相对 `template_dir` 相对**配置文件目录**解析：子目录执行时不会再把
+    /// 仓库根的 `template_dir = "templates"` 拼到 `<cwd>/templates`
+    /// （静默换模板集 → 错 G-code）。
+    #[test]
+    fn relative_template_dir_resolves_against_config_dir_not_cwd() {
+        let root = std::env::temp_dir().join(format!("nctool_cfgdir_{}", std::process::id()));
+        std::fs::create_dir_all(&root).unwrap();
+        let cfg = root.join("nctool.toml");
+        std::fs::write(&cfg, "template_dir = \"tpl\"\n").unwrap();
+
+        let loaded = read_config_file(&cfg).unwrap().expect("应读到配置");
+        let got = loaded.template_dir.expect("template_dir 应在");
+        assert!(got.is_absolute(), "应解析为绝对路径: {got:?}");
+        assert_eq!(got, root.join("tpl"), "应相对配置文件目录，而非 cwd");
+
+        // 绝对路径原样通过
+        std::fs::write(&cfg, format!("template_dir = {}\n", toml_path_lit(&root))).unwrap();
+        let loaded = read_config_file(&cfg).unwrap().unwrap();
+        assert_eq!(loaded.template_dir.unwrap(), root);
+
+        std::fs::remove_dir_all(&root).ok();
+    }
+
+    /// Windows 路径写进 TOML 需转义反斜杠；非 Windows 用正斜杠字面量。
+    fn toml_path_lit(p: &Path) -> String {
+        let s = p.to_string_lossy().replace('\\', "/");
+        format!("\"{s}\"")
+    }
+
+    /// 拼错的键必须响亮失败（deny_unknown_fields），而不是被静默忽略后
+    /// 回落内置模板集。
+    #[test]
+    fn unknown_config_key_is_rejected_not_silently_ignored() {
+        let err = toml::from_str::<NctoolConfig>("templte_dir = \"templates\"\n")
+            .expect_err("拼写错误的键应解析失败");
+        assert!(
+            err.to_string().contains("templte_dir"),
+            "错误信息应点名未知键: {err}"
+        );
     }
 }

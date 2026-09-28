@@ -29,6 +29,12 @@ pub fn validate_asset_name(name: &str) -> Result<(), String> {
     if name.contains('\\') {
         return Err(format!("名称不能包含路径分隔符: {name}"));
     }
+    // 盘符相对前缀（`C:`、`Z:foo`）：Windows 上它是 `Component::Prefix`，
+    // 但 Linux/macOS 上 `Path::components()` 会把整段当作普通文件名而放行，
+    // 导致行为随平台漂移。跨平台统一按"ASCII 字母 + 冒号"开头识别并拒绝。
+    if is_drive_relative(name) {
+        return Err(format!("名称不能包含盘符前缀: {name}"));
+    }
     // 关键：不仅要求"组件数为 1"，还要求该组件是 **`Normal`**。
     // 只数组件会放行 `Z:`（Windows 上恰为 1 个 `Prefix` 组件），而
     // `root.join("Z:")` 因 RHS 带前缀会**整体替换**路径 → 逃出安全根。
@@ -37,6 +43,17 @@ pub fn validate_asset_name(name: &str) -> Result<(), String> {
         (Some(Component::Normal(_)), None) => Ok(()),
         _ => Err(format!("名称不能包含路径分隔符: {name}")),
     }
+}
+
+/// 识别 Windows 盘符相对前缀：首个字符为 ASCII 字母、第二个字符为 `:`
+/// （如 `C:`、`z:foo`）。该形态在 Windows 上是路径 `Prefix`，在类 Unix 上
+/// 只是普通文件名，因此需跨平台统一判定，而不是交给 `Path::components()`。
+fn is_drive_relative(name: &str) -> bool {
+    let mut chars = name.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some(drive), Some(':')) if drive.is_ascii_alphabetic()
+    )
 }
 
 /// 安全根：所有相对资产名称都相对它解析，且解析结果必须落在其内。
@@ -70,12 +87,23 @@ impl SafePath {
     ///
     /// 先做名称校验（唯一 `Normal` 组件），再对 **`candidate` 自身**做根包含校验
     /// （D14 双层）：目标已存在时用 `canonicalize` 后的真实路径（识破符号链接 /
-    /// junction 逃逸）；目标不存在时用拼接路径。任一步发现逃逸 →
+    /// junction 逃逸）；目标不存在时归一**父目录**后拼回文件名。任一步发现逃逸 →
     /// [`WriteError::PathEscape`]。
     ///
     /// 第二层校验不可省：即便名称校验放行了某个"看起来正常"的名字，也必须在
     /// **结果路径**上再断言一次落在根内，避免 `Path::join` 的前缀替换语义等
     /// 意外绕过。
+    ///
+    /// # 返回的是归一后的路径（P1-6，2026-09-27 修）
+    ///
+    /// 此前"校验对象"与"返回对象"是**两条不同的路径**：校验 `checked`、返回
+    /// `candidate`。调用方随后把 `candidate` 交给 `File::create` / `rename`，
+    /// 而 `File::create` 会**跟随符号链接** —— 时间窗内目标被换成链接时，
+    /// 第一次写入就写穿了根外，第二层校验形同虚设。现在两者是同一条路径。
+    ///
+    /// 同时把 `exists()`（跟随链接）换成 `symlink_metadata()`（不跟随）：
+    /// 目标是符号链接时**直接拒绝** —— 创建资产本来就不该落到链接上。
+    /// 这同时消掉了 `exists()` → `canonicalize()` 之间的 TOCTOU 窗口。
     pub fn resolve(&self, rel: &str) -> Result<PathBuf, WriteError> {
         if let Err(reason) = validate_asset_name(rel) {
             return Err(WriteError::PathEscape {
@@ -84,12 +112,33 @@ impl SafePath {
             });
         }
         let candidate = self.root.join(rel);
-        let checked = if candidate.exists() {
-            candidate
-                .canonicalize()
-                .map_err(|e| map_io(e, &candidate))?
-        } else {
-            candidate.clone()
+        // ① 不跟随链接地探测目标：是链接即拒绝（不给 `File::create` 跟随的机会）。
+        match std::fs::symlink_metadata(&candidate) {
+            Ok(meta) if meta.file_type().is_symlink() => {
+                return Err(WriteError::PathEscape {
+                    rel: rel.to_string(),
+                    reason: format!(
+                        "目标是指向别处的符号链接，拒绝写入: {}",
+                        candidate.display()
+                    ),
+                });
+            }
+            Ok(_) => {}
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
+            Err(e) => return Err(map_io(e, &candidate)),
+        }
+        // ② 归一：存在 → 目标自身；不存在（保存前校验的常态）→ 父目录 + 文件名。
+        let checked = match std::fs::canonicalize(&candidate) {
+            Ok(c) => c,
+            Err(e) if e.kind() == std::io::ErrorKind::NotFound => {
+                let parent = candidate.parent().unwrap_or(&self.root);
+                let base = std::fs::canonicalize(parent).unwrap_or_else(|_| parent.to_path_buf());
+                match candidate.file_name() {
+                    Some(name) => base.join(name),
+                    None => base,
+                }
+            }
+            Err(e) => return Err(map_io(e, &candidate)),
         };
         if !checked.starts_with(&self.root) {
             return Err(WriteError::PathEscape {
@@ -97,7 +146,7 @@ impl SafePath {
                 reason: format!("解析结果越出安全根: {}", checked.display()),
             });
         }
-        Ok(candidate)
+        Ok(checked)
     }
 }
 
@@ -114,7 +163,7 @@ mod tests {
 
     #[test]
     fn validate_asset_name_rejects_traversal() {
-        // 跨平台一律拒绝的形态（不含裸盘符前缀——那在 Windows 上才是 Prefix 组件）
+        // 跨平台一律拒绝的形态（裸盘符前缀见 validate_asset_name_rejects_drive_prefix）
         for bad in [
             "",
             ".",
@@ -139,15 +188,15 @@ mod tests {
         }
     }
 
-    /// 盘符相对前缀（`Z:`）在 Windows 上恰为 1 个 `Prefix` 组件，是最易被
-    /// "只数组件数"放行的逃逸向量。此断言仅在 Windows 成立（Linux 上 `Z:` 是普通文件名）。
-    #[cfg(windows)]
+    /// 盘符相对前缀（`Z:`、`C:foo`）是最易被"只数组件数"放行的形态：
+    /// Windows 上它是 `Prefix` 组件，类 Unix 上则是普通文件名。
+    /// 现已跨平台统一拒绝，故断言不设 `#[cfg(windows)]`。
     #[test]
-    fn validate_asset_name_rejects_drive_prefix_on_windows() {
-        for bad in ["Z:", "C:", "Q:"] {
+    fn validate_asset_name_rejects_drive_prefix() {
+        for bad in ["Z:", "C:", "Q:", "c:foo", "D:bar"] {
             assert!(
                 validate_asset_name(bad).is_err(),
-                "{bad} 是 Prefix，不是普通组件"
+                "{bad} 含盘符前缀，应被拒绝"
             );
         }
     }

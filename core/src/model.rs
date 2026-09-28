@@ -266,12 +266,32 @@ impl ParamValue {
     /// - **为什么不修**：CNC 参数的实际量级（坐标 mm、转速 rpm、进给 mm/min、
     ///   程序号 ≤ 9999、行号 ≤ u32）**离 2^53 有 12 个数量级**。为一条到不了的路径
     ///   引入 i64/f64 双比较分支，反而给真正会走的区间比较增加分叉。
-    /// - **需要精确比较时**：直接对 `ParamValue::Integer(v)` 做 `i64` 比较，
-    ///   不要走本方法。边界行为由 `as_f64_precision_limit_is_documented` 钉住。
+    /// - **需要精确比较时**：直接用 [`ParamValue::as_exact_f64`]（越界返回 `None`，
+    ///   由调用方响亮告知），或对 `ParamValue::Integer(v)` 做 `i64` 比较。
+    ///   校验层的区间/整数约束走的就是 `as_exact_f64`（见
+    ///   [`crate::validate`] 的 `check_value_constraints`）。
+    /// - 边界行为由 `as_f64_precision_limit_is_documented` 钉住。
     pub fn as_f64(&self) -> Option<f64> {
         match self {
             ParamValue::Number(v) => Some(*v),
             ParamValue::Integer(v) => Some(*v as f64),
+            _ => None,
+        }
+    }
+
+    /// **精确可表示**的 f64 视图：整数值超出 `2^53` 时返回 `None`。
+    ///
+    /// 与 [`ParamValue::as_f64`] 的分工：后者是"能转就转"的通用视图（文档已标注
+    /// 它在 `>2^53` 上按就近取偶舍入）；本方法供**约束比较**使用 —— 拿不到精确
+    /// 值时返回 `None`，由调用方报"超出可精确比较范围"，而不是拿近似值判越界。
+    ///
+    /// 存在的意义：`as_f64` 的近似比较会出现「值实际越界但比较通过」。
+    /// CNC 当前量级到不了这条路径，但校验层是通用设施 —— 一旦放宽某个参数的
+    /// 上限（或自定义机床配了超大整数量），近似比较就会静默放行错误值。
+    pub fn as_exact_f64(&self) -> Option<f64> {
+        match self {
+            ParamValue::Number(v) => Some(*v),
+            ParamValue::Integer(v) if v.unsigned_abs() <= (1u64 << 53) => Some(*v as f64),
             _ => None,
         }
     }
@@ -329,11 +349,33 @@ impl ParamValue {
             return true;
         }
         match (self, option) {
-            (ParamValue::Number(a), ParamValue::Integer(b)) => *a == *b as f64,
-            (ParamValue::Integer(a), ParamValue::Number(b)) => *a as f64 == *b,
+            (ParamValue::Number(a), ParamValue::Integer(b)) => number_equals_integer(*a, *b),
+            (ParamValue::Integer(a), ParamValue::Number(b)) => number_equals_integer(*b, *a),
             _ => false,
         }
     }
+}
+
+/// `f64` 与 `i64` 的**精确**相等判定（[`ParamValue::matches_option`] 的跨变体比较）。
+///
+/// 不能写成 `n == i as f64`：`i` 超过 `2^53` 时 `i as f64` 会就近取偶，
+/// 于是 `Number(9007199254740992.0)` 会被判为等于 `Integer(9007199254740993)`
+/// —— 白名单放行了一个并未声明的取值。这里先把 `n` 限定为"可精确转成 i64 的
+/// 整数值"，再做整数比较。
+fn number_equals_integer(n: f64, i: i64) -> bool {
+    // 非整数值（含 NaN/Inf）不可能等于任何整数
+    if !n.is_finite() || n.fract() != 0.0 {
+        return false;
+    }
+    // i64::MIN = -2^63 可精确表示；上界取开区间，因为 `i64::MAX as f64` 会舍到 2^63，
+    // 而 2^63 本身不对应任何 i64 值。
+    const I64_MIN_F: f64 = -9_223_372_036_854_775_808.0;
+    const TWO_POW_63: f64 = 9_223_372_036_854_775_808.0;
+    if n < I64_MIN_F || n >= TWO_POW_63 {
+        return false;
+    }
+    // 区间内且为整数值 → `as i64` 是精确转换
+    (n as i64) == i
 }
 
 /// 参数类型（用于校验）。
@@ -605,7 +647,12 @@ impl DeriveRule {
 /// 必选性由**模板引用**决定——模板引用了该参数且无 `default` 兜底时即必选。
 /// 因此 `required` 与 `default` 的取值以模板实际引用情况为准，规格中的声明
 /// 主要用于人类可读的说明。
+///
+/// `deny_unknown_fields`：拼错的键（`requird` / `minimun`）必须**响亮失败**，
+/// 而不是被静默忽略后表现为"约束没生效"（区间不拦、白名单不查）——这类
+/// 静默失效正是本仓库零容忍的问题，与 `NctoolConfig` / `ManifestFile` 同口径。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct ParamSpec {
     /// 参数名（与模板中变量名一致）
     pub name: String,
@@ -628,6 +675,20 @@ pub struct ParamSpec {
     /// 数值上界（**含边界**）；仅对数值/整数参数生效，`None` 表示不限。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub max: Option<f64>,
+    /// 动态上界来源：机床配置键路径（如 `machine.max_spindle_rpm`）。
+    ///
+    /// 校验层拿到机床上下文时（`validate_*_with_machine`），以机床配置的
+    /// **实时值**覆盖静态 [`Self::max`] 参与上界比较——主轴转速上界随机床
+    /// 联动（P0-2/Q-01：WFL=3500、INDEX=5000，模板静态 6000 只是无机床上下文
+    /// 时的兜底）。机床值缺失/非法时**回退静态 `max` 并产生警告**，绝不以
+    /// `0` 为上界（Q-12：0/负数会把所有取值判为越界 = 全量误杀）。
+    ///
+    /// `machine.` 前缀仅作文档与诊断展示，查找时取其余段读
+    /// [`MachineConfig::get`](crate::model::MachineConfig::get)。
+    /// 无机床上下文的调用方（旧签名校验入口）沿用静态 `max`，行为与本字段
+    /// 引入前一致。
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub max_from: Option<String>,
     /// 是否要求取**整数值**（数值参数拒绝 `5.5` 这类带小数的值）。
     ///
     /// 用途：程序号、刀具号、刀长补偿号等天然为整数的参数。缺失此约束时，
@@ -696,6 +757,7 @@ impl ParamSpec {
             default: None,
             min: None,
             max: None,
+            max_from: None,
             integer: false,
             unit: None,
             options: None,
@@ -721,6 +783,14 @@ impl ParamSpec {
     pub fn with_range(mut self, min: f64, max: f64) -> Self {
         self.min = Some(min);
         self.max = Some(max);
+        self
+    }
+
+    /// 声明动态上界来源（机床配置键路径，如 `machine.max_spindle_rpm`，见
+    /// [`Self::max_from`]）。与 [`Self::with_max`] 可叠加：静态值作为无机床上下文
+    /// /机床上限非法时的兜底，动态值可用时覆盖之。
+    pub fn with_max_from(mut self, key: impl Into<String>) -> Self {
+        self.max_from = Some(key.into());
         self
     }
 
@@ -1116,6 +1186,64 @@ mod tests {
         );
         // 非数值类型不受影响（与精度无关，防止改写时把这条路径也带偏）
         assert_eq!(ParamValue::String("1".to_string()).as_f64(), None);
+    }
+
+    /// **Q-05：约束比较必须拿精确值，拿不到就响亮说"拿不到"。**
+    ///
+    /// `as_f64` 的行为由上一个用例钉住（有意保留的近似视图）；本用例钉的是
+    /// `as_exact_f64` 这条**新增的精确视图**：边界内可转，边界外返回 `None`
+    /// 而不是近似值。
+    #[test]
+    fn as_exact_f64_refuses_values_beyond_f53() {
+        let two_pow_53 = 1_i64 << 53;
+        // 边界本身可精确表示 → 照常给出
+        assert_eq!(
+            ParamValue::Integer(two_pow_53).as_exact_f64(),
+            Some(two_pow_53 as f64)
+        );
+        assert_eq!(
+            ParamValue::Integer(-two_pow_53).as_exact_f64(),
+            Some(-(two_pow_53 as f64))
+        );
+        // 边界之外 → None（**不**返回被舍入的近似值）
+        assert_eq!(
+            ParamValue::Integer(two_pow_53 + 1).as_exact_f64(),
+            None,
+            "2^53+1 不可精确表示，必须返回 None 而非舍入值"
+        );
+        assert_eq!(ParamValue::Integer(i64::MAX).as_exact_f64(), None);
+        assert_eq!(ParamValue::Integer(i64::MIN).as_exact_f64(), None);
+        // `Number` 与类型无关，原样透出
+        assert_eq!(ParamValue::Number(1.5).as_exact_f64(), Some(1.5));
+        assert_eq!(ParamValue::String("1".into()).as_exact_f64(), None);
+    }
+
+    /// **Q-05（白名单侧）：跨变体比较必须精确。**
+    ///
+    /// 原实现 `*a == *b as f64` 会把 `Number(9007199254740992.0)` 判为等于
+    /// `Integer(9007199254740993)` —— 白名单放行了一个并未声明的取值。
+    #[test]
+    fn matches_option_is_exact_beyond_f53() {
+        let two_pow_53 = 1_i64 << 53;
+        // 9007199254740993 在 f64 里舍入到 9007199254740992 → 必须不相等
+        assert!(
+            !ParamValue::Number(two_pow_53 as f64)
+                .matches_option(&ParamValue::Integer(two_pow_53 + 1)),
+            "近似值不得命中白名单"
+        );
+        // 2^63（即 `i64::MAX as f64`）不对应任何 i64 值
+        assert!(!ParamValue::Number(9_223_372_036_854_775_808.0)
+            .matches_option(&ParamValue::Integer(i64::MAX)));
+        // 回归：常见的无害写法仍必须被接受（`8` 与 `8.0` 是同一候选项）
+        assert!(ParamValue::Number(8.0).matches_option(&ParamValue::Integer(8)));
+        assert!(ParamValue::Integer(8).matches_option(&ParamValue::Number(8.0)));
+        // 边界内的大整数照常相等
+        assert!(
+            ParamValue::Integer(two_pow_53).matches_option(&ParamValue::Number(two_pow_53 as f64))
+        );
+        // 小数不命中整数候选项；NaN 不命中任何候选项
+        assert!(!ParamValue::Number(8.5).matches_option(&ParamValue::Integer(8)));
+        assert!(!ParamValue::Number(f64::NAN).matches_option(&ParamValue::Integer(8)));
     }
 
     /// `MachineConfig::META_KEYS` 必须与 `build_render_context` 实际注入的元信息
@@ -1545,6 +1673,15 @@ mod tests {
         assert!(yaml.contains("required_if"), "{yaml}");
         let back: ParamSpec = serde_yaml::from_str(&yaml).unwrap();
         assert_eq!(back, spec);
+    }
+
+    /// 拼错的规格键必须**响亮失败**（`deny_unknown_fields`）：静默忽略会把
+    /// "约束声明了但没生效"（区间/白名单从此不拦）伪装成"模板没问题"。
+    #[test]
+    fn param_spec_rejects_unknown_keys() {
+        let yaml = "name: x\nkind: number\nrequired: true\ndescription: X\nrequird: false\n";
+        let err = serde_yaml::from_str::<ParamSpec>(yaml).expect_err("未知键应拒绝");
+        assert!(err.to_string().contains("requird"), "{err}");
     }
 
     #[test]

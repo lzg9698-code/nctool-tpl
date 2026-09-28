@@ -39,8 +39,11 @@ pub fn run(ctx: &Ctx, args: &RenderArgs) -> Result<(), CliError> {
         ascii_only: args.ascii,
     };
 
-    // 渲染前校验（宽松模式不阻断，仅提示）
-    let report = gen.registry().validate(&name, &params)?;
+    // 渲染前校验（宽松模式不阻断，仅提示）。带机床上下文（P0-2）：校验与
+    // 渲染用同一台机床，转速上界按 `machine.max_spindle_rpm` 联动。
+    let report = gen
+        .registry()
+        .validate_with_machine(&name, &params, Some(&machine))?;
     if report.has_errors() && !args.lenient {
         // 报告走 stderr：stdout 要留给 G-code（未指定 --out 时 G-code 写 stdout）。
         // 且**不能**把整份报告塞进 `CliError::message`——统一错误输出只给首行加
@@ -207,12 +210,22 @@ pub fn resolve_registry(
             None => fname,
         };
         let mut fresh = ctx.build_registry_fresh()?;
+        // 参数规格（P1-10）：此前这里恒传 `vec![]`，于是**同一份模板**
+        // `render turning/a.j2`（注册名）会校验类型/区间/白名单，
+        // `render /abs/turning/a.j2`（路径）一层都不校验，而两者都显示"校验通过"。
+        // 静默少校验 → 越界参数直接进 G-code（撞刀风险）。
+        //
+        // 源码先读一次用于解析规格；`add_file` 内部会再读一次（它要自己持有
+        // source_text）—— 多一次小文件读，换掉"注册表里有源码但规格是空的"这一
+        // 不一致状态，值得。
+        let src_text = crate::args::read_text_capped(&path, "模板")?;
+        let specs = crate::commands::templates::specs_for_path(ctx, &path, &src_text);
         fresh.registry_mut().add_file(
             key.clone(),
             TemplateCategory::General,
             format!("文件模板: {}", path.display()),
             &path,
-            vec![],
+            specs,
         )?;
         return Ok((Rc::new(fresh), key, Some(path)));
     }

@@ -216,7 +216,12 @@ impl VariableLibrary {
 }
 
 /// `variables.yaml` 的文档结构（带 `variables` 键的推荐写法）。
+///
+/// `deny_unknown_fields`：顶层拼错的键（`variable`）必须响亮失败，而不是被
+/// 静默忽略后解析出**空库**——变量库空了，下游所有"按库补齐 options/kind"
+/// 的逻辑都会静默退化成无约束。
 #[derive(Debug, serde::Deserialize)]
+#[serde(deny_unknown_fields)]
 struct VariablesFile {
     #[serde(default)]
     variables: Vec<ParamOverride>,
@@ -258,6 +263,18 @@ variables:
                 == 3
         );
         assert!(l.get("missing").is_none());
+    }
+
+    /// 合法的 `variables:` 文档 + 拼错的额外顶层键 → 必须报错，
+    /// 而不是静默忽略该键、交出一个"看似正常"的库（`deny_unknown_fields`）。
+    #[test]
+    fn keyed_form_rejects_unknown_top_level_key() {
+        let err = VariableLibrary::from_yaml(
+            "variables: []\nvariablez: []\n",
+            Path::new("variables.yaml"),
+        )
+        .expect_err("未知顶层键应失败");
+        assert!(err.to_string().contains("variablez"), "{err}");
     }
 
     #[test]
@@ -461,5 +478,60 @@ variables:
     fn variable_library_accepts_legal_subnormal() {
         let l = lib("variables:\n  - name: U_A\n    kind: number\n    options: [5e-324]\n");
         assert_eq!(l.len(), 1);
+    }
+
+    /// Q-02 / P1-13 守卫：扫描**真实** `templates/variables.yaml`。
+    ///
+    /// 反例：`--param U_RTRPM=999999` 曾校验全绿（变量库只声明了 `kind`），
+    /// `S999999` 直接写进 G-code。所有名字含 `RPM` 的键必须声明 `max`；
+    /// 转速/进给全集（含名字不含 RPM 的 `R1` / `speed_limit`）必须声明 `min` + `max`。
+    #[test]
+    fn variable_library_declares_upper_bound_for_all_rpm_params() {
+        let path = Path::new(env!("CARGO_MANIFEST_DIR")).join("../templates/variables.yaml");
+        let text = std::fs::read_to_string(&path).expect("真实变量库应可读");
+        let library = VariableLibrary::from_yaml(&text, &path).expect("真实变量库应可解析");
+
+        // 1) 名字含 RPM（不分大小写）→ 必须有上界
+        let mut rpm_named = 0;
+        for e in library.iter() {
+            if e.name.to_ascii_lowercase().contains("rpm") {
+                assert!(
+                    e.max.flatten().is_some(),
+                    "名字含 RPM 的键 `{}` 未声明 max（Q-02：S999999 会全绿）",
+                    e.name
+                );
+                rpm_named += 1;
+            }
+        }
+        assert!(
+            rpm_named >= 2,
+            "至少应有 U_RTRPM / U_FTRPM，实测 {rpm_named}"
+        );
+
+        // 2) 转速/进给全集 → min + max（R1 / speed_limit 名字不含 RPM，
+        //    靠显式清单兜住；U_RTFF 是审查清单漏掉的第 4 个进给键，一并收口）
+        for name in [
+            "U_RTRPM",
+            "U_RTRF",
+            "U_RTFF",
+            "U_FTRPM",
+            "U_FTF",
+            "R1",
+            "R2",
+            "speed_limit",
+        ] {
+            let entry = library
+                .get(name)
+                .unwrap_or_else(|| panic!("`{name}` 应在真实变量库中声明"));
+            assert!(entry.min.flatten().is_some(), "`{name}` 未声明 min");
+            assert!(entry.max.flatten().is_some(), "`{name}` 未声明 max");
+        }
+
+        // 3) 界必须经 apply 真正合入规格（否则声明了也拦不住）
+        let base = vec![ParamSpec::new("U_RTRPM", ParamKind::Any, "粗铣刀转速")];
+        let specs = library.apply(base, "G97 S1={{ U_RTRPM }}\n", "t.j2");
+        let spec = specs.iter().find(|s| s.name == "U_RTRPM").unwrap();
+        assert_eq!(spec.min, Some(1.0), "合并后应带下界");
+        assert_eq!(spec.max, Some(6000.0), "合并后应带上界");
     }
 }

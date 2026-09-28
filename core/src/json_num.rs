@@ -355,7 +355,11 @@ pub fn scan_underflow_candidates(json: &str) -> Vec<UnderflowCandidate> {
 /// - **注释** `# ...` 到行尾整体跳过（YAML 有，JSON 没有）。
 /// - **单引号字符串** `'...'`（无转义；`''` 表一个 `'`）跳过。
 /// - **双引号字符串** `"..."`（与 JSON 同转义）跳过。
-/// - **块标量** `|` / `>` 之后的缩进行（多行字符串内容）整体跳过。
+/// - **块标量** `|` / `>` 头之后的内容行（含其中的空行）整体跳过：头行可带
+///   夹持/缩进指示符（`|-` / `|+` / `|2` / `|-2`）与行尾注释；且只有处在
+///   **值位**（本行最近的 `:` / `-` 之后只见过空白）的 `|` / `>` 才算头——
+///   普通标量行尾的 `key: bar |` 不是块头，误判会把其后的真实下溢字面量
+///   当块文本静默跳过。
 ///
 /// 返回语义与调用方义务同 [`scan_underflow_candidates`]，但**确认必须用 YAML 解析器**
 /// （[`confirm_underflow_yaml`]）—— 见附录 D4：`serde_yaml` 与 `serde_json` 的
@@ -466,17 +470,23 @@ enum ScanState {
 /// 扫描骨架：在文本中找出全部「数字字面量候选」。
 ///
 /// JSON 模式：Normal / InString / InStringEscape 三态（§2 状态机）。
-/// YAML 模式：额外处理行尾注释 `#`、单引号字符串 `'...'`、块标量 `|`/`>` 后的缩进行。
+/// YAML 模式：额外处理行尾注释 `#`、单引号字符串 `'...'`、块标量头（`|`/`>` +
+/// 夹持/缩进指示符/行尾注释）与其后的缩进行（含其中的空行）。
 fn scan_number_tokens(text: &str, mode: LexMode) -> Vec<UnderflowCandidate> {
     let bytes = text.as_bytes();
     let mut out: Vec<UnderflowCandidate> = Vec::new();
     let mut i: usize = 0;
     let mut state = ScanState::Normal;
-    // YAML 块标量：记录其后的缩进量；缩进行整体跳过，直到遇到缩进更小的行。
+    // YAML 块标量：内容行（含其中的空行）整体跳过，直到遇到缩进更小的非空行。
     let mut block_indent: Option<usize> = None;
+    // YAML「值位」标记：本行中最近的 `:` / `-` 指示符之后只见过空白（换行即
+    // 失效）。`|` / `>` 只有处在值位才是块标量头——行尾 `key: bar |` 是普通
+    // 标量的一部分，误判会把其后的整份文档吞进块内容，真实下溢被静默跳过。
+    let mut scalar_allowed = false;
 
     while i < bytes.len() {
-        // YAML 块标量处理：跳过所有「缩进 >= block_indent」的行。
+        // YAML 块标量：跳过内容行与其中的空行。**空行是块内容的一部分**
+        // （YAML 允许块中间出现空行），只有缩进不足的非空行才结束块。
         if let Some(indent) = block_indent {
             let line_start = i;
             // 计算本行缩进（空格数；行首）。
@@ -487,47 +497,82 @@ fn scan_number_tokens(text: &str, mode: LexMode) -> Vec<UnderflowCandidate> {
             let blank = line_start + ws >= bytes.len()
                 || bytes[line_start + ws] == b'\n'
                 || bytes[line_start + ws] == b'\r';
-            if !blank && ws >= indent {
-                // 该行属于块标量内容 → 跳到行尾。
+            if blank || ws >= indent {
+                // 属于块 → 整行（含行尾换行）吃掉，下一轮从下一行行首开始，
+                // 不会把行尾 `\n` 误判成「空行 → 块结束」。
                 while i < bytes.len() && bytes[i] != b'\n' {
+                    i += 1;
+                }
+                if i < bytes.len() {
                     i += 1;
                 }
                 continue;
             }
-            // 缩进不足（或空行）→ 块标量结束。
+            // 缩进不足的非空行 → 块标量结束，本行按正常状态扫描。
             block_indent = None;
         }
 
         match state {
             ScanState::Normal => {
                 let b = bytes[i];
-                if mode == LexMode::Yaml && b == b'#' {
-                    // YAML 注释：到行尾。
+                // YAML 注释：`#` **只有处在空白/行首之后**才是注释起点（YAML 规范）。
+                // 标量内部的 `#`（如 URL 片段 `http://a#b`、流序列 `x#y`）是普通
+                // 字符——无条件当注释会把**同一行其后的真下溢整行跳过**，形成漏报
+                // （Q-04 / P1-15，与模块文档「不可能漏掉真下溢」的承诺冲突）。
+                // 误扫的候选由确认层（`confirm_underflow_yaml`）兜底：非数值不误报。
+                if mode == LexMode::Yaml
+                    && b == b'#'
+                    && (i == 0 || matches!(bytes[i - 1], b' ' | b'\t' | b'\n' | b'\r'))
+                {
+                    scalar_allowed = false;
                     state = ScanState::InComment;
                     i += 1;
                 } else if b == b'"' {
                     // 进入双引号字符串（键名与内容一律跳过）。
+                    scalar_allowed = false;
                     state = ScanState::InString;
                     i += 1;
                 } else if mode == LexMode::Yaml && b == b'\'' {
                     // YAML 单引号字符串。
+                    scalar_allowed = false;
                     state = ScanState::InSingleQuote;
                     i += 1;
                 } else if mode == LexMode::Yaml
                     && (b == b'|' || b == b'>')
-                    && next_nonspace_is_eol(text, i + 1)
+                    && scalar_allowed
+                    && is_block_scalar_header(text, i)
                 {
-                    // 块标量头（`|` / `>` 可选带 chomping/indent 指示符，以行尾结束）。
-                    // 记录其内容的缩进基准，并**跳过本行（含换行）**，使下一轮循环从
-                    // 内容行行首开始判断。
-                    block_indent = Some(next_line_indent(text, i + 1));
+                    // 块标量头（可带夹持/缩进指示符与行尾注释）：记下内容缩进
+                    // 基准，并**跳过头行（含换行）**，使下一轮循环从首个内容/空行
+                    // 行首开始判断。
+                    block_indent = block_content_indent(text, i);
+                    scalar_allowed = false;
                     while i < bytes.len() && bytes[i] != b'\n' {
                         i += 1;
                     }
                     if i < bytes.len() {
                         i += 1; // 越过行尾 `\n`，避免把本行误判为「空行 → 块标量结束」。
                     }
+                } else if mode == LexMode::Yaml && (b == b' ' || b == b'\t') {
+                    // 空白不清除「值位」标记（`key:   |` 仍是块标量头）。
+                    i += 1;
+                } else if mode == LexMode::Yaml && (b == b'\n' || b == b'\r') {
+                    scalar_allowed = false;
+                    i += 1;
+                } else if mode == LexMode::Yaml && b == b':' {
+                    // 键后进入值位（`key: |`）。行内的 `http://` 之类会在下一个
+                    // 非空白字符处把标记清掉，不会误判。
+                    scalar_allowed = true;
+                    i += 1;
+                } else if mode == LexMode::Yaml
+                    && b == b'-'
+                    && matches!(bytes.get(i + 1), None | Some(b' ' | b'\t' | b'\n' | b'\r'))
+                {
+                    // 列表指示符（`- |`）：其后进入值位。`-5` 之类走数字分支。
+                    scalar_allowed = true;
+                    i += 1;
                 } else if b == b'-' || b.is_ascii_digit() {
+                    scalar_allowed = false;
                     // 数字 token：贪婪吃 `[0-9.eE+-]`。
                     let start = i;
                     i += 1;
@@ -556,6 +601,7 @@ fn scan_number_tokens(text: &str, mode: LexMode) -> Vec<UnderflowCandidate> {
                         });
                     }
                 } else {
+                    scalar_allowed = false;
                     i += 1;
                 }
             }
@@ -600,34 +646,90 @@ fn scan_number_tokens(text: &str, mode: LexMode) -> Vec<UnderflowCandidate> {
     out
 }
 
-/// 从下标 `from` 起跳过行内空白后是否到达行尾（含 `\n` / `\r` / 串尾）。
+/// 判断 `i` 处的 `|` / `>` 是否是**块标量头**。
 ///
-/// 用于识别 YAML 块标量头（`key: |` / `key: >`）——`|`/`>` 之后只允许空白与行尾。
-fn next_nonspace_is_eol(text: &str, from: usize) -> bool {
+/// 头行格式（YAML 规定）：指示符后可跟夹持与缩进指示符（顺序任意、各至多
+/// 一个：`|2-` / `|-2`），再跟空白与可选的行尾注释，直到行尾 / EOF。
+///
+/// 调用方须先验「值位」（`scalar_allowed`）：普通标量行尾的 `key: bar |`
+/// 里的 `|` 不是头，误判会让块跳过吞掉其后的整份文档。
+fn is_block_scalar_header(text: &str, i: usize) -> bool {
     let bytes = text.as_bytes();
-    let mut j = from;
+    let mut j = i + 1;
+    let mut has_indent_indicator = false;
+    let mut has_chomping = false;
+    while j < bytes.len() {
+        match bytes[j] {
+            b'0'..=b'9' if !has_indent_indicator => {
+                has_indent_indicator = true;
+                j += 1;
+            }
+            b'+' | b'-' if !has_chomping => {
+                has_chomping = true;
+                j += 1;
+            }
+            _ => break,
+        }
+    }
+    // 指示符之后只允许空白与行尾注释。
     while j < bytes.len() && (bytes[j] == b' ' || bytes[j] == b'\t') {
         j += 1;
+    }
+    if j < bytes.len() && bytes[j] == b'#' {
+        return true; // 行尾注释：其后必然是行尾/EOF。
     }
     j >= bytes.len() || bytes[j] == b'\n' || bytes[j] == b'\r'
 }
 
-/// 求下一行首个非空字符的缩进（空格数）。用于块标量内容的缩进基准。
-fn next_line_indent(text: &str, from: usize) -> usize {
+/// 块标量内容的缩进基准：头行之后**首个非空行**的缩进。
+///
+/// 返回 `None` 表示没有内容行（EOF，或首个非空行缩进 <= 头行缩进——块为空、
+/// 下一行是兄弟节点）：此时不进入块跳过模式，后续行照常扫描。空块若按
+/// `next_line_indent` 的旧算法会取到兄弟行的缩进（常为 0），「所有行缩进 >= 0」
+/// 把其后的真实下溢字面量全部静默跳过。
+///
+/// 阈值取首个内容行缩进而非显式指示符推算值：真实内容缩进恒 <= 首个内容行
+/// 缩进，阈值偏大只会多扫几行（候选仍须解析确认，最坏是**响亮**的误报），
+/// 阈值偏大会把兄弟节点的真实 YAML 数字当块文本跳过（**静默**归零）——
+/// 后者是红线，故宁大勿小。
+fn block_content_indent(text: &str, header_at: usize) -> Option<usize> {
     let bytes = text.as_bytes();
-    // 跳到下一行行首。
-    let mut j = from;
+    // 头所在行的行首缩进（兄弟节点的缩进基准）。
+    let mut line_start = header_at;
+    while line_start > 0 && bytes[line_start - 1] != b'\n' {
+        line_start -= 1;
+    }
+    let mut header_indent = 0usize;
+    while line_start + header_indent < header_at && bytes[line_start + header_indent] == b' ' {
+        header_indent += 1;
+    }
+    // 跳过头行本身，找首个非空行。
+    let mut j = header_at;
     while j < bytes.len() && bytes[j] != b'\n' {
         j += 1;
     }
     if j < bytes.len() {
-        j += 1; // 越过 `\n`。
+        j += 1;
     }
-    let mut indent = 0usize;
-    while j + indent < bytes.len() && bytes[j + indent] == b' ' {
-        indent += 1;
+    while j < bytes.len() {
+        let mut ws = 0usize;
+        while j + ws < bytes.len() && bytes[j + ws] == b' ' {
+            ws += 1;
+        }
+        let blank = j + ws >= bytes.len() || bytes[j + ws] == b'\n' || bytes[j + ws] == b'\r';
+        if !blank {
+            // 缩进不超过头行 → 那是兄弟节点，块为空。
+            return (ws > header_indent).then_some(ws);
+        }
+        // 空行 → 继续找（空行可能在块内容之前）。
+        while j < bytes.len() && bytes[j] != b'\n' {
+            j += 1;
+        }
+        if j < bytes.len() {
+            j += 1;
+        }
     }
-    indent
+    None
 }
 
 /// 单个数字 token 是否为**预筛候选**：真值非零 且 `|真值| < 2^-1000`。
@@ -1074,6 +1176,43 @@ mod tests {
         assert_eq!(hits_yaml("params:\n  x: 1"), 0, "普通值");
     }
 
+    /// §5.6 块标量边界回归：
+    ///
+    /// - 头行变体（`|-` / `|+` / `|2` / 行尾注释）必须被识别，多行内容与块内
+    ///   空行必须整体跳过——否则块文本里的 `1e-400` 被合成探测误确认成下溢，
+    ///   **合法文件被响亮误拒**。
+    /// - 普通标量行尾的 `|`（`x: bar |`）与空块**不得**被当头——否则其后的真实
+    ///   下溢字面量被静默跳过，归零的 `0` 直接进 G-code（红线）。
+    #[test]
+    fn yaml_block_scalar_headers_and_boundaries() {
+        // 头行变体全部识别，内容整块跳过。
+        assert_eq!(hits_yaml("x: |-\n  1e-400\ny: 1"), 0, "`|-` 头");
+        assert_eq!(hits_yaml("x: |+\n  1e-400\ny: 1"), 0, "`|+` 头");
+        assert_eq!(hits_yaml("x: |2\n    1e-400\ny: 1"), 0, "`|2` 头");
+        assert_eq!(hits_yaml("x: |2-\n    1e-400\ny: 1"), 0, "`|2-` 头");
+        assert_eq!(hits_yaml("x: | # note\n  1e-400\ny: 1"), 0, "行尾注释头");
+        assert_eq!(hits_yaml("x: >-\n  1e-400\ny: 1"), 0, "`>-` 折叠头");
+        assert_eq!(hits_yaml("seq:\n  - |\n    1e-400\n  - y"), 0, "序列项块头");
+        // 多行内容：旧实现只跳过首行，第二行起被当普通 YAML 扫描。
+        assert_eq!(hits_yaml("x: |\n  a\n  1e-400\n  b\ny: 1"), 0, "多行内容");
+        // 块内空行不得提前结束块（空行是块内容的一部分）。
+        assert_eq!(hits_yaml("x: |\n  a\n\n  1e-400\ny: 1"), 0, "块内空行");
+        // 头行与内容之间夹空行：缩进基准取首个非空行。
+        assert_eq!(hits_yaml("x: |\n\n  1e-400\ny: 1"), 0, "头行后空行");
+        // 块结束之后的真实下溢必须照常命中。
+        assert_eq!(hits_yaml("x: |\n  text\ny: 1e-400"), 1, "块外命中");
+        // 行尾 `|` 是普通标量的一部分，不是块头——旧实现会吞掉其后整份文档。
+        assert_eq!(hits_yaml("x: bar |\ny: 1e-400"), 1, "行尾 `|` 非块头");
+        // 空块：头行后首个非空行是兄弟节点，不得进入跳过模式。
+        assert_eq!(hits_yaml("x: |\ny: 1e-400"), 1, "空块不吞兄弟行");
+        // 块内"看起来像数字"的文本被跳过（否则会被合成探测误确认）。
+        assert_eq!(
+            hits_yaml("gcode: |\n  G0 X1e-400 Y5e-324\ny: 1"),
+            0,
+            "块内文本"
+        );
+    }
+
     /// YAML 单引号里的 `''` 转义不提前闭合。
     #[test]
     fn yaml_single_quote_escape() {
@@ -1092,6 +1231,69 @@ mod tests {
         );
         // 注释结束后的下一行标量仍命中。
         assert_eq!(hits_yaml("x: 1  # 1e-400\ny: 1e-500"), 1, "注释下一行命中");
+    }
+
+    /// Q-04 / P1-15：标量内部的 `#`（URL 片段、流序列项内）**不是**注释起点，
+    /// 其后的候选必须被扫到——无条件当注释会把同一行其后的真下溢整行跳过（漏报）。
+    ///
+    /// 分工：扫描层**放宽**（候选必扫，宁多勿漏），确认层照旧兜底。
+    /// 下列 serde_yaml 断言是**实测对照**（不是猜的）：原文档里 `#` 后到底是不是
+    /// 真数值，由解析器说话。
+    #[test]
+    fn yaml_hash_inside_plain_scalar_is_not_comment() {
+        // 1) 审查守卫：`#` 紧跟非空白字符 → 标量内字符，其后候选应命中（曾为 0）。
+        assert_eq!(
+            hits_yaml("u: http://a#1e-400"),
+            1,
+            "标量内 # 之后的候选应命中"
+        );
+        // 2) 实测原文档：该值是**字符串**（YAML：# 前无空格 → 非注释，整串非数值）。
+        //    注意确认层是上下文无关的字面量探针（`x: <lit>`，见
+        //    `confirm_underflow_yaml`），对此类字面量仍返回 true —— 即 URL 片段
+        //    呈 `1e-400` 形态会被**响亮误拒**；与 `u: abc 1e-400`（既有行为）同类，
+        //    零容忍域宁可误拒、不可静默，设计内接受。
+        let doc: serde_yaml::Value =
+            serde_yaml::from_str("u: http://a#1e-400").expect("URL 标量是合法 YAML");
+        let map = match &doc {
+            serde_yaml::Value::Mapping(m) => m,
+            other => panic!("应为映射: {other:?}"),
+        };
+        let value = map
+            .get(serde_yaml::Value::String("u".to_string()))
+            .expect("u 键存在");
+        assert!(
+            matches!(value, serde_yaml::Value::String(s) if s.contains('#')),
+            "实测：u 的值是字符串而非数值: {value:?}"
+        );
+
+        // 3) 真漏报通道（同一行、`#` 在标量内、其后是**原文档里的真数值**）：
+        //    流序列 `1e-400` 被 serde_yaml 解析为 0.0 —— 此前扫描层整行跳过 → 静默
+        //    归零 G-code。现在扫描层必须抓到、确认层必须证实。
+        let flow = scan_underflow_candidates_yaml("a: [x#y, 1e-400]");
+        assert_eq!(flow.len(), 1, "流序列中 # 后的候选应命中");
+        assert!(
+            confirm_underflow_yaml(&flow[0]),
+            "流序列里的 1e-400 是真下溢，必须确认"
+        );
+        let flow_doc: serde_yaml::Value =
+            serde_yaml::from_str("a: [x#y, 1e-400]").expect("流序列是合法 YAML");
+        let seq = match &flow_doc {
+            serde_yaml::Value::Mapping(m) => match m.get(serde_yaml::Value::String("a".into())) {
+                Some(serde_yaml::Value::Sequence(s)) => s.clone(),
+                other => panic!("a 应为序列: {other:?}"),
+            },
+            other => panic!("应为映射: {other:?}"),
+        };
+        let second = seq.get(1).expect("第二元素存在");
+        assert!(
+            matches!(second, serde_yaml::Value::Number(n) if n.as_f64() == Some(0.0)),
+            "实测：原文档第二元素是数值 0.0（真下溢）: {second:?}"
+        );
+
+        // 4) 块上下文同款：键内的 `#` 之后、同一行的真数值。
+        let kv = scan_underflow_candidates_yaml("k#x: 1e-400");
+        assert_eq!(kv.len(), 1, "键内 # 之后的候选应命中");
+        assert!(confirm_underflow_yaml(&kv[0]), "行内真下溢必须确认");
     }
 
     // ───────────────────────── YAML 确认（serde_yaml 实测） ─────────────────────────

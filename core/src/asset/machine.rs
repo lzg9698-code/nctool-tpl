@@ -293,6 +293,13 @@ impl MachineWriter {
                                      真正的夹紧在 pipeline 后处理）"
                                 ));
                             }
+                        } else if let Some(w) = crate::machine::integer_range_warning(k, n) {
+                            // 取值范围（Q-12 前置）：解析成功不等于取值安全——
+                            // `max_spindle_rpm=0` 会让按机床校验全量误杀转速。
+                            // `line_number_digits` 走上面的夹紧专用提示（含渲染期
+                            // 行为说明），此处不重复告警。警告级：不阻断保存，
+                            // 与"校验时回退静态上界"的处置一致。
+                            report.warnings.push(w);
                         }
                     }
                     Err(_) => {
@@ -331,8 +338,12 @@ impl MachineWriter {
 // ---------------------------------------------------------------------------
 
 /// 读文件文本；不存在返回 `None`。
+///
+/// 走 [`crate::io_limit::read_text_capped`] 而不是裸 `read_to_string`：
+/// 机床配置是 TOML（不经 serde_yaml），但"被误指到大文件/网络盘/备份副本"
+/// 这条路径与预设文件完全相同，且本文件随后还会做全文下溢扫描。
 fn read_text_if_exists(path: &Path) -> Result<Option<String>, WriteError> {
-    match std::fs::read_to_string(path) {
+    match crate::io_limit::read_text_capped(path, crate::io_limit::MAX_CONFIG_BYTES) {
         Ok(text) => Ok(Some(text)),
         Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
         Err(e) => Err(map_io(e, path)),
@@ -490,7 +501,73 @@ mod tests {
     use super::*;
     use std::time::{SystemTime, UNIX_EPOCH};
 
-    fn tmpdir(tag: &str) -> std::path::PathBuf {
+    /// 尽力删除目录：先递归清只读，再 `remove_dir_all`；失败则清只读后重试一次；
+    /// 仍失败则 panic（带路径与两次错误）—— 绝不静默吞掉失败。
+    ///
+    /// 与 `cli/tests/cli_machine_e2e.rs` 的同名辅助逻辑一致：Windows 上
+    /// `remove_dir_all` 遇到只读文件 / 只读目录会以 os error 5 失败，故先递归去只读。
+    fn remove_dir_all_force(dir: &Path) {
+        clear_readonly_recursive(dir);
+        match std::fs::remove_dir_all(dir) {
+            Ok(()) => {}
+            Err(first) => {
+                // 只读属性可能在清理与删除之间被重新置上，重试一次。
+                clear_readonly_recursive(dir);
+                if let Err(second) = std::fs::remove_dir_all(dir) {
+                    panic!(
+                        "清理残留临时目录失败（已两次尝试清除只读属性）：{}（首次错误: {first}；重试错误: {second}）",
+                        dir.display()
+                    );
+                }
+            }
+        }
+    }
+
+    /// 递归清除目录树下所有条目（含目录本身）的只读属性，使 `remove_dir_all` 可成功。
+    fn clear_readonly_recursive(dir: &Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return; // 不存在 / 不可读：无可清理，交给 remove_dir_all 去报错
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                clear_readonly_recursive(&p);
+            }
+            let _ = clear_readonly(&p);
+        }
+        let _ = clear_readonly(dir);
+    }
+
+    /// 清除单个路径的只读属性（失败忽略：调用方靠后续 `remove_dir_all` 的错误兜底）。
+    fn clear_readonly(p: &Path) -> std::io::Result<()> {
+        let mut perms = std::fs::metadata(p)?.permissions();
+        if perms.readonly() {
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            std::fs::set_permissions(p, perms)?;
+        }
+        Ok(())
+    }
+
+    /// RAII 临时目录：用例结束（含 panic 展开）即回收自己的目录树，避免
+    /// `%TEMP%\nctool_machine_*` 跨用例堆积（修复前每轮遗留约 9 个）。`Deref` 到
+    /// `Path`，故既有的 `dir.join(...)` 用法无需改动。
+    struct TmpDir(std::path::PathBuf);
+
+    impl std::ops::Deref for TmpDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            remove_dir_all_force(&self.0);
+        }
+    }
+
+    fn tmpdir(tag: &str) -> TmpDir {
         let dir = std::env::temp_dir().join(format!(
             "nctool_machine_{tag}_{}_{}",
             std::process::id(),
@@ -500,7 +577,7 @@ mod tests {
                 .as_nanos()
         ));
         std::fs::create_dir_all(&dir).unwrap();
-        dir
+        TmpDir(dir)
     }
 
     fn sample(id: &str) -> MachineConfig {
@@ -637,6 +714,34 @@ mod tests {
         assert!(r.can_save(), "扩展键与超大行号位数都不应阻断: {r:?}");
         assert!(r.unknown_keys.contains(&"my_ext".to_string()));
         assert!(r.warnings.iter().any(|w| w.contains("夹紧")));
+    }
+
+    /// Q-12（保存时告警）：`max_spindle_rpm=0` 保存时就必须出警告——
+    /// 修复前 preflight 只判"是不是整数"，0 能静默落盘，等 P0-2 联动生效后
+    /// 会把所有转速判为越界（全量误杀）。级别是警告不阻断（与"校验时回退
+    /// 静态上界"的处置一致）。
+    #[test]
+    fn preflight_warns_on_illegal_max_spindle_rpm() {
+        let mut cfg = sample("hero");
+        cfg.config
+            .insert("max_spindle_rpm".to_string(), "0".to_string());
+        let r = MachineWriter::preflight(&cfg, &BTreeSet::new());
+        assert!(r.can_save(), "范围违规是警告级，不阻断保存: {r:?}");
+        assert!(
+            r.warnings.iter().any(|w| w.contains("max_spindle_rpm")),
+            "保存时必须警告非法转速上限: {:?}",
+            r.warnings
+        );
+        // 合法值不产生该告警
+        let mut ok = sample("hero");
+        ok.config
+            .insert("max_spindle_rpm".to_string(), "8000".to_string());
+        let r = MachineWriter::preflight(&ok, &BTreeSet::new());
+        assert!(
+            !r.warnings.iter().any(|w| w.contains("max_spindle_rpm")),
+            "合法转速上限不应告警: {:?}",
+            r.warnings
+        );
     }
 
     /// 从路径读指纹（测试辅助；文件必须存在）。

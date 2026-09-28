@@ -189,6 +189,23 @@ fn save_rejects_illegal_value() {
     assert!(!e.preset.exists(), "被拒时不得落盘");
 }
 
+/// 非法预设名（`../` 穿越 / 控制字符）→ 与 rename/import 同一条
+/// `validate_asset_name` 口径拒绝，且不落盘。
+#[test]
+fn save_rejects_illegal_name() {
+    let e = Env::new("save_bad_name");
+    let r = e.save("../evil", "t.j2", &["x=1"]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    r.stderr_contains(&["名称非法", "../evil"]);
+    assert!(!e.preset.exists(), "非法名不得创建预设文件");
+
+    // 控制字符名：同样拒绝（否则 `preset list` 会把 ANSI/OSC 序列回显到终端）
+    let r = e.save("p\u{7}1", "t.j2", &["x=1"]);
+    assert_eq!(r.code, 2, "{}", r.stderr);
+    r.stderr_contains(&["名称非法"]);
+    assert!(!e.preset.exists(), "被拒两次后仍不得有文件");
+}
+
 /// 空参数预设无意义 → 拒绝。
 #[test]
 fn save_rejects_empty_params() {
@@ -682,6 +699,49 @@ fn fresh_preset_is_not_flagged() {
         &e.args(&["preset", "show", "p", "--file", e.preset_arg()]),
     );
     r.stdout_contains(&["陈旧检测: 通过"]);
+}
+
+/// **P1-6 实测更正**：审查报告称"目标模板被删/语法坏时 `apply` 会输出
+/// 「陈旧检测: 通过」"——实测**不成立**。
+///
+/// `apply` 在陈旧检测之前就有 `specs_of(ctx, &target)?`，模板不可解析即硬失败。
+/// 本用例把这条**真实保护点**钉住：防止将来有人把那个 `?` 改成降级，
+/// 从而真的让"检测通过"变成假象。
+#[test]
+fn apply_fails_loudly_when_target_template_is_unresolvable() {
+    let e = Env::new("apply_gone");
+    e.save("p", "t.j2", &["x=1", "y=2"]);
+
+    // ① 模板被删除
+    std::fs::remove_file(e.root.join("t.j2")).unwrap();
+    let r = run_in(
+        &e.work,
+        &e.args(&["preset", "apply", "p", "--file", e.preset_arg()]),
+    );
+    assert_ne!(r.code, 0, "必须非 0 退出：\n{}", r.stdout);
+    assert!(
+        !r.stdout.contains("陈旧检测: 通过"),
+        "绝不能出现假的「检测通过」：\n{}",
+        r.stdout
+    );
+    r.stderr_contains(&["模板不存在"]);
+
+    // ② 模板存在但语法坏（注册表构建阶段即失败）
+    std::fs::write(
+        e.root.join("t.j2"),
+        "G0 X{{ x | nc_fixed(3) }}\n{% for %}\n",
+    )
+    .unwrap();
+    let r = run_in(
+        &e.work,
+        &e.args(&["preset", "apply", "p", "--file", e.preset_arg()]),
+    );
+    assert_ne!(r.code, 0, "必须非 0 退出：\n{}", r.stdout);
+    assert!(
+        !r.stdout.contains("陈旧检测: 通过"),
+        "绝不能出现假的「检测通过」：\n{}",
+        r.stdout
+    );
 }
 
 // ---------------------------------------------------------------------------

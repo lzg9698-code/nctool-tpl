@@ -17,7 +17,6 @@
 //! `save` 与 `import` 都调用 [`check_param_values`]（core 的**正向集合**入口，
 //! 只校验已提供参数的值），并有 `SpecFingerprint` 记录落盘规格——陈旧检测的基线。
 
-use std::io::Read;
 use std::path::{Path, PathBuf};
 
 use nctool_core::asset::{
@@ -107,14 +106,30 @@ fn candidate_template_roots(ctx: &Ctx) -> Vec<PathBuf> {
 
 /// 写内核错误 → CLI 错误。
 ///
-/// **委托**共享映射 [`CliError::from_write_error`]（消除 preset / machine 两份
-/// 漂移），仅覆写**一臂**：预设文件损坏归 `io`(3)。预设是工具自有**资产**，
-/// 损坏属 IO/内容问题；而 `machine` 的 `nctool.toml` 损坏是**配置**问题 → `config`(4)
-/// ——二者有意不同（设计 D4）。`NotFound` 委托为 `preset_not_found`(5)。
+/// **委托**共享映射 [`CliError::from_write_error`]（消除 preset / machine /
+/// templates 三份漂移），preset 上下文经显式参数传入：`NotFound` →
+/// `preset_not_found`(5)、`Corrupt` → `io`(3)（预设是工具自有**资产**，损坏属
+/// IO/内容问题；`machine` 的 `nctool.toml` 损坏是**配置**问题 → `config`(4)`
+/// ——二者有意不同，设计 D4）。
 fn map_write_err(e: WriteError) -> CliError {
-    match e {
-        WriteError::Corrupt(m) => CliError::new("io", m),
-        other => CliError::from_write_error(other, "preset_not_found"),
+    // preset 语义经显式上下文传入：`NotFound` → `preset_not_found`(5)、
+    // `Corrupt` → `io`(3)（预设是工具自有**资产**，损坏属 IO/内容问题；
+    // machine 的 `nctool.toml` 损坏则是**配置**问题 → `config`(4)，设计 D4）。
+    CliError::from_write_error(e, "preset_not_found", "io")
+}
+
+/// `WriteError` → `CliError` 的 `From` 落点（P1-11 移入本模块）。
+///
+/// 唯一消费者：[`PresetStore::import_presets`] 的 `E: From<WriteError>`
+/// 泛型约束（见 `preset import`），故语义 = **预设口径**（委托
+/// [`map_write_err`]：`Corrupt` → `io(3)`、`NotFound` → `preset_not_found(5)`）。
+///
+/// ⚠️ 其它命令族**不要**用 `.into()`/`?` 隐式转换：machine 的 `Corrupt` 应归
+/// `config(4)`，必须显式调
+/// `CliError::from_write_error(e, "machine_not_found", "config")`。
+impl From<WriteError> for CliError {
+    fn from(err: WriteError) -> Self {
+        map_write_err(err)
     }
 }
 
@@ -142,6 +157,37 @@ pub(crate) fn stale_of(ctx: &Ctx, p: &Preset) -> Option<StaleReport> {
     Some(PresetStore::stale_report_full(
         p,
         &specs,
+        Some(&vars),
+        &required,
+    ))
+}
+
+/// [`stale_of`] 的"指定目标模板"版本：`preset apply` 可经 `--template` 应用到
+/// **另一个**模板，此时规格必须取目标模板的（调用方已解析好 `target_specs`）。
+///
+/// 语义与 [`stale_of`] **完全一致**：目标模板不可解析 → 返回 `None`，由调用方
+/// 呈现为"检测跳过"，**不得**退回 `StaleReport::default()` —— 那会把一个已经落空
+/// 的预设显示成"陈旧检测: 通过"，属静默误报。
+///
+/// # 可达性（实测更正，2026-09-27）
+///
+/// 审查报告（P1-6）称"目标模板有语法错误/被删/被改名时 `apply` 会输出检测通过"，
+/// **该症状不成立**：`apply` 在更早的 `specs_of(ctx, &target)?` 处就已硬失败
+/// （模板被删 → 退出码 5 `template_not_found`；模板语法坏 → 注册表构建失败）。
+/// 因此本函数返回 `None` 目前是**防御性**的：它消除的是 `unwrap_or_default()`
+/// 这个"吞掉 Err 假装空集"的写法本身，以及 `stale` 字段"跳过"与"通过"不可区分
+/// 的契约缺陷（现为 `null`）。行为由
+/// `apply_fails_loudly_when_target_template_is_unresolvable` 钉住。
+pub(crate) fn stale_of_on(
+    ctx: &Ctx,
+    p: &Preset,
+    target: &str,
+    target_specs: &[ParamSpec],
+) -> Option<StaleReport> {
+    let (vars, required) = template_vars(ctx, target).ok()?;
+    Some(PresetStore::stale_report_full(
+        p,
+        target_specs,
         Some(&vars),
         &required,
     ))
@@ -565,20 +611,28 @@ fn export(ctx: &Ctx, args: &PresetExportArgs) -> Result<(), CliError> {
 fn import(ctx: &Ctx, args: &PresetImportArgs) -> Result<(), CliError> {
     let path = preset_path(ctx, &args.file)?;
     let raw = if args.input == "-" {
-        let mut buf = String::new();
-        std::io::stdin()
-            .read_to_string(&mut buf)
-            .map_err(|e| CliError::new("io", format!("读取 stdin 失败：{e}")))?;
-        buf
+        // stdin **无法预检长度**，此前是完全无界的 `read_to_string`（P1-1）
+        crate::args::read_stdin_capped("stdin")?
     } else {
-        std::fs::read_to_string(&args.input)
-            .map_err(|e| CliError::new("io", format!("读取导入文件失败 {}: {e}", args.input)))?
+        crate::args::read_text_capped(Path::new(&args.input), "导入文件")?
     };
 
     // 导入的每个预设都要过与 `save` 同一套值级校验（AC-3.9）；
     // 模板不可解析 → 视作"规格为空"，此时只做有限性校验（不阻断合法历史预设）。
     let presets = PresetStore::import_presets::<CliError, _>(&raw, |p| {
-        let specs = specs_of(ctx, &p.template).unwrap_or_default();
+        let specs = match specs_of(ctx, &p.template) {
+            Ok(s) => s,
+            Err(e) => {
+                // 不阻断导入（合法的历史预设可能引用已改名/删除的模板），
+                // 但**不能无声**：降级后只做有限性校验，用户必须知道
+                // "这组参数没有经过类型/区间/白名单校验"。
+                eprintln!(
+                    "warning: 预设「{}」的模板 {} 规格不可解析（{e}），已按无规格处理（仅做有限性校验）",
+                    p.name, p.template
+                );
+                Vec::new()
+            }
+        };
         let report = check_param_values(&specs, &p.params);
         if report.has_errors() {
             return Err(CliError::new(
@@ -650,7 +704,18 @@ fn apply(ctx: &Ctx, args: &PresetApplyArgs) -> Result<(), CliError> {
     let mut cross_report: Option<CrossTemplateReport> = None;
     let mut text = String::new();
     if cross {
-        let src_specs = specs_of(ctx, &p.template).unwrap_or_default();
+        let src_specs = match specs_of(ctx, &p.template) {
+            Ok(s) => s,
+            Err(e) => {
+                // 源模板不可解析 → 交集报告里"可复用/需确认"会整体偏保守，
+                // 必须让用户知道这份报告是在缺源规格的前提下算出来的。
+                eprintln!(
+                    "warning: 源模板 {} 规格不可解析（{e}），跨模板报告已按无规格处理（结果偏保守）",
+                    p.template
+                );
+                Vec::new()
+            }
+        };
         let r = PresetStore::cross_template_report(&p, &src_specs, &target_specs);
         text.push_str(&format!(
             "跨模板应用: {} → {}\n\
@@ -692,11 +757,12 @@ fn apply(ctx: &Ctx, args: &PresetApplyArgs) -> Result<(), CliError> {
         ));
     }
 
-    let (target_vars, target_required) = template_vars(ctx, &target).unwrap_or_default();
-    let stale =
-        PresetStore::stale_report_full(&p, &target_specs, Some(&target_vars), &target_required);
+    // 陈旧检测：目标模板不可解析时**必须显式跳过**，不得静默显示"通过"
+    // （P1-6：此前 `template_vars(...).unwrap_or_default()` 把 Err 吞成空集，
+    // 于是陈旧检测拿到空变量集，"检测通过"是假象）。
+    let stale = stale_of_on(ctx, &p, &target, &target_specs);
     text.push_str(&format!(
-        "预设: {}\n目标模板: {}\n参数: {}\n{}",
+        "预设: {}\n目标模板: {}\n参数: {}\n",
         p.name,
         target,
         p.params
@@ -705,8 +771,14 @@ fn apply(ctx: &Ctx, args: &PresetApplyArgs) -> Result<(), CliError> {
             .map(|(k, v)| format!("{k}={}", v.display()))
             .collect::<Vec<_>>()
             .join("  "),
-        stale_line(&stale),
     ));
+    match &stale {
+        Some(report) => text.push_str(&stale_line(report)),
+        None => text.push_str(&format!(
+            "陈旧检测: 跳过（目标模板 {target} 当前不可解析；可能已被重命名或删除，\
+             请先修复模板再上机）\n"
+        )),
+    }
     text.push_str(
         "提示：以上为**生效参数**，与手填值走同一套校验；\n\
          上机前请按工艺要求复核，未经真实工艺评审。\n",
@@ -720,7 +792,11 @@ fn apply(ctx: &Ctx, args: &PresetApplyArgs) -> Result<(), CliError> {
         "params": p.params.values.iter()
             .map(|(k, v)| (k.clone(), serde_json::to_value(v).unwrap_or(serde_json::Value::Null)))
             .collect::<serde_json::Map<_, _>>(),
-        "stale": stale,
+        // 跳过检测时为 null（而不是 `{}`）：消费方须能区分"检测通过"与"没检测"
+        "stale": match &stale {
+            Some(r) => serde_json::to_value(r).unwrap_or(serde_json::Value::Null),
+            None => serde_json::Value::Null,
+        },
     });
     ctx.style.print_ok(&text, data);
     Ok(())

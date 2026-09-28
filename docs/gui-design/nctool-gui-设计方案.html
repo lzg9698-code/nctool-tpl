@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<meta name="description" content="nctool-tpl 项目 Tauri 2 桌面 GUI 设计方案（v1.1 修订稿）：技术选型对比、页面可交互视觉原型（深色工业风格）、按仓库真实 API 校对过的 Tauri Commands 设计、参数输入通道安全约束、三阶段路线图与事实核查表。">
+<meta name="description" content="nctool-tpl 项目 Tauri 2 桌面 GUI 设计方案（v1.2 修订稿）：技术选型对比、页面可交互视觉原型（深色工业风格）、按仓库真实 API 校对过的 Tauri Commands 设计、参数输入通道安全约束、Send/Sync 与注册表重建成本的实测结论、三阶段路线图与事实核查表。">
 <title>nctool 桌面 GUI 设计方案</title>
 <style>
 /* ========== 全局重置与基础 ========== */
@@ -24,7 +24,9 @@ a:hover{text-decoration:underline}
 code{font-family:var(--mono);font-size:.9em}
 
 /* ========== 文档顶部 Banner ========== */
-.doc-banner{background:linear-gradient(135deg,#0d1117 0%,#161b22 50%,#1a1a2e 100%);border-bottom:1px solid var(--border);padding:3rem 2rem 2rem;text-align:center}
+/* 左内边距 220px = 固定侧边导航宽度：banner 横跨整个视口，若不避让，
+   修订说明（max-width:960px + margin:auto）会滑到侧栏底下被遮住左半截 */
+.doc-banner{background:linear-gradient(135deg,#0d1117 0%,#161b22 50%,#1a1a2e 100%);border-bottom:1px solid var(--border);padding:3rem 2rem 2rem 220px;text-align:center}
 .doc-banner h1{font-size:1.8rem;font-weight:700;letter-spacing:.5px;margin-bottom:.5rem}
 .doc-banner .subtitle{color:var(--txt-1);font-size:.95rem}
 .doc-banner .meta-row{display:flex;justify-content:center;gap:1.5rem;margin-top:1rem;flex-wrap:wrap}
@@ -213,6 +215,7 @@ code{font-family:var(--mono);font-size:.9em}
 @media(max-width:768px){
   .doc-nav{display:none}
   .doc-main{margin-left:0}
+  .doc-banner{padding-left:1rem;padding-right:1rem}
   .doc-section{padding:1.5rem 1rem}
   .split-view{flex-direction:column}
   .proto-body{height:auto}
@@ -228,10 +231,20 @@ code{font-family:var(--mono);font-size:.9em}
   <div class="meta-row">
     <span class="meta-tag">项目 <span>nctool-tpl</span></span>
     <span class="meta-tag">技术栈 <span>Tauri 2 + React</span></span>
-    <span class="meta-tag">版本 <span>v1.1 修订稿</span></span>
+    <span class="meta-tag">版本 <span>v1.2 修订稿</span></span>
     <span class="meta-tag">日期 <span>2026-09-25</span></span>
   </div>
-  <div class="note" style="max-width:960px;margin:1.2rem auto 0;text-align:left">
+  <div class="note note-ok" style="max-width:960px;margin:1.2rem auto 0;text-align:left">
+    <strong>v1.2 修订说明</strong> — 本稿据 2026-09-25 对 Phase 1 门槛项的 spike（编译探针 + 计时探针，复校结论见〈附录 A-2〉）修正了 v1.1 对 <code>Send</code>/<code>Sync</code> 的判断，并补上文档自己标"需实测"的两处数字。改动集中在 §1.5 / §3.4 / §4.6 / §5：
+    <ol style="margin:.5rem 0 0 1.2rem;padding:0">
+      <li><strong>§4.6 的补救办法原样照做编译不过</strong>：编译探针实测 <code>GCodeGenerator</code> 是 <code>Send</code> 但<strong>不是</strong> <code>Sync</code>（根因只有两处 <code>std::cell::OnceCell</code>），因此 <code>Arc&lt;GCodeGenerator&gt;</code> 既不 <code>Send</code> 也不 <code>Sync</code> —— v1.1 写的 <code>Mutex&lt;…Arc&lt;GCodeGenerator&gt;&gt;</code> 会把问题从 cli 的 <code>Rc</code>/<code>RefCell</code> 转移到 core 的 <code>OnceCell</code> 上。已替换为两条可编译的路径。</li>
+      <li><strong>注册表重建成本已实测</strong>（原注"需实测耗时"）：32 条模板重建 5.72 ms（release）/ 16.07 ms（debug），缓存命中 0.42 ms，端到端渲染（热缓存）0.20 ms。据此判断<strong>共享缓存不值得做</strong>，Phase 1 采用"每命令重建"。</li>
+      <li><strong>§3.4 补一条禁止项</strong>：<code>core::json_num::scan_underflow_candidates</code> 是预筛而非判定 —— 对合法的最小次正规数 <code>5e-324</code> 同样返回候选，必须由 <code>serde_json</code> 实测确认后才可拦截。</li>
+      <li><strong>§1.5 的成本被高估</strong>：<code>cli</code> 的 7 个集成测试全部走 <code>assert_cmd</code> 调二进制、无一引用 crate 内部，故 bin→bin+lib 不会破坏既有测试；真正要补的只是一处公开构造器（<code>Ctx.registry_cache</code> 是 <code>pub(crate)</code>，外部无法用结构体字面量构造 <code>Ctx</code>）。</li>
+      <li><strong>Phase 1 门槛项降级</strong>：结构可行性已排除，"契约复用"从 2 天的验证项降为 0.5 天的常规落地；Phase 1 合计由 ~13.5 天调整为 ~12 天（仍保留"参数通道安全"为门槛项）。</li>
+    </ol>
+  </div>
+  <div class="note" style="max-width:960px;margin:1rem auto 0;text-align:left">
     <strong>v1.1 修订说明</strong> — 本稿已按仓库代码逐条校对（校对结论见〈附录 A 事实核查表〉，依据清单见〈附录 B〉）。改动的起因不是风格，而是 v1.0 有多处 API 与现状描述与代码不符，照做会编译不过或产出错误 G-code：
     <ol style="margin:.5rem 0 0 1.2rem;padding:0">
       <li><strong>第 4 章 按真实签名重写</strong>：原文引用的 <code>nctool_core::renderer</code>、<code>nctool_core::lint</code>、<code>TemplateEntry.categories</code>、<code>Renderer::set_line_step</code>、<code>registry.register_from_source</code> 等均不存在，已替换为 <code>nctool_tpl::Renderer</code>、<code>nctool_tpl::lint</code>、<code>core::pipeline::GCodeGenerator</code> + <code>GenerationOptions</code>、<code>core::asset::*</code> 等真实入口。</li>
@@ -436,7 +449,7 @@ code{font-family:var(--mono);font-size:.9em}
       <td><strong>A. 进程内复用 cli 服务层</strong> <span class="badge badge-rec">推荐</span></td>
       <td>给 <code>cli</code> 增加 <code>src/lib.rs</code>（保留 bin），Tauri command 调用 <code>server::route</code> 或其底层命令函数</td>
       <td>下溢守卫、端点集合、错误分类全部继承；GUI 与 Web UI 行为同源，parity 门禁可扩展覆盖；不会出现两套参数解析</td>
-      <td><code>cli</code> 由 bin-only 改为 bin+lib；<code>Ctx</code> 内的 <code>RefCell&lt;Option&lt;(RegistryKey, Rc&lt;GCodeGenerator&gt;)&gt;&gt;</code> 不是 <code>Send</code>/<code>Sync</code>，需改为 <code>Mutex</code>/<code>Arc</code> 或按命令重建（重建 = 重新解析全部模板，需实测耗时）</td>
+      <td><code>cli</code> 由 bin-only 改为 bin+lib（加一个 <code>lib.rs</code>，把现有 7 个私有 <code>mod</code> 声明为 <code>pub mod</code>；<code>route</code> 与两个下溢守卫函数已是 <code>pub</code>，无需改可见性）。<code>cli/tests/</code> 的 7 个集成测试<strong>全部走 <code>assert_cmd</code> 调真实二进制</strong>、无一 <code>use nctool_cli::</code>，故 lib 化不会破坏既有测试。<br><strong>实测结论（v1.2）</strong>：<code>Ctx</code> 的 <code>RefCell&lt;Option&lt;(RegistryKey, Rc&lt;GCodeGenerator&gt;)&gt;&gt;</code> 确实不是 <code>Send</code>/<code>Sync</code>，但<strong>不需要</strong>按 v1.1 所写改成 <code>Mutex</code>/<code>Arc</code> —— 走"每命令重建"即可（32 条模板实测 5.72 ms/release），代价远低于结构改造。真正要补的是<strong>一处公开构造器</strong>：<code>Ctx.registry_cache</code> 是 <code>pub(crate)</code>，外部无法用结构体字面量构造 <code>Ctx</code>，而唯一的公开构造器 <code>Ctx::from_global</code> 每次都会重读配置并向 stderr 打 warning</td>
     </tr>
     <tr>
       <td>B. 直连 core / tpl 自建命令面</td>
@@ -454,6 +467,7 @@ code{font-family:var(--mono);font-size:.9em}
 
   <div class="note">
     <strong>建议</strong>：Phase 1 走方案 A，把"契约复用"当作第一个交付物而不是后期优化；若需要尽快演示桌面外壳，可用方案 C 过渡，<strong>但不要走 B</strong> —— B 的每条自建路径都会成为 parity 门禁之外的盲区。<br>
+    <strong>spike 结论（v1.2，方案 A 的落地形态已确定）</strong>：<code>lib.rs</code> + 一处公开 <code>Ctx</code> 构造器 + <code>State</code> 只存纯数据（<code>template_dir</code> + <code>LoadedConfig</code>，均 <code>Send + Sync</code>）+ <strong>每命令重建 <code>Ctx</code>/注册表</strong>，<strong>不触碰 <code>nctool-core</code></strong>。实测成本（32 条模板）：重建 5.72 ms（release）/ 16.07 ms（debug），缓存命中 0.42 ms —— 共享缓存每命令只省约 5 ms，不足以抵消结构改造与"不能跨 await 持锁"的约束，故推迟到确有需要时再加（届时按 §4.6 的 (a) 方案，不要照 v1.1 的 <code>Arc</code> 写法）。<br>
     <strong>并存策略</strong>：<code>nctool ui</code> 与桌面 GUI 长期并存，面向不同场景（无安装权限/远程访问的机器 vs 工业 PC 本地部署）。只有在 GUI 覆盖了 Web UI 的全部端点、且 parity 门禁已把 GUI 纳入硬门禁之后，才考虑降低 Web UI 的维护优先级。<br>
     <strong>门禁扩展</strong>：任何新增端点必须同时改动四处并在 CI 落地 —— 后端路由臂、<code>scripts/api_routes.json</code>、Web UI 的 API 封装、GUI 的 command 封装。
   </div>
@@ -1242,6 +1256,8 @@ code{font-family:var(--mono);font-size:.9em}
 
   <div class="note">
     <strong>落地与验收</strong>：① <code>render</code> / <code>validate</code> 两个命令签名改为接收 <code>params_json: String</code>；② 首个 spike 就要跑一条对抗用例 —— 传 <code>{"x": 1e-400}</code>，期望<strong>报错且不产出 G-code</strong>（与 CLI <code>--format json</code> 的行为一致）；③ 该用例应同时进入 CI，覆盖 CLI、Web UI、GUI 三条入口，避免将来某一端被"优化"掉守卫。<br>
+    <strong>验证补充（v1.2 实测）</strong>：这条硬约束的必要性已由探针证实 —— <code>serde_json::from_str::&lt;Value&gt;("{\"x\":1e-400}")</code> 返回 <code>Ok({"x":0.0})</code>，<strong>不报任何错</strong>，文本层信息确实永久丢失。<br>
+    <strong>不要只做第一段（v1.2 实测）</strong>：<code>core::json_num::scan_underflow_candidates</code> 是<strong>预筛</strong>而非判定 —— 对合法的最小次正规数 <code>5e-324</code> 它同样返回候选（实测 1 条），必须再经 <code>serde_json</code> 实测确认才可拦截，否则会把合法参数误拒。两段都已是 <code>pub</code>：<code>cli::output::json_underflow_error</code> 是两段合一，<code>confirm_json_underflow</code> 是第二段 —— <strong>直接调它们或调 <code>route()</code>，不要自己拼两段</strong>。<br>
     <strong>注意</strong>：<code>--lenient</code>（宽松模式）<strong>不</strong>豁免这类错误 —— 下溢属于"用户传入的参数值不合法"，是硬失败，不受宽松模式影响。
   </div>
 
@@ -1550,7 +1566,7 @@ pub async fn delete_preset(name: String) -&gt; Result&lt;(), CommandError&gt; { 
     <tr><td><code>get_config</code></td><td>设置页只读视图</td><td><code>config show</code></td><td>ConfigDump（投影自 LoadedConfig）</td></tr>
     <tr><td><code>init_config</code></td><td>设置页「生成示例配置」</td><td><code>config init</code></td><td>()</td></tr>
     <tr><td><code>save_nc_file</code></td><td>渲染页「保存为…」（Tauri 保存对话框）</td><td>—（GUI 专有）</td><td>()</td></tr>
-    <tr><td><code>part_generate</code></td><td>Phase 3 批量/多工序（可选）</td><td><code>part</code></td><td>part 管线的结果类型</td></tr>
+    <tr><td><s><code>part_generate</code></s></td><td><s>Phase 3 批量/多工序（可选）</s> — <strong>2026-09-26 已确认不需要</strong></td><td><code>part</code></td><td>part 管线的结果类型</td></tr>
   </table>
 
   <div class="note">
@@ -1563,8 +1579,8 @@ pub async fn delete_preset(name: String) -&gt; Result&lt;(), CommandError&gt; { 
     <tr><th>议题</th><th>约束</th><th>做法</th></tr>
     <tr>
       <td>State 必须 <code>Send + Sync</code></td>
-      <td><code>#[tauri::command] async fn</code> 的 <code>State&lt;T&gt;</code> 要求 <code>T: Send + Sync</code>；而 <code>cli::Ctx</code> 内部是 <code>RefCell&lt;Option&lt;(RegistryKey, Rc&lt;GCodeGenerator&gt;)&gt;&gt;</code>（单线程缓存，注释明确写"无需加锁"）</td>
-      <td>方案 A 落地时把该缓存改为 <code>Mutex&lt;Option&lt;(RegistryKey, Arc&lt;GCodeGenerator&gt;)&gt;&gt;</code>，或每条命令重建 <code>GCodeGenerator</code>（代价 = 重新解析全部模板，需实测；先用基准数据决定）</td>
+      <td><code>#[tauri::command] async fn</code> 的 <code>State&lt;T&gt;</code> 要求 <code>T: Send + Sync</code>；而 <code>cli::Ctx</code> 内部是 <code>RefCell&lt;Option&lt;(RegistryKey, Rc&lt;GCodeGenerator&gt;)&gt;&gt;</code>（单线程缓存，注释明确写"无需加锁"）。<br><strong>v1.2 编译探针补充</strong>：<code>GCodeGenerator</code> 实测是 <code>Send</code> 但<strong>不是</strong> <code>Sync</code> —— 根因只有两处 <code>std::cell::OnceCell</code>：<code>core/src/registry.rs:159</code>（<code>TemplateEntry.analysis</code>）与 <code>core/src/registry.rs:330</code>（<code>TemplateRegistry.lenient_cache</code>）</td>
+      <td><strong>采用（v1.2 已定）</strong>：<code>State</code> 只放纯数据（<code>template_dir</code> + <code>LoadedConfig</code>，均 <code>Send + Sync</code>），每命令现建 <code>Ctx</code> 与注册表 —— 不动 core、不加锁、无"跨 await 持锁"问题。<br><strong>若日后确需共享缓存</strong>，两条<strong>可编译</strong>的路径：<br>(a) 让 <code>Mutex</code> 持有 generator <strong>本体</strong>（<code>Mutex&lt;Option&lt;(RegistryKey, GCodeGenerator)&gt;&gt;</code>；<code>Mutex&lt;T&gt;: Sync</code> 只要求 <code>T: Send</code>，成立）—— 不必改 core；<br>(b) 把 core 那两处 <code>OnceCell</code> 换成 <code>OnceLock</code>（改动小、对外不可见），之后才可用 <code>Arc&lt;GCodeGenerator&gt;</code> 自由共享。<br><strong>v1.1 的写法为什么错</strong>：<code>Arc&lt;T&gt;: Send + Sync</code> 要求 <code>T: Send + Sync</code>，而 <code>GCodeGenerator</code> 不是 <code>Sync</code>，故 <code>Mutex&lt;…Arc&lt;GCodeGenerator&gt;&gt;</code> 照抄编译不过 —— 错误只是从 cli 的 <code>Rc</code>/<code>RefCell</code> 转移到了 core 的 <code>OnceCell</code></td>
     </tr>
     <tr>
       <td>注册表缓存失效</td>
@@ -1587,6 +1603,21 @@ pub async fn delete_preset(name: String) -&gt; Result&lt;(), CommandError&gt; { 
       <td>用 Tauri dialog 插件在<strong>后端</strong>取路径，前端只传"用户选了哪个"的意图；路径校验走 <code>asset::path::SafePath</code> / <code>validate_asset_name</code>，防越出模板根</td>
     </tr>
   </table>
+
+  <div class="note note-ok">
+    <strong>实测数据（v1.2 门槛项 spike，32 条模板 = 25 个文件模板 + 内置库）</strong>
+    <table class="tbl" style="margin:.6rem 0">
+      <tr><th>指标</th><th>debug</th><th>release</th></tr>
+      <tr><td>注册表重建（<code>build_registry_fresh</code>）</td><td>16.07 ms</td><td>5.72 ms</td></tr>
+      <tr><td>缓存命中（目录指纹 + 复用）</td><td>0.95 ms</td><td>0.42 ms</td></tr>
+      <tr><td>仅目录指纹（<code>tree_stamp</code>）</td><td>0.13 ms</td><td>0.12 ms</td></tr>
+      <tr><td>端到端 <code>POST /api/render</code>（热缓存）</td><td>0.35 ms</td><td>0.20 ms</td></tr>
+      <tr><td>端到端（每命令新建 <code>Ctx</code>）</td><td>15.91 ms</td><td>5.44 ms</td></tr>
+    </table>
+    <strong>读法</strong>：低于 1 ms 的几行在 Windows 上属噪声量级（<code>render_warm</code> 甚至低于 <code>cache_hit</code>，说明该量级不可当精度用），<strong>可信的是量级</strong> —— 重建约 5 ms（release）/ 16 ms（debug）。5 ms 相对 300 ms 防抖预算可忽略，故"每命令重建"是 Phase 1 的正确选择。<br>
+    <strong>复现方式</strong>：<code>cargo test -p nctool-cli --bin nctool --release -- --ignored --nocapture spike_registry_build_cost</code>（该用例是常驻测量探针，<code>#[ignore]</code> 不进常规 CI）。<br>
+    <strong>另注</strong>：批量渲染（Phase 3）不构成反例 —— 它是<strong>单个命令内部的循环</strong>，注册表构建一次即可，与"每命令重建"并不冲突。
+  </div>
 
 </section>
 
@@ -1611,10 +1642,10 @@ pub async fn delete_preset(name: String) -&gt; Result&lt;(), CommandError&gt; { 
 
         <table class="tbl">
           <tr><th>功能项</th><th>状态</th><th>Command 依赖</th><th>工作量</th></tr>
-          <tr><td><strong>契约复用 spike</strong>（<code>cli</code> 加 lib target，跑通 <code>inspect</code> + <code>render</code> 两条链路）</td><td>新增（门槛项）</td><td>复用 <code>server::route</code></td><td>2 天</td></tr>
+          <tr><td><strong>契约复用</strong>（<code>cli</code> 加 <code>lib.rs</code> + 一处公开 <code>Ctx</code> 构造器，跑通 <code>inspect</code> + <code>render</code> 两条链路）<br><span style="color:var(--ok)">可行性已由 spike 排除风险（v1.2），不再是验证项</span></td><td>新增</td><td>复用 <code>server::route</code></td><td>0.5 天</td></tr>
           <tr><td><strong>参数通道安全</strong>（<code>params_json</code> 文本层 + 下溢对抗用例进 CI）</td><td>新增（门槛项）</td><td>3.4 节</td><td>1 天</td></tr>
           <tr><td>Tauri 2 项目脚手架（<code>create-tauri-app</code> React 模板）</td><td>新增</td><td>—</td><td>0.5 天</td></tr>
-          <tr><td>AppState 设计（<code>Send + Sync</code>，注册表缓存改造）</td><td>新增</td><td>4.6 节</td><td>1.5 天</td></tr>
+          <tr><td>AppState 设计（<code>State</code> 只存纯数据 + 公开 <code>Ctx</code> 构造器 + 每命令重建）</td><td>新增</td><td>4.6 节</td><td>1.5 天</td></tr>
           <tr><td>侧边栏 + 路由布局</td><td>新增</td><td>—</td><td>1 天</td></tr>
           <tr><td>渲染页：模板选择 + 变量表单 + NC 预览</td><td>核心</td><td><code>inspect_template</code> + <code>render_template</code></td><td>3 天</td></tr>
           <tr><td>实时预览（防抖机制）</td><td>核心</td><td><code>render_template</code></td><td>1 天</td></tr>
@@ -1624,7 +1655,7 @@ pub async fn delete_preset(name: String) -&gt; Result&lt;(), CommandError&gt; { 
           <tr><td>Windows .exe 构建 + NSIS 安装包</td><td>核心</td><td>—</td><td>1 天</td></tr>
         </table>
 
-        <div class="note note-ok"><strong>MVP 交付物</strong>：一个可安装的 <code>nctool-gui.exe</code>，能完成"选模板→填参数→校验→预览→保存"闭环，且<strong>与 CLI 输出逐字节一致</strong>（含下溢硬失败行为）。不含模板管理、检查页、机床配置、预设、设置页（这些页面显示"Phase 2"占位）。<br><strong>门槛项说明</strong>：前两项不是功能，是<strong>验证假设</strong>——若 <code>cli</code> lib 化或 <code>Send + Sync</code> 改造遇到结构性阻碍，应在 2 天内暴露并重新选择方案（1.5 节 的 B/C），而不是带着风险往下堆功能。</div>
+        <div class="note note-ok"><strong>MVP 交付物</strong>：一个可安装的 <code>nctool-gui.exe</code>，能完成"选模板→填参数→校验→预览→保存"闭环，且<strong>与 CLI 输出逐字节一致</strong>（含下溢硬失败行为）。不含模板管理、检查页、机床配置、预设、设置页（这些页面显示"Phase 2"占位）。<br><strong>门槛项说明（v1.2）</strong>：原"契约复用"验证项已由门槛项 spike 排除风险（见 §1.5 / §4.6），降为常规落地工作；<strong>仍保留的门槛项是"参数通道安全"</strong> —— 下溢守卫必须真实跑通且对抗用例进 CI，这条不因 spike 结论而放松。</div>
       </div>
     </div>
 
@@ -1672,7 +1703,7 @@ pub async fn delete_preset(name: String) -&gt; Result&lt;(), CommandError&gt; { 
 
         <table class="tbl">
           <tr><th>功能项</th><th>描述</th><th>工作量</th></tr>
-          <tr><td>批量渲染</td><td>导入参数表（CSV/Excel）批量渲染。需与既有 <code>nctool part</code>（多工序拼接，行号跨工序续编）对齐，避免两套批量语义</td><td>4 天</td></tr>
+          <tr><td><s>批量渲染</s></td><td><s>导入参数表（CSV/Excel）批量渲染。需与既有 <code>nctool part</code>（多工序拼接，行号跨工序续编）对齐，避免两套批量语义</s><br><strong>✅ 2026-09-26 已确认不需要，本项取消</strong>（详见〈附录 B〉待确认项）</td><td><s>4 天</s></td></tr>
           <tr><td>渲染历史记录</td><td>本地 SQLite 存储渲染历史，支持回溯和重新生成</td><td>3 天</td></tr>
           <tr><td>模板编辑器</td><td>内嵌代码编辑器（Monaco）。须与 <code>templates edit</code> 的"保存前分级校验 + 乐观锁"一致，不能绕过校验直接落盘</td><td>5 天</td></tr>
           <tr><td>diff 对比</td><td>两次渲染结果或两个参数预设的差异对比视图</td><td>2 天</td></tr>
@@ -1723,9 +1754,9 @@ pub async fn delete_preset(name: String) -&gt; Result&lt;(), CommandError&gt; { 
       <td>走 1.5 节 方案 A 复用契约；CI 的 <code>param / option / api-routes</code> 三道 parity 门禁扩展覆盖 GUI（清单见 4.5 节）</td>
     </tr>
     <tr>
-      <td><strong>cli 复用受结构限制</strong>（v1.1 新增）</td>
-      <td><code>cli</code> 是 bin-only，<code>Ctx</code> 用 <code>Rc</code>/<code>RefCell</code> 单线程缓存，不能直接进 Tauri 的 <code>State</code></td>
-      <td>Phase 1 第一个 spike 就验证 lib 化 + <code>Send/Sync</code> 改造；若不可行，退回方案 C（内嵌 HTTP 服务），不要自行复刻解析逻辑</td>
+      <td><strong>cli 复用受结构限制</strong> <span class="badge badge-rec">已排除 v1.2</span></td>
+      <td>原判断（v1.1）：<code>cli</code> 是 bin-only，<code>Ctx</code> 用 <code>Rc</code>/<code>RefCell</code> 单线程缓存，不能直接进 Tauri 的 <code>State</code>。<strong>实测：不构成结构性阻碍</strong> —— lib 化是机械改动（加 <code>lib.rs</code>；7 个集成测试全走 <code>assert_cmd</code> 不受影响），且不共享缓存时无需 <code>Send/Sync</code> 改造</td>
+      <td>已由门槛项 spike 排除（见 §1.5 / §4.6）。残留工作仅"补一处公开 <code>Ctx</code> 构造器"，不再是 2 天的验证假设。若日后加共享缓存，按 §4.6 的 (a)/(b) 两条可编译路径走，<strong>不要照 v1.1 的 <code>Arc</code> 写法</strong></td>
     </tr>
     <tr>
       <td><strong>与 <code>nctool ui</code> 定位重叠</strong>（v1.1 新增）</td>
@@ -1739,8 +1770,8 @@ pub async fn delete_preset(name: String) -&gt; Result&lt;(), CommandError&gt; { 
   <div class="card-grid">
     <div class="card">
       <div class="card-title">Phase 1 MVP</div>
-      <div class="card-value">~13.5 天</div>
-      <div class="card-desc">3 周（含契约复用与参数通道两个门槛项）</div>
+      <div class="card-value">~12 天</div>
+      <div class="card-desc">2.5 周（契约复用风险已排除；参数通道仍为门槛项）</div>
     </div>
     <div class="card">
       <div class="card-title">Phase 2 完整</div>
@@ -1754,8 +1785,8 @@ pub async fn delete_preset(name: String) -&gt; Result&lt;(), CommandError&gt; { 
     </div>
     <div class="card" style="border-left:3px solid var(--accent)">
       <div class="card-title">总计</div>
-      <div class="card-value">~65 天</div>
-      <div class="card-desc">约 13 周（1 人全职；v1.0 的 50 天未含契约复用、参数安全、预设页与门禁）</div>
+      <div class="card-value">~63 天</div>
+      <div class="card-desc">约 12.5 周（1 人全职；v1.0 的 50 天未含契约复用、参数安全、预设页与门禁；v1.2 起 Phase 1 首项由 2 天降为 0.5 天）</div>
     </div>
   </div>
 
@@ -1764,7 +1795,7 @@ pub async fn delete_preset(name: String) -&gt; Result&lt;(), CommandError&gt; { 
 <!-- ============ 附录 A: 事实核查表 ============ -->
 <section class="doc-section" id="appendix-a">
   <h2><span class="num">A</span>附录 A：事实核查表（v1.0 → 代码事实）</h2>
-  <p>下表是 v1.1 全部改动的依据。核对方式：在仓库根执行 <code>rg</code> / 直接读对应文件；行号取 2026-09-25 的 <code>master</code>（含 <code>e8e4e8e</code> 设计稿提交）。</p>
+  <p>下表是 v1.1 全部改动的依据（<strong>v1.2 的复校见表 A-2</strong>）。核对方式：在仓库根执行 <code>rg</code> / 直接读对应文件；行号取 2026-09-25 的 <code>master</code>（含 <code>e8e4e8e</code> 设计稿提交）。</p>
   <table class="tbl">
     <tr><th>#</th><th>v1.0 的说法</th><th>代码事实</th><th>依据</th></tr>
     <tr><td>1</td><td>ARCHITECTURE.md 已明确规划 Tauri GUI 集成</td><td>不成立：全仓检索 <code>tauri</code> 零命中，文档中也没有桌面端规划</td><td><code>docs/ARCHITECTURE.md</code>、<code>docs/ROADMAP.md</code>、<code>docs/PROJECT_STATUS.md</code></td></tr>
@@ -1788,6 +1819,18 @@ pub async fn delete_preset(name: String) -&gt; Result&lt;(), CommandError&gt; { 
     <tr><td>19</td><td>五个页面覆盖 CLI 全部核心功能</td><td>缺参数预设（CLI <code>preset</code> 子命令 + <code>core::asset::PresetStore</code>，含指纹过期检测）</td><td><code>cli/src/cli.rs:73</code>、<code>core/src/asset/preset.rs:188</code></td></tr>
     <tr><td>20</td><td>未提及参数解析的安全约束</td><td>存在 ERR-NUM-UNDERFLOW 硬约束，CLI 在文本层拦截；Tauri 直接反序列化会绕过</td><td><code>cli/src/server.rs:337</code>、<code>core/src/json_num.rs</code>、<code>cli/src/output.rs:161</code></td></tr>
   </table>
+
+  <h3>附录 A-2：v1.2 复校（2026-09-25 门槛项 spike）</h3>
+  <p>核对方式：<strong>编译探针</strong>（对 <code>GCodeGenerator</code> 做 <code>assert_send</code> / <code>assert_sync</code> 静态断言）+ <strong>计时探针</strong>（32 条模板）。计时用例已作为常驻测量探针落在 <code>cli/src/context.rs</code>（<code>#[ignore]</code>，不进常规 CI）。</p>
+  <table class="tbl">
+    <tr><th>#</th><th>v1.1 的说法</th><th>实测 / 代码事实</th><th>依据</th></tr>
+    <tr><td>1</td><td><code>Ctx</code> 的缓存"需改为 <code>Mutex</code>/<code>Arc</code> 或按命令重建"</td><td><code>Arc&lt;GCodeGenerator&gt;</code> 既不 <code>Send</code> 也不 <code>Sync</code>：<code>GCodeGenerator</code> 实测 <code>Send</code> 但 <code>!Sync</code>，该写法编译不过。正确写法见 §4.6 的 (a)/(b)</td><td>编译探针；<code>core/src/registry.rs:159</code>、<code>:330</code></td></tr>
+    <tr><td>2</td><td>"重建 = 重新解析全部模板，需实测耗时；先用基准数据决定"</td><td>已实测：重建 5.72 ms（release）/ 16.07 ms（debug）；缓存命中 0.42 ms；端到端渲染（热缓存）0.20 ms。结论：共享缓存只省约 5 ms，不值得在 Phase 1 做</td><td>计时探针 <code>spike_registry_build_cost</code></td></tr>
+    <tr><td>3</td><td>3.4 节写"先扫描后解析"（两段式）</td><td>补强：只做第一段不够 —— <code>scan_underflow_candidates</code> 对合法 <code>5e-324</code> 也返回候选（实测 1 条），必须经 <code>serde_json</code> 实测确认才可拦截</td><td><code>core/src/json_num.rs:346</code>、<code>cli/src/output.rs:177</code></td></tr>
+    <tr><td>4</td><td>"<code>cli</code> 由 bin-only 改为 bin+lib"的代价未核到测试面</td><td>7 个集成测试全部走 <code>assert_cmd</code> 调真实二进制、无一 <code>use nctool_cli::</code>，故 lib 化不破坏测试；真正要补的是公开构造器（<code>registry_cache</code> 是 <code>pub(crate)</code>，外部无法用结构体字面量构造 <code>Ctx</code>）</td><td><code>cli/tests/*.rs</code>、<code>cli/src/context.rs:52</code></td></tr>
+    <tr><td>5</td><td>3.4 节断言"<code>serde_json</code> 会把 <code>1e-400</code> 静默解析成 <code>0.0</code>"</td><td><strong>成立</strong>：实测 <code>from_str::&lt;Value&gt;("{\"x\":1e-400}")</code> 返回 <code>Ok({"x":0.0})</code> 且不报错 —— <code>params_json: String</code> 这条硬约束的必要性已证实</td><td>serde_json 探针</td></tr>
+    <tr><td>6</td><td>§4.6 未提 cli 侧 <code>Rc</code> 的扩散面</td><td>扩散面很小：除 <code>context.rs</code> 外仅 2 处内部辅助函数（<code>server.rs:383</code>、<code>commands/render.rs:164</code>），且 <code>build_registry_fresh</code> 已返回 owned 值 —— "每命令重建"路径不必触碰它们</td><td><code>grep -rn "Rc&lt;" cli/src</code></td></tr>
+  </table>
 </section>
 
 <!-- ============ 附录 B: 依据与待确认项 ============ -->
@@ -1808,8 +1851,8 @@ pub async fn delete_preset(name: String) -&gt; Result&lt;(), CommandError&gt; { 
   <p><strong>待业务方确认（本稿不作假设）</strong>：</p>
   <ul>
     <li><strong>部署现场与传输方式</strong>：v1.0 提到具体工厂与"传 NC 到机床"，仓库文档中没有该信息，Phase 3 的"机床传输集成"需业务方给出协议与设备清单后再估。</li>
-    <li><strong>是否需要"删除模板"</strong>：若需要，先在 <code>core</code>/CLI 补齐（含 <code>scan_stale_includes</code> 引用检查）与测试，再上 GUI 按钮。</li>
-    <li><strong>是否需要"批量渲染"与 <code>nctool part</code> 合并</strong>：两者语义若不同，应分别命名并在文档中说明差异（行号跨工序续编是 <code>part</code> 的既有行为）。</li>
+    <li><strong>是否需要"删除模板"</strong>：若需要，先在 <code>core</code>/CLI 补齐（含 <code>scan_stale_includes</code> 引用检查）与测试，再上 GUI 按钮。<br><strong>✅ 已确认（2026-09-26）：不需要</strong> —— Phase 2 不提供删除入口；<code>core</code>/CLI 侧也无需为此补齐。</li>
+    <li><strong>是否需要"批量渲染"与 <code>nctool part</code> 合并</strong>：两者语义若不同，应分别命名并在文档中说明差异（行号跨工序续编是 <code>part</code> 的既有行为）。<br><strong>✅ 已确认（2026-09-26）：不需要</strong> —— Phase 3 的「批量渲染」一项取消；<code>POST /api/part/generate</code> 也无需 GUI 封装（在 <code>scripts/api_routes.json</code> 中保持 <code>gui: null</code>）。</li>
     <li><strong>目标 Windows 版本与 WebView2 分发策略</strong>：决定 NSIS 是否内嵌 Bootstrapper、安装包体积上界。</li>
   </ul>
 </section>

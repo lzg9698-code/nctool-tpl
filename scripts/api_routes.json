@@ -1,19 +1,22 @@
 {
-  "description": "前后端接口集合的单一来源。后端 cli/src/server.rs::route 的路由臂与前端 ui/index.html 的 API 封装必须覆盖同一份集合：后端侧由 cargo test（api_routes_are_routable）消费，前端侧由 scripts/check_api_parity.mjs（CI 硬门禁）消费。新增端点必须同时改三处（后端路由臂、本文件、前端封装），漏改任一处即红。",
-  "note": "path 里的 {name} 之类占位在 sample 中写成具体值；covers 用于声明「前端按拼接方式使用的路径前缀」。",
+  "description": "前后端接口集合的单一来源。后端 cli/src/server.rs::route 的路由臂、Web UI（ui/index.html 的 API 封装）与 GUI（nctool-gui 的 Tauri command 封装）必须覆盖同一份集合：后端侧由 cargo test（api_routes_are_routable）消费，Web UI 侧由 scripts/check_api_parity.mjs（CI 硬门禁）消费，GUI 侧由 scripts/check_gui_parity.mjs（CI 硬门禁）消费。新增端点必须同时改四处（后端路由臂、本文件、Web UI 封装、GUI command 封装），漏改任一处即红。",
+  "note": "path 里的 {name} 之类占位在 sample 中写成具体值；covers 用于声明「前端按拼接方式使用的路径前缀」。每条 routes[] 条目必须带 gui 键：值为封装该端点的 GUI command 名（Tauri invoke 名），或 null（Phase 1 GUI 有意不暴露，此时必须同时给非空 gui_note 说明原因）。顶层 gui_only 登记不经 route() 的 GUI 专有命令（对齐 frontend_only 的豁免约定，必须写明 reason）。",
   "routes": [
     {
       "method": "GET",
       "path": "/health",
       "query": "",
       "body": "",
-      "note": "健康检查：非 /api/ 前缀，不进跨站校验"
+      "note": "健康检查：非 /api/ 前缀，不进跨站校验",
+      "gui": null,
+      "gui_note": "内部健康检查端点：GUI 进程内直接复用 route()，没有「探测自身是否存活」的需求，故 Phase 1 不暴露对应 command。"
     },
     {
       "method": "GET",
       "path": "/api/templates",
       "query": "",
-      "body": ""
+      "body": "",
+      "gui": "list_templates"
     },
     {
       "method": "GET",
@@ -21,60 +24,85 @@
       "query": "",
       "body": "",
       "covers": "/api/templates/",
-      "note": "模板详情：前端用 \"/api/templates/\" + encodeURIComponent(name) 拼接"
+      "note": "模板详情：前端用 \"/api/templates/\" + encodeURIComponent(name) 拼接",
+      "gui": "get_template"
     },
     {
       "method": "GET",
       "path": "/api/machines",
       "query": "",
-      "body": ""
+      "body": "",
+      "gui": "list_machines"
     },
     {
       "method": "GET",
       "path": "/api/presets",
       "query": "",
       "body": "",
-      "note": "参数预设列表（含结构化陈旧字段 stale/staleParams/missingRequired 与 degradations 警告）；?template=<名> 过滤。损坏文件降级为警告而非报错（D13）"
+      "note": "参数预设列表（含结构化陈旧字段 stale/staleParams/missingRequired 与 degradations 警告）；?template=<名> 过滤。损坏文件降级为警告而非报错（D13）",
+      "gui": "list_presets"
     },
     {
       "method": "POST",
       "path": "/api/presets",
       "query": "",
       "body": "{}",
-      "note": "保存/覆盖预设，体 {\"name\",\"template\",\"params\",\"force\"}；校验链与 preset save 逐条一致"
+      "note": "保存/覆盖预设，体 {\"name\",\"template\",\"params\",\"force\"}；校验链与 preset save 逐条一致",
+      "gui": "save_preset"
     },
     {
       "method": "POST",
       "path": "/api/presets/delete",
       "query": "",
       "body": "{}",
-      "note": "删除预设，体 {\"name\"}。用 POST 而非 DELETE+路径段：预设名可含 . 与 -，放路径段需额外编码处理，且前端 API 封装只做 GET/POST"
+      "note": "删除预设，体 {\"name\"}。用 POST 而非 DELETE+路径段：预设名可含 . 与 -，放路径段需额外编码处理，且前端 API 封装只做 GET/POST",
+      "gui": "delete_preset"
     },
     {
       "method": "POST",
       "path": "/api/inspect",
       "query": "",
-      "body": "{}"
+      "body": "{}",
+      "gui": null,
+      "gui_note": "Phase 1 GUI 渲染表单改用 GET /api/templates/{name} 取 params（该端点返回 params，而 inspect 不返回，见勘误 E3）；inspect 仅 Web UI 使用。"
     },
     {
       "method": "POST",
       "path": "/api/validate",
       "query": "",
-      "body": "{}"
+      "body": "{}",
+      "gui": "validate_template"
     },
     {
       "method": "POST",
       "path": "/api/render",
       "query": "",
-      "body": "{}"
+      "body": "{}",
+      "gui": "render_template"
     },
     {
       "method": "POST",
       "path": "/api/part/generate",
       "query": "",
       "body": "{\"part\":{\"name\":\"示例\",\"ops\":[]}}",
-      "note": "零件级批量生成：体 {\"part\":{name,default_machine,params,ops:[{template,params,machine,options}]}}，顶层还可带 lineNumbers/addHeader/stripBlank/ascii/lenient。**注意与 CLI 的语义差异**：CLI 是全有或全无（任一工序失败即不写出文件，exit 1），本端点则返回 200 + data.results（逐工序结果），因为前端 runBatch 需要按工序高亮错误；此时成功的工序带 skipped:true 且不带 output（不吐半成品程序）。请求体本身不合法（如缺 part 字段、ops 为空）才回 400 且不带 data。"
+      "note": "零件级批量生成：体 {\"part\":{name,default_machine,params,ops:[{template,params,machine,options}]}}，顶层还可带 lineNumbers/addHeader/stripBlank/ascii/lenient。**注意与 CLI 的语义差异**：CLI 是全有或全无（任一工序失败即不写出文件，exit 1），本端点则返回 200 + data.results（逐工序结果），因为前端 runBatch 需要按工序高亮错误；此时成功的工序带 skipped:true 且不带 output（不吐半成品程序）。请求体本身不合法（如缺 part 字段、ops 为空）才回 400 且不带 data。",
+      "gui": null,
+      "gui_note": "零件级批量渲染是 Phase 3 交付面。Phase 1 GUI 不暴露。"
     }
   ],
-  "frontend_only": []
+  "frontend_only": [],
+  "gui_only": [
+    {
+      "command": "get_config",
+      "reason": "不经 route()：无对应 HTTP 端点，GUI 直接从进程内 AppState.loaded 投影只读视图（状态栏 / 设置页）。Web UI 无此概念（服务端进程本身就是配置源）。若将来要纳入契约，应新增 `GET /api/config` 路由臂，在本文件 routes[] 登记并同步 Web UI 与 GUI 两侧封装。"
+    },
+    {
+      "command": "save_nc_file",
+      "reason": "不经 route()：GUI 专有。渲染产物写入用户选定路径，路径由 Tauri 保存对话框（@tauri-apps/plugin-dialog 的 save()）取得，再 std::fs::write 落盘 —— NC 成品文件不是服务端资产，无对应 HTTP 端点。若将来要纳入契约，应新增 `POST /api/save`（体 {path,content}）并处理服务端路径安全，再在本文件与两侧封装登记。"
+    },
+    {
+      "command": "lint_template",
+      "reason": "不经 route()：① 无对应 HTTP 端点 —— `/api/lint` 不存在（cli/src/server.rs::route 无该路由臂），Web UI 目前也不做 lint，故不宜为 GUI 单方面新增端点（新增端点须同时改后端路由臂 + 本文件 + Web UI 封装 + GUI 封装四处，见本文件 description）。② 集成路径与 CLI `lint` 子命令**同源**：先 `GET /api/templates/{name}` 取 `data.template.source`，再调 `nctool_tpl::lint(&source, &name)`（与 cli/src/commands/lint.rs 同一函数，不写第二套实现），返回 `Vec<LintFinding>`（无级别）。③ 将来若 Web UI 也要 lint，应补 `POST /api/lint`（体 {template}）路由臂，并把本条从 gui_only 移入对应 routes[] 条目的 gui 键（同步 Web UI 封装与 scripts/check_api_parity.mjs）。"
+    }
+  ]
 }

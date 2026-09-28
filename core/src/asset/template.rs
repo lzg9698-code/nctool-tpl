@@ -97,16 +97,16 @@ impl TemplateWriter {
     /// 乐观锁 `expect = None` 要求写前文件**不存在**；已存在 → [`WriteError::Conflict`]，
     /// 调用方映射为 `template_duplicate`(6)。
     ///
-    /// ⚠️ **这不是"原子创建"**：`write_guarded(expect=None)` 的实现是
-    /// `read_snapshot`（`metadata` + 整读）**然后** `atomic::write_atomic`
-    /// （tmp + rename），**仍是 check-then-write**。两个并发 `new` 同名可以
-    /// **双双通过检查**，后 `rename` 者胜、**静默覆盖**。若需真正的重名原子性，
-    /// `create` 必须改走 `OpenOptions::create_new`（`O_EXCL`）。
+    /// 重名原子性（P0-1）：`write_guarded` 在**跨进程互斥锁内**做
+    /// `read_snapshot` 比对 —— 并发同名 `new` 被锁串行化，后到者读到已存在
+    /// 的文件 → `Conflict`，**不会**双双通过、更不会静默覆盖。初稿建议的
+    /// `OpenOptions::create_new`（`O_EXCL`）已撤回：持锁后冗余，且 O_EXCL
+    /// 直接写目标文件、崩在半路会留下残缺文件（架构 §3.1 定稿说明）。
     ///
-    /// 相比旧的 `path.exists()` + `std::fs::write`，本函数真正改善的是：
-    /// **写原子性**（tmp + rename，任何时刻要么旧内容要么新内容，无半成品）与
-    /// **不跟随符号链接**（`rename` 替换目录项本身；悬空链接向量下写不会落到根外）。
-    /// 它**不**提供重名检查的原子性。
+    /// 相比旧的 `path.exists()` + `std::fs::write`，本函数的改善是：**写原子性**
+    /// （tmp + rename，任何时刻要么旧内容要么新内容，无半成品）、**不跟随符号
+    /// 链接**（`rename` 替换目录项本身；悬空链接向量下写不会落到根外），以及
+    /// **重名检查的原子性**（锁内比对，见上）。
     pub fn create(dir: &Path, rel_key: &str, source: &str) -> Result<WriteOutcome, WriteError> {
         let sp = SafePath::from_root(dir)?;
         let path = resolve_rel(&sp, rel_key)?;
@@ -202,7 +202,7 @@ fn clone_manifest_entry(sp: &SafePath, src_rel: &str, dst_rel: &str) -> Manifest
             path.display()
         ));
     }
-    let text = match std::fs::read_to_string(&path) {
+    let text = match crate::io_limit::read_text_capped(&path, crate::io_limit::MAX_SOURCE_BYTES) {
         Ok(t) => t,
         Err(e) => return ManifestOutcome::Degraded(format!("清单读取失败：{e}")),
     };
@@ -231,7 +231,7 @@ fn rewrite_manifest_key(sp: &SafePath, old_rel: &str, new_rel: &str) -> Manifest
             path.display()
         ));
     }
-    let text = match std::fs::read_to_string(&path) {
+    let text = match crate::io_limit::read_text_capped(&path, crate::io_limit::MAX_SOURCE_BYTES) {
         Ok(t) => t,
         Err(e) => return ManifestOutcome::Degraded(format!("清单读取失败：{e}")),
     };
@@ -321,16 +321,26 @@ pub fn manifest_entry_body(text: &str, key: &str) -> Option<Vec<String>> {
         if l.is_empty() || indent_of(l) <= key_indent {
             break;
         }
-        // 此处必然 `indent_of(l) > key_indent`，故首 `key_indent` 字节全为空白，
-        // 切片落在合法 char 边界上。
-        body.push(l[key_indent..].to_string());
+        // 此处必然 `indent_of(l) > key_indent`，故首 `key_indent` 字节是 ASCII
+        // 空白、切片落在合法 char 边界上；`get` 兜底（畸形缩进不 panic，P1-3）。
+        let Some(rest) = l.get(key_indent..) else {
+            break;
+        };
+        body.push(rest.to_string());
     }
     Some(body)
 }
 
-/// 行首空白（空格 / 制表符）的**字节数**。
+/// 行首 **ASCII 空白**（空格 / 制表符）的**字节数**。
+///
+/// 只认 ASCII：若用 `trim_start()`（按 `char::is_whitespace` 裁剪，含 U+00A0 NBSP、
+/// U+2028 等**多字节空白**），键行与字段行的空白前缀构成不同会让
+/// `l[key_indent..]` 的下标落进多字节字符**内部** → 字节切片 panic。该 API 是
+/// **pub**（经 `lib.rs` 再导出），库内 panic 调用方无从 catch（P1-3 / Q-?）。
 fn indent_of(line: &str) -> usize {
-    line.len() - line.trim_start().len()
+    line.bytes()
+        .take_while(|b| *b == b' ' || *b == b'\t')
+        .count()
 }
 
 /// 改写某条已存在条目的键行文本，保留其余字节不变。
@@ -599,6 +609,30 @@ mod tests {
         let text = "templates:\n    \"a.j2\":\n  name: \"A\"\n";
         let body = manifest_entry_body(text, "a.j2").unwrap();
         assert!(body.is_empty(), "更浅缩进不得被当作字段吞入: {body:?}");
+    }
+
+    /// **P1-3 回归**：多字节空白（NBSP）缩进**不得 panic**。
+    ///
+    /// 旧 `indent_of` 用 `trim_start()`（`char::is_whitespace` 裁剪，NBSP 计入），
+    /// 与键行的 ASCII 缩进混合后 `l[key_indent..]` 的下标落进 NBSP 字节**内部**
+    /// → 字节切片 panic（pub API 库内 panic，调用方无从 catch）。
+    /// 现只认 ASCII 空白：NBSP 行缩进计 0 → 不满足"严格大于键行" → 停止收集。
+    #[test]
+    fn entry_body_multibyte_indent_does_not_panic() {
+        // 键行缩进 2 空格（key_indent = 2）；字段行 = [空格][NBSP]…：
+        // 旧 indent_of > 2 且下标 2 落在 NBSP 内部 → panic。
+        let text = "templates:\n  \"a.j2\":\n \u{a0}name: \"A\"\n    path: x.j2\n";
+        let body = manifest_entry_body(text, "a.j2").expect("键行应找到");
+        assert!(
+            body.is_empty(),
+            "NBSP 前缀行不满足 ASCII 缩进比较: {body:?}"
+        );
+
+        // 键行本身用 NBSP 缩进（旧 indent_of = 2 字节）也不得 panic；
+        // 字段行的 ASCII 部分照常收集（缩进比较按 ASCII 定义）。
+        let text = "\u{a0}\"b.j2\":\n  name: \"B\"\n";
+        let body = manifest_entry_body(text, "b.j2").expect("键行应找到");
+        assert_eq!(body, vec!["  name: \"B\"".to_string()]);
     }
 
     /// **P1 回归**：相邻兄弟条目（同缩进、无空行分隔）不得被吞并。

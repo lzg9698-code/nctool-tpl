@@ -6,33 +6,51 @@
 //!   场景，只剩攻击面。（此处曾写"由命令层打印警告、本模块不做判断"，那是更早
 //!   的实现；照那句话改回去会把这个决定悄悄撤销。）
 //! - 不执行任何 shell 命令；不提供任何写操作
-//! - 请求体读取设 1 MiB 上限，防异常载荷
+//! - 请求体读取设 1 MiB 上限，防异常载荷；`Content-Length` 超限在**读取前**即
+//!   拒绝（413），且读完与声明长度**对账**——半包/截断的请求体回 400，绝不当
+//!   完整请求交给 [`route`]（P1-7）
+//! - 请求体读取带**超时**（[`BODY_READ_TIMEOUT`]）：tiny_http 0.12 无读超时，
+//!   而本循环是单线程顺序的，一个"发一半就挂"的连接能钉死整个服务（P1-8）
 //! - **失败响应不回显内部正文**：500 只给泛化文案，详情写 stderr —— 内部错误的
 //!   正文含模板文件的绝对路径（见 [`internal_error`]）
 //! - **跨站请求防护**：`/api/` 下的请求校验 `Origin` / `Sec-Fetch-Site`
 //!   （见 [`cross_site_guard`]）——只绑回环并不够，浏览器里的任意页面都能向
 //!   `127.0.0.1:<port>` 发请求（DNS rebinding / CSRF）；本服务无状态、不落盘，
 //!   但"被陌生网页驱动"仍应拦住
+//! - **Host 校验**：所有请求（含静态页）校验 `Host` 是否为回环主机名
+//!   （见 [`host_guard`]）——`Origin` 防护挡不住 DNS rebinding 后的**同源 GET**
+//!   （它不带 `Origin`、`Sec-Fetch-Site: same-origin`，两条分支都放行），
+//!   而 `Host` 由浏览器按地址栏主机名填写、JS 改不了，是重绑攻击的必经破绽
 //! - 每个响应都带 CSP / nosniff / Referrer-Policy（见 [`SECURITY_HEADERS`]）
 //!
 //! 设计：路由逻辑收敛到纯函数 [`route`]（无网络依赖，可直接单元/集成测试），
 //! [`serve`] 只负责 tiny_http 粘合（监听、解析、响应）。
 
+// T01 库化后本模块成为 `pub mod server`（GUI 复用 [`route`]），其文档里多处交叉引用
+// **私有**辅助项（`internal_error` / `SECURITY_HEADERS` / `allowed_origins` /
+// `crate::commands::ui`）。私有项在公开文档中不生成超链接，rustdoc 以
+// `private_intra_doc_links` 报警 → CI `-D warnings` 变红。此处显式放行该 lint：
+// 链接对读源码的维护者仍有跳转价值（`--document-private-items` 下正常解析）。
+#![allow(rustdoc::private_intra_doc_links)]
+
 use std::io::Read;
 use std::net::{IpAddr, SocketAddr};
 use std::rc::Rc;
+use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::{mpsc, Arc};
+use std::time::Duration;
 
 use nctool_core::asset::{now_iso8601, Preset, PresetStore, SpecFingerprint, WriteError};
 use nctool_core::machine::{MachineKeyKind, MachineKeySchema, MachinePreset};
 use nctool_core::pipeline::{GCodeGenerator, GenerationOptions, OutputFormat};
 use nctool_core::registry::{TemplateCategory, TemplateSource};
+use nctool_core::{ParamValue, ParameterSet};
 use nctool_tpl::Variable;
 
 use crate::args::parameter_set_from_json;
 use crate::cli::CategoryArg;
-use crate::commands::templates::extract_variables;
 use crate::context::Ctx;
-use crate::output::CliError;
+use crate::output::{report_json, CliError};
 
 /// 内嵌单文件前端（`cli/ui/index.html`，演示与服务双模式）。
 ///
@@ -44,6 +62,30 @@ pub const UI_HTML: &str = include_str!("../ui/index.html");
 
 /// 单个请求体上限：inspect 的模板源码远小于此，超出视为异常载荷。
 const MAX_BODY_BYTES: usize = 1024 * 1024;
+
+/// 请求体读取超时（P1-8）。
+///
+/// tiny_http 0.12 **没有任何读超时配置**（`ServerConfig` 只有 `addr` / `ssl`），
+/// 而 `serve_requests` 是**单条顺序循环**：一个声明 `Content-Length: 5000` 却只
+/// 发几个字节、然后挂住的连接，会让 `read_to_end` 无限阻塞 —— 整个 `nctool ui`
+/// 就此永久无响应。10s 足够任何正常客户端发完 1 MiB 以内的载荷。
+///
+/// 注意 tiny_http 对 `Content-Length <= 1024` 的请求是**在构造 `Request` 之前**
+/// 就同步读完的（`request.rs:194-210`，读不满直接 `RequestCreationError`），
+/// 因此本超时实际只作用于「声明长度 > 1024」与 chunked 两类请求。
+const BODY_READ_TIMEOUT: Duration = Duration::from_secs(10);
+
+/// 同时在读请求体的线程数上限（P1-8 的第二道闸）。
+///
+/// 超时是**放弃**那个连接而不是中止读（`read` 阻塞在系统调用里，std 无法取消），
+/// 于是读线程会一直挂着直到对端断开。若不加限制，恶意客户端反复"发一半就挂"
+/// 就能把"服务永久挂死"换成"线程无限增长"。`serve_requests` 是顺序循环，正常
+/// 情况下这个计数恒为 0 或 1；达到上限即说明堆了 8 个被放弃的连接，此时对新
+/// 请求直接回 503（而不是再赔一个线程进去）。
+///
+/// 计数是**每个 serve 实例一份**（`Arc<AtomicUsize>`，不是全局 static）：全局
+/// 计数会让并行跑的单测互相看见对方的读数，把 503 分支抖到别的用例上。
+const MAX_IN_FLIGHT_BODY_READERS: usize = 8;
 
 /// 所有响应统一附加的安全响应头。
 ///
@@ -136,6 +178,85 @@ pub fn cross_site_guard(headers: &[(&str, &str)], allowed: &[String]) -> Option<
     None
 }
 
+/// Host 头防护（DNS rebinding）：返回 `Some(403)` 表示应拒绝该请求。
+///
+/// `cross_site_guard` 只能挡住"带 `Origin` 的跨站写"和"带 `Sec-Fetch-Site` 的
+/// 跨站读"。DNS rebinding 不走这两条路：攻击者先在 `attacker.example` 上架页，
+/// 再把 DNS TTL 置 0 重绑到 `127.0.0.1`——此后浏览器认为它与本服务**同源**，
+/// 发出的 GET **不带 `Origin`**（同源 GET 不发）、`Sec-Fetch-Site: same-origin`
+/// （两条分支都放行），响应体即可被读取（`/api/presets` 含工艺参数与预设路径、
+/// `/api/templates` 含全部模板源码）。
+///
+/// 拦法是校验 `Host`：它由浏览器按**地址栏里的主机名**填写、JS 改不了，
+/// 重绑攻击下必然是 `attacker.example:<port>` —— 不在回环白名单即拒。
+/// 伪造 `Host` 的客户端本来就能直连回环地址，没有额外攻击面。
+///
+/// 判定：
+/// 1. `Host` **缺失** → 放行（HTTP/1.0 与 curl `-H` 显式去头的用法；
+///    浏览器在 HTTP/1.1 下必然带 `Host`，重绑场景不会走到这条）；
+/// 2. 主机名部分 ∈ {`localhost`, `127.0.0.1`, `::1`} 或任意回环 IP → 放行；
+/// 3. 其它（含空串、带用户信息、非回环 IP、任意域名）→ 403。
+///
+/// 端口**不参与**判定：重绑只能借"连到我们端口的那一次"伪造主机名，
+/// 而主机名已被第 2 条卡死；放开端口则 `localhost:任意` 仍是我们自己。
+pub fn host_guard(headers: &[(&str, &str)]) -> Option<Resp> {
+    let host = headers
+        .iter()
+        .find(|(k, _)| k.eq_ignore_ascii_case("host"))
+        .map(|(_, v)| *v)?;
+    if host_allowed(host) {
+        None
+    } else {
+        Some(Resp::Json(
+            403,
+            err(
+                "forbidden_host",
+                format!("请求被拒绝：Host 为 {host}，本服务只接受回环主机名"),
+            ),
+        ))
+    }
+}
+
+/// [`host_guard`] 的主机名判定（纯函数，便于单测穷举）。
+fn host_allowed(host: &str) -> bool {
+    fn loopback_name(name: &str) -> bool {
+        if name.eq_ignore_ascii_case("localhost") {
+            return true;
+        }
+        if let Ok(v4) = name.parse::<std::net::Ipv4Addr>() {
+            return v4.is_loopback();
+        }
+        if let Ok(v6) = name.parse::<std::net::Ipv6Addr>() {
+            return v6.is_loopback();
+        }
+        false
+    }
+
+    let h = host.trim();
+    if h.is_empty() {
+        return false;
+    }
+    // RFC 3986：IPv6 字面量必须带方括号 —— `[::1]` / `[::1]:8787`
+    if let Some(rest) = h.strip_prefix('[') {
+        let v6 = match rest.split_once(']') {
+            Some((v6, _)) => v6,
+            None => return false,
+        };
+        return loopback_name(v6);
+    }
+    // 无端口的整体先按字面量判（`127.0.0.1` 的点号会干扰下面的 rsplit）
+    if loopback_name(h) {
+        return true;
+    }
+    // 再剥 `:port`：`127.0.0.1:8787` / `localhost:8787`
+    match h.rsplit_once(':') {
+        Some((name, port)) if !port.is_empty() && port.chars().all(|c| c.is_ascii_digit()) => {
+            loopback_name(name)
+        }
+        _ => false,
+    }
+}
+
 /// 路由结果：JSON（带状态码）或 HTML 页面。
 #[derive(Debug)]
 pub enum Resp {
@@ -148,6 +269,31 @@ pub enum Resp {
 /// 成功包络：`{ ok: true, data }`。
 fn ok(data: serde_json::Value) -> serde_json::Value {
     serde_json::json!({ "ok": true, "data": data })
+}
+
+/// `GET /health` 载荷：状态 + 版本 + **内置模板缺失告警**（`builtinWarnings`）。
+///
+/// 降级方案（P1-4）把「内置模板注册失败」从 panic 改成跳过——崩溃立刻可见，
+/// **悄悄缺失不会**，故必须有 HTTP 出口（纯新增字段，不破坏既有契约；
+/// 正常恒为 `[]`）。注册表按指纹缓存（`Ctx::build_registry`），健康检查不会
+/// 每次重编译；构建失败时字段给 `[]`——构建失败本身由各业务路由以更响的
+/// 通用错误暴露。
+fn health_json(ctx: &Ctx) -> serde_json::Value {
+    let warnings: Vec<serde_json::Value> = ctx
+        .build_registry()
+        .map(|gen| {
+            gen.registry()
+                .builtin_warnings()
+                .iter()
+                .map(|w| serde_json::json!({ "name": w.name, "message": w.message }))
+                .collect()
+        })
+        .unwrap_or_default();
+    ok(serde_json::json!({
+        "status": "ok",
+        "version": env!("CARGO_PKG_VERSION"),
+        "builtinWarnings": warnings,
+    }))
 }
 
 /// 错误包络：`{ ok: false, error: { kind, message } }`（kind 与 CLI 错误对齐）。
@@ -163,13 +309,7 @@ fn err(kind: &str, message: impl Into<String>) -> serde_json::Value {
 /// - `body`：原始请求体字节
 pub fn route(ctx: &Ctx, method: &str, path: &str, query: &str, body: &[u8]) -> Resp {
     match (method, path) {
-        ("GET", "/health") => Resp::Json(
-            200,
-            ok(serde_json::json!({
-                "status": "ok",
-                "version": env!("CARGO_PKG_VERSION"),
-            })),
-        ),
+        ("GET", "/health") => Resp::Json(200, health_json(ctx)),
         ("GET", "/api/templates") => templates_list(ctx, query),
         ("GET", "/api/machines") => machines_list(ctx),
         ("GET", "/api/presets") => presets_list(ctx, query),
@@ -251,13 +391,17 @@ fn template_detail(ctx: &Ctx, raw_name: &str) -> Resp {
         Ok(g) => g,
         Err(e) => return internal_error(e),
     };
-    let system_vars = gen.registry().system_vars().to_vec();
 
     // 注册表模板（内置 / 目录）：携带分类、描述与参数规格
     if let Some(e) = gen.registry().get(&name) {
-        let vars = match extract_variables(&e.source_text, &e.name, &system_vars) {
+        // 参数**闭包**提取（穿透 include/extends），与 CLI `inspect`、
+        // `registry.validate` 同一口径：组合模板若只列主模板自身的变量，
+        // 片段独有的必选参数（如 `_undercut_common.j2` 的 5 个）在表单里
+        // 根本不存在 → 提交必然 validate 失败。系统变量由
+        // `extract_params` 内部剔除，这里不再手工传 `system_vars`。
+        let vars = match gen.registry().extract_params(&name) {
             Ok(v) => v,
-            Err(err) => return cli_error(err),
+            Err(err) => return cli_error(CliError::from(err)),
         };
         let params: Vec<serde_json::Value> = e.params.iter().map(spec_json).collect();
         return Resp::Json(
@@ -392,11 +536,23 @@ fn registered_template(ctx: &Ctx, name: &str) -> Result<(Rc<GCodeGenerator>, Str
 }
 
 fn api_machine(ctx: &Ctx, value: &serde_json::Value) -> Result<nctool_core::MachineConfig, Resp> {
-    let id = value
-        .get("machine")
-        .and_then(|v| v.as_str())
-        .unwrap_or("generic");
-    ctx.resolve_machine(Some(id)).map_err(|e| {
+    // 必须把「键缺失」与「类型错误」分开：`and_then(as_str)` 对 `{"machine":123}`
+    // 同样返回 None，合并处理就会**静默按 generic 生成** —— 机床参数错的 G-code
+    // 正是项目零容忍的「静默产出错误程序」。与 `generation_options` 的
+    // OPTIONS-SILENT-FALLBACK-001 同源（那里已修，此处是第二处漏网）。
+    let explicit = match value.get("machine") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(s)) => Some(s.as_str()),
+        Some(_) => {
+            return Err(Resp::Json(
+                400,
+                err("bad_request", "machine 必须是字符串（省略时用默认机床）"),
+            ))
+        }
+    };
+    // 缺失 → 走 `resolve_machine(None)`：取 `--machine`/配置的默认机床，
+    // 无配置时回落 generic（此前硬编码 "generic"，会无视已配置的默认机床）。
+    ctx.resolve_machine(explicit).map_err(|e| {
         let status = if e.kind == "machine_not_found" {
             404
         } else {
@@ -419,14 +575,28 @@ fn validate(ctx: &Ctx, body: &[u8]) -> Resp {
         Ok(v) => v,
         Err(r) => return r,
     };
-    match gen.registry().validate(&name, &params) {
+    // P0-2：与 /api/render 同口径解析机床（请求体 `machine` 缺省 → 配置默认/
+    // generic），转速上界按该机床联动——否则 validate 放行的参数会被 render
+    // 拒绝，同一份参数在两个端点上给出两个结论。
+    let machine = match api_machine(ctx, &value) {
+        Ok(v) => v,
+        Err(r) => return r,
+    };
+    match gen
+        .registry()
+        .validate_with_machine(&name, &params, Some(&machine))
+    {
         Ok(report) => Resp::Json(
             200,
             ok(serde_json::json!({
                 "report": crate::output::report_json(&name, &report),
             })),
         ),
-        Err(e) => Resp::Json(500, err("registry", e.to_string())),
+        // P0-3：`RegistryError` 的 Display 可能携带模板文件绝对路径
+        // （`RegistryError::Io` 来自 `registry.rs` 的读文件消息），原样回传等于
+        // 把服务器目录结构交给浏览器。与 `registered_template` 的
+        // `build_registry` 失败同一口径：详情进 stderr，响应体泛化。
+        Err(e) => internal_error(CliError::from(e)),
     }
 }
 
@@ -526,9 +696,15 @@ fn render(ctx: &Ctx, body: &[u8]) -> Resp {
         Ok(v) => v,
         Err(r) => return r,
     };
-    let report = match gen.registry().validate(&name, &params) {
+    // P0-2：校验与渲染用同一台机床（`machine` 已在上方解析），转速上界按
+    // `machine.max_spindle_rpm` 联动——报告里的结论就是渲染管线的结论。
+    let report = match gen
+        .registry()
+        .validate_with_machine(&name, &params, Some(&machine))
+    {
         Ok(v) => v,
-        Err(e) => return Resp::Json(500, err("registry", e.to_string())),
+        // P0-3：同 `validate`，不回显 `RegistryError` 正文（可能含绝对路径）。
+        Err(e) => return internal_error(CliError::from(e)),
     };
     let report_json = crate::output::report_json(&name, &report);
     if report.has_errors() && !lenient {
@@ -563,6 +739,9 @@ fn render(ctx: &Ctx, body: &[u8]) -> Resp {
                 "machine": machine.id,
             })),
         ),
+        // P0-3 保留 400 + 回显正文：此处消息只描述**调用方传入的**模板
+        // （HTTP 侧 `registered_template` 只接受注册表逻辑名 = 相对键，
+        // 不复用 CLI 的文件路径解析），不含服务器磁盘路径（cli-review P0-1）。
         Err(e) => Resp::Json(400, err("render", e.to_string())),
     }
 }
@@ -603,27 +782,32 @@ fn part_generate(ctx: &Ctx, body: &[u8]) -> Resp {
         Ok(g) => g,
         Err(e) => return internal_error(e),
     };
-    let opts = nctool_core::part::PartOptions {
-        line_numbers: value
-            .get("lineNumbers")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        add_header_comment: value
-            .get("addHeader")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        strip_blank_lines: value
-            .get("stripBlank")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        ascii_only: value
-            .get("ascii")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
-        lenient: value
-            .get("lenient")
-            .and_then(|v| v.as_bool())
-            .unwrap_or(false),
+    // 顶层布尔选项必须**严格**：`and_then(as_bool).unwrap_or(false)` 对
+    // `{"lineNumbers":"true"}` 会静默关掉行号——调用方以为选项生效，实际输出
+    // 少了行号（OPTIONS-SILENT-FALLBACK-001 的同类漏网；`/api/render` 的
+    // `generation_options` 早已对类型错误硬 400，同一份请求体不该两套严格度）。
+    let opts = (|| -> Result<nctool_core::part::PartOptions, Resp> {
+        let opt_bool = |name: &str| -> Result<bool, Resp> {
+            match value.get(name) {
+                None | Some(serde_json::Value::Null) => Ok(false),
+                Some(serde_json::Value::Bool(b)) => Ok(*b),
+                Some(_) => Err(Resp::Json(
+                    400,
+                    err("bad_request", format!("{name} 必须是布尔值")),
+                )),
+            }
+        };
+        Ok(nctool_core::part::PartOptions {
+            line_numbers: opt_bool("lineNumbers")?,
+            add_header_comment: opt_bool("addHeader")?,
+            strip_blank_lines: opt_bool("stripBlank")?,
+            ascii_only: opt_bool("ascii")?,
+            lenient: opt_bool("lenient")?,
+        })
+    })();
+    let opts = match opts {
+        Ok(o) => o,
+        Err(r) => return r,
     };
 
     match spec.generate(&gen, ctx.default_machine.as_deref(), &opts) {
@@ -775,7 +959,64 @@ fn presets_path(ctx: &Ctx) -> Result<std::path::PathBuf, CliError> {
     crate::commands::preset::preset_path(ctx, &crate::cli::PresetFileArgs { file: None })
 }
 
-/// `GET /api/presets`：预设列表（含结构化陈旧字段）。`?template=<名>` 过滤。
+/// 成功响应里的预设文件位置：`~/...` 脱敏形态（P1-9）。
+///
+/// 绝对路径必然含 Windows 用户名，`/api/presets*` 系列无鉴权，不得随每次
+/// 成功响应无条件外泄（cli-review P1-3 / SUMMARY 批1-3）。`~` 前缀保留
+/// 用户定位文件所需的全部信息；路径在家目录之外时退回**文件名**
+/// （与 [`write_error_resp`] 的 Conflict 分支同口径），绝不回显目录部分。
+fn preset_path_display(path: &std::path::Path) -> String {
+    let home = std::env::var_os("USERPROFILE")
+        .or_else(|| std::env::var_os("HOME"))
+        .map(std::path::PathBuf::from);
+    if let Some(home) = home {
+        if let Ok(rest) = path.strip_prefix(&home) {
+            // 统一正斜杠：反斜杠在 JSON 里要转义，`~/` 形态跨平台一致
+            let rest = rest.to_string_lossy().replace('\\', "/");
+            return format!("~/{rest}");
+        }
+    }
+    path.file_name()
+        .map(|n| n.to_string_lossy().into_owned())
+        .unwrap_or_else(|| "presets.yaml".to_string())
+}
+
+/// 单个 [`ParamValue`] → **扁平** JSON 标量（`21.0` / `"粗加工"` / `true` / `[..]`）。
+///
+/// **为什么不直接用 `serde_json::to_value`**：`ParamValue` 的 `Serialize` 是
+/// **带标签**形式（`{"type":"number","value":21.0}`，见 `core::model::ParamValue`
+/// 的文档），而 `presets_save` 侧用 `parameter_set_from_json` 解析的是**扁平**形式
+/// （`{"x":21.0}`，与 `--params-file` 同形）。若把带标签形式塞进列表项，消费方
+/// 把它原样回喂 `POST /api/presets` 会撞上"参数 x 不支持对象类型"——列表项无法
+/// 往返。故此处**显式按扁平标量构造**，与解析端严格互逆（不依赖 derive 的默认形态）。
+fn param_value_flat_json(v: &ParamValue) -> serde_json::Value {
+    match v {
+        ParamValue::Number(n) => serde_json::json!(n),
+        ParamValue::Integer(i) => serde_json::json!(i),
+        ParamValue::String(s) => serde_json::json!(s),
+        ParamValue::Bool(b) => serde_json::json!(b),
+        // 列表递归扁平化：元素仍为裸标量，`parameter_set_from_json` 能原样还原。
+        ParamValue::List(items) => {
+            serde_json::Value::Array(items.iter().map(param_value_flat_json).collect())
+        }
+    }
+}
+
+/// [`ParameterSet`] → **扁平** JSON 映射（`{"x":21.0,"y":15.0}`）。
+///
+/// 供 `GET /api/presets` 列表项的 `params` 字段使用。形态与 `presets_save` 的入参
+/// （`parameter_set_from_json`）**互为逆运算**：把列表里拿到的 `params` 原样作为
+/// `POST /api/presets` 的 `params` 回喂，必须解析成功且产出同一参数集（往返约束）。
+/// 键序取 `BTreeMap` 的字典序（确定性输出，便于逐字断言）。
+fn params_flat_json(params: &ParameterSet) -> serde_json::Value {
+    let mut map = serde_json::Map::with_capacity(params.values.len());
+    for (k, v) in &params.values {
+        map.insert(k.clone(), param_value_flat_json(v));
+    }
+    serde_json::Value::Object(map)
+}
+
+/// `GET /api/presets`：预设列表（含结构化陈旧字段**与扁平参数取值**）。`?template=<名>` 过滤。
 ///
 /// 文件损坏 / 版本未知时**降级为警告**并继续（只读命令不被坏文件拦住，D13），
 /// 警告随响应返回给前端，而不是静默丢掉。
@@ -806,6 +1047,11 @@ fn presets_list(ctx: &Ctx, query: &str) -> Resp {
                 "name": p.name,
                 "template": p.template,
                 "paramCount": p.params.len(),
+                // ★ 扁平参数取值（`{"x":21.0}`），让消费方（Web UI / GUI）能从列表
+                //   直接"应用"预设——此前只回 `paramCount`，消费方拿到名字却拿不到值，
+                //   只能静默清空表单（Web UI 早已按 `p.params` 取值，正是此处缺字段）。
+                //   形态与 `presets_save` 入参互逆（见 `params_flat_json`），可原样回喂保存。
+                "params": params_flat_json(&p.params),
                 "createdAt": p.created_at,
                 "specFingerprint": p.spec_fingerprint,
                 "resolvable": stale.is_some(),
@@ -818,7 +1064,9 @@ fn presets_list(ctx: &Ctx, query: &str) -> Resp {
     Resp::Json(
         200,
         ok(serde_json::json!({
-            "path": path.display().to_string(),
+            // P1-9：`~/...` 脱敏形态，绝不回显含用户名的绝对路径
+            "path": preset_path_display(&path),
+            "pathRedacted": true,
             "presets": items,
             "warnings": got.warnings,
         })),
@@ -845,6 +1093,15 @@ fn presets_save(ctx: &Ctx, body: &[u8]) -> Resp {
         Some(s) if !s.is_empty() => s.to_string(),
         _ => return Resp::Json(400, err("bad_request", "请求体需要非空字符串字段 \"name\"")),
     };
+    // 预设名与 CLI `preset save` / `preset rename` / `preset import` 同一条
+    // `validate_asset_name` 口径：否则"import 拒绝的名字能经 save 落盘"，
+    // 且含控制字符的名字会被 `preset list` 原样回显到终端（ANSI/OSC 注入）。
+    // 也使 `write_error_resp` 的 PathEscape 分支重新可达（此前不可达）。
+    if let Err(reason) = nctool_core::asset::validate_asset_name(&name) {
+        // kind 与 `write_error_resp` 的 PathEscape 分支一致（bad_request），
+        // 保证"早校验"与"core 落盘时校验"两条路径对同一份输入给出同一形状。
+        return Resp::Json(400, err("bad_request", format!("预设名非法：{reason}")));
+    }
     let template = match parsed.get("template").and_then(|t| t.as_str()) {
         Some(s) if !s.is_empty() => s.to_string(),
         _ => {
@@ -854,10 +1111,14 @@ fn presets_save(ctx: &Ctx, body: &[u8]) -> Resp {
             )
         }
     };
-    let force = parsed
-        .get("force")
-        .and_then(|f| f.as_bool())
-        .unwrap_or(false);
+    // `force` 必须是布尔值：`and_then(as_bool).unwrap_or(false)` 会把
+    // `force:"true"` 静默读成 false → 409。方向虽安全（不覆盖），但把用户的
+    // 明确意图静默改写成"拒绝"同样是口径漂移，与本文件其余选项的严格度对齐。
+    let force = match parsed.get("force") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(serde_json::Value::Bool(b)) => *b,
+        Some(_) => return Resp::Json(400, err("bad_request", "force 必须是布尔值")),
+    };
 
     // 参数：复用 CLI 的扁平解析器（`{"x":21.0}`），与 `--params-file` 同形。
     let empty = serde_json::json!({});
@@ -943,7 +1204,9 @@ fn presets_save(ctx: &Ctx, body: &[u8]) -> Resp {
         created_at: now_iso8601(),
         spec_fingerprint: spec_fingerprint.clone(),
     };
-    let outcome = match PresetStore::upsert(&path, preset) {
+    // 服务侧等待 0（try-lock）：serve 循环单线程，阻塞等锁会钉死整个 UI；
+    // 拿不到锁即 LockBusy → write_error_resp 回 409，由前端稍后重试。
+    let outcome = match PresetStore::upsert_with_wait(&path, preset, std::time::Duration::ZERO) {
         Ok(o) => o,
         Err(e) => return write_error_resp(e),
     };
@@ -953,7 +1216,9 @@ fn presets_save(ctx: &Ctx, body: &[u8]) -> Resp {
             "name": name,
             "template": template,
             "paramCount": params.len(),
-            "path": path.display().to_string(),
+            // P1-9：`~/...` 脱敏形态，绝不回显含用户名的绝对路径
+            "path": preset_path_display(&path),
+            "pathRedacted": true,
             "action": outcome.action,
             "specFingerprint": spec_fingerprint,
             "fileFingerprint": outcome.fingerprint,
@@ -980,7 +1245,8 @@ fn presets_delete(ctx: &Ctx, body: &[u8]) -> Resp {
         Ok(p) => p,
         Err(e) => return cli_error(e),
     };
-    let outcome = match PresetStore::remove(&path, &name) {
+    // 服务侧等待 0（try-lock）：与 upsert 同口径，绝不阻塞 serve 循环。
+    let outcome = match PresetStore::remove_with_wait(&path, &name, std::time::Duration::ZERO) {
         Ok(o) => o,
         Err(e) => return write_error_resp(e),
     };
@@ -988,7 +1254,9 @@ fn presets_delete(ctx: &Ctx, body: &[u8]) -> Resp {
         200,
         ok(serde_json::json!({
             "name": name,
-            "path": path.display().to_string(),
+            // P1-9：`~/...` 脱敏形态，绝不回显含用户名的绝对路径
+            "path": preset_path_display(&path),
+            "pathRedacted": true,
             "action": outcome.action,
             "fileFingerprint": outcome.fingerprint,
         })),
@@ -1025,17 +1293,27 @@ fn inspect(ctx: &Ctx, body: &[u8]) -> Resp {
         Some(entry) => entry,
         None => return Resp::Json(404, err("template_not_found", format!("模板不存在: {tpl}"))),
     };
-    let system_vars = gen.registry().system_vars().to_vec();
-    let vars = match extract_variables(&entry.source_text, &entry.name, &system_vars) {
+    // 参数**闭包**提取（穿透 include/extends），与 CLI `inspect`、`registry.validate`
+    // 同一口径；系统变量由 `extract_params` 内部剔除。
+    let vars = match gen.registry().extract_params(tpl) {
         Ok(v) => v,
-        Err(err) => return cli_error(err),
+        Err(err) => return cli_error(CliError::from(err)),
     };
+    // `issues` **不再是硬编码 `[]`**：填入不依赖用户参数的规格 default 自洽
+    // 问题（类型不符 / 越界 / 非整数 / 不在白名单 / NaN）——写错的 default 会在
+    // 渲染前被静默注入上下文，此前这条路径没有任何"不提交参数就能看到"的入口。
+    // JSON 形状与 `/api/validate` 的 `report.issues` 同源（同一序列化视图）。
+    let spec_report = nctool_core::validate::check_spec_defaults_report(&entry.params);
+    let issues = report_json(&entry.name, &spec_report)
+        .get("issues")
+        .cloned()
+        .unwrap_or(serde_json::json!([]));
     let v = vars_json(&vars);
     Resp::Json(
         200,
         ok(serde_json::json!({
             "template": entry.name,
-            "issues": [],
+            "issues": issues,
             "required": v["required"],
             "optional": v["optional"],
         })),
@@ -1086,6 +1364,73 @@ pub fn serve(server: tiny_http::Server, addr: SocketAddr, ctx: Ctx) -> Result<()
     serve_requests(&server, addr, &ctx)
 }
 
+/// 一次请求体的读取结果。
+enum BodyOutcome {
+    /// 读完（可能读出错）：`request` 必须**还回去**才能 `respond`。
+    Read {
+        /// 原请求（读完后仍要用来回响应）。
+        request: Box<tiny_http::Request>,
+        /// 读到的字节（出错时可能只有前缀）。
+        body: Vec<u8>,
+        /// `read_to_end` 的结果：`Err` 表示对端中途断开 / 重置 / 半包。
+        result: std::io::Result<usize>,
+    },
+    /// 读超时：连接被放弃，主循环继续。
+    TimedOut,
+}
+
+/// 读请求体，带**读超时**（P1-8），并把 IO 错误原样带出（P1-7）。
+///
+/// # 为什么必须用分离线程
+///
+/// `read` 阻塞在系统调用里，std 没有任何取消手段。报告初稿建议的
+/// `std::thread::scope` + `recv_timeout` **不起作用**：`scope` 在块结束时会
+/// **join 全部线程**，读线程仍卡在 `read` 上 → 主线程照样钉死，等于没加超时。
+/// 只有 `std::thread::spawn`（分离）能让主循环脱身。
+///
+/// 代价是超时后那个线程与其持有的连接被**放弃**（读操作返回时 `send` 失败，
+/// `Request` 随错误值被 drop —— tiny_http 会据此自动回一个 500 并关闭连接）。
+/// 因此调用方必须用 [`MAX_IN_FLIGHT_BODY_READERS`] 给这种泄漏设上界。
+fn read_body_with_timeout(
+    request: tiny_http::Request,
+    timeout: Duration,
+    in_flight: &Arc<AtomicUsize>,
+) -> BodyOutcome {
+    let (tx, rx) = mpsc::channel();
+    in_flight.fetch_add(1, Ordering::SeqCst);
+    let counter = Arc::clone(in_flight);
+    std::thread::spawn(move || {
+        // 无论正常退出、早退还是 panic 都要把计数还回去，否则 8 次之后
+        // 服务会永久回 503（比原来的挂死更难查）。
+        struct Decr(Arc<AtomicUsize>);
+        impl Drop for Decr {
+            fn drop(&mut self) {
+                self.0.fetch_sub(1, Ordering::SeqCst);
+            }
+        }
+        let _decr = Decr(counter);
+
+        let mut request = request;
+        let mut body = Vec::new();
+        // `take(上限+1)`：多读一个字节就足以判定"超限"，不必把整份载荷读进内存。
+        let result = request
+            .as_reader()
+            .take(MAX_BODY_BYTES as u64 + 1)
+            .read_to_end(&mut body);
+        // 接收端已超时放弃 → `send` 失败，`request` 随错误值被 drop。
+        let _ = tx.send((request, body, result));
+    });
+
+    match rx.recv_timeout(timeout) {
+        Ok((request, body, result)) => BodyOutcome::Read {
+            request: Box::new(request),
+            body,
+            result,
+        },
+        Err(_) => BodyOutcome::TimedOut,
+    }
+}
+
 /// [`serve`] 的实际请求循环，按**借用**接收服务实例。
 ///
 /// 拆出借用版是为了可测：`serve` 按值接管后，测试进程无法再持有句柄调用
@@ -1093,9 +1438,23 @@ pub fn serve(server: tiny_http::Server, addr: SocketAddr, ctx: Ctx) -> Result<()
 /// 覆盖数据——被 kill 的子进程数据全丢）。测试用借用版 + `unblock()` 覆盖
 /// 请求循环（见 `serve_handles_real_request_then_unblocks_cleanly`）。
 fn serve_requests(server: &tiny_http::Server, addr: SocketAddr, ctx: &Ctx) -> Result<(), CliError> {
-    let allowed = allowed_origins(&addr);
+    serve_requests_with_timeout(server, addr, ctx, BODY_READ_TIMEOUT)
+}
 
-    for mut request in server.incoming_requests() {
+/// 与 [`serve_requests`] 相同，但请求体读超时可注入 —— 单测用它把 10s 压到毫秒级，
+/// 否则测一次"半包连接不钉死服务"要真等 10 秒（覆盖门禁不接受）。
+fn serve_requests_with_timeout(
+    server: &tiny_http::Server,
+    addr: SocketAddr,
+    ctx: &Ctx,
+    body_timeout: Duration,
+) -> Result<(), CliError> {
+    let allowed = allowed_origins(&addr);
+    // 在读请求体的线程数（P1-8 第二道闸）。每个 serve 实例一份，理由见
+    // [`MAX_IN_FLIGHT_BODY_READERS`]。
+    let in_flight = Arc::new(AtomicUsize::new(0));
+
+    for request in server.incoming_requests() {
         let method = request.method().as_str().to_ascii_uppercase();
         let url = request.url().to_string();
         let (path, query) = match url.split_once('?') {
@@ -1108,28 +1467,109 @@ fn serve_requests(server: &tiny_http::Server, addr: SocketAddr, ctx: &Ctx) -> Re
             .map(|h| (h.field.as_str().as_str(), h.value.as_str()))
             .collect();
 
-        let resp = match (method.as_str(), path.as_str()) {
-            ("GET", "/") | ("GET", "/index.html") => Resp::Html,
-            _ => {
-                // 跨站防护先于路由：被拒绝的请求不必再读请求体、不必建注册表
-                let blocked = path
+        // Host 校验先于一切（含静态页）：DNS rebinding 下连 `/` 也不该被读走。
+        // 缺失 `Host` 时放行（见 host_guard 文档），故不改变 curl/HTTP1.0 用法。
+        //
+        // 三层短路全部先算完，再决定要不要读请求体：被拒的请求不该让服务为它
+        // 缓冲 1 MiB，也不该进 `route()`（建注册表）。
+        let early: Option<Resp> = match host_guard(&headers) {
+            Some(blocked) => Some(blocked),
+            None => match (method.as_str(), path.as_str()) {
+                ("GET", "/") | ("GET", "/index.html") => Some(Resp::Html),
+                _ => path
                     .starts_with("/api/")
                     .then(|| cross_site_guard(&headers, &allowed))
-                    .flatten();
-                if let Some(resp) = blocked {
-                    resp
-                } else {
-                    let mut body = Vec::new();
-                    let too_large = request
-                        .as_reader()
-                        .take(MAX_BODY_BYTES as u64 + 1)
-                        .read_to_end(&mut body)
-                        .is_ok()
-                        && body.len() > MAX_BODY_BYTES;
-                    if too_large {
-                        Resp::Json(413, err("payload_too_large", "请求体超过 1 MiB 上限"))
-                    } else {
-                        route(ctx, &method, &path, &query, &body)
+                    .flatten(),
+            },
+        };
+        // `Content-Length` 预检（P1-7）：声明长度已超上限就直接 413，**不进读取**。
+        // 此前是"先缓冲 1 MiB 再判 413"，声明 100 MiB 的请求也要先吃掉 1 MiB 内存。
+        //
+        // 用 `body_length()` 而不是自己解析头：tiny_http 已按 RFC 处理了
+        // 「有 `Transfer-Encoding` 时忽略 `Content-Length`」（`request.rs:143-160`），
+        // 自己再解析一遍就会把这条规则抄错。`None` 表示"未知长度"（chunked 或
+        // 两者皆无），此时交给下面的读上限兜底。
+        let precheck: Option<Resp> = match request.body_length() {
+            Some(len) if len > MAX_BODY_BYTES => Some(Resp::Json(
+                413,
+                err("payload_too_large", "请求体超过 1 MiB 上限"),
+            )),
+            _ => None,
+        };
+        // 声明长度（`None` = chunked / 两者皆无）。读完要与实际字节数对账（P1-7）。
+        let declared_len = request.body_length();
+        // `headers` 里的 `&str` 借用 `request`，而 `Vec` 带 Drop → 借用活到作用域尾，
+        // 不显式 drop 就**无法把 request 移交给读线程**。
+        drop(headers);
+
+        // 读线程数达到上限（P1-8 第二道闸）：说明已经堆了 `MAX_IN_FLIGHT_BODY_READERS`
+        // 个"发一半就挂"的连接，此时对新请求直接回 503，而不是再赔一个线程进去。
+        let overloaded = in_flight.load(Ordering::SeqCst) >= MAX_IN_FLIGHT_BODY_READERS;
+
+        let mut respondable = request;
+        let resp = if let Some(resp) = early {
+            resp
+        } else if let Some(resp) = precheck {
+            resp
+        } else if overloaded {
+            Resp::Json(
+                503,
+                err(
+                    "service_unavailable",
+                    "服务正忙于处理挂起的连接，请稍后重试",
+                ),
+            )
+        } else {
+            match read_body_with_timeout(respondable, body_timeout, &in_flight) {
+                // 超时：连接被放弃，**没有**可用于回响应的 `Request`，只能记 stderr
+                // 后继续下一轮 —— 这正是 P1-8 要的效果：一个赖着不发的客户端不再
+                // 能把整个 UI 服务钉死。
+                BodyOutcome::TimedOut => {
+                    eprintln!(
+                        "warning: 读取请求体超时（{body_timeout:?}），已放弃该连接：{method} {path}"
+                    );
+                    continue;
+                }
+                BodyOutcome::Read {
+                    request,
+                    body,
+                    result,
+                } => {
+                    respondable = *request;
+                    match result {
+                        // P1-7 前半：读失败（对端重置等）**必须**显式报错。
+                        // 此前 `.is_ok()` 把 Err 直接吞掉，残缺的请求体被当完整请求交给
+                        // `route()` —— 调用方看到的是"我的 JSON 写错了"，而不是"传输中断"，
+                        // 排障方向全错。
+                        Err(e) => Resp::Json(
+                            400,
+                            err(
+                                "bad_request",
+                                format!("读取请求体失败（对端中断或半包）: {e}"),
+                            ),
+                        ),
+                        // P1-7 后半：**实际字节数必须等于声明的 `Content-Length`**。
+                        //
+                        // 只靠上面的 `Err` 抓不到"半包"：tiny_http 的 `EqualReader`
+                        // 在底层 EOF 时返回 `Ok(0)`（`equal_reader.rs:52-58`，注释写明
+                        // "if the limit is reached, it returns EOF"），也就是**短读不报错**。
+                        // 不自己比长度，截断的 JSON 依旧会被当完整请求送进 `route()`。
+                        Ok(n) => match declared_len {
+                            Some(d) if n != d => Resp::Json(
+                                400,
+                                err(
+                                    "bad_request",
+                                    format!(
+                                        "请求体不完整：声明 {d} 字节，实际读到 {n} 字节（对端中断或半包）"
+                                    ),
+                                ),
+                            ),
+                            // chunked（`body_length()` 为 `None`）时预检拦不住，这里兜底。
+                            _ if body.len() > MAX_BODY_BYTES => {
+                                Resp::Json(413, err("payload_too_large", "请求体超过 1 MiB 上限"))
+                            }
+                            _ => route(ctx, &method, &path, &query, &body),
+                        },
                     }
                 }
             }
@@ -1164,7 +1604,7 @@ fn serve_requests(server: &tiny_http::Server, addr: SocketAddr, ctx: &Ctx) -> Re
                 )
             }
         };
-        let _ = request.respond(response);
+        let _ = respondable.respond(response);
     }
     Ok(())
 }
@@ -1222,48 +1662,83 @@ fn cli_error_mapped(e: CliError) -> Resp {
 
 /// 写内核错误 → HTTP 响应。
 ///
-/// 状态码按**语义**而非一律 400：乐观锁冲突是 409（可重试），越界 / 名称非法是
-/// 400（调用方能改），IO / 内容损坏是 500（本地环境或磁盘问题，调用方无从修正，
-/// 且正文可能含绝对路径，按 [`internal_error`] 的口径不回显细节）。
+/// 状态码与 `kind` 查 [`crate::output::classify_write_error`] 单一分类表
+/// （P1-11，与 CLI 侧同源）；**正文**逐臂构建且一律脱敏：乐观锁冲突 / 锁争用
+/// 409、越界/名称非法 400（重名 409 name_conflict）、条目不存在 404、
+/// IO / 内容损坏 500（本地环境或磁盘问题，调用方无从修正，正文可能含
+/// 绝对路径，按 [`internal_error`] 的口径不回显细节）。
 ///
-/// `WriteError` 是 `#[non_exhaustive]`：兜底归 500，不静默降级成 400。
+/// **4xx 也不回显绝对路径**（P1-17 口径）：路径只进服务端 stderr，响应体给
+/// 文件名——足够用户识别是哪份预设文件被外部改动了，又不把磁盘布局经 API 泄露。
+/// `LockBusy` 更严格：正文连文件名都不带，固定文案（架构 §3.1 约束 A）。
+///
+/// `WriteError` 为 `#[non_exhaustive]`：未登记变体由分类表**留声**兜底
+/// （eprintln 警告 + 500），不静默降级成 400。
 fn write_error_resp(e: WriteError) -> Resp {
-    match e {
-        WriteError::Conflict { path, .. } => Resp::Json(
-            409,
-            err(
-                "write_conflict",
-                format!("写入冲突：{} 已被外部修改，未覆盖。请重试", path.display()),
-            ),
-        ),
+    // 状态码与 kind 查单一分类表（P1-11）；消息逐臂构建且**一律脱敏**——
+    // 表的 `cli_msg_with_path` 只授权 CLI/stderr 通道带绝对路径，HTTP 响应体
+    // 永远不含目录段（P1-17；文件名可留，供用户识别是哪份预设）。
+    let cls = crate::output::classify_write_error(&e, "preset_not_found", "io");
+    let message = match &e {
+        WriteError::Conflict { path, .. } => {
+            eprintln!(
+                "error: 预设文件已被外部修改（写入冲突，未覆盖）: {}",
+                path.display()
+            );
+            let name = path
+                .file_name()
+                .map(|s| s.to_string_lossy().into_owned())
+                .unwrap_or_else(|| "预设文件".into());
+            format!("写入冲突：{name} 已被外部修改，未覆盖。请重试")
+        }
+        // 锁争用（P0-1）：路径只进 stderr；HTTP 响应体用固定脱敏文案 ——
+        // 不得照抄 Conflict 的形状（那会在 LockBusy 上新开一处路径泄漏）。
+        WriteError::LockBusy { path } => {
+            eprintln!(
+                "error: 预设文件正被另一个 nctool 进程写入（未改动）: {}",
+                path.display()
+            );
+            "预设文件正被另一个 nctool 进程写入，请稍后重试".to_string()
+        }
         WriteError::PathEscape { rel, reason } => {
             if reason.contains("已存在") {
-                Resp::Json(409, err("name_conflict", format!("{reason}：{rel}")))
+                format!("{reason}：{rel}")
             } else {
-                Resp::Json(
-                    400,
-                    err("bad_request", format!("预设名非法：{rel}（{reason}）")),
-                )
+                format!("预设名非法：{rel}（{reason}）")
             }
         }
         WriteError::ReadOnly { path } => {
             eprintln!("error: 预设文件只读或无写入权限: {}", path.display());
-            Resp::Json(500, err("internal", "目标文件只读或无写入权限"))
+            "目标文件只读或无写入权限".to_string()
         }
         // "预设不存在"：调用方问题，404（**不是** 500 —— 早期因为它被塞进
         // `Corrupt` 分支而报成服务端内部错误）
-        WriteError::NotFound(m) => Resp::Json(404, err("preset_not_found", m)),
+        WriteError::NotFound(m) => m.clone(),
         WriteError::Corrupt(m) => {
             eprintln!("error: 预设文件损坏: {m}");
-            Resp::Json(500, err("internal", "预设文件内容损坏，详情见服务终端输出"))
+            "预设文件内容损坏，详情见服务终端输出".to_string()
+        }
+        // 行/列/字面量足够定位；路径只进 stderr（表 flag=false，HTTP 不带）
+        WriteError::NumUnderflow {
+            literal,
+            line,
+            column,
+            path,
+        } => {
+            eprintln!("error: 预设文件下溢: {}", path.display());
+            format!(
+                "第 {line} 行第 {column} 列：数值 yaml:{literal} 低于 f64 最小可表示正数\
+                 （会被静默变 0，G-code 将产出错误坐标）。请改用可表示的数值。"
+            )
         }
         WriteError::Io(e) => {
             eprintln!("error: 预设文件读写失败: {e}");
-            Resp::Json(500, err("internal", "预设文件读写失败"))
+            "预设文件读写失败".to_string()
         }
-        // `#[non_exhaustive]`：新增变体一律归 500（服务端问题），不猜 400。
-        _ => Resp::Json(500, err("internal", "预设文件读写失败")),
-    }
+        // `#[non_exhaustive]`：未登记变体由 classify 留声警告，HTTP 归 500
+        _ => "预设文件读写失败".to_string(),
+    };
+    Resp::Json(cls.http_status, err(cls.http_kind, message))
 }
 
 // ---------------------------------------------------------------------------
@@ -1385,6 +1860,89 @@ mod tests {
         // curl 等不带浏览器专属头——本服务刻意保留"命令行直接调 API"的用法
         assert!(cross_site_guard(&[], &origins()).is_none());
         assert!(cross_site_guard(&[("user-agent", "curl/8.0")], &origins()).is_none());
+    }
+
+    #[test]
+    fn host_guard_allows_loopback_hosts() {
+        for host in [
+            "localhost",
+            "localhost:8787",
+            "LOCALHOST:8787",
+            "127.0.0.1",
+            "127.0.0.1:8787",
+            "127.0.0.53:8787", // 回环网段整体（is_loopback），非精确 127.0.0.1
+            "[::1]",
+            "[::1]:8787",
+            "::1",
+        ] {
+            assert!(
+                host_guard(&[("host", host)]).is_none(),
+                "回环 Host 应放行: {host}"
+            );
+        }
+    }
+
+    #[test]
+    fn host_guard_rejects_rebinding_hosts() {
+        // DNS rebinding：浏览器按地址栏主机名填 Host，同源 GET 不带 Origin，
+        // cross_site_guard 对它完全无感——Host 是唯一能拦住的凭据。
+        for host in [
+            "attacker.example",
+            "attacker.example:8787",
+            "evil.local:8787",
+            "0.0.0.0:8787",
+            "192.168.1.10:8787",
+            "[2001:db8::1]:8787",
+            "",
+            " ",
+            "localhost.evil.example:8787", // 后缀伪装
+            "127.0.0.1.evil.example:8787",
+        ] {
+            let Some(Resp::Json(status, payload)) = host_guard(&[("host", host)]) else {
+                panic!("非回环 Host 应被拒绝: {host:?}");
+            };
+            assert_eq!(status, 403, "Host: {host:?}");
+            assert_eq!(payload["error"]["kind"], "forbidden_host");
+        }
+    }
+
+    #[test]
+    fn host_guard_missing_host_is_allowed_but_case_insensitive() {
+        // HTTP/1.0 / curl 显式去头：缺失放行（浏览器在 HTTP/1.1 下必然带 Host）
+        assert!(host_guard(&[]).is_none());
+        assert!(host_guard(&[("user-agent", "curl/8.0")]).is_none());
+        // 头名大小写不敏感
+        assert!(host_guard(&[("HOST", "localhost:8787")]).is_none());
+        assert!(host_guard(&[("Host", "evil.example")]).is_some());
+    }
+
+    #[test]
+    fn api_machine_rejects_non_string_instead_of_silent_generic() {
+        let ctx = test_ctx();
+        // 类型错误必须硬 400：静默回落 generic 会产出机床参数错的 G-code
+        let Err(Resp::Json(status, payload)) =
+            api_machine(&ctx, &serde_json::json!({ "machine": 123 }))
+        else {
+            panic!("machine 非字符串应被拒绝");
+        };
+        assert_eq!(status, 400);
+        assert_eq!(payload["error"]["kind"], "bad_request");
+        // bool / 数组 / 对象同样拒绝
+        for bad in [
+            serde_json::json!(true),
+            serde_json::json!(["wfl_m65"]),
+            serde_json::json!({"id": "generic"}),
+        ] {
+            let v = serde_json::json!({ "machine": bad });
+            assert!(api_machine(&ctx, &v).is_err(), "machine={bad} 应被拒绝");
+        }
+        // 键缺失 → 默认机床（Ctx::for_test 无配置 → generic）
+        let m = api_machine(&ctx, &serde_json::json!({})).expect("缺失应回落默认机床");
+        assert_eq!(m.id, "generic");
+        // 显式字符串照常解析
+        let m = api_machine(&ctx, &serde_json::json!({ "machine": "wfl_m65" }))
+            .expect("已知机床应解析成功");
+        assert_eq!(m.id, "wfl_m65");
     }
 
     #[test]
@@ -1565,6 +2123,36 @@ mod tests {
         assert_eq!(payload["error"]["kind"], "num_underflow", "{payload}");
     }
 
+    /// 非法预设名在**解析模板/参数之前**被早校验拒绝：400 / bad_request，
+    /// kind 与 core `upsert` → `write_error_resp` 的 PathEscape 分支一致，
+    /// 且完全不触碰磁盘（含控制字符名，防 `GET /api/presets` 回显注入）。
+    #[test]
+    fn presets_save_rejects_illegal_name() {
+        let env = preset_endpoint_test("save_bad_name");
+        let ctx = env.ctx();
+        // (输入, 期望理由片段)：与 `validate_asset_name` 的拒绝理由同源。
+        // 请求体经 `serde_json` 序列化，控制字符会被转义为 JSON 转义序列——
+        // 否则**原始**控制字符直接违反 JSON 字符串语法，拦在解析层而非名字校验层。
+        for (bad, why) in [("../evil", "路径分隔符"), ("p\u{7}1", "控制字符")] {
+            let body = serde_json::to_vec(&serde_json::json!({
+                "name": bad, "template": "t.j2", "params": {"x": 1.0}, "force": false,
+            }))
+            .unwrap();
+            let Resp::Json(status, payload) = route(&ctx, "POST", "/api/presets", "", &body) else {
+                panic!("应返回 JSON")
+            };
+            assert_eq!(status, 400, "bad={bad} {payload}");
+            assert_eq!(payload["error"]["kind"], "bad_request", "bad={bad}");
+            let msg = payload["error"]["message"].as_str().unwrap_or_default();
+            assert!(msg.contains("预设名非法"), "bad={bad} {payload}");
+            assert!(msg.contains(why), "应说明拒绝理由：{payload}");
+        }
+        assert!(
+            !nctool_core::asset::default_preset_path().exists(),
+            "非法名不得落盘"
+        );
+    }
+
     /// GET 空文件：合法返回空列表，不是错误。
     #[test]
     fn presets_list_empty_is_ok() {
@@ -1612,6 +2200,103 @@ mod tests {
         assert_eq!(one["stale"], false);
         assert!(one["staleParams"].is_array());
         assert!(one["missingRequired"].is_array());
+    }
+
+    /// 列表项**必须**带 `params` 取值（此前只回 `paramCount`）。
+    ///
+    /// 回归背景：`GET /api/presets` 曾只回 `paramCount` 不回 `params`，而 Web UI
+    /// 的 `loadPreset` 早已按 `p.params` 取值 —— 于是点预设 chip 时参数被静默清空、
+    /// 却提示"已载入预设"（本项目最忌讳的静默错误）。本测试钉住字段存在且取值正确。
+    #[test]
+    fn presets_list_includes_params() {
+        let env = preset_endpoint_test("list_params");
+        let ctx = env.ctx();
+        let body = env.body("p1", r#"{"x":21,"y":15}"#, false);
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/presets", "", body.as_bytes())
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "{payload}");
+
+        let Resp::Json(status, payload) = route(&ctx, "GET", "/api/presets", "", &[]) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200);
+        let one = &payload["data"]["presets"][0];
+        let params = one
+            .get("params")
+            .unwrap_or_else(|| panic!("列表项应含 params 字段: {one}"));
+        assert!(params.is_object(), "params 应为扁平对象: {params}");
+        assert_eq!(params["x"], serde_json::json!(21.0), "x 取值: {params}");
+        assert_eq!(params["y"], serde_json::json!(15.0), "y 取值: {params}");
+        assert_eq!(
+            params.as_object().unwrap().len(),
+            2,
+            "params 项数应与 paramCount 一致: {params}"
+        );
+    }
+
+    /// **往返约束**：列表里拿到的 `params` **原样**回喂 `POST /api/presets` 必须成功。
+    ///
+    /// 这条是防"形态不一致"的关键测试：`ParameterSet` 的 `Serialize` 是
+    /// `{"values":{...}}` 包裹形态、`ParamValue` 是带标签形态（`{"type":..,"value":..}`），
+    /// 二者都与 `presets_save` 侧 `parameter_set_from_json` 期望的**扁平**形态不同。
+    /// 若列表误用 derive 的默认形态，本测试会以 `bad_request`（"不支持对象类型"）失败。
+    #[test]
+    fn presets_list_params_round_trip() {
+        let env = preset_endpoint_test("round_trip");
+        let ctx = env.ctx();
+        // ① 存一个源预设
+        let body = env.body("src", r#"{"x":21,"y":15}"#, false);
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/presets", "", body.as_bytes())
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "{payload}");
+
+        // ② 从列表取回 params（**原样**）
+        let Resp::Json(_, payload) = route(&ctx, "GET", "/api/presets", "", &[]) else {
+            panic!("应返回 JSON")
+        };
+        let listed = payload["data"]["presets"][0]["params"].clone();
+        assert!(listed.is_object(), "列表项 params 应为对象: {listed}");
+
+        // ③ 把列表里的 params 原样作为 POST /api/presets 的 params 再存一次（换 name）
+        let save_body = json_body(&serde_json::json!({
+            "name": "copy",
+            "template": "t.j2",
+            "params": listed,
+            "force": false,
+        }));
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/presets", "", &save_body)
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(
+            status, 200,
+            "列表 params 应能原样回喂保存（往返约束）: {payload}"
+        );
+        assert_eq!(payload["data"]["name"], "copy");
+        assert_eq!(payload["data"]["paramCount"], 2, "回喂后参数个数应与源一致");
+
+        // ④ 再列表：两个预设的 params 必须逐字段一致（值未被形态转换破坏）
+        let Resp::Json(_, payload) = route(&ctx, "GET", "/api/presets", "", &[]) else {
+            panic!("应返回 JSON")
+        };
+        let items = payload["data"]["presets"].as_array().unwrap();
+        assert_eq!(items.len(), 2);
+        let params_of = |n: &str| {
+            items
+                .iter()
+                .find(|p| p["name"] == n)
+                .unwrap_or_else(|| panic!("缺少预设 {n}"))["params"]
+                .clone()
+        };
+        assert_eq!(
+            params_of("src"),
+            params_of("copy"),
+            "往返后 params 应逐字段一致"
+        );
     }
 
     /// 未带 force 的同名保存 → 409 + `name_conflict`（不静默覆盖）。
@@ -1749,13 +2434,65 @@ mod tests {
             panic!("应返回 JSON")
         };
         assert_ne!(status, 200, "预设文件落在模板根内应被拒");
+        let msg = payload["error"]["message"].as_str().unwrap();
+        assert!(msg.contains("不得落在模板目录内"), "{payload}");
+        // P1-17 口径：这条 reason 会被原样回显进 400 响应体，不得带绝对路径
         assert!(
-            payload["error"]["message"]
-                .as_str()
-                .unwrap()
-                .contains("不得落在模板目录内"),
-            "{payload}"
+            !msg.contains(&env.work.display().to_string()),
+            "400 响应体不得回显绝对路径：{msg}"
         );
+    }
+
+    /// P1-9（cli-review P1-3）：三个预设端点的**成功**响应体不得回显含用户名
+    /// 的绝对路径。`path` 统一 `~/...` 脱敏形态并以 `pathRedacted: true` 明示；
+    /// 测试环境下 `USERPROFILE` 指向临时工作目录，任何 `nctool_apitest_` 残留
+    /// 即代表目录部分泄漏。
+    #[test]
+    fn preset_success_responses_redact_absolute_path() {
+        let env = preset_endpoint_test("p19");
+        let ctx = env.ctx();
+        let assert_redacted = |payload: &serde_json::Value, what: &str| {
+            let text = payload.to_string();
+            let p = payload["data"]["path"]
+                .as_str()
+                .unwrap_or_else(|| panic!("{what} 缺 data.path: {text}"));
+            assert_eq!(payload["data"]["pathRedacted"], true, "{what}: {text}");
+            assert!(
+                p.starts_with("~/") || !p.contains('/'),
+                "{what} 应为 ~/ 形态或文件名兜底：{p}"
+            );
+            assert!(!p.contains('\\'), "{what} 不得含反斜杠：{p}");
+            assert!(!p.contains(':'), "{what} 不得含盘符：{p}");
+            assert!(
+                !text.contains("nctool_apitest_"),
+                "{what} 不得回显工作目录（= 含用户名的绝对路径）：{text}"
+            );
+        };
+
+        // POST /api/presets（保存）
+        let body = env.body("p19", r#"{"x":21.0,"y":15.0}"#, false);
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/presets", "", body.as_bytes())
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "{payload}");
+        assert_redacted(&payload, "save");
+
+        // GET /api/presets（列表）
+        let Resp::Json(status, payload) = route(&ctx, "GET", "/api/presets", "", &[]) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "{payload}");
+        assert_redacted(&payload, "list");
+
+        // POST /api/presets/delete（删除）
+        let body = br#"{"name":"p19"}"#;
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/presets/delete", "", body)
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "{payload}");
+        assert_redacted(&payload, "delete");
     }
 
     /// 坏文件降级：只读命令给警告 + 空列表，**不是** 500（D13）。
@@ -1796,6 +2533,18 @@ mod tests {
         assert_eq!(status, 200);
         assert_eq!(payload["ok"], true);
         assert_eq!(payload["data"]["status"], "ok");
+        // P1-4 配套②：内置模板缺失的结构化出口（纯新增；正常恒为 []）
+        assert!(
+            payload["data"]["builtinWarnings"].is_array(),
+            "builtinWarnings 应恒为数组: {payload}"
+        );
+        assert_eq!(
+            payload["data"]["builtinWarnings"]
+                .as_array()
+                .map(|a| a.len()),
+            Some(0),
+            "内置模板应全部安装成功: {payload}"
+        );
     }
 
     // ---- POST /api/part/generate ----
@@ -2496,6 +3245,42 @@ mod tests {
         }
     }
 
+    /// P0-3（cli-review P0-1）回归：含绝对路径的内部错误经 `/api/validate`、
+    /// `/api/render` 回传时，响应体必须是泛化文案——路径详情只进 stderr。
+    /// 最典型的路径载体是 `build_registry` 的 `模板目录不存在: <绝对路径>`，
+    /// 它在 `registered_template` 处经 `internal_error` 落地为 500；
+    /// `validate`/`render` 里 `registry().validate()` 的 `Err` 分支（此前
+    /// `err("registry", e.to_string())` 直接回传）已改为同一口径。
+    #[test]
+    fn http_error_bodies_never_contain_absolute_paths() {
+        let mut ctx = test_ctx();
+        let missing =
+            std::env::temp_dir().join(format!("nctool_p03_missing_{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&missing);
+        assert!(!missing.exists(), "测试前提：目录不存在");
+        ctx.template_dir = Some(missing.clone());
+        let marker = missing
+            .file_name()
+            .map(|n| n.to_string_lossy().into_owned())
+            .expect("temp_dir 应有最后一段");
+        for path in ["/api/validate", "/api/render"] {
+            let body = br#"{"template":"drill_cycle","params":{}}"#;
+            let Resp::Json(status, payload) = route(&ctx, "POST", path, "", body) else {
+                panic!("{path} 应返回 JSON")
+            };
+            assert_eq!(status, 500, "{path}: {payload}");
+            assert_eq!(payload["error"]["kind"], "internal", "{path}: {payload}");
+            let text = payload.to_string();
+            assert!(!text.contains(&marker), "{path} 不得回显服务器路径: {text}");
+            assert!(!text.contains(".j2"), "{path} 不得回显 .j2: {text}");
+            // 裸 `C:\` 与 JSON 转义后的 `C:\\` 都要堵死
+            assert!(
+                !text.contains(":\\") && !text.contains("\\\\"),
+                "{path} 不得回显 Windows 路径: {text}"
+            );
+        }
+    }
+
     #[test]
     fn render_unknown_machine_is_404() {
         let body = br#"{"template":"drill_cycle","params":{"x":1,"y":1,"depth":-1,"feed":100},"machine":"no_such_machine"}"#;
@@ -2839,5 +3624,597 @@ mod tests {
         let q = parse_query("category=%E9%93%A3%E5%89%8A&x=1");
         assert_eq!(q[0], ("category".to_string(), "铣削".to_string()));
         assert_eq!(q[1], ("x".to_string(), "1".to_string()));
+    }
+
+    // =======================================================================
+    // 覆盖率补测（P1-2c）
+    //
+    // 背景：`cli` 库化（lib + bin）后 `server.rs` 成为**公开 API 面**被完整插桩，
+    // 一批此前在 bin 目标里被死代码消除、从未进过分母的**生产**分支（错误路径、
+    // 边界、`serve_requests` 的真实 HTTP 分支）现在需要覆盖。以下用例全部沿用
+    // 本文件既有的测试风格（直接调 `route()` / 进程内真实 HTTP），不引入新依赖。
+    // =======================================================================
+
+    /// 写内核错误 → HTTP 响应的**全部**分支（含 `#[non_exhaustive]` 兜底语义）。
+    ///
+    /// 状态码按语义而非一律 400：乐观锁冲突 409、名称非法 400、只读/IO/损坏 500、
+    /// 条目不存在 404。这些分支此前只在真实写盘异常时才走到，常规用例碰不到。
+    #[test]
+    fn write_error_resp_maps_every_variant() {
+        let Resp::Json(s, p) = write_error_resp(WriteError::Conflict {
+            path: PathBuf::from("C:/secret/dir/presets.yaml"),
+            expected: None,
+            actual: None,
+        }) else {
+            panic!("应为 JSON")
+        };
+        assert_eq!(s, 409, "乐观锁冲突应可重试（409）");
+        assert_eq!(p["error"]["kind"], "write_conflict");
+        // P1-17 口径：4xx 响应体也不回显绝对路径——保留文件名供识别，目录段不得出现
+        let msg = p["error"]["message"].as_str().unwrap_or_default();
+        assert!(msg.contains("presets.yaml"), "应保留文件名：{msg}");
+        assert!(!msg.contains("secret"), "不得回显绝对路径：{msg}");
+
+        // LockBusy（P0-1 锁争用）：同 Conflict 归 409 write_conflict，但正文
+        // 更严格 —— 连文件名都不带，固定脱敏文案（架构 §3.1 约束 A：绝不照抄
+        // Conflict 的 path 形状，路径只进服务端 stderr）
+        let Resp::Json(s, p) = write_error_resp(WriteError::LockBusy {
+            path: PathBuf::from("C:/secret/dir/presets.yaml"),
+        }) else {
+            panic!("应为 JSON")
+        };
+        assert_eq!(s, 409, "锁争用应可重试（409）");
+        assert_eq!(p["error"]["kind"], "write_conflict");
+        let msg = p["error"]["message"].as_str().unwrap_or_default();
+        assert!(msg.contains("另一个 nctool 进程"), "应说明锁争用：{msg}");
+        assert!(msg.contains("稍后重试"), "应给出重试指引：{msg}");
+        assert!(!msg.contains("secret"), "不得回显绝对路径：{msg}");
+        assert!(!msg.contains("presets.yaml"), "锁争用正文不带路径段：{msg}");
+
+        // PathEscape：reason 含「已存在」→ 409 name_conflict
+        let Resp::Json(s, p) = write_error_resp(WriteError::PathEscape {
+            rel: "p1".into(),
+            reason: "同名预设已存在".into(),
+        }) else {
+            panic!("应为 JSON")
+        };
+        assert_eq!(s, 409);
+        assert_eq!(p["error"]["kind"], "name_conflict");
+
+        // PathEscape：其它原因 → 400 bad_request（调用方能改名重试）
+        let Resp::Json(s, p) = write_error_resp(WriteError::PathEscape {
+            rel: "../evil".into(),
+            reason: "路径越界".into(),
+        }) else {
+            panic!("应为 JSON")
+        };
+        assert_eq!(s, 400);
+        assert_eq!(p["error"]["kind"], "bad_request");
+
+        // ReadOnly → 500 internal（本地环境问题，调用方无从修正）
+        let Resp::Json(s, p) = write_error_resp(WriteError::ReadOnly {
+            path: PathBuf::from("presets.yaml"),
+        }) else {
+            panic!("应为 JSON")
+        };
+        assert_eq!(s, 500);
+        assert_eq!(p["error"]["kind"], "internal");
+
+        // NotFound → 404 preset_not_found（**不是** 500：这是调用方问题）
+        let Resp::Json(s, p) = write_error_resp(WriteError::NotFound("没有这个预设".into()))
+        else {
+            panic!("应为 JSON")
+        };
+        assert_eq!(s, 404);
+        assert_eq!(p["error"]["kind"], "preset_not_found");
+
+        // Corrupt / Io → 500 internal（正文不回显细节）
+        let Resp::Json(s, p) = write_error_resp(WriteError::Corrupt("内容坏了".into())) else {
+            panic!("应为 JSON")
+        };
+        assert_eq!(s, 500);
+        assert_eq!(p["error"]["kind"], "internal");
+
+        let Resp::Json(s, p) = write_error_resp(WriteError::Io(std::io::Error::other("磁盘错误")))
+        else {
+            panic!("应为 JSON")
+        };
+        assert_eq!(s, 500);
+        assert_eq!(p["error"]["kind"], "internal");
+
+        // NumUnderflow → 400 num_underflow（P1-11 前掉进 `_` 被报成 500）；
+        // 正文给行/列/字面量，**不**带文件路径（表 cli_msg_with_path=false）
+        let Resp::Json(s, p) = write_error_resp(WriteError::NumUnderflow {
+            path: PathBuf::from("C:/secret/presets.yaml"),
+            literal: "1e-400".into(),
+            line: 7,
+            column: 12,
+        }) else {
+            panic!("应为 JSON")
+        };
+        assert_eq!(s, 400, "{p}");
+        assert_eq!(p["error"]["kind"], "num_underflow", "{p}");
+        let msg = p["error"]["message"].as_str().unwrap_or_default();
+        assert!(msg.contains("1e-400"), "应带字面量：{msg}");
+        assert!(!msg.contains("secret"), "不得回显绝对路径：{msg}");
+    }
+
+    /// `presets_save` / `presets_delete` / `inspect` 的**请求体校验**分支。
+    ///
+    /// 三者的共同契约：非法 JSON / 缺字段 / 空字段都要 400 且点名缺哪个字段 ——
+    /// 若某个端点漏了这道校验，它会把 `""` 当名字/模板名去查注册表 → 报 404 而非
+    /// 400，前端拿到的错误分类就错了。
+    #[test]
+    fn post_endpoints_reject_malformed_bodies() {
+        let env = preset_endpoint_test("badbody");
+        let ctx = env.ctx();
+
+        // 非法 JSON：三个 POST 端点各自报 bad_request
+        for path in ["/api/presets", "/api/presets/delete", "/api/inspect"] {
+            let Resp::Json(s, p) = route(&ctx, "POST", path, "", b"{not json") else {
+                panic!("{path} 应返回 JSON")
+            };
+            assert_eq!(s, 400, "{path}: {p}");
+            assert_eq!(p["error"]["kind"], "bad_request", "{path}: {p}");
+            assert!(
+                p["error"]["message"].as_str().unwrap().contains("JSON"),
+                "{path} 应说明请求体不是合法 JSON: {p}"
+            );
+        }
+
+        // 缺 name（presets_save / presets_delete）
+        for path in ["/api/presets", "/api/presets/delete"] {
+            let Resp::Json(s, p) = route(&ctx, "POST", path, "", br#"{"template":"t.j2"}"#) else {
+                panic!("{path} 应返回 JSON")
+            };
+            assert_eq!(s, 400, "{path}: {p}");
+            assert!(
+                p["error"]["message"].as_str().unwrap().contains("name"),
+                "{path} 应点名缺 name: {p}"
+            );
+        }
+
+        // presets_save：缺 template
+        let Resp::Json(s, p) = route(&ctx, "POST", "/api/presets", "", br#"{"name":"n"}"#) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(s, 400, "{p}");
+        assert!(
+            p["error"]["message"].as_str().unwrap().contains("template"),
+            "应点名缺 template: {p}"
+        );
+
+        // inspect：空 template 视同缺（否则会拿 "" 去查注册表 → 404）
+        let Resp::Json(s, p) = route(&ctx, "POST", "/api/inspect", "", br#"{"template":""}"#)
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(s, 400, "{p}");
+        assert_eq!(p["error"]["kind"], "bad_request");
+    }
+
+    /// `part_generate` 的请求体错误：形状不合法 → **反序列化失败**点名（400，不是 500）；
+    /// 形状合法但 `ops` 为空 → **语义错误**（400 `InvalidSpec`）。
+    ///
+    /// 两者都必须是 400：形状错是调用方发错了结构，语义错是调用方发了空零件 ——
+    /// 都是调用方能自己修正的问题，不该报 500（那会让前端显示"服务端故障"）。
+    #[test]
+    fn part_generate_bad_part_shape_is_400() {
+        let ctx = test_ctx();
+        // ① 数字 / 字符串：`serde_json::from_value::<PartSpec>` 失败
+        for body in [r#"{"part":123}"#, r#"{"part":"x"}"#] {
+            let Resp::Json(status, payload) =
+                route(&ctx, "POST", "/api/part/generate", "", body.as_bytes())
+            else {
+                panic!("应返回 JSON")
+            };
+            assert_eq!(status, 400, "body={body}: {payload}");
+            assert_eq!(payload["error"]["kind"], "bad_request", "body={body}");
+            assert!(
+                payload["error"]["message"]
+                    .as_str()
+                    .unwrap()
+                    .contains("零件定义"),
+                "应说明是零件定义解析失败: {payload}"
+            );
+        }
+
+        // ② `[]` 实测可反序列化成"空 ops"，属**语义**错误（InvalidSpec），仍是 400
+        let Resp::Json(status, payload) =
+            route(&ctx, "POST", "/api/part/generate", "", br#"{"part":[]}"#)
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 400, "{payload}");
+        assert_eq!(payload["error"]["kind"], "bad_request", "{payload}");
+        assert!(
+            payload["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("工序"),
+            "空零件应点名缺少工序: {payload}"
+        );
+    }
+
+    /// `render` 的**宽松分支**：`lenient: true` 时走 `generate_lenient_outcome`。
+    ///
+    /// 严格/宽松是两条不同的路径：严格先做校验、有错就 `blocked:true` 拦下；宽松
+    /// **跳过校验拦截**、直接尝试生成（`map(|(o, _report)| o)` 丢掉报告）。但
+    /// 「跳过校验」≠「保证成功」—— 生成阶段遇到不可用的参数（缺失 / 类型错）仍会
+    /// 报错（400 `render`）。此前只测了严格分支，宽松分支的产出路径从未执行。
+    #[test]
+    fn render_lenient_uses_lenient_outcome() {
+        // ① 合法参数 + 宽松 → 正常产出（覆盖 `if lenient { generate_lenient_outcome(..) }`）
+        let body = br#"{"template":"drill_cycle","params":{"x":21,"y":15,"depth":-10,"feed":100},"options":{"lenient":true}}"#;
+        let Resp::Json(status, payload) = route(&test_ctx(), "POST", "/api/render", "", body)
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "{payload}");
+        assert_eq!(payload["data"]["blocked"], false);
+        assert!(
+            payload["data"]["output"]
+                .as_str()
+                .is_some_and(|s| s.contains("X21.000")),
+            "宽松模式同样要产出 G-code: {payload}"
+        );
+
+        // ② 缺参数 + 宽松 → 跳过校验拦截，但生成仍失败 → 400 render（**不是** blocked）
+        let lenient_missing =
+            br#"{"template":"drill_cycle","params":{},"options":{"lenient":true}}"#;
+        let Resp::Json(status, payload) =
+            route(&test_ctx(), "POST", "/api/render", "", lenient_missing)
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 400, "宽松模式不保证生成成功: {payload}");
+        assert_eq!(payload["error"]["kind"], "render", "{payload}");
+
+        // ③ 对照：同样缺参数但**不**宽松 → 200 + blocked:true（走校验拦截路径）
+        let strict_missing = br#"{"template":"drill_cycle","params":{}}"#;
+        let Resp::Json(status, payload) =
+            route(&test_ctx(), "POST", "/api/render", "", strict_missing)
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "{payload}");
+        assert_eq!(payload["data"]["blocked"], true, "{payload}");
+    }
+
+    /// `serve_requests` 的真实 HTTP 分支：内嵌页面（`Resp::Html`）、query 串、
+    /// 跨站拦截（403）、超大请求体（413）。
+    ///
+    /// 既有用例只发了一条 `GET /health`。这里把**同一进程内**的请求循环按分支补齐，
+    /// 用 `Server::unblock()` 让它干净退出（llvm-cov 只在进程干净退出时落盘数据）。
+    ///
+    /// 两处**必须**这么写，否则测试会假红或直接挂死（都是实测踩过的坑）：
+    ///
+    /// 1. **按原始字节读**，不用 `read_to_string`：`GET /` 的响应体走
+    ///    `Transfer-Encoding: chunked`，分块边界可能落在多字节 UTF-8 字符中间，
+    ///    于是 `read_to_string` 判定为非法 UTF-8、**丢弃整个缓冲区**（返回 Err 且
+    ///    buf 为空）—— 断言就会看到"空响应"。改读 `Vec<u8>` 再 lossy 解码即可。
+    /// 2. **断言移到作用域之外 + `unblock` 兜底守卫**：若在 `thread::scope` 内断言
+    ///    失败，scope 会先 join 那个仍阻塞在 `incoming_requests()` 上的服务线程，
+    ///    而 `unblock()` 还没被调用 → 整个测试进程挂死（实测挂了 24 分钟）。
+    #[test]
+    fn serve_requests_covers_html_query_guard_and_limits() {
+        use std::io::{Read, Write};
+        use std::net::TcpStream;
+        use std::time::Duration;
+
+        // 无论后面怎样退出（含 panic），都保证 unblock，避免 scope 在 join 时挂死。
+        struct UnblockOnDrop<'a>(&'a tiny_http::Server);
+        impl Drop for UnblockOnDrop<'_> {
+            fn drop(&mut self) {
+                self.0.unblock();
+            }
+        }
+
+        let (srv, actual) = bind("127.0.0.1:0".parse().unwrap()).expect("绑定回环应成功");
+        let port = actual.port();
+
+        // 发一条原始 HTTP 请求并读回**全部字节**（直到对端关闭或读超时）。不 panic：
+        // 连接/读写失败时回一个带前缀的说明串，交给外层断言报错。
+        let send = |raw: &str| -> String {
+            let mut buf: Vec<u8> = Vec::new();
+            match TcpStream::connect_timeout(
+                &format!("127.0.0.1:{port}").parse().unwrap(),
+                Duration::from_millis(1000),
+            ) {
+                Ok(mut stream) => {
+                    let _ = stream.write_all(raw.as_bytes());
+                    let _ = stream.set_read_timeout(Some(Duration::from_millis(2000)));
+                    let mut chunk = [0u8; 8192];
+                    loop {
+                        match stream.read(&mut chunk) {
+                            Ok(0) | Err(_) => break,
+                            Ok(n) => buf.extend_from_slice(&chunk[..n]),
+                        }
+                    }
+                }
+                Err(e) => return format!("<connect error: {e}>"),
+            }
+            String::from_utf8_lossy(&buf).into_owned()
+        };
+
+        let (html, idx, q, cross, too_large, joined) = std::thread::scope(|scope| {
+            let srv_ref = &srv;
+            let t = scope.spawn(move || serve_requests(srv_ref, actual, &Ctx::for_test()));
+            let _guard = UnblockOnDrop(&srv);
+
+            // ① GET / → 内嵌前端（`Resp::Html` 分支 + 安全响应头）
+            let html = send("GET / HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+            // ② GET /index.html → 同一分支
+            let idx =
+                send("GET /index.html HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n");
+            // ③ query 串（url.split_once('?') 的 Some 分支）
+            let q = send(
+                "GET /health?verbose=1 HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+            );
+            // ④ 跨站 Origin → 403（cross_site_guard 先于路由）
+            let cross = send(
+                "GET /api/templates HTTP/1.1\r\nHost: 127.0.0.1\r\nOrigin: http://evil.example\r\nConnection: close\r\n\r\n",
+            );
+            // ⑤ 请求体恰好超过 1 MiB → 413（Content-Length 与实际等长，避免半读死锁）
+            let n = MAX_BODY_BYTES + 1;
+            let body = "x".repeat(n);
+            let raw = format!(
+                "POST /api/validate HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: {n}\r\n\r\n{body}"
+            );
+            let too_large = send(&raw);
+
+            srv.unblock();
+            let joined = t.join();
+            (html, idx, q, cross, too_large, joined)
+        });
+
+        assert!(html.contains("HTTP/1.1 200"), "根路径应回内嵌页面: {html}");
+        assert!(
+            html.contains("Content-Security-Policy"),
+            "静态页面也要带安全头: {html}"
+        );
+        assert!(
+            idx.contains("HTTP/1.1 200"),
+            "index.html 应回内嵌页面: {idx}"
+        );
+        assert!(q.contains("\"status\":\"ok\""), "query 串应被正确切分: {q}");
+        assert!(cross.contains("403"), "跨站应被拒: {cross}");
+        assert!(cross.contains("forbidden_origin"), "{cross}");
+        assert!(too_large.contains("413"), "超大请求体应回 413: {too_large}");
+        assert!(too_large.contains("payload_too_large"), "{too_large}");
+        assert!(joined.is_ok(), "serve 应返回 Ok: {joined:?}");
+    }
+
+    // -----------------------------------------------------------------------
+    // P1-7 / P1-8：请求体读取的**错误归因**与**读超时**
+    // -----------------------------------------------------------------------
+
+    /// 发一条原始 HTTP 请求并读回全部响应字节。
+    ///
+    /// - `half_close = true`：写完 `body` 后 `shutdown(Write)`，让服务端读到 EOF。
+    ///   这是"半包"的形态，也是**唯一**能让服务端读操作确定性地返回的方式
+    ///   （不关就变成"挂着"，那是另一条用例）。
+    /// - `half_close = false`：保持连接，服务端靠 `Connection: close` 自行收尾。
+    fn raw_http(port: u16, head: &str, body: &[u8], half_close: bool) -> String {
+        use std::io::{Read, Write};
+        use std::net::{Shutdown, TcpStream};
+
+        let mut stream = TcpStream::connect_timeout(
+            &format!("127.0.0.1:{port}").parse().unwrap(),
+            Duration::from_millis(1000),
+        )
+        .expect("应能连上服务");
+        stream.write_all(head.as_bytes()).expect("写请求头");
+        if !body.is_empty() {
+            stream.write_all(body).expect("写请求体");
+        }
+        if half_close {
+            let _ = stream.shutdown(Shutdown::Write);
+        }
+        let _ = stream.set_read_timeout(Some(Duration::from_millis(3000)));
+        let mut buf = Vec::new();
+        let mut chunk = [0u8; 8192];
+        loop {
+            match stream.read(&mut chunk) {
+                Ok(0) | Err(_) => break,
+                Ok(n) => buf.extend_from_slice(&chunk[..n]),
+            }
+        }
+        String::from_utf8_lossy(&buf).into_owned()
+    }
+
+    /// 起一个进程内服务，把 `f(port)` 的返回值与 `serve` 的返回值一起交回。
+    fn with_server<T>(timeout: Duration, f: impl FnOnce(u16) -> T) -> (T, Result<(), CliError>) {
+        let (srv, actual) = bind("127.0.0.1:0".parse().unwrap()).expect("绑定回环应成功");
+        let port = actual.port();
+        std::thread::scope(|scope| {
+            let srv_ref = &srv;
+            let t = scope.spawn(move || {
+                serve_requests_with_timeout(srv_ref, actual, &Ctx::for_test(), timeout)
+            });
+            let out = f(port);
+            srv.unblock();
+            let joined = t.join().expect("serve 线程应正常结束");
+            (out, joined)
+        })
+    }
+
+    /// P1-7：**半包请求体必须回 400，绝不能当完整请求交给 `route()`**。
+    ///
+    /// 声明 2000 字节、只发 16 字节后关掉写端。tiny_http 的 `EqualReader` 在底层
+    /// EOF 时返回 `Ok(0)`（**短读不报错**），所以只靠 `read_to_end` 的 `Err`
+    /// 抓不到这种请求 —— 修复前它会被原样交给 `route()`，用户看到的是
+    /// "模板不存在: {"template":"x"}"（把截断的 JSON 当成了模板名），
+    /// 排障方向完全错。
+    #[test]
+    fn truncated_body_is_rejected_with_400_not_routed() {
+        let (resp, joined) = with_server(BODY_READ_TIMEOUT, |port| {
+            raw_http(
+                port,
+                "POST /api/inspect HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: 2000\r\n\r\n",
+                br#"{"template":"x"}"#,
+                true,
+            )
+        });
+        assert!(joined.is_ok(), "serve 应返回 Ok: {joined:?}");
+        assert!(resp.contains("400"), "半包必须回 400: {resp}");
+        assert!(resp.contains("bad_request"), "{resp}");
+        assert!(
+            resp.contains("请求体不完整"),
+            "应明确说是请求体不完整（而不是让下游报模板不存在）: {resp}"
+        );
+        assert!(
+            !resp.contains("template_not_found"),
+            "截断的请求体不得被路由: {resp}"
+        );
+    }
+
+    /// P1-7：`Content-Length` 超限要在**读取之前**就拒（413）。
+    ///
+    /// 声明 8 MiB 却一个字节都不发、随即关掉写端。有预检 → 立刻 413；
+    /// 没有预检 → 走进读取路径，读到 0 字节后因长度对不上回 400
+    /// （修复前更是会拿空 body 去 `route()`）。断言 413 就能区分两者。
+    #[test]
+    fn declared_length_over_limit_is_rejected_before_reading() {
+        let declared = 8 * 1024 * 1024;
+        let (resp, joined) = with_server(BODY_READ_TIMEOUT, |port| {
+            raw_http(
+                port,
+                &format!(
+                    "POST /api/inspect HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: {declared}\r\n\r\n"
+                ),
+                b"",
+                true,
+            )
+        });
+        assert!(joined.is_ok(), "serve 应返回 Ok: {joined:?}");
+        assert!(resp.contains("413"), "声明超限应立刻 413: {resp}");
+        assert!(resp.contains("payload_too_large"), "{resp}");
+    }
+
+    /// P1-7 的反面守卫：**合法的大请求体（> 1024 字节）不能被新加的长度对账误伤**。
+    ///
+    /// 用尾部空白把 body 撑到 3000 字节（JSON 允许尾随空白，`serde_json` 照常解析），
+    /// `Content-Length` 与实际等长。这条走的是 tiny_http 的 `EqualReader` 惰性读
+    /// 分支（`content_length > 1024`），正是本次改动碰到的路径。
+    #[test]
+    fn legit_large_body_still_reaches_route() {
+        let mut body = br#"{"template":"definitely_not_a_template"}"#.to_vec();
+        body.extend(std::iter::repeat_n(b' ', 3000));
+        let declared = body.len();
+        assert!(declared > 1024, "本用例要覆盖惰性读分支，body 必须 > 1024");
+
+        let (resp, joined) = with_server(BODY_READ_TIMEOUT, move |port| {
+            raw_http(
+                port,
+                &format!(
+                    "POST /api/inspect HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\nContent-Length: {declared}\r\n\r\n"
+                ),
+                &body,
+                true,
+            )
+        });
+        assert!(joined.is_ok(), "serve 应返回 Ok: {joined:?}");
+        assert!(
+            resp.contains("template_not_found"),
+            "请求体应被完整读到并进入路由（预期 404 未知模板）: {resp}"
+        );
+        assert!(
+            !resp.contains("请求体不完整"),
+            "合法长度不得被判为半包: {resp}"
+        );
+    }
+
+    /// P1-8：一个"发一半就挂着"的连接**不得钉死**整个服务循环。
+    ///
+    /// `serve_requests` 是单条顺序循环，tiny_http 0.12 又没有读超时 —— 修复前
+    /// `read_to_end` 会永远阻塞，`nctool ui` 就此永久无响应。这里注入 300ms 超时，
+    /// 先挂一个半包连接，再在窗口内发一条正常请求：正常请求必须被服务。
+    ///
+    /// 修复前（无超时）本用例会**挂住**而不是失败 —— 所以它同时是"超时真的生效"
+    /// 的守卫，而不只是"没报错"。
+    #[test]
+    fn half_sent_body_does_not_pin_the_serve_loop() {
+        use std::io::Write;
+        use std::net::TcpStream;
+
+        let (resp, joined) = with_server(Duration::from_millis(300), |port| {
+            // ① 半包连接：声明 2000 字节、只发 3 字节，**不关连接**（读操作无限阻塞）
+            let mut stuck = TcpStream::connect_timeout(
+                &format!("127.0.0.1:{port}").parse().unwrap(),
+                Duration::from_millis(1000),
+            )
+            .expect("应能连上服务");
+            stuck
+                .write_all(b"POST /api/inspect HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2000\r\n\r\nabc")
+                .expect("写半包请求");
+            // 给服务端一点时间把 ① 排到队首（否则 ② 可能先被处理，用例就失去意义）
+            std::thread::sleep(Duration::from_millis(50));
+
+            // ② 正常请求：必须在超时窗口之后仍被服务（读超时 3s，足够覆盖 300ms 等待）
+            let resp = raw_http(
+                port,
+                "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+                b"",
+                true,
+            );
+
+            // 清场：关掉半包连接，被放弃的读线程读到 EOF 后退出并归还计数
+            drop(stuck);
+            resp
+        });
+        assert!(joined.is_ok(), "serve 应返回 Ok: {joined:?}");
+        assert!(
+            resp.contains("HTTP/1.1 200") && resp.contains("\"status\":\"ok\""),
+            "半包连接不得钉死服务循环，后续请求必须被正常处理: {resp}"
+        );
+    }
+
+    /// P1-8 的第二道闸：被放弃的读线程数达到上限后，新请求回 503 而不是继续赔线程。
+    ///
+    /// 用 100ms 超时堆满 `MAX_IN_FLIGHT_BODY_READERS` 个"发一半就挂"的连接
+    /// （循环会逐个超时放弃，共约 0.8s），第 9 个请求必须拿到 503。
+    /// 没有这道闸时，这个测试会拿到 200（服务照旧再赔一个线程）。
+    #[test]
+    fn too_many_abandoned_body_readers_yield_503() {
+        use std::io::Write;
+        use std::net::TcpStream;
+
+        let (resp, joined) = with_server(Duration::from_millis(100), |port| {
+            // 堆满：每个连接声明 2000 字节、只发 1 字节、不关连接
+            let mut stuck: Vec<TcpStream> = (0..MAX_IN_FLIGHT_BODY_READERS)
+                .map(|_| {
+                    let mut s = TcpStream::connect_timeout(
+                        &format!("127.0.0.1:{port}").parse().unwrap(),
+                        Duration::from_millis(1000),
+                    )
+                    .expect("应能连上服务");
+                    s.write_all(
+                        b"POST /api/inspect HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2000\r\n\r\nx",
+                    )
+                    .expect("写半包请求");
+                    s
+                })
+                .collect();
+
+            // 等循环逐个超时放弃（每个 100ms），留足余量
+            std::thread::sleep(Duration::from_millis(
+                100 * (MAX_IN_FLIGHT_BODY_READERS as u64 + 4),
+            ));
+
+            let resp = raw_http(
+                port,
+                "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+                b"",
+                true,
+            );
+            stuck.clear();
+            resp
+        });
+        assert!(joined.is_ok(), "serve 应返回 Ok: {joined:?}");
+        assert!(
+            resp.contains("503") && resp.contains("service_unavailable"),
+            "被放弃的读线程堆到上限后应回 503: {resp}"
+        );
     }
 }

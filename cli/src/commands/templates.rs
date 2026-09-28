@@ -6,7 +6,7 @@ use nctool_core::asset::{
     build_derived_source, last_component, manifest_append_entry, manifest_is_parseable,
     scan_stale_includes, sibling_rel_key, ManifestOutcome, TemplateWriter, WriteError, WriteKernel,
 };
-use nctool_core::manifest::{ResolvedMeta, TemplateManifest, MANIFEST_FILE};
+use nctool_core::manifest::{path_to_rel_key, ResolvedMeta, TemplateManifest, MANIFEST_FILE};
 use nctool_core::validate::{check_param_values, check_spec_consistency};
 use nctool_core::variables::VariableLibrary;
 use nctool_core::TemplateSource;
@@ -106,9 +106,12 @@ type ResolvedSource = (
     Vec<String>,
 );
 
-/// 返回 `(模板名, 源码, 参数规格, 系统变量)`；文件模板无规格 → `None`。
+/// 返回 `(模板名, 源码, 参数规格, 系统变量)`。
 /// 优先级与 `render`/`validate` 一致：**已注册模板名（内置/目录）→ 文件路径**，
 /// 保证"查看的源码"与"实际渲染的源码"是同一份。
+///
+/// 文件路径分支的规格**不再是 `None`**（P1-10）：此前它恒为 `None`，与
+/// [`specs_for_path`] 的口径不一致，调用方拿不到规格就只能当"无约束"处理。
 pub fn resolve_source(ctx: &Ctx, name_or_path: &str) -> Result<ResolvedSource, CliError> {
     // 1) 已注册模板（内置 / 目录）
     let gen = ctx.build_registry()?;
@@ -122,13 +125,20 @@ pub fn resolve_source(ctx: &Ctx, name_or_path: &str) -> Result<ResolvedSource, C
     }
     // 2) 文件路径 → 读源码（名称用文件名）
     if let Some(path) = ctx.find_template_file(name_or_path) {
-        let source = std::fs::read_to_string(&path)
-            .map_err(|e| CliError::new("io", format!("读取模板失败 {}: {e}", path.display())))?;
+        // 上限读取（P1-1）：路径模板此前是**无界**读，`templates inspect <GB 级日志>`
+        // 会一次性吃满内存，且报错指向后续莫名其妙的解析失败、指不到病因。
+        let source = crate::args::read_text_capped(&path, "模板")?;
         let name = path
             .file_name()
             .map(|n| n.to_string_lossy().to_string())
             .unwrap_or_else(|| name_or_path.to_string());
-        return Ok((name, source, None, gen.registry().system_vars().to_vec()));
+        let specs = specs_for_path(ctx, &path, &source);
+        return Ok((
+            name,
+            source,
+            Some(specs),
+            gen.registry().system_vars().to_vec(),
+        ));
     }
     Err(CliError::new(
         "template_not_found",
@@ -248,11 +258,11 @@ fn new(ctx: &Ctx, args: &TemplatesNewArgs) -> Result<(), CliError> {
     let specs = resolve_specs(&dir, &file_name, &source)?;
     run_l1_l2(&source, &file_name, &specs)?;
 
-    // 经写内核落盘：原子写（tmp + rename，无半成品）+ 不跟随符号链接。
-    // ⚠️ 重名检测仍是**写前快照比对**（`write_guarded(expect=None)` 先
-    // `read_snapshot` 再 `write_atomic`），**非** `O_EXCL` 原子创建——两个并发
-    // 同名 `new` 仍可能双双通过检查、后 rename 者静默覆盖；要真原子，`create`
-    // 需改走 `OpenOptions::create_new`。见设计 §6.7 / R-11。
+    // 经写内核落盘：原子写（tmp + rename，无半成品）+ **跨进程互斥锁**（P0-1）。
+    // 重名检测是**锁内**的写前快照比对：`write_guarded(expect=None)` 在持锁状态
+    // 下读快照 —— 并发同名 `new` 被串行化，后到者读到已存在 → `Conflict` →
+    // 归 `template_duplicate`(6)，**不再**可能双双通过、后 rename 者静默覆盖
+    // （O_EXCL 建议已由持锁解决，架构 §3.1 定稿说明）。
     match TemplateWriter::create(&dir, &file_name, &source) {
         Ok(_) => {}
         Err(WriteError::Conflict { .. }) => {
@@ -287,7 +297,7 @@ fn append_manifest_for_new(dir: &Path, file_name: &str, display_name: &str) {
         );
         return;
     }
-    let text = match std::fs::read_to_string(&path) {
+    let text = match crate::args::read_text_capped(&path, "清单文件") {
         Ok(t) => t,
         Err(e) => {
             eprintln!(
@@ -438,8 +448,7 @@ fn derive(ctx: &Ctx, args: &TemplatesDeriveArgs) -> Result<(), CliError> {
     validate_template_name(&args.new)?;
     let root = template_root(ctx)?;
     let (src_key, src_path) = locate_editable(ctx, &args.src)?;
-    let src_source = std::fs::read_to_string(&src_path)
-        .map_err(|e| CliError::new("io", format!("读取源模板失败 {}: {e}", src_path.display())))?;
+    let src_source = crate::args::read_text_capped(&src_path, "源模板")?;
 
     let new_source = build_derived_source(&src_source, &args.new, &src_key, !args.no_derive_note);
     let dst_key = sibling_rel_key(&src_key, &args.new);
@@ -545,9 +554,8 @@ fn locate_editable(ctx: &Ctx, name: &str) -> Result<(String, PathBuf), CliError>
 /// 写路径（同一套校验与乐观锁）。
 fn obtain_new_source(args: &TemplatesEditArgs, target: &Path) -> Result<String, CliError> {
     if let Some(f) = &args.from_file {
-        return std::fs::read_to_string(f).map_err(|e| {
-            CliError::new("io", format!("读取 --from-file 失败 {}: {e}", f.display()))
-        });
+        // 上限读取（P1-1）：`--from-file <GB 级日志>` 此前会一次性吃满内存
+        return crate::args::read_text_capped(f, "--from-file 文件");
     }
 
     let editor = args
@@ -563,8 +571,7 @@ fn obtain_new_source(args: &TemplatesEditArgs, target: &Path) -> Result<String, 
             )
         })?;
 
-    let current = std::fs::read_to_string(target)
-        .map_err(|e| CliError::new("io", format!("读取模板失败 {}: {e}", target.display())))?;
+    let current = crate::args::read_text_capped(target, "模板")?;
     let tmp = std::env::temp_dir().join(format!(
         "nctool-edit-{}-{}.j2",
         std::process::id(),
@@ -591,8 +598,9 @@ fn obtain_new_source(args: &TemplatesEditArgs, target: &Path) -> Result<String, 
             format!("编辑器退出码非 0（{status}），已放弃保存"),
         ));
     }
-    let edited = std::fs::read_to_string(&tmp)
-        .map_err(|e| CliError::new("io", format!("读取编辑结果失败: {e}")))?;
+    // 临时副本读回同样设上限（P1-1）：编辑器/脚本往里面灌超大内容时
+    // 应该在读取处就失败，而不是让后面的校验去猜为什么解析不动。
+    let edited = crate::args::read_text_capped(&tmp, "编辑结果")?;
     let _ = std::fs::remove_file(&tmp);
     Ok(edited)
 }
@@ -600,27 +608,102 @@ fn obtain_new_source(args: &TemplatesEditArgs, target: &Path) -> Result<String, 
 /// 解析模板的**有效参数规格**（头部 `{# PARAMS: #}` + 变量库 + 清单覆盖层）。
 ///
 /// 与注册表加载时的口径一致（[`ResolvedMeta::resolve`] 单一来源）。
-fn resolve_specs(
+///
+/// 返回 `Result` 是历史形状，实际上**恒为 `Ok`**：清单/变量库读坏只 warning +
+/// 空表（与目录注册同口径，见 `context.rs`）。保留签名以免改动既有调用点。
+pub(crate) fn resolve_specs(
     root: &Path,
     rel_key: &str,
     source: &str,
 ) -> Result<Vec<nctool_core::ParamSpec>, CliError> {
-    let manifest = match TemplateManifest::load(root) {
+    let manifest = load_manifest_or_warn(root);
+    let library = load_library_or_warn(root);
+    let meta = ResolvedMeta::resolve(Path::new(rel_key), source, manifest.get(rel_key), &library);
+    Ok(meta.params)
+}
+
+/// 清单读取：坏文件只 warning + 空清单（与目录注册同口径）。
+fn load_manifest_or_warn(root: &Path) -> TemplateManifest {
+    match TemplateManifest::load(root) {
         Ok(m) => m,
         Err(e) => {
             eprintln!("warning: {e}");
             TemplateManifest::empty()
         }
-    };
-    let library = match VariableLibrary::load(root) {
+    }
+}
+
+/// 变量库读取：坏文件只 warning + 空库（与目录注册同口径）。
+fn load_library_or_warn(root: &Path) -> VariableLibrary {
+    match VariableLibrary::load(root) {
         Ok(l) => l,
         Err(e) => {
             eprintln!("warning: {e}");
             VariableLibrary::empty()
         }
+    }
+}
+
+/// **磁盘上任意一个模板文件**的有效参数规格（P1-10 单一来源）。
+///
+/// # 为什么需要它
+///
+/// 目录注册（`context.rs`）走 [`ResolvedMeta::resolve`]，规格是**三层齐全**的；
+/// 而「按文件路径」注册（`render.rs::resolve_registry`、`templates.rs::resolve_source`）
+/// 此前传的是**空切片** —— 于是**同一份模板**：
+///
+/// - `nctool render turning/a.j2` → 校验类型 / 区间 / 白名单；
+/// - `nctool render /abs/turning/a.j2` → 一层都不校验。
+///
+/// 两者对用户呈现的都是"校验通过"。这是本项目零容忍的**静默少校验**：
+/// 越界参数会一路走到 G-code（错误坐标 = 撞刀风险）。
+///
+/// # 清单覆盖层按「能否对上键」决定是否参与
+///
+/// 头部 `{# PARAMS: #}` 与变量库两层与文件位置无关，照常生效；清单 `params`
+/// 覆盖层是**按相对键**索引的，因此：
+///
+/// - 文件在模板根下 → 用真实相对键取覆盖层，与目录注册**完全同口径**；
+/// - 文件在模板根外 → **跳过覆盖层**。用文件名去 `manifest.get(fname)` 是错的：
+///   它可能命中模板目录里**另一个同名文件**的覆盖层，把别人的约束套到这个文件上
+///   —— 比"无规格"更糟（会误拒合法参数）。
+///
+/// 未配置模板目录时只有头部一层（变量库与清单都无根可寻）。
+pub(crate) fn specs_for_path(ctx: &Ctx, path: &Path, source: &str) -> Vec<nctool_core::ParamSpec> {
+    let Some(root) = ctx.template_dir.as_deref() else {
+        return ResolvedMeta::resolve(Path::new(""), source, None, &VariableLibrary::empty())
+            .params;
     };
-    let meta = ResolvedMeta::resolve(Path::new(rel_key), source, manifest.get(rel_key), &library);
-    Ok(meta.params)
+    match rel_key_under(root, path) {
+        Some(rel_key) => resolve_specs(root, &rel_key, source).unwrap_or_default(),
+        None => {
+            // 根外文件：只保留"头部 + 变量库"两层，清单层显式不参与（原因见上）。
+            let library = load_library_or_warn(root);
+            let fname = path
+                .file_name()
+                .map(|n| n.to_string_lossy().to_string())
+                .unwrap_or_default();
+            ResolvedMeta::resolve(Path::new(&fname), source, None, &library).params
+        }
+    }
+}
+
+/// `path` 相对模板根 `root` 的清单键（`/` 分隔）；不在 `root` 下返回 `None`。
+///
+/// 两边都先 `canonicalize`：`root` 来自 `canonicalize_dir` 已是绝对路径，而
+/// `find_template_file` 可能原样返回用户给的**相对路径**；Windows 上
+/// `canonicalize` 还会加 `\\?\` 前缀 —— 同口径才比得上。
+///
+/// 大小写差异**不**做兜底：`strip_prefix` 在 Windows 上对普通分量是大小写敏感的，
+/// 比不中时我们退回"跳过清单层"（安全方向），不会错套别人的覆盖层。
+fn rel_key_under(root: &Path, path: &Path) -> Option<String> {
+    let root = std::fs::canonicalize(root).ok()?;
+    let full = std::fs::canonicalize(path).ok()?;
+    let rel = full.strip_prefix(&root).ok()?;
+    if rel.as_os_str().is_empty() {
+        return None;
+    }
+    Some(path_to_rel_key(rel))
 }
 
 /// 保存前的**分级校验**：L1 语法（总是）/ L2 规格自洽（总是）/ L3 参数值（可选）。
@@ -707,28 +790,14 @@ fn describe_manifest(m: &ManifestOutcome) -> String {
     }
 }
 
-/// 把写内核错误映射为 CLI 错误（写冲突 → 6；只读 / IO → 3；越界 → 2）。
+/// 把写内核错误映射为 CLI 错误（kind 查 `classify_write_error` 单一分类表，
+/// P1-11）。委托共享实现 [`CliError::from_write_error`]，文案与 preset/machine
+/// 同源——此前本函数有三处错分：`PathEscape`（reason 含"已存在"）归 `args`(2)
+/// 而非 `name_conflict`(6)、`NotFound` 掉进 `_` 归 `io`(3) 而非
+/// `template_not_found`(5)、`NumUnderflow` 归 `io`(3) 而非 `args`(2)。
 fn map_write_err(e: WriteError) -> CliError {
-    match e {
-        WriteError::Conflict { path, .. } => CliError::new(
-            "write_conflict",
-            format!(
-                "写入冲突：{} 已被外部修改，未覆盖。\
-                 可选：① 覆盖（以当前内容为基线重存）② 放弃 ③ 另存为新模板",
-                path.display()
-            ),
-        ),
-        WriteError::ReadOnly { path } => {
-            CliError::new("io", format!("目标只读或无写入权限：{}", path.display()))
-        }
-        WriteError::PathEscape { rel, reason } => {
-            CliError::new("args", format!("路径越界被拒绝：{rel}（{reason}）"))
-        }
-        // 目标不可用（如同名目录占位）≠ "数据损坏"：payload 已自述，不再加误导前缀。
-        WriteError::Corrupt(m) => CliError::new("io", m),
-        WriteError::Io(e) => CliError::new("io", format!("写入失败：{e}")),
-        _ => CliError::new("io", format!("写入失败：{e}")),
-    }
+    // templates 是资产 → `Corrupt` 归 `io`(3)（与 preset 同，非 machine 的 config）
+    CliError::from_write_error(e, "template_not_found", "io")
 }
 
 /// 派生 / 重命名的写错误映射：目标已存在 → `name_conflict`(6)；其余同 [`map_write_err`]。
@@ -744,7 +813,23 @@ fn map_create_err(e: WriteError, key: &str) -> CliError {
 
 #[cfg(test)]
 mod tests {
-    use super::validate_template_name;
+    use super::{rel_key_under, specs_for_path, validate_template_name};
+    use crate::context::Ctx;
+    use nctool_core::manifest::MANIFEST_FILE;
+    use nctool_core::variables::VARIABLES_FILE;
+    use std::path::PathBuf;
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    /// 独立临时目录（用例互不踩踏）。
+    fn tmp(tag: &str) -> PathBuf {
+        static N: AtomicU32 = AtomicU32::new(0);
+        let n = N.fetch_add(1, Ordering::Relaxed);
+        let dir =
+            std::env::temp_dir().join(format!("nctool_specs_{}_{}_{}", std::process::id(), tag, n));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
 
     #[test]
     fn valid_names() {
@@ -762,5 +847,125 @@ mod tests {
         assert!(validate_template_name("").is_err());
         assert!(validate_template_name(r"..\evil").is_err());
         assert!(validate_template_name("sub\\evil").is_err());
+    }
+
+    /// P1-10：模板根**内**的文件必须拿到与目录注册**完全同口径**的三层规格
+    /// （头部 + 变量库 + 清单覆盖层）。
+    ///
+    /// 修复前 `render <绝对路径>` 注册时传 `vec![]`，三层全丢 —— 同一份模板
+    /// 按注册名渲染会校验、按路径渲染不校验，而两者都显示"校验通过"。
+    #[test]
+    fn specs_for_path_in_root_keeps_all_three_layers() {
+        let root = tmp("in_root");
+        let sub = root.join("turning");
+        std::fs::create_dir_all(&sub).unwrap();
+        let tpl = sub.join("parity.j2");
+        let src = "G1 X{{ x }} F{{ feed }}\n";
+        std::fs::write(&tpl, src).unwrap();
+        // 第 2 层：变量库（按名生效）给 feed 一个上界
+        std::fs::write(
+            root.join(VARIABLES_FILE),
+            "variables:\n  - name: feed\n    kind: number\n    max: 5000\n",
+        )
+        .unwrap();
+        // 第 3 层：清单覆盖层给 x 一个区间
+        std::fs::write(
+            root.join(MANIFEST_FILE),
+            "templates:\n  \"turning/parity.j2\":\n    params:\n      - name: x\n        kind: number\n        min: 0\n        max: 10\n",
+        )
+        .unwrap();
+
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(root.clone());
+        let specs = specs_for_path(&ctx, &tpl, src);
+
+        let x = specs
+            .iter()
+            .find(|s| s.name == "x")
+            .expect("x 应拿到清单覆盖层的规格");
+        assert_eq!((x.min, x.max), (Some(0.0), Some(10.0)), "清单覆盖层未生效");
+        let feed = specs
+            .iter()
+            .find(|s| s.name == "feed")
+            .expect("feed 应拿到变量库的规格");
+        assert_eq!(feed.max, Some(5000.0), "变量库层未生效");
+
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    /// P1-10：模板根**外**的文件必须**跳过清单覆盖层**。
+    ///
+    /// 若按文件名去查清单，会命中模板目录里**另一个同名文件**的覆盖层，
+    /// 把别人的约束套到这个文件上 —— 比"无规格"更糟（会误拒合法参数）。
+    /// 变量库与头部两层仍照常生效（与文件位置无关）。
+    #[test]
+    fn specs_for_path_outside_root_skips_manifest_layer() {
+        let root = tmp("out_root");
+        let sub = root.join("turning");
+        std::fs::create_dir_all(&sub).unwrap();
+        // 根内有个同名文件，清单给它声明了 x ∈ [0, 10]
+        std::fs::write(sub.join("parity.j2"), "G1 X{{ x }}\n").unwrap();
+        std::fs::write(
+            root.join(MANIFEST_FILE),
+            "templates:\n  \"turning/parity.j2\":\n    params:\n      - name: x\n        kind: number\n        min: 0\n        max: 10\n",
+        )
+        .unwrap();
+        std::fs::write(
+            root.join(VARIABLES_FILE),
+            "variables:\n  - name: x\n    kind: number\n",
+        )
+        .unwrap();
+        // 根**外**的同名文件
+        let elsewhere = tmp("out_elsewhere");
+        let outside = elsewhere.join("parity.j2");
+        std::fs::write(&outside, "G1 X{{ x }}\n").unwrap();
+
+        let mut ctx = Ctx::for_test();
+        ctx.template_dir = Some(root.clone());
+        let specs = specs_for_path(&ctx, &outside, "G1 X{{ x }}\n");
+
+        let x = specs
+            .iter()
+            .find(|s| s.name == "x")
+            .expect("变量库层应生效（与位置无关）");
+        assert_eq!(
+            (x.min, x.max),
+            (None, None),
+            "根外文件不得继承模板目录里同名文件的清单覆盖层"
+        );
+        assert_eq!(x.kind, nctool_core::model::ParamKind::Number);
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&elsewhere);
+    }
+
+    /// `rel_key_under`：根内命中、根自身与根外为 `None`。
+    ///
+    /// （用户给的**相对路径**这条分支无法在此单测：`canonicalize` 按当前工作目录
+    /// 解析，而临时目录在工作目录之外。它由 `cli_e2e` 的
+    /// `render_by_path_and_by_registry_name_agree_on_specs` 以真实子进程 cwd 覆盖。）
+    #[test]
+    fn rel_key_under_detects_inside_and_outside() {
+        let root = tmp("relkey");
+        let sub = root.join("turning");
+        std::fs::create_dir_all(&sub).unwrap();
+        let tpl = sub.join("a.j2");
+        std::fs::write(&tpl, "X").unwrap();
+
+        assert_eq!(
+            rel_key_under(&root, &tpl).as_deref(),
+            Some("turning/a.j2"),
+            "根内绝对路径应归一出相对键"
+        );
+        // 根目录自身：相对部分为空 → None（没有"根"这个模板）
+        assert_eq!(rel_key_under(&root, &root), None);
+
+        let outside = tmp("relkey_out");
+        let o = outside.join("a.j2");
+        std::fs::write(&o, "X").unwrap();
+        assert_eq!(rel_key_under(&root, &o), None, "根外文件必须为 None");
+
+        let _ = std::fs::remove_dir_all(&root);
+        let _ = std::fs::remove_dir_all(&outside);
     }
 }

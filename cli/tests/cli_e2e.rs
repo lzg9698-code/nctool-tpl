@@ -549,6 +549,37 @@ fn render_with_named_machine_succeeds() {
     assert_eq!(r.code, 0);
 }
 
+#[test]
+fn cli_rejects_spindle_speed_above_machine_limit() {
+    // P0-2/Q-01（SUMMARY §8 行2）：wfl_m65 主轴上限 3500，S5000 必须以**非 0**
+    // 退出且 stderr 报告含 `3500`。修复前静态上界 6000 会放行 `M3 S5000`
+    // （超机床极限 43%）——本 e2e 钉死"校验用的机床 = 渲染用的机床"。
+    let r = run_in(
+        repo_root().as_path(),
+        &[
+            "--machine",
+            "wfl_m65",
+            "render",
+            "tool_change",
+            "--param",
+            "tool_num=1",
+            "--param",
+            "spindle_speed=5000",
+        ],
+    );
+    assert_ne!(
+        r.code, 0,
+        "超机床上限必须非 0 退出\nstdout: {}\nstderr: {}",
+        r.stdout, r.stderr
+    );
+    r.stderr_contains(&["3500"]);
+    assert!(
+        !r.stdout.contains("M3 S5000"),
+        "被拒绝时不得输出超程 G-code：{}",
+        r.stdout
+    );
+}
+
 // ---------------------------------------------------------------------------
 // generate（与 render 同签名的规范入口）
 // ---------------------------------------------------------------------------
@@ -1091,6 +1122,129 @@ fn completion_rejects_unknown_shell() {
 fn completion_requires_shell() {
     let r = run_in(repo_root().as_path(), &["completion"]);
     assert_eq!(r.code, 2);
+}
+
+// ---------------------------------------------------------------------------
+// P1-10 对拍：模板的**引用方式**不得改变参数校验强度
+// ---------------------------------------------------------------------------
+
+/// P1-10 对拍：同一份模板文件，用「注册表名 / cwd 相对路径 / 绝对路径」三种方式
+/// 引用，参数校验结论必须**完全一致**。
+///
+/// 修复前：文件路径分支注册进临时注册表时传的是**空规格**，于是同一份模板
+/// `render turning/parity.j2`（注册名）会校验类型/区间/白名单，
+/// `render <绝对路径>` 一层都不校验 —— 而两者对用户显示的都是"校验通过"。
+/// 这是本项目零容忍的**静默少校验**：越界参数会一路渲染成 G-code（撞刀风险）。
+/// 本测试在修复前必须在路径两条上退出 0（即红）。
+#[test]
+fn render_by_path_and_by_registry_name_agree_on_specs() {
+    let dir = temp_dir("specs_parity");
+    let tpl_dir = dir.join("templates");
+    let sub = tpl_dir.join("turning");
+    std::fs::create_dir_all(&sub).unwrap();
+    std::fs::write(sub.join("parity.j2"), "G1 X{{ x }} F{{ feed }}\n").unwrap();
+    // 第 2 层：变量库（按名生效）—— feed 上界
+    std::fs::write(
+        tpl_dir.join("variables.yaml"),
+        "variables:\n  - name: feed\n    kind: number\n    max: 5000\n",
+    )
+    .unwrap();
+    // 第 3 层：清单覆盖层 —— x 区间 [0, 10]
+    std::fs::write(
+        tpl_dir.join("templates.yaml"),
+        "templates:\n  \"turning/parity.j2\":\n    params:\n      - name: x\n        kind: number\n        min: 0\n        max: 10\n",
+    )
+    .unwrap();
+
+    let abs = sub.join("parity.j2");
+    let abs_s = abs.to_str().unwrap().to_string();
+    let refs: [&str; 3] = ["turning/parity.j2", "templates/turning/parity.j2", &abs_s];
+
+    // ① 合法参数：三种引用方式都必须成功，且**产物逐字节一致**
+    let mut outs = Vec::new();
+    for r in refs {
+        let out = run_in(
+            &dir,
+            &[
+                "--template-dir",
+                "templates",
+                "render",
+                r,
+                "--param",
+                "x=5",
+                "--param",
+                "feed=100",
+            ],
+        );
+        assert_eq!(out.code, 0, "{r} 合法参数应成功；stderr: {}", out.stderr);
+        outs.push(out.stdout);
+    }
+    assert_eq!(outs[0], outs[1], "注册表名与相对路径的产物必须一致");
+    assert_eq!(outs[0], outs[2], "注册表名与绝对路径的产物必须一致");
+
+    // ② 清单层越界（x=999 ∉ [0,10]）：三种方式都必须拒绝
+    for r in refs {
+        let out = run_in(
+            &dir,
+            &[
+                "--template-dir",
+                "templates",
+                "render",
+                r,
+                "--param",
+                "x=999",
+                "--param",
+                "feed=100",
+            ],
+        );
+        assert_eq!(
+            out.code, 1,
+            "{r} 清单层越界必须被拒绝（退出码 1）；stdout: {}",
+            out.stdout
+        );
+    }
+
+    // ③ 变量库层越界（feed=99999 > 5000）：三种方式都必须拒绝
+    for r in refs {
+        let out = run_in(
+            &dir,
+            &[
+                "--template-dir",
+                "templates",
+                "render",
+                r,
+                "--param",
+                "x=5",
+                "--param",
+                "feed=99999",
+            ],
+        );
+        assert_eq!(
+            out.code, 1,
+            "{r} 变量库层越界必须被拒绝（退出码 1）；stdout: {}",
+            out.stdout
+        );
+    }
+
+    // ④ `validate` 与 `render` 共用 `resolve_registry`，同样必须一致
+    for r in refs {
+        let out = run_in(
+            &dir,
+            &[
+                "--template-dir",
+                "templates",
+                "validate",
+                r,
+                "--param",
+                "x=999",
+                "--param",
+                "feed=100",
+            ],
+        );
+        assert_eq!(out.code, 1, "{r} validate 也必须拒绝越界参数");
+    }
+
+    let _ = std::fs::remove_dir_all(&dir);
 }
 
 // ---------------------------------------------------------------------------

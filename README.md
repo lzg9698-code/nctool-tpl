@@ -29,7 +29,7 @@ NCtool 模板解析核心：基于 [minijinja](https://github.com/mitsuhiko/mini
 
 | 项目 | 要求 |
 | --- | --- |
-| Rust 工具链 | **1.85 及以上**（`rust-version = "1.85"`；CI 使用 stable，另有 `msrv` job 在 1.85 上验证） |
+| Rust 工具链 | **1.89 及以上**（`rust-version = "1.89"`；CI 使用 stable，另有 `msrv` job 在 1.89 上验证） |
 | 操作系统 | Linux / macOS / Windows（CI 三平台矩阵均需绿灯） |
 | 运行时依赖 | 无。CLI 是单一二进制，release 构建开启 LTO + strip |
 
@@ -588,20 +588,25 @@ cargo test --workspace --doc          # --all-targets 不跑 doctest，CI 为此
 RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 node scripts/check_param_parity.mjs   # --param 归一规则的 Rust/前端对拍
 node scripts/check_option_parity.mjs  # 生成选项（行号/步进/上限/…）的 CLI/前端对拍
+node scripts/check_gui_parity.mjs     # 端点契约 ↔ GUI Tauri command 封装的双向对拍
 python3 scripts/check_package_contents.py  # 发布包不得含非库资产（--offline）
 cargo audit
 
-# 覆盖率门（与 CI 同款；需先装 rustup component add llvm-tools-preview
-# 与 cargo install cargo-llvm-cov，另需 python）
-cargo llvm-cov --workspace --all-features --lcov --output-path lcov.info
-python scripts/check_coverage_caliber.py lcov.info --min 91
+# 覆盖率门（与 CI 逐字同款；需先装 rustup component add llvm-tools-preview
+# 与 cargo install cargo-llvm-cov，另需 python3）
+# `--ignore-filename-regex` 同时接受 `/` 与 `\`：CI(Ubuntu) 是正斜杠、Windows 本机是
+# 反斜杠，只写 `/` 在 Windows 上一个 gui 文件都排除不掉。
+# 阈值 92%（2026-09-26 口径修订后由 91% 上调，见 docs/CONTRIBUTING.md §3）。
+cargo llvm-cov --workspace --lcov --output-path lcov.info --ignore-filename-regex '(^|[\\/])gui[\\/]'
+python3 scripts/check_coverage_caliber.py lcov.info --min 92
 ```
 
-> 覆盖率门判定的是**生产代码**口径，**不是** `cargo llvm-cov` 的原始口径 ——
-> llvm-cov 把 `src/*.rs` 内的 `#[cfg(test)]` 段本身计入分母，新增测试会推高数字、
-> 新增未覆盖的生产代码反被稀释（2026-09-22 实测：生产口径 92.35%）。
-> 故由 `scripts/check_coverage_caliber.py` 剔除测试段后重新统计，细节见
-> [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) §3。
+> 覆盖率门判定的是**可执行生产代码**口径，**不是** `cargo llvm-cov` 的原始口径 ——
+> llvm-cov 既把 `src/*.rs` 内的 `#[cfg(test)]` 段本身计入分母（新增测试会推高数字、
+> 新增未覆盖的生产代码反被稀释），又会给注释行 / 空行 / `impl Foo {` 这类**非可执行行**
+> 也写 `DA:0`（计入分母等于测「注释覆盖率」，数值还会随工具链版本漂移）。
+> 故由 `scripts/check_coverage_caliber.py` 同时剔除**测试段**与**非可执行行**后重新
+> 统计，细节见 [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) §3。
 
 > `--workspace` 一个字都不能省：根目录**既是 workspace 根又是一个 package**，
 > 而 cargo 在没有 `default-members` 时默认只选根 package —— 漏掉它，
@@ -631,7 +636,7 @@ python scripts/check_coverage_caliber.py lcov.info --min 91
   便于 `git bisect` 与 `git revert`。
 - 0.x 阶段：master 上直推 + 事后 review；1.0 后启用 PR 流程（1 个 approve + 三平台 CI 全绿），
   详见 [docs/RELEASE.md](docs/RELEASE.md)。CI **全部 job 均为阻断项**（含覆盖率门与
-  MSRV 1.85 检查），没有可以当噪音忽略的红灯。
+  MSRV 1.89 检查），没有可以当噪音忽略的红灯。
 
 ### 报告问题
 

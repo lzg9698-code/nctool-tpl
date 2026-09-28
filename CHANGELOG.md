@@ -20,11 +20,14 @@
 - **批次二（修好度量闭环）**：覆盖率门禁口径、自证测试、MSRV 声明、CI 卫生。
   **不改变任何运行时行为**，只让既有的质量声明从「文档里的一句话」变成可验证的事实。
 
-**本段还收录三组后加的改动**（时序上晚于第三轮审查的批次一/二，故列于前）：
+**本段还收录五组后加的改动**（时序上晚于第三轮审查的批次一/二，故列于前）：
 
 - **零件级批量生成 `nctool part generate`**（Backlog F4 #2 落地）——见下方同名小节。
 - **第五轮代码审查的 2 条 P1 修复**（`docs/CODE_REVIEW_2026-09-23.md`）——见「批次十八」。
 - **2026-09-24 两线合并**：并行开发线（远程）的批次十一～二十二一并并入本段。
+- **2026-09-26 GUI 契约门禁 + 覆盖率口径修订** —— 见下方「批次三十」。
+- **2026-09-27 第六轮审查三项 P0 收口**（`docs/review/SUMMARY-2026-09-27.md`，进行中）——
+  见下方「批次三十一」；其余 P1/P2 后续批次续记。
 
 > ⚠️ **关于「批次 N」的两套编号（2026-09-24 说明）**
 >
@@ -41,7 +44,116 @@
 > | 批次十八 | JSON/YAML 数值下溢（第五轮 P1-1） | 收窄发布包（A5） |
 > | 批次十九～二十二 | —（本地线未使用） | golden 保护 / 弱断言 / `nctool lint` / 注释对齐 |
 >
-> **后续新增小节一律用 批次二十三 及以后**，不再复用旧编号。合并详情见 `overview.md`。
+> **后续新增小节接续本段现有最大编号往后排，不复用旧编号**（注意：本句曾写作「一律用 批次二十三 及以后」，那是 2026-09-24 写下时二十三尚空着；此后二十三～二十九 已被占用，照抄会造出重复编号）。合并详情见 `overview.md`。
+
+### 批次三十一：第六轮审查三项 P0 收口（SUMMARY-2026-09-27，2026-09-27）
+
+依据 `docs/review/SUMMARY-2026-09-27.md`（3 P0 / 18 P1 / 38 P2）。本批记录三项 P0
+与它们的硬前置（P1 先行项）；其余 P1 / P2 按批次续记。
+
+#### Changed（P0-1 跨进程写互斥 + MSRV 抬升）
+
+- **新增 `core/src/asset/lock.rs`**：`DirLock` OS 级 advisory 锁（std `File::try_lock`/
+  `unlock`，1.89 稳定，零新增依赖；进程死亡由 OS 自动释放，无 stale/TTL 问题）。
+  `WriteKernel::write_guarded` 流程变为「取锁 → 读快照 → 比对 → 写 → 释放」——
+  修复全 crate 写路径零互斥的 check-then-write：两进程并发写同一文件可双双通过
+  乐观锁比对、后 `rename` 者胜、先写者的编辑被静默丢弃。
+- **等待时长可注入**：`write_guarded_with_wait`、`PresetStore::{save,upsert,remove}_with_wait`
+  保留旧签名委托；CLI 默认 `CLI_LOCK_WAIT = 2s`，服务侧预设保存/删除传 `Duration::ZERO`
+  （try-lock，拿不到即 409 —— serve 循环单线程，阻塞等锁会钉死 UI）。
+- **新增 `WriteError::LockBusy { path }`**：与 `Conflict` 分工写死（冲突=内容已被改、以新
+  内容为基线重试；锁争用=另一进程正在写、稍后重试同一操作）。`classify_write_error`
+  单表加一行 → CLI 归 `write_conflict`(6)、HTTP 409 `write_conflict`，退出码矩阵与
+  `exit_code_matrix` 测试零改动；HTTP 正文固定脱敏文案不带路径（路径只进 stderr），
+  `Display`/CLI 消息带路径。锁文件 `<stem>.nctool.lock` 只 unlock 不 unlink（unlink 会破互斥）。
+- **MSRV 1.85 → 1.89**（std 文件锁 API 稳定所需）：四份 `rust-version`、CI `msrv` job
+  （toolchain `@1.89`、步骤改 publish-only 三包）、README / CONTRIBUTING / RELEASE /
+  ROADMAP / overview 同步；本地 `cargo +1.89 check -p nctool-tpl -p nctool-core
+  -p nctool-cli --locked` 实测通过。历史批次文档（CHANGELOG 旧记录 / 审查报告）不改写。
+- **模板 `create` 的 `O_EXCL` 建议按架构 §3.1 撤回**：并发同名 `new` 由持锁串行化，
+  后到者 `Conflict` → `template_duplicate`(6)，退出码契约零改动；`template.rs`、
+  `templates.rs` 中「仍是 check-then-write、会静默覆盖」的旧注释同步改写。
+- 测试：`concurrent_writes_to_same_path_never_corrupt`（两写者恰一 Ok、败者 Conflict、
+  文件=胜者全文）、`try_lock_reports_busy_then_succeeds_after_release`、
+  `lock_file_is_named_stem_nctool_lock_and_survives_release`（命名 + 不 unlink + 可再取）、
+  classify / `from_write_error` / `write_error_resp` 各补 LockBusy 案例。
+
+#### Changed（P0-2 转速上界随机床联动，Q-01 / Q-12）
+
+- **`ParamSpec.max_from`**（serde default，磁盘模板不可声明，`with_max_from` builder）：
+  `tool_change.spindle_speed` = 静态 `1..=6000` + `max_from("machine.max_spindle_rpm")`
+  双保险 —— 无机床上下文或机床值非法时静态兜底，绝不以 0/负数为上界全量误杀。
+- **校验链路穿机床上下文**：`validate_template_with_machine` / `validate_with_vars_with_machine` /
+  `TemplateRegistry::validate_with_machine`（旧签名委托、零破坏）；CLI `render` / `validate` /
+  `machine test`、服务端 validate/render 路由、core pipeline strict/lenient 全部传
+  `Some(machine)`。动态值非法/缺失 → 回退静态上界 + 每规格一条 Warning（`IssueKind::Other`，
+  不新增 JSON kind）；machine-less 调用方（编辑器、服务端校验、前端 Checks 页）有意保持原语义。
+- **Q-12 前置**：`integer_range_warning` 单一来源接入 `validate_config_keys` 与机床
+  preflight —— `max_spindle_rpm` = 0/负数/超 100000、位数键 <1 一律**警告不阻断**
+  （阻断会误杀既有配置；parse 仍阻断）。指纹 `spec_fingerprint::canonical` 仅在
+  `max_from=Some` 时追加列，历史指纹零失配。
+- 测试 +6：边界 8 组、回退告警（0/-100/abc/缺失 → 静态 6000 + 回退警告含机床 id）、
+  零/负机床值告警、预设 ≤ generic、preflight 非法机床值告警、e2e
+  `cli_rejects_spindle_speed_above_machine_limit`（退出非 0 + stderr 含 3500 +
+  stdout 无 `M3 S5000`）。
+
+#### Fixed（本轮 P1 硬前置，先行完成）
+
+- **P1-11 分类收敛**：`classify_write_error(e, not_found_kind, corrupt_kind)` 三参单表，
+  六处手写映射合一 —— 不先收敛则 `LockBusy` 会静默落 `_ => io(3)` 兜底（正是本次要堵的
+  「新变体靠 wildcard 蒙对」反模式）。
+- **P0-3 / P1-9 路径外泄**：HTTP 写错误正文绝对路径脱敏（保留文件名供识别、目录段不回显），
+  路径只进 stderr；`write_error_resp` 各变体 + `P1-17` 4xx 口径均有回归断言。
+- **P1-13**：`variables.yaml` 8 键 min/max 守卫 + 测试。
+- **P1-14 / P1-15**：`json_num` `#` 注释规则两处修复 + 测试。
+- **P1-3 / P1-4**：`indent_of` 只认纯 ASCII（NBSP 不再被当缩进）+ 测试；`BuiltinWarning` /
+  `install_builtins` 去掉 `expect`（panic 面收窄）+ health_json 覆盖。
+
+
+
+本轮把 GUI 的 Tauri command 面接入契约门禁，并修正一处「度量在骗人」的口径问题。
+
+#### Added
+
+- **GUI 的 Tauri command 面纳入 parity 契约门禁**（新增 `scripts/check_gui_parity.mjs`）：
+  把 `scripts/api_routes.json` 与 `gui/src/commands/*.rs` 里的 `run_route(...)` 调用点做
+  **双向对拍** —— 每个被 GUI 封装的端点都要能定位到**生产**调用点，GUI 专有命令必须登记
+  `reason`。为此给 `api_routes.json` 的端点补 `gui` / `gui_only` 字段，并在 CI 增加对应步骤。
+  调用点校验只统计生产调用点（剔除 `#[cfg(test)]` 段与函数定义行），堵住「改了生产路径
+  仍判绿」的盲区。
+
+#### Changed
+
+- **覆盖率口径修订 + 阈值 91% → 92%**（`scripts/check_coverage_caliber.py`、
+  `.github/workflows/ci.yml`、`README.md`、`docs/CONTRIBUTING.md` 等）：原口径把 llvm-cov
+  给注释 / 空行 / 纯分隔符写的 `DA:0` 也算进生产分母，等于在测「注释覆盖率」，且数值随
+  llvm-cov / rustc 版本漂移。修订后分母只含**可执行**生产代码：本机 88.76% → **92.88%**
+  （6600/7106）。按「**只上调、不下调**」政策同步把阈值由 91% 上调到 92%（余量 0.88pt）。
+  脚本同时修好对 `#[cfg(test)]` **非 mod** 项（如 `pub(crate) fn for_test`）的剔除，
+  避免其函数体漏进生产分母。
+- **`--ignore-filename-regex` 改跨平台**（`.github/workflows/ci.yml`）：`(^|/)gui/` →
+  `(^|[\\/])gui[\\/]`，使 Windows 反斜杠路径下 gui 的 9 个文件也能被排除（此前只写正斜杠，
+  本机一个都排不掉，造成「本机能过 / CI 口径不一致」的隐患）。
+- **临时目录 RAII 化**（`core/src/asset/machine.rs`、`cli/src/commands/machine.rs`、
+  `cli/tests/cli_machine_e2e.rs`）：单测临时目录改用带 `Drop` 的守卫（`TmpDir` / `Env`），
+  用例结束（含 panic 展开）即回收，消除 `%TEMP%\nctool_machine_*` 的跨用例堆积
+  （`core::asset::machine` 实测由 +9/轮 降为 0）。
+
+#### Fixed
+
+- **`write_atomic` 对瞬时权限拒绝做有限重试**（`core/src/asset/atomic.rs`）：Windows 上杀毒
+  软件等会瞬时占用目标文件、令写入以 `os error 5`（`PermissionDenied`）失败；现经 `with_retry`
+  对**权限被拒**做有限次线性退避重试（上限 5 次 ≈ 100ms），其它 IO 错误不重试，真实只读
+  目标重试耗尽后仍如实报错 —— **重试不掩盖问题**。
+
+#### 测试
+
+- 新增 11 项补测（`cli/src/server.rs`、`cli/src/context.rs`），`server.rs` 生产口径由
+  65.98% 提升到 91.41%。
+- workspace 全量通过；`cargo fmt --all --check`、`cargo clippy --workspace --all-targets -- -D warnings`、
+  `cargo test --workspace --all-targets`、`cargo test --workspace --doc`、
+  `RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps`、`cargo audit`、
+  覆盖率门（**≥ 92%**）均通过。
 
 ### 批次一：堵住静默出错
 

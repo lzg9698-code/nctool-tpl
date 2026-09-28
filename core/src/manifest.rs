@@ -32,11 +32,15 @@ use crate::registry::TemplateCategory;
 /// 且背离「头部声明」的语义。沿用源项目的 10 行约定。
 const HEADER_SCAN_LINES: usize = 10;
 
-/// `{# PARAMS: #}` 块的最大扫描行数。
+/// `{# PARAMS: #}` 块**体**的最大行数。
 ///
 /// 参数表天然比 `NAME` / `DESCRIPTION` 长（机床模板最多十余个参数），
 /// 因此不能沿用 [`HEADER_SCAN_LINES`]。这里给一个宽松但有界的上限，
-/// 避免在畸形文件上无界扫描。
+/// 避免在畸形（块永不闭合）的文件上无界扫描。
+///
+/// 上限只约束块体，**不约束寻找 `{# PARAMS:` 开标记的过程**：找标记是
+/// 线性扫描（注册表本来就读了整个文件），限它只会让"块写在文件200 行
+/// 之后"变回一种静默丢弃——整块约束无声失效，而加载日志一片正常。
 const PARAMS_SCAN_LINES: usize = 200;
 
 /// 清单文件名（位于模板目录根部）。
@@ -507,15 +511,20 @@ impl TemplateManifest {
     ///
     /// 文件不存在时返回**空清单**而非错误——清单是可选的，
     /// 没有清单时全部字段走回退逻辑，这是合法状态。
+    ///
+    /// 读取走 [`crate::io_limit::read_text_capped`]（P1-1）：清单随后要交给
+    /// `serde_yaml`，而它的别名展开没有预算 —— 一份"锚点套锚点"的清单可以
+    /// 展开出 GB 级节点树。上限必须在**解析之前**生效，读完再判已经晚了。
     pub fn load(dir: &Path) -> Result<Self, ManifestError> {
         let path = dir.join(MANIFEST_FILE);
         if !path.exists() {
             return Ok(Self::empty());
         }
-        let text = std::fs::read_to_string(&path).map_err(|e| ManifestError::Io {
-            path: path.clone(),
-            source: e,
-        })?;
+        let text = crate::io_limit::read_text_capped(&path, crate::io_limit::MAX_SOURCE_BYTES)
+            .map_err(|e| ManifestError::Io {
+                path: path.clone(),
+                source: e,
+            })?;
         Self::from_yaml(&text, &path)
     }
 
@@ -690,17 +699,22 @@ pub fn extract_header_meta(source: &str) -> HeaderMeta {
 ///
 /// 描述取结构化前缀之后的全部内容（内部空白归一化为单空格）。
 /// 无法解析的行**不静默跳过**，而是产出告警文本交由调用方提示——
-/// 静默丢一行等于静默少一条参数约束。
+/// 静默丢一行等于静默少一条参数约束。同理，**同名重复行**保留先声明者
+/// 并告警（按名查找/覆盖层都是 first-wins，留两条只会让"哪条生效"成玄学）。
 fn extract_params_block(source: &str) -> (Vec<ParamSpec>, Vec<String>) {
     let mut body: Vec<String> = Vec::new();
     let mut in_block = false;
     let mut truncated = false;
-    for (idx, line) in source.lines().enumerate() {
-        if idx >= PARAMS_SCAN_LINES {
-            // 块还没闭合就撞上扫描上限：后面写的参数声明会被**静默丢弃**，
+    for line in source.lines() {
+        if in_block && body.len() >= PARAMS_SCAN_LINES {
+            // 块还没闭合就撞上块体上限：后面写的参数声明会被**静默丢弃**，
             // 而调用方看到的是"一切正常、只是少了几条约束"。记下来交给调用方提示
             // ——静默丢一行等于静默少一条参数约束，与本节开头那条约定同源。
-            truncated = in_block;
+            //
+            // 上限**只在块已打开时生效**：若把寻找开标记的过程也截断在200 行，
+            // 写在文件后部的 PARAMS 块会整块无声消失（`truncated = in_block`
+            // 恒为 false，连告警都没有）——那正是本条要堵的静默丢弃。
+            truncated = true;
             break;
         }
         if !in_block {
@@ -743,17 +757,31 @@ fn extract_params_block(source: &str) -> (Vec<ParamSpec>, Vec<String>) {
     let mut warnings = Vec::new();
     if truncated {
         warnings.push(format!(
-            "{{# PARAMS: #}} 块在第 {PARAMS_SCAN_LINES} 行仍未闭合，其后的参数声明全部被忽略\
+            "{{# PARAMS: #}} 块超过 {PARAMS_SCAN_LINES} 行仍未闭合，其后的参数声明全部被忽略\
              （类型/白名单/条件必选都不会生效；请把参数表前移或拆短）"
         ));
     }
+    // 同名重复行：保留先声明者并告警。按名查找与清单覆盖层都是 first-wins，
+    // 两条并存只会让"哪条生效"变成玄学；而静默丢后一条等于静默丢一条约束。
+    let mut seen: BTreeSet<String> = BTreeSet::new();
     for (n, raw) in body.iter().enumerate() {
         let line = raw.trim();
         if line.is_empty() {
             continue;
         }
         match parse_param_line(line) {
-            Ok(spec) => specs.push(spec),
+            Ok(spec) => {
+                if !seen.insert(spec.name.clone()) {
+                    warnings.push(format!(
+                        "{{# PARAMS: #}} 第 {} 行参数名 '{}' 与前面重复，以后声明无效\
+                         （以先声明者为准）：{line}",
+                        n + 1,
+                        spec.name
+                    ));
+                    continue;
+                }
+                specs.push(spec);
+            }
             Err(reason) => warnings.push(format!(
                 "{{# PARAMS: #}} 第 {} 行无法解析（{reason}）：{line}",
                 n + 1
@@ -1059,6 +1087,45 @@ templates:
         assert_eq!(meta.output_extension, ".NC");
     }
 
+    /// **P1-1**：清单读取有字节上限，且上限在**解析之前**生效。
+    ///
+    /// 无界读的后果不是"解析慢"，而是整份文件先进内存；更糟的是清单随后要交给
+    /// `serde_yaml`，而它的别名展开没有预算 —— 一份"锚点套锚点"的清单
+    /// （billion laughs 变体）能展开出 GB 级节点树。
+    ///
+    /// 这里用**合法 YAML**（全注释填充）构造超限文件，断言：① 硬失败；
+    /// ② 错误说"过大"而非"解析失败"——文件没坏，是拿错了，报"解析失败"
+    /// 会把用户引向错误的排障方向。
+    #[test]
+    fn oversized_manifest_is_rejected_before_parsing() {
+        use std::sync::atomic::{AtomicU32, Ordering};
+        static N: AtomicU32 = AtomicU32::new(0);
+        let dir = std::env::temp_dir().join(format!(
+            "nctool_manifest_cap_{}_{}",
+            std::process::id(),
+            N.fetch_add(1, Ordering::Relaxed)
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+
+        let mut text = String::from("templates: {}\n#");
+        while (text.len() as u64) <= crate::io_limit::MAX_SOURCE_BYTES {
+            text.push('x');
+        }
+        std::fs::write(dir.join(MANIFEST_FILE), &text).unwrap();
+
+        let err = TemplateManifest::load(&dir).expect_err("超限必须硬失败");
+        let msg = err.to_string();
+        assert!(msg.contains("过大"), "应报「过大」而非解析问题: {msg}");
+
+        // 对照：同一目录换成小清单即可正常加载（证明失败来自大小而非路径/内容）
+        std::fs::write(dir.join(MANIFEST_FILE), "templates: {}\n").unwrap();
+        let ok = TemplateManifest::load(&dir).expect("小清单应正常加载");
+        assert!(ok.is_empty());
+
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
     /// 回归（P1-12）：清单里写了却不存在的键此前**零检测** —— 该条目的
     /// `params`（白名单/区间）、`visible`、`machine`、`output_extension` 全部静默
     /// 失效，看起来约束齐全、实际一条都没上。写成 `undercut.j2`（实际是
@@ -1179,6 +1246,57 @@ templates:
                 .any(|w| w.contains("仍未闭合")),
             "界内闭合的块不该报截断"
         );
+    }
+
+    /// 回归：开标记落在旧扫描上限（第200 行）之后时，旧实现在
+    /// `in_block == false` 上 `break`，整块被**静默丢弃**（连告警都没有）——
+    /// 类型/白名单/条件必选全部无声失效。寻找开标记的过程不得截断，
+    /// `PARAMS_SCAN_LINES` 只约束块体。
+    #[test]
+    fn params_block_opening_after_old_search_limit_still_parses() {
+        let mut src = String::new();
+        for i in 0..(PARAMS_SCAN_LINES + 30) {
+            src.push_str(&format!("G1 X{}\n", i));
+        }
+        src.push_str("{# PARAMS:\n     LATE  number  必选  晚开的参数\n#}\nG1 X1\n");
+
+        let meta = extract_header_meta(&src);
+        let names: Vec<&str> = meta.params.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(
+            names,
+            ["LATE"],
+            "晚于旧上限的块必须解析而不是静默丢弃: {names:?}"
+        );
+        assert!(
+            !meta.warnings.iter().any(|w| w.contains("仍未闭合")),
+            "块正常闭合不该报截断: {:?}",
+            meta.warnings
+        );
+    }
+
+    /// 回归：同名重复行不得静默并存——按名查找/覆盖层都是 first-wins，
+    /// 留两条会让"哪条生效"变成玄学；静默丢后一条又等于静默少一条约束。
+    #[test]
+    fn params_block_duplicate_names_warn_and_keep_first() {
+        let src = "{# PARAMS:\
+             \n     A number 必选 第一份\
+             \n     A number 可选 第二份\
+             \n     B number 必选 另一个\
+             \n#}\n";
+        let meta = extract_header_meta(src);
+        let names: Vec<&str> = meta.params.iter().map(|s| s.name.as_str()).collect();
+        assert_eq!(names, ["A", "B"], "重复名只保留先声明者: {names:?}");
+        assert!(
+            meta.params[0].description.contains("第一份"),
+            "以先声明者为准: {}",
+            meta.params[0].description
+        );
+        let dup = meta
+            .warnings
+            .iter()
+            .find(|w| w.contains("重复"))
+            .expect("同名重复必须告警而不是静默");
+        assert!(dup.contains("'A'"), "{dup}");
     }
 
     #[test]

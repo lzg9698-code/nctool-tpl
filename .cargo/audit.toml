@@ -1,0 +1,23 @@
+# cargo-audit 配置（供 `cargo audit --deny warnings` 使用）。
+#
+# 背景：桌面 GUI（nctool-gui，Tauri 2）作为 workspace 成员后，其传递依赖树带来
+# 7 条 `unmaintained` / `unsound` 告警。它们**全部来自 Tauri 的传递依赖**，且不在
+# 本仓库可控的版本范围内（由 tauri / tauri-utils / webkit2gtk 的版本约束钉死）。
+# 逐条忽略并附理由 —— 有理由的忽略优于把安全门禁整体关掉。
+#
+# 复核时机：升级 tauri / tauri-utils / tauri-plugin-* 或 GTK 栈后，请重跑
+# `cargo audit`；能消除的条目应立即从本列表删除（否则会掩盖真正的新告警）。
+
+[advisories]
+ignore = [
+    # —— 经 urlpattern ← tauri-utils 的 unic-* 系列（纯 Unicode 字符属性工具，未维护）——
+    # 无安全影响：仅用于 URL 模式匹配的字符类，不处理不可信输入的可执行语义。
+    "RUSTSEC-2025-0075", # unic-char-range 未维护
+    "RUSTSEC-2025-0080", # unic-common 未维护
+    "RUSTSEC-2025-0081", # unic-char-property 未维护
+    "RUSTSEC-2025-0098", # unic-ucd-version 未维护
+    "RUSTSEC-2025-0100", # unic-ucd-ident 未维护
+    # —— Linux GTK/WebKit 栈（仅 Linux 目标可达；Windows/macOS 不编译该子树）——
+    "RUSTSEC-2024-0370", # proc-macro-error 未维护（gdk/gtk 宏栈，仅构建期使用）
+    "RUSTSEC-2024-0429", # glib 0.18.5 VariantStrIter 不健全；本项目未使用该 API
+]

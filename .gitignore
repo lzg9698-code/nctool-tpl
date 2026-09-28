@@ -35,3 +35,10 @@ __pycache__/
 
 # AI 编程助手的本地计划文件（同 .claude/）
 .zcode/
+
+# 桌面 GUI 前端（Tauri 2 + React）构建产物
+gui/frontend/node_modules/
+gui/frontend/dist/
+# tauri-build 生成的 ACL/权限 schema（每次构建自动重建，不提交）
+gui/gen/schemas/
+

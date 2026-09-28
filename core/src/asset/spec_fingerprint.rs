@@ -21,7 +21,8 @@ impl SpecFingerprint {
 
     /// 规范化串：按参数名排序后，对每个规格按**固定字段序**拼接。
     ///
-    /// 字段序：`name|kind|required|min|max|integer|unit|options|required_if|derive|default`。
+    /// 字段序：`name|kind|required|min|max|integer|unit|options|required_if|derive|default`，
+    /// 其后**条件附加** `|max_from`（声明了动态上界来源时才附加，见循环内注释）。
     /// **每个字段值**（含 `name`/`kind`/`required`/`integer`）都经长度前缀编码，
     /// 故分隔符 `|` 与记录符 `\n` 无法被值注入；`None` 记 `-1:`，数值用
     /// `format!("{:?}", f64)`；`options` / `required_if` 取值 / `derive` 表项排序后拼接。
@@ -46,6 +47,15 @@ impl SpecFingerprint {
                 opt_value(&s.default),
             ];
             out.push_str(&fields.join("|"));
+            // `max_from`（动态上界来源，P0-2）**仅在声明时附加**：该字段由代码
+            // 声明、绝大多数规格恒为 `None`——恒定追加一列会让历史指纹全体
+            // 失配（既存预设无端被标"规格已变化"）。`Some` 时附加则让"声明了
+            // 按机床上限校验"进入陈旧判定：旧指纹无此列，必然不等。附加列走
+            // 同一套长度前缀编码，拼接保持单射（值无法注入分隔符）。
+            if let Some(max_from) = &s.max_from {
+                out.push('|');
+                out.push_str(&enc_str(max_from));
+            }
             out.push('\n');
         }
         out

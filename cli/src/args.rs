@@ -150,25 +150,70 @@ pub const MAX_CLI_FILE_BYTES: u64 = 1024 * 1024;
 /// **为什么是 `io` 而不是各调用方自己的类别**：读写失败与"文件过大"同属
 /// **I/O 层**问题（与用户传错路径、权限不足同类），退出码应一致。用 `config`/`args`
 /// 会把"文件拿错了"和"文件内容不合法"混在一起 —— 后者才是调用方类别该表达的。
+///
+/// # 两道防线（P1-1）
+///
+/// 1. `metadata()` 预检：只为给出**准确的实际字节数**（读进来之后再判就只能
+///    报出被截断的长度，对 10 MiB 的文件会误报成 1 MiB + 1）。
+/// 2. `Take` 截断读取：这才是**硬不变量** —— `metadata()` 与实际 `read` 之间
+///    存在 TOCTOU（文件可在两步之间被追加/替换），只靠第 1 步挡不住。
 pub fn read_text_capped(path: &Path, what: &str) -> Result<String, CliError> {
     // 先看长度，避免把超大文件整个读进内存再判断
     if let Ok(meta) = std::fs::metadata(path) {
         if meta.len() > MAX_CLI_FILE_BYTES {
-            return Err(CliError::new(
-                "io",
-                format!(
-                    "{}过大 {}: {} 字节，上限 {} 字节（{} KiB）",
-                    what,
-                    path.display(),
-                    meta.len(),
-                    MAX_CLI_FILE_BYTES,
-                    MAX_CLI_FILE_BYTES / 1024
-                ),
-            ));
+            return Err(too_large(what, path, meta.len()));
         }
     }
-    std::fs::read_to_string(path)
-        .map_err(|e| CliError::new("io", format!("读取{}失败 {}: {e}", what, path.display())))
+    read_capped_from(
+        std::fs::File::open(path)
+            .map_err(|e| CliError::new("io", format!("读取{what}失败 {}: {e}", path.display())))?,
+        what,
+        path,
+    )
+}
+
+/// 按上限读取标准输入（`-` 作为文件名的场合），超出即报 `io` 类别的错误。
+///
+/// stdin **无法预检长度**，只能靠 `Take` 截断 —— 这也是本函数存在的理由：
+/// 此前 `preset import -` 直接 `stdin().read_to_string()`，是**完全无界**的读取。
+pub fn read_stdin_capped(what: &str) -> Result<String, CliError> {
+    let stdin = std::io::stdin();
+    read_capped_from(stdin.lock(), what, Path::new("<stdin>"))
+}
+
+/// [`read_text_capped`] / [`read_stdin_capped`] 的共用内核：`Take` 截断 + 超限判定。
+fn read_capped_from(
+    reader: impl std::io::Read,
+    what: &str,
+    path: &Path,
+) -> Result<String, CliError> {
+    use std::io::Read;
+    let mut text = String::new();
+    std::io::BufReader::new(reader)
+        .take(MAX_CLI_FILE_BYTES + 1)
+        .read_to_string(&mut text)
+        .map_err(|e| CliError::new("io", format!("读取{what}失败 {}: {e}", path.display())))?;
+    if text.len() as u64 > MAX_CLI_FILE_BYTES {
+        // 到这一步说明预检没拦住（文件在两步之间变大了，或是 stdin）：
+        // 报出的长度是**截断后**的，故用 `too_large` 的"超过上限"口径而不声称精确值。
+        return Err(too_large(what, path, text.len() as u64));
+    }
+    Ok(text)
+}
+
+/// 构造"过大"错误（`io` 类别）：文案点明是什么过大、路径、实际字节数与上限。
+fn too_large(what: &str, path: &Path, len: u64) -> CliError {
+    CliError::new(
+        "io",
+        format!(
+            "{}过大 {}: {} 字节，上限 {} 字节（{} KiB）",
+            what,
+            path.display(),
+            len,
+            MAX_CLI_FILE_BYTES,
+            MAX_CLI_FILE_BYTES / 1024
+        ),
+    )
 }
 
 /// 从 JSON 对象构造参数集：`{"x": 21.0, "tool": "D12", "coolant": true}`。
@@ -698,6 +743,24 @@ mod tests {
             msg.contains(&MAX_CLI_FILE_BYTES.to_string()),
             "应给出上限：{msg}"
         );
+    }
+
+    /// `read_stdin_capped` 的内核：stdin **无法预检长度**，只能靠 `Take` 截断。
+    ///
+    /// 用内存 reader 直接验证内核（stdin 与它走的是同一个 `read_capped_from`），
+    /// 覆盖"没有 metadata 预检"这条分支 —— 这正是 `preset import -` 此前完全无界的原因。
+    #[test]
+    fn read_capped_from_enforces_limit_without_precheck() {
+        let over = vec![b' '; MAX_CLI_FILE_BYTES as usize + 1];
+        let err = read_capped_from(&over[..], "标准输入", Path::new("<stdin>")).unwrap_err();
+        assert_eq!(err.kind, "io", "过大属 I/O 层问题");
+        assert!(err.message.contains("标准输入过大"), "{}", err.message);
+        assert!(err.message.contains("<stdin>"), "{}", err.message);
+
+        // 恰好等于上限放行（边界是 `>` 不是 `>=`）
+        let exact = vec![b' '; MAX_CLI_FILE_BYTES as usize];
+        let got = read_capped_from(&exact[..], "标准输入", Path::new("<stdin>")).unwrap();
+        assert_eq!(got.len(), MAX_CLI_FILE_BYTES as usize);
     }
 
     /// 通过 `load_params_file` 走一遍：超限的参数文件必须以 `io` 失败，

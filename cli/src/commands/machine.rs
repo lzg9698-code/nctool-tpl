@@ -170,13 +170,13 @@ fn add(ctx: &Ctx, args: &MachineAddArgs) -> Result<(), CliError> {
     //    且 AC-2.10 的 golden 需要一份**带注释**的 nctool.toml 才有输入可验）。
     if !path.exists() {
         WriteKernel::write_atomic(&path, config::EXAMPLE_CONFIG.as_bytes())
-            .map_err(|e| CliError::from_write_error(e, "machine_not_found"))?;
+            .map_err(|e| CliError::from_write_error(e, "machine_not_found", "config"))?;
     }
 
     // ⑧ 落盘（乐观锁 expect = 当前指纹）。
     let expect = resolve_expect(&path, args.expect_hash.as_deref())?;
     let outcome = MachineWriter::upsert(&path, &cfg, expect)
-        .map_err(|e| CliError::from_write_error(e, "machine_not_found"))?;
+        .map_err(|e| CliError::from_write_error(e, "machine_not_found", "config"))?;
 
     let action = if created {
         "新建"
@@ -241,7 +241,7 @@ fn edit(ctx: &Ctx, args: &MachineEditArgs) -> Result<(), CliError> {
     let warnings = preflight_or_fail(ctx, &cfg, &args.id)?;
     let expect = resolve_expect(&path, args.expect_hash.as_deref())?;
     let outcome = MachineWriter::upsert(&path, &cfg, expect)
-        .map_err(|e| CliError::from_write_error(e, "machine_not_found"))?;
+        .map_err(|e| CliError::from_write_error(e, "machine_not_found", "config"))?;
 
     let text = format!(
         "已保存机床: {}\n厂商/型号: {} / {}\n配置键: {} 个\n文件: {}\n动作: {}\n\
@@ -284,7 +284,7 @@ fn rm(ctx: &Ctx, args: &MachineRmArgs) -> Result<(), CliError> {
     }
     let expect = resolve_expect(&path, args.expect_hash.as_deref())?;
     let outcome = MachineWriter::remove(&path, &args.id, expect)
-        .map_err(|e| CliError::from_write_error(e, "machine_not_found"))?;
+        .map_err(|e| CliError::from_write_error(e, "machine_not_found", "config"))?;
 
     let text = format!("已删除机床: {}\n文件: {}\n", args.id, path.display());
     let data = serde_json::json!({
@@ -320,8 +320,12 @@ fn test(ctx: &Ctx, args: &MachineTestArgs) -> Result<(), CliError> {
         &specs,
     )?;
 
-    // 渲染前校验（与 render 同口径；有 Error 即阻断，退出码 1）
-    let report = gen.registry().validate(&args.template, &params)?;
+    // 渲染前校验（与 render 同口径；有 Error 即阻断，退出码 1）。
+    // 带本命令的机床上下文（P0-2）：`machine test` 的意义就是"在这台机床上
+    // 能不能出程序"，转速上界必须按这台机床的 `max_spindle_rpm` 判。
+    let report = gen
+        .registry()
+        .validate_with_machine(&args.template, &params, Some(&machine))?;
     if report.has_errors() {
         // 报告走 stderr：stdout 要留给 G-code（与 render 一致）
         eprintln!("{}", report.summary());
@@ -474,7 +478,8 @@ fn machine_path(ctx: &Ctx, file: &MachineFileArgs) -> Result<PathBuf, CliError> 
 fn load_machines(
     path: &Path,
 ) -> Result<std::collections::BTreeMap<String, MachineConfig>, CliError> {
-    MachineWriter::load(path).map_err(|e| CliError::from_write_error(e, "machine_not_found"))
+    MachineWriter::load(path)
+        .map_err(|e| CliError::from_write_error(e, "machine_not_found", "config"))
 }
 
 /// 内置机床保护（AC-2.2）：内置 3 预设不可改，`args`(2)，不落盘。
@@ -515,7 +520,7 @@ fn parse_set(kv: &str) -> Result<(String, String), CliError> {
 /// 实际写盘仍以当前快照为 `expect`。
 fn resolve_expect(path: &Path, want: Option<&str>) -> Result<Option<FileFingerprint>, CliError> {
     let current = WriteKernel::read_fingerprint(path)
-        .map_err(|e| CliError::from_write_error(e, "machine_not_found"))?;
+        .map_err(|e| CliError::from_write_error(e, "machine_not_found", "config"))?;
     match want {
         None => Ok(current),
         Some(want) => match current {
@@ -566,8 +571,73 @@ fn action_label(action: WriteAction) -> &'static str {
 mod tests {
     use super::*;
 
-    /// 建一个临时模板目录并写入给定模板，返回 `(目录, 供 Drop 清理的守卫路径)`。
-    fn template_dir_with(tag: &str, files: &[(&str, &str)]) -> PathBuf {
+    /// 尽力删除目录：先递归清只读，再 `remove_dir_all`；失败则清只读后重试一次；
+    /// 仍失败则 panic（带路径与两次错误）—— 绝不静默吞掉失败。
+    ///
+    /// 与 `cli/tests/cli_machine_e2e.rs` 的同名辅助逻辑一致：Windows 上
+    /// `remove_dir_all` 遇到只读文件 / 只读目录会以 os error 5 失败，故先递归去只读。
+    fn remove_dir_all_force(dir: &Path) {
+        clear_readonly_recursive(dir);
+        match std::fs::remove_dir_all(dir) {
+            Ok(()) => {}
+            Err(first) => {
+                clear_readonly_recursive(dir);
+                if let Err(second) = std::fs::remove_dir_all(dir) {
+                    panic!(
+                        "清理残留临时目录失败（已两次尝试清除只读属性）：{}（首次错误: {first}；重试错误: {second}）",
+                        dir.display()
+                    );
+                }
+            }
+        }
+    }
+
+    /// 递归清除目录树下所有条目（含目录本身）的只读属性，使 `remove_dir_all` 可成功。
+    fn clear_readonly_recursive(dir: &Path) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for e in entries.flatten() {
+            let p = e.path();
+            if p.is_dir() {
+                clear_readonly_recursive(&p);
+            }
+            let _ = clear_readonly(&p);
+        }
+        let _ = clear_readonly(dir);
+    }
+
+    /// 清除单个路径的只读属性（失败忽略：调用方靠后续 `remove_dir_all` 的错误兜底）。
+    fn clear_readonly(p: &Path) -> std::io::Result<()> {
+        let mut perms = std::fs::metadata(p)?.permissions();
+        if perms.readonly() {
+            #[allow(clippy::permissions_set_readonly_false)]
+            perms.set_readonly(false);
+            std::fs::set_permissions(p, perms)?;
+        }
+        Ok(())
+    }
+
+    /// RAII 临时模板目录：用例结束（含 panic 展开）即回收自己的目录树，避免
+    /// `%TEMP%\nctool_machine_unit_*` 跨用例堆积。`Deref` 到 `Path`，故既有的
+    /// `dir.join(...)` 用法不变；需要 `PathBuf` 时显式 `to_path_buf()`。
+    struct TmpDir(PathBuf);
+
+    impl std::ops::Deref for TmpDir {
+        type Target = Path;
+        fn deref(&self) -> &Path {
+            &self.0
+        }
+    }
+
+    impl Drop for TmpDir {
+        fn drop(&mut self) {
+            remove_dir_all_force(&self.0);
+        }
+    }
+
+    /// 建一个临时模板目录并写入给定模板，返回**自带 Drop 清理**的目录守卫。
+    fn template_dir_with(tag: &str, files: &[(&str, &str)]) -> TmpDir {
         let dir = std::env::temp_dir().join(format!(
             "nctool_machine_unit_{}_{}",
             std::process::id(),
@@ -578,7 +648,7 @@ mod tests {
         for (name, src) in files {
             std::fs::write(dir.join(name), src).unwrap();
         }
-        dir
+        TmpDir(dir)
     }
 
     /// 缺键集合来自"模板实际引用了哪些 `machine.*`"——**但必须排除元信息键**
@@ -594,7 +664,7 @@ mod tests {
             )],
         );
         let mut ctx = Ctx::for_test();
-        ctx.template_dir = Some(dir.clone());
+        ctx.template_dir = Some(dir.to_path_buf());
 
         let (keys, warnings) = required_machine_keys(&ctx, "hero_x9").unwrap();
         assert!(warnings.is_empty(), "不应有告警：{warnings:?}");
@@ -607,8 +677,6 @@ mod tests {
         }
         // 内置模板恒在注册表中，故其引用的键也应出现。
         assert!(keys.contains("program_prefix"), "{keys:?}");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 注册表构建失败（模板目录里有坏模板）→ 降级为空集 + **一条明确告警**，
@@ -617,14 +685,12 @@ mod tests {
     fn required_machine_keys_degrade_to_warning_on_broken_registry() {
         let dir = template_dir_with("broken", &[("bad.j2", "{% if %}\n")]);
         let mut ctx = Ctx::for_test();
-        ctx.template_dir = Some(dir.clone());
+        ctx.template_dir = Some(dir.to_path_buf());
 
         let (keys, warnings) = required_machine_keys(&ctx, "hero_x9").unwrap();
         assert!(keys.is_empty(), "降级时应返回空集：{keys:?}");
         assert_eq!(warnings.len(), 1, "{warnings:?}");
         assert!(warnings[0].contains("无法加载模板注册表"), "{warnings:?}");
-
-        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

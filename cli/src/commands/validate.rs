@@ -30,7 +30,13 @@ pub fn run(ctx: &Ctx, args: &ValidateArgs) -> Result<(), CliError> {
 
     // 校验：内置模板与目录模板都带规格——目录模板的规格来自头部
     // `{# PARAMS: #}` 参数表与清单 `params` 覆盖层（见 core::manifest）。
-    let report: ValidationReport = gen.registry().validate(&name, &params)?;
+    // 带机床上下文（P0-2）：与 `render` 同口径解析 `--machine`/配置默认机床，
+    // 转速上界等 `max_from` 动态约束按该机床联动——否则 validate 放行的值
+    // 会被 render 拒绝（同一份参数两个结论）。
+    let machine = ctx.resolve_machine(None)?;
+    let report: ValidationReport =
+        gen.registry()
+            .validate_with_machine(&name, &params, Some(&machine))?;
 
     let has_errors = report.has_errors();
     let data = crate::output::report_json(&name, &report);

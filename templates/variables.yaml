@@ -97,16 +97,30 @@ variables:
     kind: integer
   - name: U_RTD # 粗铣刀具直径 (mm)
     kind: integer
+  # ── 转速/进给静态上界（Q-02 / P1-13）：保守值，堵 `S999999` / `F999999`
+  #    校验全绿的口子。机床联动上界见 P0-2（max_spindle_rpm），此处为下限。
+  #    守卫测试：`variable_library_declares_upper_bound_for_all_rpm_params`
+  #    （名字含 RPM 的键必须声明 max；下列 8 键还必须声明 min）。
   - name: U_RTRPM # 粗铣刀转速 (RPM)
     kind: integer
+    min: 1
+    max: 6000
   - name: U_RTRF # 粗铣进给速度 (mm/min)
     kind: integer
+    min: 1
+    max: 6000
   - name: U_RTFF # 半精铣进给速度 (mm/min)
     kind: integer
+    min: 1
+    max: 6000
   - name: U_FTRPM # 精铣刀转速 (RPM)
     kind: integer
+    min: 1
+    max: 6000
   - name: U_FTF # 精铣进给速度 (mm/min)
     kind: number
+    min: 1
+    max: 6000
   - name: U_FTD # 精铣刀直径 (mm)
     kind: integer
   - name: U_ALBR # 粗铣后侧面单边余量 (mm)
@@ -126,8 +140,12 @@ variables:
   # ══ 倒角刀 R 参数（uz_dj_x.j2；源库为 read_only 常量）══════════
   - name: R1 # 倒角刀转速 (rpm)
     kind: integer
+    min: 1
+    max: 6000
   - name: R2 # 倒角刀进给 (mm/min)
     kind: integer
+    min: 1
+    max: 6000
   - name: R3 # 倒角刀直径 (mm)
     kind: integer
   - name: R4 # 刀具 Z 向下降深度 (mm)
@@ -176,6 +194,8 @@ variables:
     kind: number
   - name: speed_limit # 转速上限 (r/min)
     kind: integer
+    min: 1
+    max: 6000
 
   # ══ 轨迹段（G 代码块）════════════════════════════════════════
   # 这些参数的值是**整段 G 代码**（源库 default_value 就是完整程序块），
