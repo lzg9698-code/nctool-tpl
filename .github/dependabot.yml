@@ -8,6 +8,11 @@ updates:
       time: "08:00"
       timezone: Asia/Shanghai
     open-pull-requests-limit: 5
+    groups:
+      actions-minor-patch:
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: cargo
     directory: "/"
@@ -17,6 +22,11 @@ updates:
       time: "08:30"
       timezone: Asia/Shanghai
     open-pull-requests-limit: 5
+    groups:
+      cargo-minor-patch:
+        update-types:
+          - minor
+          - patch
 
   - package-ecosystem: npm
     directory: "/gui/frontend"
@@ -26,3 +36,12 @@ updates:
       time: "09:00"
       timezone: Asia/Shanghai
     open-pull-requests-limit: 5
+    groups:
+      frontend-minor-patch:
+        update-types:
+          - minor
+          - patch
+    ignore:
+      - dependency-name: "@types/node"
+        update-types:
+          - version-update:semver-major
