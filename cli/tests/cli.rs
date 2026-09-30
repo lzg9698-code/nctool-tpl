@@ -828,10 +828,25 @@ fn http_request_with_host(
     body: &str,
     host: &str,
 ) -> std::io::Result<Vec<u8>> {
-    let mut stream = TcpStream::connect_timeout(
-        &format!("127.0.0.1:{port}").parse().unwrap(),
-        Duration::from_millis(300),
-    )?;
+    let addr = format!("127.0.0.1:{port}").parse().unwrap();
+    // macOS CI occasionally returns EAGAIN from connect_timeout when several CLI/UI
+    // integration tests are creating child processes and loopback sockets concurrently.
+    // Retry only transient nonblocking errors; a genuinely closed listener still fails fast.
+    let deadline = std::time::Instant::now() + Duration::from_secs(2);
+    let mut stream = loop {
+        match TcpStream::connect_timeout(&addr, Duration::from_millis(300)) {
+            Ok(stream) => break stream,
+            Err(error)
+                if matches!(
+                    error.kind(),
+                    std::io::ErrorKind::WouldBlock | std::io::ErrorKind::Interrupted
+                ) && std::time::Instant::now() < deadline =>
+            {
+                std::thread::sleep(Duration::from_millis(25));
+            }
+            Err(error) => return Err(error),
+        }
+    };
     stream.set_read_timeout(Some(Duration::from_millis(500)))?;
     let request = format!(
         "{method} {path} HTTP/1.1\r\nHost: {host}\r\nConnection: close\r\nContent-Type: application/json\r\nContent-Length: {}\r\n\r\n{body}",

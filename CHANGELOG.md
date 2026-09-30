@@ -20,6 +20,8 @@
 - Release workflow 按 job 缩小 `GITHUB_TOKEN` 权限；crates.io token 只在手动发布步骤注入，二进制 job 不可读取。
 - 前端开发基线改为 Node 24 LTS；保留 Node 22.12+ 兼容范围并由 npm 严格检查，CI 与本机共用 `.nvmrc`，Node 类型定义与运行时对齐。
 - 前端生产构建同时类型检查应用代码和 Vite 配置；统一 `.editorconfig`、`.npmrc` 与本地 `.env` 忽略规则。
+- Dependabot 将 React/ReactDOM 类型和 Vite/plugin-react 的 major 升级分别成组，避免拆开发出的 peer dependency 冲突 PR。
+- macOS CLI 集成测试对 loopback `connect_timeout` 的瞬时 `EAGAIN`/`Interrupted` 做有界重试。
 
 #### Added
 
