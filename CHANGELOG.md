@@ -16,7 +16,7 @@
 
 - 三个 crates 及其 workspace 内依赖约束升级为 `1.0.0`；该版本尚未发布。
 - Release workflow 的 tag 事件只执行验证和二进制构建；crates.io 上传需手动触发并显式启用。
-- 候选 tag 的 GitHub Release 保持草稿预发布状态，等待跨平台构建完成后再人工定稿。
+- 候选 tag 的 GitHub Release 标记为预发布；跨平台构建通过后附有三平台 CLI 资产，尚未定稿。
 - 修复 macOS 临时目录经过 symlink 且预设父目录尚未创建时，路径规范化漏掉模板根保护的问题。
 - 请求体读线程上限测试改为等待服务端计数器达到饱和，避免慢 CI runner 上固定 sleep 导致误报。
 

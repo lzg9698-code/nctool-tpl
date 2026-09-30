@@ -1,7 +1,7 @@
 # 1.0 API 升级就绪度
 
-> 状态：**1.0.0 发布候选已完成代码与版本收口；原生桌面人工验收仍未完成。**
-> 记录日期：2026-09-30。本文描述当前工作区，不代表已发布或经过真实机床验证。
+> 状态：**`nctool-tpl-v1.0.0` 候选 tag 已推送，CI 与三平台 CLI 构建通过；原生桌面人工验收仍未完成。**
+> 记录日期：2026-09-30。尚未发布 crates.io，也未完成真实机床工艺验证。
 
 ## 当前判断
 
@@ -9,7 +9,9 @@
 两个已登记的缓存一致性接口，整合了 Web/Tauri 的业务执行路径，并修复了资产管理的并发覆盖、
 损坏预设覆盖、默认机床误删等问题。工作区质量门和包内容检查通过后，可以评估是否冻结 API；
 三个可发布 crate 的版本和内部依赖约束已同步为 `1.0.0`，根 crate 的发布包 dry-run 通过。
-发布准备提交 `afad9ef` 已推送至 `master`；tag 尚未推送，也未实际发布。
+候选 tag `nctool-tpl-v1.0.0` 与提交 `4bd9466` 一致；该 tag 的 [CI](https://github.com/lzg9698-code/nctool-tpl/actions/runs/36700943120)
+和 [Release workflow](https://github.com/lzg9698-code/nctool-tpl/actions/runs/36700947756) 均通过，三个 crates.io
+发布步骤均跳过。GitHub Release 为预发布，包含 Linux、Windows、macOS CLI 二进制；没有上传 crate。
 
 1.0 的产品定位仍是**G-code 模板开发工具**。语法通过、参数通过和 golden 测试通过，都不代表
 NC 程序已适用于某台具体机床。内置预设和新导入模板仍须由工艺人员按机床手册复核并空运行，
@@ -53,16 +55,16 @@ NC 程序已适用于某台具体机床。内置预设和新导入模板仍须�
 | 发布包内容守卫 | 通过：75 个文件，无非库资产 |
 | Markdown 链接与锚点检查 | 通过 |
 
-## 发布 tag 前仍需完成
+## 正式 1.0.0 发布前仍需完成
 
 1. 在支持的原生桌面环境按 [GUI 用户指南](GUI_USER_GUIDE.md) 和人工验收清单走查创建/编辑/冲突处理、
    默认机床保护、预设往返、保存 NC 文件和渲染错误反馈。当前完成的是 headless Chromium Web UI
    走查与 Tauri Rust 命令测试；Linux 容器没有可交互的桌面会话。
-2. 版本与依赖约束已统一到 `1.0.0`。本次只打候选 tag，不发布 crates.io；tag 工作流已改为默认跳过
-   所有发布步骤。根 crate 的本地 `cargo publish --dry-run` 通过；core/cli 在前序依赖尚未发布时无法做
-   registry dry-run。若以后决定发布 crates.io，再按 `docs/RELEASE.md` 的依赖顺序显式手动运行发布工作流。
-3. 在 Windows / macOS CI 完成 release 构建和安装验证；本轮 Linux `custom-protocol` release 编译
-   通过，但容器没有桌面会话，不能证明打包后的原生窗口可启动。
+2. 若决定发布 crates.io，再按 `docs/RELEASE.md` 的依赖顺序显式手动运行发布 workflow。当前 tag 事件
+   默认跳过发布；根 crate 的本地 `cargo publish --dry-run` 已通过，core/cli 的 registry dry-run 需等待
+   上游 crate 已发布后再运行。
+3. Windows / macOS CI 的 CLI 测试与 release 构建已通过，三个平台 CLI 资产已挂到预发布。原生 Tauri GUI
+   的安装、启动与人工 UI 验收仍未完成；本轮 Linux 容器没有可交互桌面，不能以 CLI 二进制构建替代 GUI 验收。
 4. 工艺人员仍需核对内置机床键值和计划用于实际加工的模板，并在目标机床空运行。项目应继续显著
    标注尚未复核的模板，不得把静态扫描结果升级成 `verified`。
 

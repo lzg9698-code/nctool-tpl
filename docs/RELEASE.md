@@ -45,7 +45,7 @@
 而这类分辨正是应该被流程消除的东西。
 
 ```bash
-# 推候选 tag：运行验证、三平台 CLI 构建并更新为草稿预发布，不上传 crates.io
+# 推候选 tag：运行验证、三平台 CLI 构建并创建/更新 GitHub 预发布，不上传 crates.io
 git tag nctool-tpl-v1.0.0 && git push origin nctool-tpl-v1.0.0
 ```
 
