@@ -5,6 +5,7 @@ const state = {
   templates: API.mode === "server" ? [] : TEMPLATES,
   machines: API.mode === "server" ? [] : Object.values(MACHINE_PRESETS),
   machineSchema: [],        /* 机床键规格（服务端 `/api/machines` 的 schema；演示模式为空） */
+  machineFingerprint: null,
   templateDetails: {},
   cat: "全部",
   query: "",
@@ -27,7 +28,7 @@ const $ = id => document.getElementById(id);
 const CATS = ["全部", "通用", "铣削", "车削", "钻孔", "切槽", "机床"];
 
 /* localStorage 安全访问：Chrome 在 file:// 下会抛 SecurityError，
-   隐私模式同样可能拒绝写入。界面是只读工具，存取失败一律降级为「无持久化」，
+   隐私模式同样可能拒绝写入。仅用于演示模式偏好与缓存，失败时降级为「无持久化」，
    绝不让持久化问题中断主流程。 */
 const LS = {
   get(k) { try { return localStorage.getItem(k); } catch { return null; } },
@@ -74,6 +75,9 @@ function tplCardHtml(t) {
   const specs = t.params || [];
   const reqN = specs.filter(p => p.required && paramDefault(p) === undefined).length;
   const optN = specs.length - reqN;
+  const reviewLabels = { unreviewed: "未评审", reviewed: "已评审", verified: "已空运行" };
+  const badgeText = reviewLabels[t.status] || (t.builtin ? "内置" : "磁盘");
+  const badgeClass = t.status === "unreviewed" ? "review-pending" : t.builtin ? "builtin" : "demo";
   /* v2：该模板已有的预设直接挂到卡片上，让「复用」发生在选模板之前 */
   const presets = PRESET_CACHE.filter(p => p.template === t.name).slice(0, 2);
   const chips = presets.map(p => {
@@ -86,8 +90,8 @@ function tplCardHtml(t) {
      属性与文本两处都要转：漏掉属性那处，一个 `"` 就能加出 onerror。 */
   return `<div class="tpl-item ${state.selected === t.name ? "active" : ""}" data-tpl="${esc(t.name)}">
     <div class="row1"><span class="name">${esc(t.name)}</span>
-      <span class="badge ${t.builtin ? "builtin" : "demo"}">${t.builtin ? "内置" : "示例"}</span>
-      <button class="chip" data-derive="${esc(t.name)}" title="以该模板为蓝本派生新模板">派生</button></div>
+      <span class="badge ${badgeClass}">${esc(badgeText)}</span>
+      <button class="chip" data-derive="${esc(t.name)}" ${t.builtin ? "disabled" : ""} title="${t.builtin ? "内置模板只读，请选择磁盘模板派生" : "以该模板为蓝本派生新模板"}">派生</button></div>
     <div class="desc">${esc(t.description || "")}</div>
     <div class="meta"><span>${esc(t.category)}</span><span>必选 ${reqN}</span><span>可选 ${optN}</span></div>
     ${chips ? `<div class="tpl-presets">${chips}</div>` : ""}
@@ -260,7 +264,11 @@ function fieldHtml(t, s) {
   let input = "";
   const range = [s.min, s.max].filter(x => x !== undefined).map(x => `${esc(x)}`).join(" ~ ");
   if (s.kind === "Bool") {
-    input = `<label class="switch"><input type="checkbox" data-param="${name}" ${cur ? "checked" : ""}><span class="slider"></span></label>`;
+    input = `<select data-param="${name}">
+      <option value="" ${cur === undefined ? "selected" : ""}>— 未设置 —</option>
+      <option value="true" ${cur === true ? "selected" : ""}>true</option>
+      <option value="false" ${cur === false ? "selected" : ""}>false</option>
+    </select>`;
   } else if (optionValues(s).length) {
     /* 白名单参数用下拉框：后端会拒绝白名单外的取值，让用户在这里就选对 */
     const vals = optionValues(s);
@@ -324,7 +332,10 @@ function collectParams(t) {
     if (s.derive) return; /* 派生参数由系统注入，不由表单提供 */
     const inp = $("formBody").querySelector(`[data-param="${selEsc(s.name)}"]`);
     if (!inp) return;
-    if (s.kind === "Bool") { p[s.name] = inp.checked; return; }
+    if (s.kind === "Bool") {
+      if (inp.value !== "") p[s.name] = inp.value === "true";
+      return;
+    }
     /* 空值统一记为 undefined（"未提供"，交给后端默认值/条件必选判定） */
     p[s.name] = coerceParamValue(s, inp.value);
   });
@@ -335,6 +346,7 @@ function collectParams(t) {
 
 /* —— 预览 + 校验 —— */
 let renderTimer = null;
+let renderController = null;
 function scheduleRender() {
   clearTimeout(renderTimer);
   renderTimer = setTimeout(() => doRender(), 300);
@@ -343,11 +355,19 @@ async function doRender() {
   const t = state.templateDetails[state.selected] || state.templates.find(x => x.name === state.selected);
   if (!t) return;
   const seq = ++state.renderSeq;
+  if (renderController) renderController.abort();
+  renderController = new AbortController();
   $("statusBar").className = "st rendering";
   $("statusBar").querySelector("span:last-child").textContent = "渲染中…";
   $("rHead").classList.add("busy");
   const t0 = performance.now();
-  const res = await API.render(t.name, state.params, state.machine, state.options);
+  let res;
+  try {
+    res = await API.render(t.name, state.params, state.machine, state.options, renderController.signal);
+  } catch (e) {
+    if (e && e.name === "AbortError") return;
+    throw e;
+  }
   if (seq !== state.renderSeq) return;
   const ms = (performance.now() - t0).toFixed(1);
   $("rHead").classList.remove("busy");
@@ -666,6 +686,8 @@ function highlightSource(src) {
    7. 交互事件
    ═══════════════════════════════════════════════════════════════ */
 async function selectTemplate(name, opts) {
+  if (renderController) renderController.abort();
+  state.renderSeq++;
   state.selected = name;
   state.params = {};
   let t = state.templates.find(x => x.name === name);
@@ -680,12 +702,13 @@ async function selectTemplate(name, opts) {
   /* 默认值预填（server 模式默认值可能是带标签 ParamValue，统一经 paramDefault 取值） */
   (t.params || []).forEach(s => {
     const def = paramDefault(s);
-    if (s.kind === "Bool") state.params[s.name] = !!def;
+    if (s.kind === "Bool") state.params[s.name] = def === undefined ? undefined : !!def;
     else if (def !== undefined) state.params[s.name] = def;
     else state.params[s.name] = undefined;
   });
   $("crumb").innerHTML = `· <b>${esc(t.category)}</b>`;
-  $("panelTitle").textContent = t.name;
+  const reviewNotice = t.status === "unreviewed" ? " · 未经工艺评审" : t.status === "reviewed" ? " · 已工艺评审" : t.status === "verified" ? " · 已机床空运行" : "";
+  $("panelTitle").textContent = t.name + reviewNotice;
   pushRecent(name);
   $("resetBtn").hidden = false;
   if (window.innerWidth <= 767) setMobileView("params");
@@ -703,6 +726,28 @@ async function selectTemplate(name, opts) {
   $("statAscii").className = "stat";
   switchTab("gcode");
   doRender();
+}
+
+async function reloadTemplateList(selectName) {
+  const r = await API.listTemplates();
+  if (!r.ok) { toast(r.error?.message || "模板列表刷新失败", "err"); return false; }
+  state.templates = r.data.templates || [];
+  state.templateDetails = {};
+  renderSidebar();
+  if (selectName && state.templates.some(t => t.name === selectName)) await selectTemplate(selectName);
+  return true;
+}
+
+async function createTemplate() {
+  if (API.mode !== "server") { toast("请通过 nctool ui 服务模式创建模板", "warn"); return; }
+  const name = prompt("新模板名称（可带 .j2）");
+  if (!name) return;
+  const category = prompt("分类：general / milling / turning / drilling / grooving / machine", "general");
+  if (!category) return;
+  const r = await API.createTemplate(name, category);
+  if (!r.ok) { toast(r.error?.message || "创建失败", "err"); return; }
+  toast(r.data.manifestWarning ? `模板已创建；${r.data.manifestWarning}` : "模板已创建", r.data.manifestWarning ? "warn" : "ok");
+  await reloadTemplateList(r.data.name);
 }
 
 function switchTab(name) {
@@ -730,15 +775,61 @@ function renderMachineSel() {
   sel.value = state.machine;
 }
 
-/* 当前机床（用于只读弹窗；找不到就退回内置预设） */
+/* 当前机床（找不到就退回内置预设） */
 function currentMachine() {
   return state.machines.find(m => m.id === state.machine)
     || Object.values(MACHINE_PRESETS).find(m => m.id === state.machine)
     || null;
 }
 
-/* 只读「机床配置」弹窗：当前键值 + 键规格 + 可复制的 CLI 命令。
-   写入通道只有 CLI —— 浏览器不做机床写操作（Q8），故这里没有保存按钮。 */
+async function reloadMachines() {
+  const r = await API.listMachines();
+  if (!r.ok) { toast(r.error?.message || "机床列表刷新失败", "err"); return false; }
+  state.machines = r.data.machines || [];
+  state.machineSchema = r.data.schema || [];
+  state.machineFingerprint = r.data.configFingerprint || null;
+  renderMachineSel(); renderMachineCfg();
+  return true;
+}
+
+function editMachine(create) {
+  if (API.mode !== "server") { toast("演示模式不支持写入机床配置", "warn"); return; }
+  const current = create ? null : currentMachine();
+  if (!create && (!current || current.builtin)) { toast("请选择自定义机床后再编辑", "warn"); return; }
+  $("mcEditId").value = current?.id || "";
+  $("mcEditId").readOnly = !create;
+  $("mcEditVendor").value = current?.vendor || "";
+  $("mcEditModel").value = current?.model || "";
+  const cfg = current?.config || (create ? (state.machines.find(m => m.id === "generic")?.config || {}) : {});
+  const fields = state.machineSchema.map(s => {
+    const val = cfg[s.key] ?? "";
+    const control = s.kind === "Choice" && s.options?.length
+      ? `<select data-mc-key="${esc(s.key)}"><option value="">（未设置）</option>${s.options.map(o => `<option value="${esc(o)}" ${String(val) === String(o) ? "selected" : ""}>${esc(o)}</option>`).join("")}</select>`
+      : `<input type="text" data-mc-key="${esc(s.key)}" value="${esc(val)}">`;
+    return `<label>${esc(s.key)}<small>${esc(s.description || "")}</small>${control}</label>`;
+  });
+  for (const [key, val] of Object.entries(cfg)) {
+    if (!state.machineSchema.some(s => s.key === key)) fields.push(`<label>${esc(key)}<small>扩展键（保留）</small><input type="text" data-mc-key="${esc(key)}" value="${esc(val)}"></label>`);
+  }
+  $("mcEditConfig").innerHTML = fields.join("");
+  $("mcEditForm").style.display = "block";
+  $("mcEditId").focus();
+}
+
+async function saveMachineEdit() {
+  const config = {};
+  $("mcEditConfig").querySelectorAll("[data-mc-key]").forEach(el => { if (el.value !== "") config[el.dataset.mcKey] = el.value; });
+  const machine = { id: $("mcEditId").value.trim(), vendor: $("mcEditVendor").value.trim(), model: $("mcEditModel").value.trim(), config };
+  if (!machine.id) { toast("机床 ID 不能为空", "err"); return; }
+  const r = await API.saveMachine(machine, state.machineFingerprint);
+  if (!r.ok) { toast(r.error?.message || "机床保存失败", "err"); return; }
+  toast((r.data.warnings || []).length ? "机床已保存，有配置警告" : "机床配置已保存", (r.data.warnings || []).length ? "warn" : "ok");
+  $("mcEditForm").style.display = "none";
+  state.machine = machine.id;
+  await reloadMachines();
+}
+
+/* 机床配置弹窗：当前键值 + 键规格 + 自定义机床管理。 */
 function renderMachineCfg() {
   const m = currentMachine();
   const id = m ? m.id : state.machine;
@@ -768,6 +859,10 @@ function renderMachineCfg() {
   const schemaKeys = state.machineSchema.map(s => s.key);
   const sample = schemaKeys.find(k => k in cfg) || keys[0] || "program_prefix";
   $("mcCmd").value = `nctool machine edit ${id} --set ${sample}=<值>`;
+  const custom = !!m && !m.builtin && API.mode === "server";
+  $("mcEditBtn").disabled = !custom;
+  $("mcDeleteBtn").disabled = !custom;
+  $("mcNewBtn").disabled = API.mode !== "server";
 }
 
 /* Toast */
@@ -814,15 +909,50 @@ function renderPresetList() {
       ${detail}
       <span class="spacer"></span>
       <button class="btn" data-load="${esc(p.name)}">载入</button>
+      <button class="btn" data-rename="${esc(p.name)}">重命名</button>
+      <button class="btn" data-export="${esc(p.name)}">导出</button>
       <button class="btn" data-del="${esc(p.name)}">删除</button></li>`;
   }).join("");
   ul.querySelectorAll("[data-load]").forEach(b => b.addEventListener("click", () => loadPreset(b.dataset.load)));
+  ul.querySelectorAll("[data-rename]").forEach(b => b.addEventListener("click", async () => {
+    const oldName = b.dataset.rename;
+    const newName = prompt("新预设名称", oldName);
+    if (!newName || newName === oldName) return;
+    const r = await API.renamePreset(oldName, newName);
+    if (!r.ok) { toast(r.error?.message || "重命名失败", "err"); return; }
+    toast("预设已重命名"); await refreshPresets();
+  }));
+  ul.querySelectorAll("[data-export]").forEach(b => b.addEventListener("click", () => exportPresets(b.dataset.export)));
   ul.querySelectorAll("[data-del]").forEach(b => b.addEventListener("click", async () => {
     const r = await API.deletePreset(b.dataset.del);
     if (!r.ok) { toast((r.error && r.error.message) || "删除失败", "err"); return; }
     toast("预设已删除");
     refreshPresets();
   }));
+}
+
+async function exportPresets(name) {
+  const r = await API.exportPresets(name);
+  if (!r.ok) { toast(r.error?.message || "导出失败", "err"); return; }
+  const blob = new Blob([r.data.yaml], { type: "text/yaml;charset=utf-8" });
+  const a = document.createElement("a"); a.href = URL.createObjectURL(blob);
+  a.download = name ? `${name}.yaml` : "nctool-presets.yaml"; a.click(); URL.revokeObjectURL(a.href);
+  toast(`已导出 ${r.data.count} 个预设`);
+}
+
+async function importPresets() {
+  if (API.mode !== "server") { toast("演示模式不支持导入预设文件", "warn"); return; }
+  const file = $("presetImportFile").files?.[0];
+  if (!file) { toast("请先选择 YAML 文件", "warn"); return; }
+  const yaml = await file.text();
+  let r = await API.importPresets(yaml, false);
+  if (!r.ok && r.error?.kind === "name_conflict" && confirm(`${r.error.message}。覆盖同名预设？`)) r = await API.importPresets(yaml, true);
+  if (!r.ok) { toast(r.error?.message || "导入失败", "err"); return; }
+  $("presetImportFile").value = "";
+  const warnings = r.data.warnings || [];
+  toast(warnings.length ? `已导入 ${r.data.count} 个预设，部分模板未完整校验` : `已导入 ${r.data.count} 个预设`, warnings.length ? "warn" : "ok");
+  if (warnings.length) alert(warnings.join("\n"));
+  await refreshPresets();
 }
 
 /** 保存当前参数为预设。同名时先确认再带 force 重试。 */
@@ -970,6 +1100,11 @@ function init() {
   /* 主题 */
   const saved = LS.get("nctool.theme");
   if (saved) setTheme(saved);
+  if (API.mode !== "server") {
+    $("presetImportFile").disabled = true;
+    $("presetImportBtn").disabled = true;
+    $("presetImportBtn").title = "演示模式仅支持本地存储的预设导出；文件导入请运行 nctool ui";
+  }
 
   /* 机床（v2：切换后显式反馈「已按 X 重新生成」，机床属于输出目标而非界面偏好） */
   $("machineSel").addEventListener("change", e => {
@@ -991,11 +1126,14 @@ function init() {
     const item = e.target.closest(".tpl-item"); if (!item) return;
     selectTemplate(item.dataset.tpl);
   });
+  $("createTemplateBtn").addEventListener("click", createTemplate);
   $("deriveCopyBtn").addEventListener("click", () => {
     const name = $("deriveName").value.trim();
     if (!name) { toast("请输入新模板名", "warn"); return; }
-    const cmd = `nctool templates derive ${$("deriveSrc").textContent} ${name}`;
-    navigator.clipboard.writeText(cmd).then(() => toast("派生命令已复制")).catch(() => toast("复制失败", "err"));
+    API.deriveTemplate($("deriveSrc").textContent, name).then(async r => {
+      if (!r.ok) { toast(r.error?.message || "派生失败", "err"); return; }
+      closeModal("modalDerive"); toast("派生模板已创建"); await reloadTemplateList(r.data.name);
+    });
   });
 
   /* 顶栏 */
@@ -1008,6 +1146,14 @@ function init() {
     if (!t) return;
     $("srcName").value = t.name;
     $("srcArea").value = t.source || (API_REGISTRY[t.name] && API_REGISTRY[t.name].source) || "";
+    $("srcArea").readOnly = API.mode !== "server" || !!t.builtin;
+    $("srcSaveBtn").disabled = $("srcArea").readOnly;
+    $("srcRenameBtn").disabled = API.mode !== "server" || !!t.builtin;
+    $("srcCommandField").style.display = API.mode === "server" ? "none" : "";
+    $("srcCopyCmdBtn").style.display = API.mode === "server" ? "none" : "";
+    $("srcLintBtn").disabled = API.mode !== "server";
+    $("lintResult").style.display = "none";
+    $("srcSaveBtn").dataset.fingerprint = t.fingerprint || "";
     $("srcCmd").value = `nctool templates edit ${t.name}`;
     openModal("modalSrc");
   });
@@ -1015,11 +1161,38 @@ function init() {
     const name = $("srcName").value;
     if (API.mode !== "server") { toast("演示模式：源码来自内存，无外部改动", "warn"); return; }
     const res = await API.getTemplate(name);
-    if (res.ok) { $("srcArea").value = (res.data.template && res.data.template.source) || ""; toast("已重新加载预览"); }
+    if (res.ok) {
+      $("srcArea").value = (res.data.template && res.data.template.source) || "";
+      $("srcSaveBtn").dataset.fingerprint = res.data.template && res.data.template.fingerprint || "";
+      toast("源码与文件指纹已重新加载");
+    }
     else toast("重新加载失败", "err");
   });
   $("srcCopyCmdBtn").addEventListener("click", () => {
     navigator.clipboard.writeText($("srcCmd").value).then(() => toast("编辑命令已复制")).catch(() => toast("复制失败", "err"));
+  });
+  $("srcSaveBtn").addEventListener("click", async () => {
+    const name = $("srcName").value;
+    const fingerprint = $("srcSaveBtn").dataset.fingerprint;
+    if (!fingerprint) { toast("缺少文件指纹，请重新加载模板", "err"); return; }
+    const r = await API.saveTemplate(name, $("srcArea").value, fingerprint);
+    if (!r.ok) { toast(r.error?.message || "保存失败", "err"); return; }
+    closeModal("modalSrc"); toast("模板源码已保存"); await reloadTemplateList(name);
+  });
+  $("srcRenameBtn").addEventListener("click", async () => {
+    const oldName = $("srcName").value;
+    const newName = prompt("输入同目录下的新文件名", oldName.split("/").pop());
+    if (!newName || newName === oldName.split("/").pop()) return;
+    const r = await API.renameTemplate(oldName, newName);
+    if (!r.ok) { toast(r.error?.message || "重命名失败", "err"); return; }
+    closeModal("modalSrc"); toast("模板已重命名"); await reloadTemplateList(r.data.name);
+  });
+  $("srcLintBtn").addEventListener("click", async () => {
+    const r = await API.lintTemplate($("srcName").value, $("srcArea").value);
+    const box = $("lintResult"); box.style.display = "block";
+    if (!r.ok) { box.textContent = r.error?.message || "静态检查失败"; return; }
+    const findings = r.data || [];
+    box.textContent = findings.length ? findings.map(f => `第 ${f.line} 行 ${f.col} 列：${f.message}（建议：${f.suggestion}）`).join("\n") : "静态检查通过，未发现问题。";
   });
   $("copyBtn").addEventListener("click", copyGcode);
   $("downloadBtn").addEventListener("click", downloadGcode);
@@ -1028,6 +1201,8 @@ function init() {
     openPresetModal();
   });
   $("presetSaveBtn").addEventListener("click", saveCurrentPreset);
+  $("presetExportBtn").addEventListener("click", () => exportPresets());
+  $("presetImportBtn").addEventListener("click", importPresets);
   $("batchBtn").addEventListener("click", () => {
     $("batchArea").value = BATCH_EXAMPLE; $("batchResult").style.display = "none"; openModal("modalBatch");
   });
@@ -1047,17 +1222,41 @@ function init() {
   document.querySelectorAll(".modal-mask").forEach(m =>
     m.addEventListener("click", e => { if (e.target === m) closeModal(m.id); }));
 
-  /* 机床配置（只读）：查看当前键值与键规格 + 复制 CLI 命令。
-     原「自定义…」JSON 编辑框已删除 —— 它只写 localStorage，与 CLI / HTTP 读的
-     `nctool.toml` 是两个互不相干的仓库（UI 里改的机床 `nctool machine show` 看不见，
-     反之亦然），且绕过全部键名与取值校验。 */
+  /* 机床配置：所有写入走服务端 core writer，不写 localStorage。 */
   const customMachineBtn = document.createElement("button");
   customMachineBtn.className = "btn ghost";
   customMachineBtn.id = "customMachineBtn";
-  customMachineBtn.title = "查看机床配置与键规格（只读）";
+  customMachineBtn.title = "查看与管理机床配置";
   customMachineBtn.textContent = "配置…";
   $("machineSel").parentElement.appendChild(customMachineBtn);
   customMachineBtn.addEventListener("click", () => { renderMachineCfg(); openModal("modalMachineCfg"); });
+  $("mcNewBtn").addEventListener("click", () => editMachine(true));
+  $("mcEditBtn").addEventListener("click", () => editMachine(false));
+  $("mcSaveBtn").addEventListener("click", saveMachineEdit);
+  $("mcCancelBtn").addEventListener("click", () => { $("mcEditForm").style.display = "none"; });
+  $("mcDeleteBtn").addEventListener("click", async () => {
+    const m = currentMachine();
+    if (!m || m.builtin) { toast("内置机床不可删除", "warn"); return; }
+    if (!confirm(`删除自定义机床「${m.id}」？`)) return;
+    const r = await API.deleteMachine(m.id, state.machineFingerprint);
+    if (!r.ok) { toast(r.error?.message || "机床删除失败", "err"); return; }
+    if (state.machine === m.id) state.machine = "generic";
+    toast("机床配置已删除"); await reloadMachines();
+  });
+  $("mcConfigBtn").addEventListener("click", async () => {
+    const box = $("configInfo"); box.textContent = "正在读取…";
+    const r = await API.getConfig();
+    if (!r.ok) { box.textContent = r.error?.message || "读取配置失败"; return; }
+    const c = r.data;
+    box.textContent = [
+      `模板目录：${c.templateDir || "仅内置模板"}`,
+      `默认机床：${c.defaultMachine || "未指定"}`,
+      `项目配置：${c.projectPath || "未找到"}`,
+      `全局配置：${c.globalPath || "未找到"}`,
+      `自定义机床：${(c.customMachines || []).join(", ") || "无"}`,
+      `警告：${(c.warnings || []).join("；") || "无"}`,
+    ].join("\n");
+  });
   $("mcCopyBtn").addEventListener("click", () => {
     const cmd = $("mcCmd").value;
     const done = () => toast("命令已复制，粘到终端执行");
@@ -1142,6 +1341,7 @@ function init() {
       state.machines = machineRes.data.machines || [];
       /* 键规格来自服务端（core 的单一来源）；演示模式没有它，弹窗会说明 */
       state.machineSchema = machineRes.data.schema || [];
+      state.machineFingerprint = machineRes.data.configFingerprint || null;
       renderMachineSel();
       renderSidebar();
       /* 预设先于模板选中加载：模板卡片上的预设 chips 依赖 PRESET_CACHE */

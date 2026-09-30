@@ -23,8 +23,8 @@
 //!
 //! # 写路径
 //!
-//! 所有落盘都经 [`WriteKernel`]（原子写 + 乐观锁），唯一例外是 `rename` 中删除
-//! 旧文件（[`std::fs::remove_file`]）——写内核没有"删除"原语，且删除不是"写入"。
+//! 所有变更都经 [`WriteKernel`]（原子写 + 乐观锁）；`rename` 的旧文件删除也
+//! 持有同路径互斥锁并核对源指纹。
 
 use std::path::{Path, PathBuf};
 
@@ -113,6 +113,56 @@ impl TemplateWriter {
         WriteKernel::write_guarded(&path, source.as_bytes(), None)
     }
 
+    /// 新建模板后，将名称、分类和待复核状态追加到模板清单。
+    ///
+    /// 清单属于可选元数据：模板文件创建成功后，清单写入失败返回
+    /// [`ManifestOutcome::Degraded`]，由适配层把部分成功状态明确告知用户。
+    pub fn append_manifest_entry(
+        root: &Path,
+        rel_key: &str,
+        display_name: &str,
+        category: &str,
+    ) -> ManifestOutcome {
+        let path = root.join(MANIFEST_FILE);
+        let expected = match WriteKernel::read_fingerprint(&path) {
+            Ok(Some(fp)) => fp,
+            Ok(None) => {
+                return ManifestOutcome::Degraded(format!(
+                    "清单文件不存在（{}），未写入分类元数据，请手动补录",
+                    path.display()
+                ))
+            }
+            Err(e) => return ManifestOutcome::Degraded(format!("清单读取失败：{e}")),
+        };
+        let text = match crate::io_limit::read_text_capped(&path, crate::io_limit::MAX_SOURCE_BYTES)
+        {
+            Ok(t) => t,
+            Err(e) => return ManifestOutcome::Degraded(format!("清单读取失败：{e}")),
+        };
+        if !manifest_is_parseable(&text) {
+            return ManifestOutcome::Degraded(format!(
+                "清单解析失败（{}），未改动清单；请手动补录",
+                path.display()
+            ));
+        }
+        let body = vec![
+            format!(
+                "  name: {}",
+                serde_yaml::to_string(display_name)
+                    .unwrap_or_default()
+                    .trim_end()
+            ),
+            format!("  category: {category}"),
+            "  status: unreviewed".to_string(),
+        ];
+        let Some(updated) = manifest_append_entry(&text, rel_key, &body) else {
+            return ManifestOutcome::Degraded(
+                "清单缺少顶层 `templates:` 块，未写入分类元数据".to_string(),
+            );
+        };
+        write_manifest(&path, &updated, Some(expected))
+    }
+
     /// 保存已有模板：`root/<rel_key>`，乐观锁 `expect` 为打开时的快照指纹。
     ///
     /// `rel_key` 用 `/` 分隔，可含子目录（如 `turning/demo_gcode.j2`）；
@@ -148,16 +198,17 @@ impl TemplateWriter {
 
     /// 重命名：读旧文件 → 写新文件（要求不存在）→ 删旧文件 → 改写清单键。
     ///
-    /// 先写新、后删旧：任一步失败都不会丢失内容（最坏是两份并存，可人工清理）。
-    /// 删除旧文件是**唯一不经 [`WriteKernel`] 的变更**——写内核无"删除"原语。
+    /// 先写新、后按源指纹删除旧：若另一个编辑器同时改写源文件，删除会冲突，
+    /// 最坏留下两份，不会丢弃任一方的内容。
     pub fn rename(root: &Path, old_rel: &str, new_rel: &str) -> Result<RenameReport, WriteError> {
         let sp = SafePath::from_root(root)?;
         let old_path = resolve_rel(&sp, old_rel)?;
         let new_path = resolve_rel(&sp, new_rel)?;
-        let bytes = std::fs::read(&old_path).map_err(|e| super::map_io(e, &old_path))?;
+        let (bytes, source_fingerprint) = super::guard::read_snapshot(&old_path)?
+            .ok_or_else(|| WriteError::NotFound(format!("模板不存在：{}", old_path.display())))?;
         // 新文件必须不存在（expect = None）：重名即 Conflict → name_conflict(6)
         let file = WriteKernel::write_guarded(&new_path, &bytes, None)?;
-        std::fs::remove_file(&old_path).map_err(|e| super::map_io(e, &old_path))?;
+        WriteKernel::remove_guarded(&old_path, Some(source_fingerprint))?;
         let manifest = rewrite_manifest_key(&sp, old_rel, new_rel);
         Ok(RenameReport { file, manifest })
     }
@@ -196,12 +247,16 @@ fn resolve_rel(root: &SafePath, rel: &str) -> Result<PathBuf, WriteError> {
 /// 源模板无条目 → [`ManifestOutcome::NoEntry`]。
 fn clone_manifest_entry(sp: &SafePath, src_rel: &str, dst_rel: &str) -> ManifestOutcome {
     let path = sp.root().join(MANIFEST_FILE);
-    if !path.exists() {
-        return ManifestOutcome::Degraded(format!(
-            "清单文件不存在（{}），未复制条目，请手动补录",
-            path.display()
-        ));
-    }
+    let expected = match WriteKernel::read_fingerprint(&path) {
+        Ok(Some(fp)) => fp,
+        Ok(None) => {
+            return ManifestOutcome::Degraded(format!(
+                "清单文件不存在（{}），未复制条目，请手动补录",
+                path.display()
+            ))
+        }
+        Err(e) => return ManifestOutcome::Degraded(format!("清单读取失败：{e}")),
+    };
     let text = match crate::io_limit::read_text_capped(&path, crate::io_limit::MAX_SOURCE_BYTES) {
         Ok(t) => t,
         Err(e) => return ManifestOutcome::Degraded(format!("清单读取失败：{e}")),
@@ -219,18 +274,22 @@ fn clone_manifest_entry(sp: &SafePath, src_rel: &str, dst_rel: &str) -> Manifest
     let Some(new_text) = manifest_append_entry(&text, dst_rel, &body) else {
         return ManifestOutcome::Degraded("清单缺少顶层 `templates:` 块，未复制条目".to_string());
     };
-    write_manifest(&path, &new_text)
+    write_manifest(&path, &new_text, Some(expected))
 }
 
 /// 读取 `root/templates.yaml`，把旧键行改写为新键。
 fn rewrite_manifest_key(sp: &SafePath, old_rel: &str, new_rel: &str) -> ManifestOutcome {
     let path = sp.root().join(MANIFEST_FILE);
-    if !path.exists() {
-        return ManifestOutcome::Degraded(format!(
-            "清单文件不存在（{}），未同步清单键，请手动改名",
-            path.display()
-        ));
-    }
+    let expected = match WriteKernel::read_fingerprint(&path) {
+        Ok(Some(fp)) => fp,
+        Ok(None) => {
+            return ManifestOutcome::Degraded(format!(
+                "清单文件不存在（{}），未同步清单键，请手动改名",
+                path.display()
+            ))
+        }
+        Err(e) => return ManifestOutcome::Degraded(format!("清单读取失败：{e}")),
+    };
     let text = match crate::io_limit::read_text_capped(&path, crate::io_limit::MAX_SOURCE_BYTES) {
         Ok(t) => t,
         Err(e) => return ManifestOutcome::Degraded(format!("清单读取失败：{e}")),
@@ -243,14 +302,13 @@ fn rewrite_manifest_key(sp: &SafePath, old_rel: &str, new_rel: &str) -> Manifest
         ));
     }
     match manifest_rewrite_key(&text, old_rel, new_rel) {
-        Some(new_text) => write_manifest(&path, &new_text),
+        Some(new_text) => write_manifest(&path, &new_text, Some(expected)),
         None => ManifestOutcome::NoEntry,
     }
 }
 
 /// 经 [`WriteKernel`] 落盘清单文本；失败降级（不阻断调用方）。
-fn write_manifest(path: &Path, text: &str) -> ManifestOutcome {
-    let expect = WriteKernel::read_fingerprint(path).ok().flatten();
+fn write_manifest(path: &Path, text: &str, expect: Option<FileFingerprint>) -> ManifestOutcome {
     match WriteKernel::write_guarded(path, text.as_bytes(), expect) {
         Ok(out) => ManifestOutcome::Written(out),
         Err(e) => ManifestOutcome::Degraded(format!("清单写入失败（模板文件已写入）：{e}")),
@@ -287,7 +345,7 @@ pub fn manifest_append_entry(text: &str, key: &str, body: &[String]) -> Option<S
 
     let mut out: Vec<String> = lines[..=insert_at].iter().map(|s| s.to_string()).collect();
     out.push(String::new()); // 与上一条目空一行分隔
-    out.push(format!("{ENTRY_INDENT}\"{key}\":"));
+    out.push(format!("{ENTRY_INDENT}{}:", yaml_quote(key)));
     for b in body {
         out.push(format!("{ENTRY_INDENT}{b}"));
     }
@@ -353,7 +411,7 @@ pub fn manifest_rewrite_key(text: &str, old_key: &str, new_key: &str) -> Option<
     for line in text.lines() {
         if !replaced && key_line_matches(line, old_key) {
             let indent = &line[..line.len() - line.trim_start().len()];
-            out.push(format!("{indent}\"{new_key}\":"));
+            out.push(format!("{indent}{}:", yaml_quote(new_key)));
             replaced = true;
         } else {
             out.push(line.to_string());
@@ -390,7 +448,14 @@ fn key_line_matches(line: &str, key: &str) -> bool {
         return false; // 顶格行不是条目键行
     }
     let t = line.trim();
-    t == format!("\"{key}\":") || t == format!("{key}:")
+    t == format!("{}:", yaml_quote(key)) || t == format!("{key}:")
+}
+
+/// YAML 双引号标量。资产名允许引号字符（例如 Unix 文件名），必须转义后才能
+/// 安全用作清单键；控制字符已由 `validate_asset_name` 拦截。
+fn yaml_quote(value: &str) -> String {
+    let escaped = value.replace('\\', "\\\\").replace('"', "\\\"");
+    format!("\"{escaped}\"")
 }
 
 /// 文本使用的换行分隔符（保留 CRLF 以免往返改字节）。
@@ -511,6 +576,24 @@ mod tests {
     #[test]
     fn append_entry_without_top_key_returns_none() {
         assert!(manifest_append_entry("# 只有注释\n", "x.j2", &[]).is_none());
+    }
+
+    #[test]
+    fn manifest_keys_with_quotes_remain_valid_yaml() {
+        let old = "turning/a\"b.j2";
+        let new = "turning/c\"d.j2";
+        let appended = manifest_append_entry("templates:\n", old, &[]).unwrap();
+        assert!(
+            manifest_is_parseable(&appended),
+            "追加键必须保持 YAML 合法：{appended}"
+        );
+        let renamed = manifest_rewrite_key(&appended, old, new).unwrap();
+        assert!(
+            manifest_is_parseable(&renamed),
+            "重命名键必须保持 YAML 合法：{renamed}"
+        );
+        assert!(manifest_contains_key(&renamed, new));
+        assert!(!manifest_contains_key(&renamed, old));
     }
 
     /// `templates:` 映射之后还有**其它顶层键**时，新条目必须插在映射末尾、

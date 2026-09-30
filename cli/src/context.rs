@@ -660,9 +660,9 @@ mod tests {
         assert!(!Rc::ptr_eq(&first, &second), "目录树变化后必须重建注册表");
         let entry = second.registry().get("turning/a.j2").expect("模板仍在");
         assert!(
-            entry.source_text.contains("Z{{ z }}"),
+            entry.source_text().contains("Z{{ z }}"),
             "重建后必须读到新内容，实际为: {}",
-            entry.source_text
+            entry.source_text()
         );
 
         let _ = std::fs::remove_dir_all(&dir);

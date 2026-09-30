@@ -1,23 +1,30 @@
 # nctool 系统设计文档
 
-> 版本：v2.1 · 2026-09-20（**架构性变更记档**：`nctool-core` 首次承担资产写入职责）
+> 版本：v2.3 · 2026-09-29（**当前架构**：Web 与 Tauri 写操作收敛到共享 route）
 > **v2.2 修订说明（2026-09-21）**：三大编辑模块 T01–T04 全部落地，本版据其收口 ——
 > ① **前端改为构建期拼接**（T04-c）：源码上移到 `ui/src/*.part.html`，`ui/index.html` 与
 > `cli/ui/index.html` 降级为**生成物**（§3 相应段落已改），行数约束迁移为"每片段 ≤ 3000"；
-> ② **机床编辑走 CLI、UI 只读**（T04-b/d）：`machine add/edit/rm/test` 是唯一写入通道，
-> **不新增任何 HTTP 写端点**（Q8），`GET /api/machines` 只增只读 `schema` 字段 ——
+> ② 当时机床编辑走 CLI、UI 只读：`machine add/edit/rm/test` 是唯一写入通道，
+> 未新增 HTTP 写端点，`GET /api/machines` 只增只读 `schema` 字段 ——
 > 与 **D19**（资产写全部经 `core::asset`）一致，未新增例外；
 > ③ `core::asset` 的三种编辑策略（`toml_edit` 合并写 / YAML 定点文本编辑 / serde 全量往返）
 > 至此全部落地。**本次仅改文档，未改源码/测试**。
 >
+> **v2.3 修订说明（2026-09-29）**：① Web UI 已增加模板与机床资产管理 API；Tauri 模板、
+> 机床、预设、校验、lint、渲染与配置命令均只做参数适配，并调用同一
+> `nctool_cli::server::route`；② 移除启动时 `AppState` 配置快照，所有 Tauri 命令按请求加载
+> 最新层叠配置；③ 机床完整性键收集复用 CLI 的同一实现；④ 模板清单写入失败显式报告，
+> 预设导入拒绝覆盖损坏文件，重命名源文件删除增加指纹保护；⑤ 更新桌面 GUI 与 API 对拍契约。
+> 桌面 GUI 仍依赖 `nctool-cli` 的 `Ctx` 与 `route`，尚未拆为独立应用服务 crate。
+>
 > **v2.1 修订说明**：依据 T01「共用写盘底座」落地并通过独立验证，记档一项**架构性变更** —— `nctool-core` **首次承担资产写入职责**（新增 `core::asset` 写内核：原子写 / 乐观锁 / 路径防护）。本次修订 §2.1（依赖图补 `core::asset`）、§2.2（crate 职责矩阵两行）、§2.3（补 `core::asset` 模块）、§6（新增 D19）、§7（补"新增写操作"扩展点）、§8（补 T01 已登记边界）；另据编辑模块（T02）定案，§3.2 记 `core::validate` 新增 `check_spec_consistency`（保存前 L2，须复用 `check_spec_defaults`）与 `check_param_values`（保存前 L3，值级、不查缺失）两个入口。**（v2.1 收准）** D19 例外改为**分类全枚举**——交付层生产口径 `fs::write` 共 3 处、全部非资产写（`config init` / `render --out` / `$EDITOR` 临时副本）；**资产写全部经 `core::asset`，D19 规则成立**。**仅改文档，未改源码/测试**。
-> 对应代码：`nctool-tpl` v0.4.0 / `nctool-core` v0.3.0 / `nctool-cli` v0.3.0（crate 版本号经查 `Cargo.toml` **未变**；**规模数字为 v2.0 快照，T01 新增 `core::asset` 后待重新实测**，见 §2.3 注）
+> 对应代码：`nctool-tpl` v0.4.0 / `nctool-core` v0.3.0 / `nctool-cli` v0.3.0 / `nctool-gui` v0.1.0（GUI 不发布）。源码规模表保留历史快照，不用于估算当前规模。
 > 范围：三个 crate 的分层架构、核心模块职责、数据结构、端到端数据流与设计决策。
 > 读者：本仓库贡献者、基于本库二次开发的下游用户。
 >
 > **与 `docs/ARCHITECTURE.md` 的关系**：`ARCHITECTURE.md` 是 2026-09-03 的 v1.0 快照，
 > 缺 `derive` / `variables` / `manifest` 外部化 / Web UI 后端 / 参数规格三来源等后续演进。
-> 本文档为当前有效版本（v2.0），两者冲突时以本文档为准。
+> 本文档为当前有效版本（v2.3），两者冲突时以本文档为准。
 
 ---
 
@@ -47,13 +54,16 @@ P2 决定了 compute-heavy 模板（如 `machines/index_g420/` 下的同步车�
 
 | 项 | 状态 |
 | --- | --- |
-| 模板 | 25 个 `.j2`（车削 5 / 切槽 1 / 机床 19），由 `templates/templates.yaml` 清单管理 |
+| 模板 | 以 `templates/templates.yaml` 和文件树为准；新增导入模板均标记为 `unreviewed`，不可据此推断工艺已核验 |
 | 变量库 | `templates/variables.yaml`，58 条按名全局规格（源自 NCTool_V3 的 62 个变量） |
 | 机床预设 | 3 个内置（`generic` / `wfl_m65` / `index_ms40`）+ 配置文件自定义 |
 | 测试 | **项数不在此硬编码**（每加一个测试就过期）——**以 CI run 的 job summary 为准**；本机复现约 3 分钟，须后台跑 |
 | 覆盖率 | 门禁 = **生产口径行覆盖 ≥ 92%**（`scripts/check_coverage_caliber.py`；2026-09-26 口径修订后由 91% 上调）；实测值以 CI 的 coverage job summary 为准，不在本文档写死 |
 | CLI | 完整：`templates` / `inspect` / `lint` / `validate` / `render` / `machine` / `preset` / `config` / `ui` / `part` / `completion` |
-| Web UI | `nctool ui` 已可用：本地 `tiny_http` 服务 + 只读/渲染 API + 单文件前端 |
+| Web UI | `nctool ui` 已可用：回环 `tiny_http` 服务 + 模板/机床/预设读写、校验、渲染 API + 单文件前端 |
+| Desktop GUI | `nctool-gui`（Tauri 2 + React）；命令适配层调用共享 route，源码和机床写操作不另写一套校验流程 |
+
+> **文档状态提示**：v2.3 之后的源码行为以本节和 `docs/PROJECT_STATUS.md` 顶部增量为准；下文较早的 T 阶段记录是历史决策背景，不代表当前未完成项。
 
 ---
 
@@ -70,6 +80,11 @@ graph TD
         C4[args.rs<br/>--param 归一]
         C5[server.rs<br/>tiny_http Web 后端]
         C6[output.rs<br/>text/JSON 双通道 + 退出码]
+    end
+
+    subgraph GUI["nctool-gui v0.1.0 · publish = false"]
+        G1[React 前端<br/>页面与表单]
+        G2[Tauri 命令<br/>轻量参数适配]
     end
 
     subgraph CORE["nctool-core v0.3.0"]
@@ -94,15 +109,20 @@ graph TD
     MJ[minijinja ~2.24<br/>unstable_machinery / loop_controls / debug]
 
     CLI -->|依赖| CORE
+    GUI -->|调用共享 Ctx / route| CLI
+    GUI -->|资产类型与模型| CORE
+    G1 -->|invoke| G2
     CORE -->|依赖| TPL
     TPL -->|依赖| MJ
 ```
 
-依赖**严格单向向下**：`cli → core → tpl → minijinja`，不存在反向依赖与跨层依赖。
+Rust 核心依赖保持单向：`core → tpl → minijinja`。CLI 依赖 core；桌面 GUI 当前依赖
+CLI 的 `Ctx` / `route` 与 core 模型。GUI 命令不复制校验和资产写入编排，但 CLI 作为 GUI
+依赖仍把入口层职责带入桌面构建，是后续是否抽 `nctool-app` 的评估点。
 
-所有真实业务逻辑（规格合并、校验、派生、渲染、后处理）都在 `nctool-core`。
-CLI 与 Web UI 只是**两个输入/展示面**，不复制任何业务逻辑 ——
-这是保证 `nctool render` 与 Web UI 渲染结果**逐字节一致**的前提。
+规格合并、机床键完整性校验、资产安全写入与 G-code 生成逻辑集中在 core/共享 route。
+CLI 子命令和两种 UI 都调用这些路径；Tauri 保留单独的 `save_nc_file`，因为输出路径来自
+桌面保存对话框，而不是应用配置目录。
 
 > **（v2.1 修订）** `core::asset`（图中 `R9`）是 `nctool-core` 内的**新增写内核子模块**：原子写 / 乐观锁 / 路径防护 / 模板·机床·预设的落盘。它是 `core` 的**内部**模块（依赖既有 core 模块与 `nctool-tpl`），**不新增任何跨 crate 边**，`cli → core → tpl → minijinja` 的单向依赖不变。自本次起，**`nctool-core` 承担资产写入职责**（此前 core 只读不写）——这是本版记档的架构性变更，详见 §2.2 与 D19。
 
@@ -113,10 +133,11 @@ CLI 与 Web UI 只是**两个输入/展示面**，不复制任何业务逻辑 �
 | `nctool-tpl` | 通用模板引擎封装 | Jinja2 解析、变量提取、NC 数值过滤器、严格/宽松渲染 | 不懂 G-code 语义、不做参数校验、不读文件 |
 | `nctool-core` | G-code 领域层 | 参数模型、规格解析与合并、校验引擎、模板注册表、机床适配、派生计算、生成管线、**资产写入内核（原子写 / 乐观锁 / 路径防护 / 模板·机床·预设的落盘）** | 不感知命令行、不感知终端输出、不起 HTTP 服务、**不决定写盘目标路径策略（由交付层传入已解析路径与安全根）**、**不打印面向用户的报告** |
 | `nctool-cli` | 交付面 | 命令解析、配置层叠、参数归一、结果渲染、退出码、本地 Web 服务、**编辑命令的参数编排与结果/报告呈现** | 不含任何校验/渲染/后处理逻辑、**不持有任何资产（模板 / 机床 / 预设）的文件写入原语** |
+| `nctool-gui` | 桌面交付面（不发布） | React 页面、Tauri invoke、保存 NC 输出 | 不复制模板/机床/预设的写入校验；通过 `nctool_cli::server::route` 调用共享用例 |
 
-> **（v2.1 修订）** 上表 `nctool-core` 与 `nctool-cli` 两行已按"资产写入内核下沉到领域层"修订（见 D19）。关键边界：core 提供**写内核**但**不决定写盘目标路径策略**（目标路径与安全根由交付层解析后传入）；cli **不持有任何资产（模板 / 机床 / 预设）的文件写入原语**——三类资产的落盘一律经 `core::asset`。**注意：D19 的作用域是"资产写"、不是"一切文件写"** —— 交付层生产口径的 `fs::write` 共 **3 处、全部非资产写**（`config init` 配置引导、`render --out` 渲染产物、`$EDITOR` 临时副本），均为**已知例外**、不在 D19 管辖内（全枚举见 D19 行与 `docs/ARCH_DESIGN_EDIT_MODULES.md` §9.1）。
+> **（v2.1 修订，后续持续适用）** 上表 `nctool-core` 与 `nctool-cli` 两行按"资产写入内核下沉到领域层"修订（见 D19）。关键边界：core 提供**写内核**但**不决定写盘目标路径策略**（目标路径与安全根由交付层解析后传入）；cli **不持有任何资产（模板 / 机床 / 预设）的文件写入原语**——三类资产落盘经 `core::asset`。**注意：D19 的作用域是"资产写"、不是"一切文件写"** —— 交付层的配置引导、渲染产物和 `$EDITOR` 临时副本仍是已登记例外（见 D19）。
 >
-> ⚠️ **目标态 vs 当前态**：上表 `nctool-cli` 行"**不持有任何资产文件写入原语**"是**迁移目标态**；当前 `templates new` 仍残留 `std::fs::write` 直写路径（风险 R-11），须在 **T02 迁移到 `write_guarded`** 后此承诺方完全成立（详见 §8）。此外 `nctool config init` 的配置引导写为**登记在案的例外**、不在 D19 管辖内（见 D19 行与 `docs/ARCH_DESIGN_EDIT_MODULES.md` §9.1）。
+> **当前边界**：模板、机床和预设资产修改全部经 `core::asset`；配置初始化、渲染输出和 `$EDITOR` 临时副本仍是 D19 范围外的交付层写操作。旧版关于 `templates new` 直写的 R-11 已由 T02 收口，作为历史记录保留在 §8。
 
 ### 2.3 源码规模分布
 
@@ -716,22 +737,22 @@ HTTP API 与 `inspect --format json` 共用 —— 新增规格字段只改这�
 - **`nc_pad` 拒绝小数/负数**，这是刻意的静默出错防线，不要"顺手放宽"。
 - **`variables.yaml` 的生效范围限于被引用变量**，库内未引用条目不会注入规格。
 - **Web 服务仅绑定回环地址**，定位是本地开发工具，未做鉴权与并发压测。
-- **`nctool part`（零件级批量生成）仍是占位**，规划于后续阶段。
+- **G-code 输出仍须工艺人员复核与目标机床空运行**；自动化校验不判断控制器模态冲突或切削工艺正确性。
 - **源项目变量库（62 个变量）的类型/候选值已导入 58 条**，剩余条目按需补齐。
-- **（v2.1 补）`templates new` 遗留直写路径须迁移到 `write_guarded`**：该路径当前是 `path.exists()` 后 `std::fs::write` 的 check-then-write，**非原子、无乐观锁**，且 **`fs::write` 会跟随符号链接** —— 而 `SafePath::resolve` 在**悬空（dangling）符号链接**（`exists()` 返回 false，故跳过 canonicalize）这一情形下会**放行**该路径。对比：`WriteKernel::write_atomic` 是"同目录临时文件 + `rename`"，而 `rename` 替换的是**目录项本身、不跟随目标符号链接**，故**不受该向量影响**。**换言之：内核是安全的，遗留的直写路径才是缺口**，须在 T02 随迁移一并闭合并补"行为钉住"用例（`PROJECT_PLAN_EDIT_MODULES.md` §6.7 / 风险 R-11）。
+- **（历史 R-11，已关闭）`templates new` 旧直写路径**：曾是 `path.exists()` 后 `std::fs::write` 的 check-then-write，T02 已迁移到 `TemplateWriter` / `WriteKernel`。保留这条记录是为了说明资产写必须继续走 core 写内核，不能恢复为调用层直接写文件。
 - **（v2.1 补）悬空符号链接向量未实测**：本机（Windows）**无法创建真正的文件符号链接**（`symlink_dir` 返回 `Ok(())` 却不创建；无开发者模式/特权），故"悬空链接逃逸"场景**未实测**，上述结论系**代码推演**；已改用 junction 验证"指向根外**已存在**目标"的逃逸被正确拒绝（通过）。后续若在具备权限的环境（Linux CI）复验，应补此用例（风险 R-13）。
 
 ---
 
 ## 9. 质量基座
 
-| 层次 | 规模 | 内容 |
-| --- | ---: | --- |
-| 单元测试 | 372 | 内嵌于各模块（`src/lib.rs` 119、`core/*` 189、`cli/src/*` 46、`tests/parsing.rs` 18 等） |
-| CLI 集成测试 | 87 | `cli/tests/cli.rs`（43）+ `cli/tests/cli_e2e.rs`（44），含 `ui_html_copies_stay_in_sync` 这类一致性断言 |
-| 覆盖率 | 行 90.75% | `cargo llvm-cov --workspace`；最低三项：`src/extract.rs` 74.25%、`cli/src/output.rs` 65.22%、`cli/src/server.rs` 73.63% |
-| 基准 | — | `benches/bench.rs`（解析/提取/渲染）、`core/benches/pipeline.rs`（后处理/端到端） |
-| 黄金样本 | — | `tests/golden/`；移植模板时以逐字节比对验证（INDEX G420 的 19 个模板已 18/18 逐行一致） |
+测试项数与覆盖率随源码变化，不在设计文档中冻结数字。当前必须执行的门禁、命令和覆盖率校准口径
+见 `docs/CONTRIBUTING.md`、`.github/workflows/ci.yml` 与 `scripts/check_coverage_caliber.py`；
+本轮 1.0 候选验证结果见 `docs/UPGRADE_READINESS.md`。
+
+稳定质量资产仍包括：`cargo test --workspace --all-targets`、MSRV 1.89、三平台 CI、
+production-line coverage 门禁、Rust 文档零警告、前端 TypeScript/Vite 构建、HTTP/Tauri API
+对拍，以及 `tests/golden/` 的逐字节基线。golden 证明回归一致，不证明机床工艺正确。
 
 ---
 
@@ -741,9 +762,12 @@ HTTP API 与 `inspect --format json` 共用 —— 新增规格字段只改这�
 | --- | --- |
 | `docs/ARCHITECTURE.md` | v1.0 架构说明（2026-09-03 快照，部分内容已被本文档取代） |
 | `docs/TEMPLATE_WRITING_GUIDE.md` | 模板编写指南（§3 NC 过滤器、§4 三角函数与 R6 约定、§9 反模式） |
-| `docs/TEMPLATE_INTEGRATION_PLAN.md` | 模板整合方案（含 §4.4 实测发现的能力缺口） |
+| `docs/OLD_PROJECT_TEMPLATE_IMPORT_CHECKLIST.md` | 外部模板完整盘点、迁移、适配和静态验证清单 |
+| `docs/TEMPLATE_ZIP_IMPORT_REPORT.md` | NCTool V3 模板归档的文件路径和哈希对照 |
 | `docs/MACHINE_CONFIG_GUIDE.md` | 机床配置键清单 |
 | `docs/PROCESS_CHECKLIST.md` | 工艺检查清单 |
+| `docs/UPGRADE_READINESS.md` | 1.0 API 升级就绪度、门禁结果与 tag 前置步骤 |
+| `docs/GUI_USER_GUIDE.md` | Tauri 桌面 GUI 页面与文件写入行为 |
 | `docs/HANDOFF_2026-09-14.md` | 阶段交接（§12 第一轮、§13 第二轮修问题 + 参数规格外部化） |
 | `templates/README.md` | 模板目录约定（`{# PARAMS: #}` 规格、清单 `params` 覆盖层、两种隐藏语义） |
 | `README.md` | 用户向快速上手 |

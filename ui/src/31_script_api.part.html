@@ -7,10 +7,10 @@ const API = {
   get registry() { return API_REGISTRY; },
   get machines() { return API_MACHINES; },
 
-  async request(path, method, body) {
+  async request(path, method, body, signal) {
     if (this.mode === "server") {
       try {
-        const init = { method, headers: {} };
+        const init = { method, headers: {}, signal };
         if (method !== "GET" && method !== "HEAD") {
           init.headers["Content-Type"] = "application/json";
           if (body !== undefined) init.body = JSON.stringify(body);
@@ -18,6 +18,7 @@ const API = {
         const r = await fetch(this.base + path, init);
         return await r.json();
       } catch (e) {
+        if (e && e.name === "AbortError") throw e;
         return { ok: false, error: { kind: "io", message: "无法连接服务：" + e.message } };
       }
     }
@@ -36,6 +37,7 @@ const API = {
       return { ok: true, data: { template: t } };
     }
     if (path === "/api/machines") return { ok: true, data: { machines: Object.values(MACHINE_PRESETS) } };
+    if (path === "/api/config") return { ok: true, data: { templateDir: "演示模式", defaultMachine: "generic", customMachines: [], warnings: [] } };
     if (path === "/api/validate") {
       const t = TEMPLATES.find(x => x.name === body.template);
       if (!t) return { ok: false, error: { kind: "notfound", message: `模板不存在: ${body.template}` } };
@@ -90,6 +92,37 @@ const API = {
       const [gone] = list.splice(i, 1);
       write(list);
       return { ok: true, data: { name: gone.name, path: "(demo/localStorage)", action: "Deleted" } };
+    }
+    if (path === "/api/presets/rename") {
+      const oldName = body && body.oldName;
+      const newName = body && body.newName;
+      if (typeof oldName !== "string" || !oldName || typeof newName !== "string" || !newName.trim()) {
+        return { ok: false, error: { kind: "bad_request", message: "需要旧名称和新名称" } };
+      }
+      const preset = list.find(p => p.name === oldName);
+      if (!preset) return { ok: false, error: { kind: "preset_not_found", message: `预设不存在：${oldName}` } };
+      if (oldName !== newName && list.some(p => p.name === newName)) {
+        return { ok: false, error: { kind: "name_conflict", message: `同名预设已存在：${newName}` } };
+      }
+      preset.name = newName;
+      write(list);
+      return { ok: true, data: { oldName, name: newName, action: oldName === newName ? "Unchanged" : "Updated" } };
+    }
+    if (path === "/api/presets/export") {
+      const selected = body && body.name;
+      const presets = selected ? list.filter(p => p.name === selected) : list;
+      if (selected && !presets.length) {
+        return { ok: false, error: { kind: "preset_not_found", message: `预设不存在：${selected}` } };
+      }
+      if (!presets.length) return { ok: false, error: { kind: "args", message: "没有可导出的预设" } };
+      const rows = presets.map(p => [
+        `  - name: ${JSON.stringify(p.name)}`,
+        `    template: ${JSON.stringify(p.template)}`,
+        `    params: ${JSON.stringify(p.params || {})}`,
+        `    createdAt: ${JSON.stringify(p.createdAt || "")}`,
+        `    specFingerprint: ${JSON.stringify(p.specFingerprint || "")}`,
+      ].join("\n"));
+      return { ok: true, data: { yaml: `version: 1\npresets:\n${rows.join("\n")}\n`, count: presets.length, names: presets.map(p => p.name) } };
     }
     /* 保存：校验口径与后端一致——参数名必须属于模板，值必须过规格约束 */
     const t = TEMPLATES.find(x => x.name === (body && body.template));
@@ -177,14 +210,22 @@ const API = {
   async listTemplates() { return this.request("/api/templates", "GET"); },
   async getTemplate(name) { return this.request("/api/templates/" + encodeURIComponent(name), "GET"); },
   async listMachines() { return this.request("/api/machines", "GET"); },
+  async getConfig() { return this.request("/api/config", "GET"); },
+  async createTemplate(name, category) { return this.request("/api/templates/create", "POST", { name, category }); },
+  async saveTemplate(name, source, expectHash) { return this.request("/api/templates/save", "POST", { name, source, expectHash }); },
+  async deriveTemplate(sourceName, newName) { return this.request("/api/templates/derive", "POST", { sourceName, newName }); },
+  async renameTemplate(oldName, newName) { return this.request("/api/templates/rename", "POST", { oldName, newName }); },
+  async saveMachine(machine, expectHash) { return this.request("/api/machines", "POST", { ...machine, expectHash }); },
+  async deleteMachine(id, expectHash) { return this.request("/api/machines/delete", "POST", { id, expectHash }); },
+  async lintTemplate(template, source) { return this.request("/api/lint", "POST", { template, source }); },
   async validate(template, params, body) { return this.request("/api/validate", "POST", { template, params, ...body }); },
   /* 出口统一归一：state.options 的数字字段可能被写回字符串（表单输入天然是字符串），
      后端按 as_u64() 取值，字符串会 400。demo 分支本来就在消费侧归一，server 分支
      此前直接 JSON.stringify 发出去 —— 于是「在步进框里改一个数字」就渲染失败。
      在唯一出口拦一次，将来再加数字字段也不会重犯。 */
-  async render(template, params, machine, options) {
+  async render(template, params, machine, options, signal) {
     return this.request("/api/render", "POST",
-      { template, params, machine, options: normalizeOpts(options || {}) });
+      { template, params, machine, options: normalizeOpts(options || {}) }, signal);
   },
   async partGenerate(part) { return this.request("/api/part/generate", "POST", { part }); },
 
@@ -196,6 +237,9 @@ const API = {
   async savePreset(name, template, params, force) {
     return this.request("/api/presets", "POST", { name, template, params, force: !!force });
   },
+  async renamePreset(oldName, newName) { return this.request("/api/presets/rename", "POST", { oldName, newName }); },
+  async exportPresets(name) { return this.request("/api/presets/export", "POST", name ? { name } : {}); },
+  async importPresets(yaml, force) { return this.request("/api/presets/import", "POST", { yaml, force }); },
   async deletePreset(name) { return this.request("/api/presets/delete", "POST", { name }); },
 };
 
@@ -231,4 +275,3 @@ function buildReport(t, params, body) {
   }
   return { issues };
 }
-

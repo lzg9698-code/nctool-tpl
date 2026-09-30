@@ -91,6 +91,10 @@ input[type="text"], input[type="number"], select, textarea {
   padding: .4rem .6rem; border-radius: 4px; font-size: .82rem;
   font-family: var(--sans); width: 100%;
 }
+/* 数值通过键盘输入，隐藏浏览器默认的上下微调按钮。 */
+input[type="number"] { appearance: textfield; -moz-appearance: textfield; }
+input[type="number"]::-webkit-inner-spin-button,
+input[type="number"]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 input:focus, select:focus, textarea:focus {
   outline: none; border-color: var(--accent); box-shadow: 0 0 0 2px var(--accent-glow);
 }
@@ -202,6 +206,32 @@ select { cursor: pointer; }
 /* 检查页：小节标题 */
 .check-section { font-size: .8rem; color: var(--txt-1); margin-bottom: .5rem; }
 
+/* 模板 / 机床管理与设置页 */
+.manager-layout { display: grid; grid-template-columns: minmax(190px, 260px) minmax(0, 1fr); gap: 1rem; }
+.manager-list, .manager-editor, .config-card { min-width: 0; background: var(--bg-1); border: 1px solid var(--border); border-radius: 5px; padding: .8rem; }
+.manager-list { overflow-y: auto; }
+.manager-editor { overflow-y: auto; }
+.manager-divider { height: 1px; background: var(--border); margin: .8rem 0; }
+.full-width { width: 100%; }
+.source-editor { min-height: 48vh; resize: vertical; font-family: var(--mono); line-height: 1.5; white-space: pre; }
+.template-actions, .machine-actions { display: flex; flex-wrap: wrap; gap: .5rem; margin: .8rem 0; }
+.template-param-list { max-height: 24vh; overflow: auto; }
+.template-param-list li { margin: .25rem 0 .25rem 1.2rem; color: var(--txt-1); }
+.tag { display: inline-block; padding: .05rem .4rem; border-radius: 3px; background: var(--bg-3); color: var(--accent-l); font-size: .7rem; }
+.machine-note { margin: .5rem 0; }
+.machine-schema-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .5rem; }
+.machine-key { background: var(--bg-2); padding: .5rem; border-radius: 4px; }
+.machine-key small { display: block; color: var(--txt-2); }
+.machine-extra { margin-top: .8rem; }
+.config-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .8rem; }
+.config-card h3, .config-subtitle { color: var(--accent-l); font-size: .9rem; margin-bottom: .6rem; }
+.config-row { display: grid; grid-template-columns: 110px minmax(0, 1fr); gap: .6rem; padding: .45rem 0; border-bottom: 1px solid var(--border); }
+.config-row > span { color: var(--txt-1); }
+.config-row code { overflow-wrap: anywhere; }
+.config-card .muted { margin-top: .7rem; }
+.config-subtitle { margin-top: 1.2rem; }
+.config-warning { padding: .6rem .8rem; margin-bottom: .4rem; color: var(--warn); background: rgba(210, 153, 34, .08); border: 1px solid rgba(210, 153, 34, .35); border-radius: 4px; }
+
 /* 检查页：validate 报告卡片 */
 .card-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: .6rem; margin-bottom: 1rem; }
 .card {
@@ -243,6 +273,12 @@ select { cursor: pointer; }
   width: 32px; text-align: right; margin-right: 8px;
 }
 .lint-snippet .hl { background: rgba(210, 153, 34, .18); display: block; }
+
+@media (max-width: 760px) {
+  .manager-layout, .config-grid { grid-template-columns: 1fr; }
+  .manager-list { max-height: 30vh; }
+  .machine-schema-grid, .form-grid { grid-template-columns: 1fr; }
+}
 
 /* ========== 状态栏 ========== */
 .statusbar {

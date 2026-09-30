@@ -11,8 +11,9 @@
 //! `1e-400` 解析再重序列化，下溢字面量会被静默归零，守卫永久失效（勘误 E10）。
 //! 故 body 构造抽成纯函数 [`build_save_preset_body`] 以便单测。
 
-use crate::commands::shared::{percent_encode_segment, run_route, spawn_failed, CommandError};
-use crate::state::AppState;
+use crate::commands::shared::{
+    load_ctx, percent_encode_segment, run_route, spawn_failed, CommandError,
+};
 
 /// `GET /api/presets` → `data = {path, pathRedacted, presets:[...], warnings?}`。
 ///
@@ -22,13 +23,9 @@ use crate::state::AppState;
 /// 列表项含结构化陈旧字段（`resolvable` / `stale` / `staleParams` / `missingRequired`）；
 /// 损坏文件降级为警告而非报错（D13）。
 #[tauri::command]
-pub async fn list_presets(
-    template: Option<String>,
-    state: tauri::State<'_, AppState>,
-) -> Result<serde_json::Value, CommandError> {
-    let (td, dm, loaded) = state.snapshot();
+pub async fn list_presets(template: Option<String>) -> Result<serde_json::Value, CommandError> {
     tauri::async_runtime::spawn_blocking(move || {
-        let ctx = nctool_cli::context::Ctx::for_embedded(td, dm, loaded);
+        let ctx = load_ctx()?;
         let query = match template.filter(|t| !t.trim().is_empty()) {
             Some(t) => format!("template={}", percent_encode_segment(&t)),
             None => String::new(),
@@ -73,11 +70,9 @@ pub async fn save_preset(
     template: String,
     params_json: String,
     force: Option<bool>,
-    state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, CommandError> {
-    let (td, dm, loaded) = state.snapshot();
     tauri::async_runtime::spawn_blocking(move || {
-        let ctx = nctool_cli::context::Ctx::for_embedded(td, dm, loaded);
+        let ctx = load_ctx()?;
         let body = build_save_preset_body(&name, &template, &params_json, force.unwrap_or(false));
         run_route(&ctx, "POST", "/api/presets", "", body.as_bytes())
     })
@@ -92,13 +87,9 @@ pub async fn save_preset(
 /// 放路径段需额外编码；删除属**有副作用**操作，必须经 `PresetStore`
 /// （乐观锁 + 原子写），不能直接删文件。预设不存在 → `404 preset_not_found`。
 #[tauri::command]
-pub async fn delete_preset(
-    name: String,
-    state: tauri::State<'_, AppState>,
-) -> Result<serde_json::Value, CommandError> {
-    let (td, dm, loaded) = state.snapshot();
+pub async fn delete_preset(name: String) -> Result<serde_json::Value, CommandError> {
     tauri::async_runtime::spawn_blocking(move || {
-        let ctx = nctool_cli::context::Ctx::for_embedded(td, dm, loaded);
+        let ctx = load_ctx()?;
         let body = format!(
             "{{\"name\":{}}}",
             serde_json::to_string(&name).expect("预设名序列化")

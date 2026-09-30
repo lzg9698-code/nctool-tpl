@@ -1,7 +1,6 @@
 //! 渲染命令：`render_template` —— 参数通道安全的关键落点。
 
-use crate::commands::shared::{run_route, spawn_failed, CommandError};
-use crate::state::AppState;
+use crate::commands::shared::{load_ctx, run_route, spawn_failed, CommandError};
 
 /// 生成选项：字段名与 HTTP `options` 键**逐字对齐**（camelCase）。
 ///
@@ -106,11 +105,9 @@ pub async fn render_template(
     template: String,
     params_json: String,
     options: Option<GenOptions>,
-    state: tauri::State<'_, AppState>,
 ) -> Result<serde_json::Value, CommandError> {
-    let (td, dm, loaded) = state.snapshot();
     tauri::async_runtime::spawn_blocking(move || {
-        let ctx = nctool_cli::context::Ctx::for_embedded(td, dm, loaded);
+        let ctx = load_ctx()?;
         let body = build_render_body(&template, &params_json, &options.unwrap_or_default());
         run_route(&ctx, "POST", "/api/render", "", body.as_bytes())
     })

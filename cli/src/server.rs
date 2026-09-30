@@ -1,11 +1,11 @@
-//! 本地 Web UI 服务（阶段 C）：tiny_http + 只读 API + 内嵌单文件前端。
+//! 本地 Web UI 服务：tiny_http + 模板/机床资产 API + 内嵌单文件前端。
 //!
 //! 安全约定（ROADMAP C1.3 / R5）：
 //! - **仅回环**：`--host` 传非回环地址时 [`listen_addr`] **直接拒绝**，而不是
 //!   打印警告后放行。本服务能读模板目录并驱动渲染，暴露到局域网没有任何使用
 //!   场景，只剩攻击面。（此处曾写"由命令层打印警告、本模块不做判断"，那是更早
 //!   的实现；照那句话改回去会把这个决定悄悄撤销。）
-//! - 不执行任何 shell 命令；不提供任何写操作
+//! - 不执行任何 shell 命令；资产写入仅通过 core 的路径约束、原子写入与指纹保护执行
 //! - 请求体读取设 1 MiB 上限，防异常载荷；`Content-Length` 超限在**读取前**即
 //!   拒绝（413），且读完与声明长度**对账**——半包/截断的请求体回 400，绝不当
 //!   完整请求交给 [`route`]（P1-7）
@@ -311,11 +311,22 @@ pub fn route(ctx: &Ctx, method: &str, path: &str, query: &str, body: &[u8]) -> R
     match (method, path) {
         ("GET", "/health") => Resp::Json(200, health_json(ctx)),
         ("GET", "/api/templates") => templates_list(ctx, query),
+        ("POST", "/api/templates/create") => template_create(ctx, body),
+        ("POST", "/api/templates/save") => template_save(ctx, body),
+        ("POST", "/api/templates/derive") => template_derive(ctx, body),
+        ("POST", "/api/templates/rename") => template_rename(ctx, body),
         ("GET", "/api/machines") => machines_list(ctx),
+        ("POST", "/api/machines") => machine_save(ctx, body),
+        ("POST", "/api/machines/delete") => machine_delete(ctx, body),
+        ("GET", "/api/config") => config_view(ctx),
         ("GET", "/api/presets") => presets_list(ctx, query),
         ("POST", "/api/presets") => presets_save(ctx, body),
         ("POST", "/api/presets/delete") => presets_delete(ctx, body),
+        ("POST", "/api/presets/rename") => presets_rename(ctx, body),
+        ("POST", "/api/presets/export") => presets_export(ctx, body),
+        ("POST", "/api/presets/import") => presets_import(ctx, body),
         ("POST", "/api/inspect") => inspect(ctx, body),
+        ("POST", "/api/lint") => lint_template(ctx, body),
         ("POST", "/api/validate") => validate(ctx, body),
         ("POST", "/api/render") => render(ctx, body),
         ("POST", "/api/part/generate") => part_generate(ctx, body),
@@ -364,6 +375,8 @@ fn templates_list(ctx: &Ctx, query: &str) -> Resp {
                 "name": e.name,
                 "category": CategoryArg::from_core(e.category),
                 "description": e.description,
+                "builtin": matches!(e.source, TemplateSource::Builtin),
+                "status": e.status,
             })
         })
         .collect();
@@ -404,6 +417,14 @@ fn template_detail(ctx: &Ctx, raw_name: &str) -> Resp {
             Err(err) => return cli_error(CliError::from(err)),
         };
         let params: Vec<serde_json::Value> = e.params.iter().map(spec_json).collect();
+        let fingerprint = match &e.source {
+            TemplateSource::File(path) => nctool_core::asset::WriteKernel::read_fingerprint(path)
+                .ok()
+                .flatten()
+                .map(|fp| fp.as_string()),
+            TemplateSource::Builtin => None,
+            TemplateSource::Memory => None,
+        };
         return Resp::Json(
             200,
             ok(serde_json::json!({
@@ -412,7 +433,9 @@ fn template_detail(ctx: &Ctx, raw_name: &str) -> Resp {
                     "category": CategoryArg::from_core(e.category),
                     "description": e.description,
                     "builtin": matches!(e.source, TemplateSource::Builtin),
-                    "source": e.source_text,
+                    "status": e.status,
+                    "fingerprint": fingerprint,
+                    "source": e.source_text(),
                     "params": params,
                     "variables": vars_json(&vars),
                 },
@@ -425,6 +448,255 @@ fn template_detail(ctx: &Ctx, raw_name: &str) -> Resp {
         404,
         err("template_not_found", format!("模板不存在: {name}")),
     )
+}
+
+// Template and machine asset editing is exposed only by the loopback UI service.
+// All writes go through nctool-core's guarded writers (atomic replacement + fingerprint).
+fn template_create(ctx: &Ctx, body: &[u8]) -> Resp {
+    let v = match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(v) => v,
+        Err(e) => return Resp::Json(400, err("bad_request", e.to_string())),
+    };
+    let (Some(name), Some(category)) = (
+        v.get("name").and_then(|x| x.as_str()),
+        v.get("category").and_then(|x| x.as_str()),
+    ) else {
+        return Resp::Json(400, err("bad_request", "需要 name 与 category"));
+    };
+    let Some(root) = ctx.template_dir.as_deref() else {
+        return Resp::Json(400, err("args", "未配置模板目录"));
+    };
+    let cat = category.to_ascii_lowercase();
+    let label = match cat.as_str() {
+        "general" => "通用",
+        "milling" => "铣削",
+        "turning" => "车削",
+        "drilling" => "钻孔",
+        "grooving" => "切槽",
+        "machine" => "机床",
+        _ => return Resp::Json(400, err("args", "未知模板分类")),
+    };
+    let raw = name.trim();
+    let key = if raw.to_ascii_lowercase().ends_with(".j2") {
+        raw.to_string()
+    } else {
+        format!("{raw}.j2")
+    };
+    let source = format!("( {raw} 模板 )\n( 分类: {label} )\n\n");
+    if let Err(e) = validate_template_source(root, &key, &source) {
+        return e;
+    }
+    let out = match nctool_core::asset::TemplateWriter::create(root, &key, &source) {
+        Ok(x) => x,
+        Err(e) => return asset_write_error(e, "template_duplicate"),
+    };
+    let manifest_warning =
+        match nctool_core::asset::TemplateWriter::append_manifest_entry(root, &key, raw, &cat) {
+            nctool_core::asset::ManifestOutcome::Degraded(s) => Some(s),
+            _ => None,
+        };
+    Resp::Json(
+        200,
+        ok(
+            serde_json::json!({"name":key,"fingerprint":out.fingerprint,"action":out.action,"manifestWarning":manifest_warning}),
+        ),
+    )
+}
+
+fn template_save(ctx: &Ctx, body: &[u8]) -> Resp {
+    let v = match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(v) => v,
+        Err(e) => return Resp::Json(400, err("bad_request", e.to_string())),
+    };
+    let (Some(name), Some(source), Some(hash)) = (
+        v.get("name").and_then(|x| x.as_str()),
+        v.get("source").and_then(|x| x.as_str()),
+        v.get("expectHash").and_then(|x| x.as_str()),
+    ) else {
+        return Resp::Json(400, err("bad_request", "需要 name、source 与 expectHash"));
+    };
+    let Some(root) = ctx.template_dir.as_deref() else {
+        return Resp::Json(400, err("args", "未配置模板目录"));
+    };
+    let entry = match ctx
+        .build_registry()
+        .ok()
+        .and_then(|g| g.registry().get(name).cloned())
+    {
+        Some(e) => e,
+        None => {
+            return Resp::Json(
+                404,
+                err("template_not_found", format!("模板不存在：{name}")),
+            )
+        }
+    };
+    let key = match entry.source {
+        TemplateSource::File(_) => entry.name,
+        _ => {
+            return Resp::Json(
+                400,
+                err("bad_request", "内置模板不可直接编辑，请先派生模板"),
+            )
+        }
+    };
+    let path = root.join(&key);
+    let current = match nctool_core::asset::WriteKernel::read_fingerprint(&path) {
+        Ok(Some(fp)) if fp.as_string() == hash => fp,
+        Ok(_) => {
+            return Resp::Json(
+                409,
+                err("write_conflict", "模板已被外部修改，请重新载入后再保存"),
+            )
+        }
+        Err(e) => return asset_write_error(e, "template_not_found"),
+    };
+    if let Err(e) = validate_template_source(root, &key, source) {
+        return e;
+    }
+    match nctool_core::asset::TemplateWriter::save(root, &key, source, Some(current)) {
+        Ok(out) => Resp::Json(
+            200,
+            ok(serde_json::json!({"name":key,"fingerprint":out.fingerprint,"action":out.action})),
+        ),
+        Err(e) => asset_write_error(e, "template_not_found"),
+    }
+}
+
+fn template_derive(ctx: &Ctx, body: &[u8]) -> Resp {
+    let v = match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(v) => v,
+        Err(e) => return Resp::Json(400, err("bad_request", e.to_string())),
+    };
+    let (Some(source_name), Some(new_name)) = (
+        v.get("sourceName").and_then(|x| x.as_str()),
+        v.get("newName").and_then(|x| x.as_str()),
+    ) else {
+        return Resp::Json(400, err("bad_request", "需要 sourceName 与 newName"));
+    };
+    let Some(root) = ctx.template_dir.as_deref() else {
+        return Resp::Json(400, err("args", "未配置模板目录"));
+    };
+    let entry = match ctx
+        .build_registry()
+        .ok()
+        .and_then(|g| g.registry().get(source_name).cloned())
+    {
+        Some(e) => e,
+        None => {
+            return Resp::Json(
+                404,
+                err("template_not_found", format!("模板不存在：{source_name}")),
+            )
+        }
+    };
+    if !matches!(entry.source, TemplateSource::File(_)) {
+        return Resp::Json(
+            400,
+            err("bad_request", "内置模板不可直接派生，请先选择磁盘模板"),
+        );
+    }
+    let name = new_name.trim();
+    if let Err(e) = nctool_core::asset::validate_asset_name(name) {
+        return Resp::Json(400, err("bad_request", e));
+    }
+    let filename = if name.to_ascii_lowercase().ends_with(".j2") {
+        name.to_string()
+    } else {
+        format!("{name}.j2")
+    };
+    let target = nctool_core::asset::sibling_rel_key(&entry.name, &filename);
+    let source =
+        nctool_core::asset::build_derived_source(entry.source_text(), name, &entry.name, true);
+    if let Err(e) = validate_template_source(root, &entry.name, &source) {
+        return e;
+    }
+    match nctool_core::asset::TemplateWriter::derive(root, &entry.name, &target, &source) {
+        Ok(out) => Resp::Json(
+            200,
+            ok(
+                serde_json::json!({"name":target,"fingerprint":out.file.fingerprint,"manifestWarning":match out.manifest { nctool_core::asset::ManifestOutcome::Degraded(s) => Some(s), _ => None }}),
+            ),
+        ),
+        Err(e) => asset_write_error(e, "template_duplicate"),
+    }
+}
+
+fn template_rename(ctx: &Ctx, body: &[u8]) -> Resp {
+    let v = match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(v) => v,
+        Err(e) => return Resp::Json(400, err("bad_request", e.to_string())),
+    };
+    let (Some(old), Some(new)) = (
+        v.get("oldName").and_then(|x| x.as_str()),
+        v.get("newName").and_then(|x| x.as_str()),
+    ) else {
+        return Resp::Json(400, err("bad_request", "需要 oldName 与 newName"));
+    };
+    let Some(root) = ctx.template_dir.as_deref() else {
+        return Resp::Json(400, err("args", "未配置模板目录"));
+    };
+    let entry = match ctx
+        .build_registry()
+        .ok()
+        .and_then(|g| g.registry().get(old).cloned())
+    {
+        Some(e) => e,
+        None => return Resp::Json(404, err("template_not_found", format!("模板不存在：{old}"))),
+    };
+    if !matches!(entry.source, TemplateSource::File(_)) {
+        return Resp::Json(400, err("bad_request", "内置模板不可重命名"));
+    }
+    let name = new.trim();
+    if let Err(e) = nctool_core::asset::validate_asset_name(name) {
+        return Resp::Json(400, err("bad_request", e));
+    }
+    let filename = if name.to_ascii_lowercase().ends_with(".j2") {
+        name.to_string()
+    } else {
+        format!("{name}.j2")
+    };
+    let target = nctool_core::asset::sibling_rel_key(&entry.name, &filename);
+    match nctool_core::asset::TemplateWriter::rename(root, &entry.name, &target) {
+        Ok(out) => Resp::Json(
+            200,
+            ok(
+                serde_json::json!({"oldName":entry.name,"name":target,"manifestWarning":match out.manifest { nctool_core::asset::ManifestOutcome::Degraded(s) => Some(s), _ => None }}),
+            ),
+        ),
+        Err(e) => asset_write_error(e, "template_not_found"),
+    }
+}
+
+fn validate_template_source(root: &std::path::Path, key: &str, source: &str) -> Result<(), Resp> {
+    nctool_tpl::parse(source, key)
+        .map_err(|e| Resp::Json(400, err("validation", e.to_string())))?;
+    let manifest = nctool_core::manifest::TemplateManifest::load(root)
+        .map_err(|e| Resp::Json(400, err("manifest", e.to_string())))?;
+    let library = nctool_core::variables::VariableLibrary::load(root)
+        .map_err(|e| Resp::Json(400, err("variables", e.to_string())))?;
+    let meta = nctool_core::manifest::ResolvedMeta::resolve(
+        std::path::Path::new(key),
+        source,
+        manifest.get(key),
+        &library,
+    );
+    let report = nctool_core::validate::check_spec_consistency(&meta.params);
+    if report.has_errors() {
+        return Err(Resp::Json(400, err("validation", report.summary())));
+    }
+    Ok(())
+}
+
+fn asset_write_error(e: nctool_core::asset::WriteError, fallback: &'static str) -> Resp {
+    let (status, kind) = match &e {
+        nctool_core::asset::WriteError::Conflict { .. }
+        | nctool_core::asset::WriteError::LockBusy { .. } => (409, "write_conflict"),
+        nctool_core::asset::WriteError::NotFound(_) => (404, fallback),
+        nctool_core::asset::WriteError::PathEscape { .. } => (400, "bad_request"),
+        _ => (500, "internal"),
+    };
+    Resp::Json(status, err(kind, e.to_string()))
 }
 
 /// `ParamSpec` → 前端规格 JSON。
@@ -917,9 +1189,8 @@ pub(crate) fn machine_schema_json(s: &MachineKeySchema) -> serde_json::Value {
 /// 机床列表：内置预设 + 配置文件自定义机床（与 `machine list` 口径一致）。
 ///
 /// `nctool ui` 的前端机床切换需要它；属于 ROADMAP C2 三端点之外的必要补充。
-/// **只读**：机床的写入通道只有 CLI（`machine add/edit/rm`），本端点不提供写入口
-/// （Q8）；`schema` 字段供前端展示"每个键是什么类型、什么含义、有哪些候选"，
-/// 让用户在 CLI 里手打命令时知道该填什么，而不是让 UI 去猜。
+/// `schema` 字段供前端展示键类型、含义和候选项；自定义机床写入另由
+/// `POST /api/machines` 与 `POST /api/machines/delete` 处理。
 fn machines_list(ctx: &Ctx) -> Resp {
     // 枚举规则（预设 + 自定义、按预设 id 去重）来自 core 的单一来源；
     // 此前与 `commands/machine.rs::list` 各写一遍，两份会漂移。
@@ -940,10 +1211,202 @@ fn machines_list(ctx: &Ctx) -> Resp {
         .iter()
         .map(machine_schema_json)
         .collect();
+    let config_fingerprint =
+        nctool_core::asset::WriteKernel::read_fingerprint(&ctx.project_config_path())
+            .ok()
+            .flatten()
+            .map(|fp| fp.as_string());
     Resp::Json(
         200,
-        ok(serde_json::json!({ "machines": machines, "schema": schema })),
+        ok(
+            serde_json::json!({ "machines": machines, "schema": schema, "configFingerprint": config_fingerprint }),
+        ),
     )
+}
+
+fn config_view(ctx: &Ctx) -> Resp {
+    Resp::Json(
+        200,
+        ok(serde_json::json!({
+            "templateDir": ctx.template_dir,
+            "defaultMachine": ctx.default_machine,
+            "globalPath": ctx.loaded.global_path,
+            "projectPath": ctx.loaded.project_path,
+            "customMachines": ctx.loaded.merged.machine.keys().collect::<Vec<_>>(),
+            "warnings": ctx.loaded.warnings,
+        })),
+    )
+}
+
+fn machine_save(ctx: &Ctx, body: &[u8]) -> Resp {
+    let path = ctx.project_config_path();
+    machine_save_at(ctx, body, &path)
+}
+
+fn machine_save_at(ctx: &Ctx, body: &[u8], path: &std::path::Path) -> Resp {
+    let v = match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(v) => v,
+        Err(e) => return Resp::Json(400, err("bad_request", e.to_string())),
+    };
+    let (Some(id), Some(vendor), Some(model)) = (
+        v.get("id").and_then(|x| x.as_str()),
+        v.get("vendor").and_then(|x| x.as_str()),
+        v.get("model").and_then(|x| x.as_str()),
+    ) else {
+        return Resp::Json(400, err("bad_request", "需要 id、vendor 与 model"));
+    };
+    if nctool_core::asset::is_builtin_machine(id) {
+        return Resp::Json(
+            400,
+            err("bad_request", "内置机床不可修改；请另存为自定义机床"),
+        );
+    }
+    let config: std::collections::BTreeMap<String, String> = match serde_json::from_value(
+        v.get("config")
+            .cloned()
+            .unwrap_or_else(|| serde_json::json!({})),
+    ) {
+        Ok(c) => c,
+        Err(e) => return Resp::Json(400, err("bad_request", format!("config 格式错误：{e}"))),
+    };
+    let current = match nctool_core::asset::WriteKernel::read_fingerprint(path) {
+        Ok(fp) => fp,
+        Err(e) => return asset_write_error(e, "machine_not_found"),
+    };
+    let expect_hash = match v.get("expectHash") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(hash)) => Some(hash.as_str()),
+        Some(_) => return Resp::Json(400, err("bad_request", "expectHash 必须是字符串或 null")),
+    };
+    if let Some(want) = expect_hash {
+        if current.as_ref().map(|fp| fp.as_string()).as_deref() != Some(want) {
+            return Resp::Json(
+                409,
+                err("write_conflict", "机床配置文件已变化，请刷新后重试"),
+            );
+        }
+    }
+    let machine = nctool_core::MachineConfig {
+        id: id.into(),
+        vendor: vendor.into(),
+        model: model.into(),
+        config,
+    };
+    let (required, mut validation_warnings) =
+        match crate::commands::machine::required_machine_keys(ctx, id) {
+            Ok(result) => result,
+            Err(e) => return cli_error(e),
+        };
+    let report = nctool_core::asset::MachineWriter::preflight(&machine, &required);
+    if !report.can_save() {
+        return Resp::Json(400, err("validation", report.blocking.join("；")));
+    }
+    validation_warnings.extend(report.warnings);
+    match nctool_core::asset::MachineWriter::upsert(path, &machine, current) {
+        Ok(out) => Resp::Json(
+            200,
+            ok(
+                serde_json::json!({"machine":machine,"action":out.action,"fileFingerprint":out.fingerprint,"warnings":validation_warnings}),
+            ),
+        ),
+        Err(e) => asset_write_error(e, "machine_not_found"),
+    }
+}
+
+fn machine_delete(ctx: &Ctx, body: &[u8]) -> Resp {
+    let path = ctx.project_config_path();
+    machine_delete_at(ctx, body, &path)
+}
+
+fn machine_delete_at(ctx: &Ctx, body: &[u8], path: &std::path::Path) -> Resp {
+    let v = match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(v) => v,
+        Err(e) => return Resp::Json(400, err("bad_request", e.to_string())),
+    };
+    let Some(id) = v.get("id").and_then(|x| x.as_str()) else {
+        return Resp::Json(400, err("bad_request", "需要 id"));
+    };
+    if ctx.default_machine.as_deref() == Some(id) {
+        return Resp::Json(
+            409,
+            err(
+                "default_machine",
+                "该机床是当前默认机床，请先修改默认机床配置再删除",
+            ),
+        );
+    }
+    if nctool_core::asset::is_builtin_machine(id) {
+        return Resp::Json(400, err("bad_request", "内置机床不可删除"));
+    }
+    let current = match nctool_core::asset::WriteKernel::read_fingerprint(path) {
+        Ok(fp) => fp,
+        Err(e) => return asset_write_error(e, "machine_not_found"),
+    };
+    let expect_hash = match v.get("expectHash") {
+        None | Some(serde_json::Value::Null) => None,
+        Some(serde_json::Value::String(hash)) => Some(hash.as_str()),
+        Some(_) => return Resp::Json(400, err("bad_request", "expectHash 必须是字符串或 null")),
+    };
+    if let Some(want) = expect_hash {
+        if current.as_ref().map(|fp| fp.as_string()).as_deref() != Some(want) {
+            return Resp::Json(
+                409,
+                err("write_conflict", "机床配置文件已变化，请刷新后重试"),
+            );
+        }
+    }
+    match nctool_core::asset::MachineWriter::remove(path, id, current) {
+        Ok(out) => Resp::Json(200, ok(serde_json::json!({"id":id,"action":out.action}))),
+        Err(e) => asset_write_error(e, "machine_not_found"),
+    }
+}
+
+fn lint_template(ctx: &Ctx, body: &[u8]) -> Resp {
+    let v = match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(v) => v,
+        Err(e) => return Resp::Json(400, err("bad_request", e.to_string())),
+    };
+    let Some(name) = v.get("template").and_then(|x| x.as_str()) else {
+        return Resp::Json(400, err("bad_request", "需要 template"));
+    };
+    let source = match v.get("source") {
+        Some(serde_json::Value::String(source)) => source.clone(),
+        Some(_) => return Resp::Json(400, err("bad_request", "source 必须是字符串")),
+        None => {
+            let path = format!("/api/templates/{}", percent_encode(name));
+            let Resp::Json(status, response) =
+                template_detail(ctx, path.trim_start_matches("/api/templates/"))
+            else {
+                unreachable!()
+            };
+            if status != 200 {
+                return Resp::Json(status, response);
+            }
+            let Some(source) = response
+                .pointer("/data/template/source")
+                .and_then(|x| x.as_str())
+            else {
+                return Resp::Json(500, err("internal", "模板详情缺少源码"));
+            };
+            source.to_string()
+        }
+    };
+    match nctool_tpl::lint(&source, name) {
+        Ok(findings) => Resp::Json(200, ok(serde_json::to_value(findings.iter().map(|f| serde_json::json!({"line":f.line,"col":f.col,"filter":f.filter,"suggestion":f.suggestion,"message":f.message})).collect::<Vec<_>>()).unwrap_or_default())),
+        Err(e) => Resp::Json(400, err("render", e.to_string())),
+    }
+}
+
+fn percent_encode(s: &str) -> String {
+    let mut out = String::new();
+    for b in s.bytes() {
+        if b.is_ascii_alphanumeric() || b"-_.~".contains(&b) {
+            out.push(b as char);
+        } else {
+            out.push_str(&format!("%{b:02X}"));
+        }
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
@@ -1263,6 +1726,177 @@ fn presets_delete(ctx: &Ctx, body: &[u8]) -> Resp {
     )
 }
 
+fn presets_rename(ctx: &Ctx, body: &[u8]) -> Resp {
+    let v = match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(v) => v,
+        Err(e) => return Resp::Json(400, err("bad_request", e.to_string())),
+    };
+    let (Some(old), Some(new)) = (
+        v.get("oldName").and_then(|x| x.as_str()),
+        v.get("newName").and_then(|x| x.as_str()),
+    ) else {
+        return Resp::Json(400, err("bad_request", "需要 oldName 与 newName"));
+    };
+    let path = match presets_path(ctx) {
+        Ok(p) => p,
+        Err(e) => return cli_error(e),
+    };
+    match PresetStore::rename(&path, old, new) {
+        Ok(out) => Resp::Json(
+            200,
+            ok(serde_json::json!({"oldName":old,"name":new,"action":out.action})),
+        ),
+        Err(nctool_core::asset::WriteError::NotFound(_)) => {
+            Resp::Json(404, err("preset_not_found", format!("预设不存在：{old}")))
+        }
+        Err(nctool_core::asset::WriteError::PathEscape { reason, .. })
+            if reason.contains("同名") =>
+        {
+            Resp::Json(409, err("name_conflict", reason))
+        }
+        Err(e) => write_error_resp(e),
+    }
+}
+
+fn presets_export(ctx: &Ctx, body: &[u8]) -> Resp {
+    let v = match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(v) => v,
+        Err(e) => return Resp::Json(400, err("bad_request", e.to_string())),
+    };
+    let path = match presets_path(ctx) {
+        Ok(p) => p,
+        Err(e) => return cli_error(e),
+    };
+    let got = match PresetStore::load(&path) {
+        Ok(g) => g,
+        Err(e) => return write_error_resp(e),
+    };
+    let selected = v.get("name").and_then(|x| x.as_str());
+    let presets: Vec<_> = match selected {
+        Some(name) => match got.file.get(name) {
+            Some(p) => vec![p.clone()],
+            None => return Resp::Json(404, err("preset_not_found", format!("预设不存在：{name}"))),
+        },
+        None => got.file.presets.clone(),
+    };
+    if presets.is_empty() {
+        return Resp::Json(400, err("args", "没有可导出的预设"));
+    }
+    let file = nctool_core::asset::PresetFile {
+        version: nctool_core::asset::PRESET_SCHEMA_VERSION,
+        presets: presets.clone(),
+    };
+    match serde_yaml::to_string(&file) {
+        Ok(yaml) => Resp::Json(
+            200,
+            ok(
+                serde_json::json!({"yaml":yaml,"count":presets.len(),"names":presets.iter().map(|p| p.name.clone()).collect::<Vec<_>>()}),
+            ),
+        ),
+        Err(e) => Resp::Json(500, err("internal", format!("预设序列化失败：{e}"))),
+    }
+}
+
+fn presets_import(ctx: &Ctx, body: &[u8]) -> Resp {
+    let v = match serde_json::from_slice::<serde_json::Value>(body) {
+        Ok(v) => v,
+        Err(e) => return Resp::Json(400, err("bad_request", e.to_string())),
+    };
+    let Some(yaml) = v.get("yaml").and_then(|x| x.as_str()) else {
+        return Resp::Json(400, err("bad_request", "需要 yaml 文本"));
+    };
+    let force = match v.get("force") {
+        None | Some(serde_json::Value::Null) => false,
+        Some(serde_json::Value::Bool(b)) => *b,
+        _ => return Resp::Json(400, err("bad_request", "force 必须是布尔值")),
+    };
+    let mut unvalidated_templates = std::collections::BTreeSet::new();
+    let presets = match PresetStore::import_presets::<CliError, _>(yaml, |p| {
+        let specs = match crate::commands::preset::specs_of(ctx, &p.template) {
+            Ok(specs) => specs,
+            Err(_) => {
+                unvalidated_templates.insert(p.template.clone());
+                Vec::new()
+            }
+        };
+        let report = nctool_core::validate::check_param_values(&specs, &p.params);
+        if report.has_errors() {
+            return Err(CliError::new(
+                "validation",
+                format!("预设「{}」参数值非法：\n{}", p.name, report.summary()),
+            ));
+        }
+        Ok(())
+    }) {
+        Ok(p) => p,
+        Err(e) => return cli_error(e),
+    };
+    let path = match presets_path(ctx) {
+        Ok(p) => p,
+        Err(e) => return cli_error(e),
+    };
+    // 指纹必须在加载文件前取得。若加载期间其他进程改写了文件，旧内容与旧
+    // 指纹的组合会在最终写入时冲突，而不会把并发更新静默覆盖。
+    let expected = match nctool_core::asset::WriteKernel::read_fingerprint(&path) {
+        Ok(x) => x,
+        Err(e) => return write_error_resp(e),
+    };
+    let loaded = match PresetStore::load(&path) {
+        Ok(x) => x,
+        Err(e) => return write_error_resp(e),
+    };
+    if loaded.degraded {
+        return write_error_resp(nctool_core::asset::WriteError::Corrupt(format!(
+            "预设文件不可用（{}），为避免覆盖已拒绝导入",
+            loaded.warnings.join("；")
+        )));
+    }
+    let mut imported_names = std::collections::BTreeSet::new();
+    if let Some(duplicate) = presets.iter().find_map(|p| {
+        if imported_names.insert(p.name.as_str()) {
+            None
+        } else {
+            Some(p.name.clone())
+        }
+    }) {
+        return Resp::Json(
+            400,
+            err(
+                "bad_request",
+                format!("导入文件包含重复预设名：{duplicate}"),
+            ),
+        );
+    }
+    let conflicts: Vec<_> = presets
+        .iter()
+        .filter(|p| loaded.file.get(&p.name).is_some())
+        .map(|p| p.name.clone())
+        .collect();
+    if !conflicts.is_empty() && !force {
+        return Resp::Json(
+            409,
+            err(
+                "name_conflict",
+                format!("预设已存在：{}。确认覆盖后重试", conflicts.join(", ")),
+            ),
+        );
+    }
+    let mut merged = loaded.file;
+    for p in &presets {
+        merged.take(&p.name);
+        merged.presets.push(p.clone());
+    }
+    match PresetStore::save_with_wait(&path, &merged, expected, std::time::Duration::ZERO) {
+        Ok(out) => Resp::Json(
+            200,
+            ok(
+                serde_json::json!({"count":presets.len(),"names":presets.iter().map(|p| p.name.clone()).collect::<Vec<_>>(),"action":out.action,"warnings":unvalidated_templates.iter().map(|t| format!("模板 {t} 无法解析，导入时只执行有限性校验。" )).collect::<Vec<_>>()}),
+            ),
+        ),
+        Err(e) => write_error_resp(e),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // POST /api/inspect
 // ---------------------------------------------------------------------------
@@ -1453,6 +2087,9 @@ fn serve_requests_with_timeout(
     // 在读请求体的线程数（P1-8 第二道闸）。每个 serve 实例一份，理由见
     // [`MAX_IN_FLIGHT_BODY_READERS`]。
     let in_flight = Arc::new(AtomicUsize::new(0));
+    // Keep the long-running server view in sync with guarded asset writes and edits made
+    // by other tools while preserving explicit startup overrides.
+    let mut active_ctx = ctx.clone();
 
     for request in server.incoming_requests() {
         let method = request.method().as_str().to_ascii_uppercase();
@@ -1568,7 +2205,16 @@ fn serve_requests_with_timeout(
                             _ if body.len() > MAX_BODY_BYTES => {
                                 Resp::Json(413, err("payload_too_large", "请求体超过 1 MiB 上限"))
                             }
-                            _ => route(ctx, &method, &path, &query, &body),
+                            _ => {
+                                let template_override = active_ctx.template_dir != active_ctx.loaded.merged.template_dir;
+                                let machine_override = active_ctx.default_machine != active_ctx.loaded.merged.default_machine;
+                                if let Ok(loaded) = crate::config::load() {
+                                    if !template_override { active_ctx.template_dir = loaded.merged.template_dir.clone(); }
+                                    if !machine_override { active_ctx.default_machine = loaded.merged.default_machine.clone(); }
+                                    active_ctx.loaded = loaded;
+                                }
+                                route(&active_ctx, &method, &path, &query, &body)
+                            },
                         },
                     }
                 }
@@ -2526,6 +3172,60 @@ mod tests {
     }
 
     #[test]
+    fn presets_import_refuses_to_overwrite_corrupt_existing_file() {
+        let env = preset_endpoint_test("import_corrupt");
+        let ctx = env.ctx();
+        let path = nctool_core::asset::default_preset_path();
+        if let Some(parent) = path.parent() {
+            std::fs::create_dir_all(parent).unwrap();
+        }
+        let original = b"version: 1\npresets: [ {unclosed";
+        std::fs::write(&path, original).unwrap();
+        let yaml = r#"version: 1
+presets:
+  - name: imported
+    template: t.j2
+    params: {x: 21.0, y: 15.0}
+    createdAt: "2026-09-29T00:00:00Z"
+    specFingerprint: "fnv1a64:0000000000000000"
+"#;
+        let body = json_body(&serde_json::json!({"yaml": yaml, "force": true}));
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/presets/import", "", &body)
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_ne!(status, 200, "损坏文件不得被导入覆盖：{payload}");
+        assert_eq!(std::fs::read(&path).unwrap(), original);
+    }
+
+    #[test]
+    fn presets_import_rejects_duplicate_names_in_payload() {
+        let env = preset_endpoint_test("import_duplicate");
+        let ctx = env.ctx();
+        let yaml = r#"version: 1
+presets:
+  - name: repeated
+    template: t.j2
+    params: {x: 21.0, y: 15.0}
+    createdAt: "2026-09-29T00:00:00Z"
+    specFingerprint: "fnv1a64:0000000000000000"
+  - name: repeated
+    template: t.j2
+    params: {x: 30.0, y: 15.0}
+    createdAt: "2026-09-29T00:00:00Z"
+    specFingerprint: "fnv1a64:0000000000000000"
+"#;
+        let body = json_body(&serde_json::json!({"yaml": yaml, "force": true}));
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/presets/import", "", &body)
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 400, "重复名称应明确拒绝：{payload}");
+        assert_eq!(payload["error"]["kind"], "bad_request");
+        assert!(!nctool_core::asset::default_preset_path().exists());
+    }
+
+    #[test]
     fn route_health() {
         let Resp::Json(status, payload) = route(&test_ctx(), "GET", "/health", "", &[]) else {
             panic!("/health 应返回 JSON")
@@ -3045,21 +3745,200 @@ mod tests {
         }
     }
 
-    /// 机床**没有** HTTP 写端点（Q8）：写了也得是 404，不能悄悄生效。
+    /// 机床写端点只接受 POST 与严格 JSON；不支持的方法仍为 404。
     #[test]
-    fn machines_have_no_write_endpoint() {
-        for (method, path) in [
-            ("POST", "/api/machines"),
-            ("PUT", "/api/machines"),
-            ("DELETE", "/api/machines"),
-            ("POST", "/api/machines/delete"),
+    fn machine_write_routes_validate_methods_and_bodies() {
+        for (method, path, expected) in [
+            ("POST", "/api/machines", 400),
+            ("PUT", "/api/machines", 404),
+            ("DELETE", "/api/machines", 404),
+            ("POST", "/api/machines/delete", 400),
         ] {
             let Resp::Json(status, payload) = route(&test_ctx(), method, path, "", b"{}") else {
                 panic!("未命中路由应返回 JSON")
             };
-            assert_eq!(status, 404, "{method} {path} 不应存在");
-            assert_eq!(payload["error"]["kind"], "not_found");
+            assert_eq!(status, expected, "{method} {path}: {payload}");
         }
+    }
+
+    #[test]
+    fn machine_delete_rejects_current_default_machine() {
+        let mut ctx = test_ctx();
+        ctx.default_machine = Some("custom_lathe".into());
+        let body = json_body(&serde_json::json!({"id":"custom_lathe"}));
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/machines/delete", "", &body)
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 409, "默认机床必须先解除引用：{payload}");
+        assert_eq!(payload["error"]["kind"], "default_machine");
+    }
+
+    #[test]
+    fn machine_save_and_delete_share_the_guarded_writer_path() {
+        let path = std::env::temp_dir().join(format!(
+            "nctool_http_machine_{}_{}.toml",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        let mut machine = nctool_core::machine::MachinePreset::from_id("generic")
+            .unwrap()
+            .config();
+        machine.id = "http_custom".into();
+        machine.vendor = "Test".into();
+        machine.model = "HTTP".into();
+        let save = json_body(&serde_json::json!({
+            "id": machine.id,
+            "vendor": machine.vendor,
+            "model": machine.model,
+            "config": machine.config,
+            "expectHash": null,
+        }));
+        let ctx = test_ctx();
+        let Resp::Json(status, saved) = machine_save_at(&ctx, &save, &path) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "机床应通过共享预校验并保存：{saved}");
+        let fingerprint = saved["data"]["fileFingerprint"].as_str().unwrap();
+        assert!(std::fs::read_to_string(&path)
+            .unwrap()
+            .contains("[machine.http_custom]"));
+
+        let delete = json_body(&serde_json::json!({
+            "id": "http_custom",
+            "expectHash": fingerprint,
+        }));
+        let Resp::Json(status, deleted) = machine_delete_at(&ctx, &delete, &path) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "机床应通过共享删除用例：{deleted}");
+        assert_eq!(deleted["data"]["action"], "deleted");
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn template_create_reports_missing_manifest_as_partial_success() {
+        let root = std::env::temp_dir().join(format!(
+            "nctool_template_create_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        let mut ctx = test_ctx();
+        ctx.template_dir = Some(root.clone());
+        let body = json_body(&serde_json::json!({"name":"new_part","category":"milling"}));
+        let Resp::Json(status, payload) = route(&ctx, "POST", "/api/templates/create", "", &body)
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "模板文件应已创建：{payload}");
+        assert!(root.join("new_part.j2").is_file());
+        assert_eq!(payload["data"]["name"], "new_part.j2");
+        assert!(payload["data"]["manifestWarning"].as_str().is_some());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn template_asset_workflow_uses_guarded_create_save_derive_and_rename() {
+        let root = std::env::temp_dir().join(format!(
+            "nctool_http_templates_{}_{}",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap()
+                .as_nanos()
+        ));
+        std::fs::create_dir_all(&root).unwrap();
+        std::fs::write(root.join("templates.yaml"), "templates:\n").unwrap();
+        let mut ctx = test_ctx();
+        ctx.template_dir = Some(root.clone());
+
+        let create = json_body(&serde_json::json!({"name":"part","category":"milling"}));
+        let Resp::Json(status, created) = route(&ctx, "POST", "/api/templates/create", "", &create)
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "创建应成功：{created}");
+        assert_eq!(created["data"]["name"], "part.j2");
+        assert!(created["data"]["manifestWarning"].is_null());
+        let initial_hash = created["data"]["fingerprint"].as_str().unwrap();
+        let listed = route(&ctx, "GET", "/api/templates", "", b"");
+        let Resp::Json(_, listed) = listed else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(
+            listed["data"]["templates"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|t| t["name"] == "part.j2")
+                .unwrap()["status"],
+            "unreviewed"
+        );
+        let Resp::Json(status, detail) = route(&ctx, "GET", "/api/templates/part.j2", "", b"")
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "模板详情应返回评审状态：{detail}");
+        assert_eq!(detail["data"]["template"]["status"], "unreviewed");
+
+        let save = json_body(&serde_json::json!({
+            "name": "part.j2",
+            "source": "G0 X{{ x }}\n",
+            "expectHash": initial_hash,
+        }));
+        let Resp::Json(status, saved) = route(&ctx, "POST", "/api/templates/save", "", &save)
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "保存应成功：{saved}");
+        let refreshed_hash = saved["data"]["fingerprint"].as_str().unwrap();
+
+        let derive = json_body(&serde_json::json!({
+            "sourceName": "part.j2",
+            "newName": "copy",
+        }));
+        let Resp::Json(status, derived) = route(&ctx, "POST", "/api/templates/derive", "", &derive)
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "派生应成功：{derived}");
+        assert_eq!(derived["data"]["name"], "copy.j2");
+        assert_ne!(refreshed_hash, "");
+
+        let rename = json_body(&serde_json::json!({
+            "oldName": "copy.j2",
+            "newName": "renamed",
+        }));
+        let Resp::Json(status, renamed) = route(&ctx, "POST", "/api/templates/rename", "", &rename)
+        else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "重命名应成功：{renamed}");
+        assert_eq!(renamed["data"]["name"], "renamed.j2");
+        assert!(!root.join("copy.j2").exists());
+        assert!(root.join("renamed.j2").exists());
+        let _ = std::fs::remove_dir_all(root);
+    }
+
+    #[test]
+    fn lint_accepts_unsaved_source_from_editor() {
+        let body = json_body(&serde_json::json!({
+            "template": "not_saved.j2",
+            "source": "{{ 30 | sin }}",
+        }));
+        let Resp::Json(status, payload) = route(&test_ctx(), "POST", "/api/lint", "", &body) else {
+            panic!("应返回 JSON")
+        };
+        assert_eq!(status, 200, "无需磁盘模板即可检查编辑器内容：{payload}");
+        assert_eq!(payload["data"][0]["filter"], "sin");
+        assert_eq!(payload["data"][0]["suggestion"], "sin_d");
     }
 
     #[test]

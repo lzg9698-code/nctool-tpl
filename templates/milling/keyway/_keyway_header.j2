@@ -1,0 +1,32 @@
+{# 铣键槽公共头部 - 所有粗铣/精铣/倒角子程序共用 #}
+{# 传入变量: tool_num(本次刀号), next_tool_num(下一把刀备刀,可为空), spindle_speed, coolant_m_code, is_left_open, U_Z, U_A, U_D, U_ID #}
+GX73
+GZ73 Y0
+L184(0,0,,,,0)
+L171("{{ tool_num }}")
+L172(0)
+{% if next_tool_num %}L171("{{ next_tool_num }}")
+{% endif %}GX73
+GZ73 Y0
+L184(0,90,,,,0)
+L140(0.00,4,0)
+SETMS(1)
+DIAMOF
+G17
+G90
+D1
+;''''基础坐标系偏移''''
+XMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9{{ U_ID }} CMW_1=0
+G59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1
+;''''旋转-定位键槽''''
+AROT Y90
+AROT Z180
+{% if is_left_open %}
+ATRANS X{{ "%.3f" | format(U_Z - U_A) }} Z{{ "%.3f" | format(U_D / 2) }}
+AROT Z180
+{% else %}
+ATRANS X{{ "%.3f" | format(U_Z) }} Z{{ "%.3f" | format(U_D / 2) }}
+{% endif %}
+;''''起转-给水''''
+G97 S1={{ "%.0f" | format(spindle_speed) }} M1=3
+M14=8 M10=150 H50=80

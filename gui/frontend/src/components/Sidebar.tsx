@@ -32,7 +32,7 @@ export default function Sidebar() {
       <div className="side-footer">
         nctool-core v0.3.0
         <br />
-        Tauri 2 · Phase 1
+        Tauri 2 · Phase 2
       </div>
     </aside>
   );

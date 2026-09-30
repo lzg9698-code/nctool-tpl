@@ -115,7 +115,7 @@ impl std::str::FromStr for TemplateCategory {
 /// 模板源码来源。
 #[derive(Debug, Clone)]
 pub enum TemplateSource {
-    /// 内存模板（源码见 [`TemplateEntry::source_text`]，不重复存储）
+    /// 内存模板（源码可通过 [`TemplateEntry::source_text`] 读取，不重复存储）
     Memory,
     /// 文件系统模板（注册时加载内容，记录路径）
     File(PathBuf),
@@ -136,8 +136,9 @@ pub struct TemplateEntry {
     pub source: TemplateSource,
     /// 参数规格（渲染前校验）
     pub params: Vec<ParamSpec>,
-    /// 模板源码（统一为字符串，供渲染）
-    pub source_text: String,
+    /// 模板源码（统一为字符串，供渲染）。请用 [`Self::source_text`] 读取；更新源码
+    /// 使用 [`Self::with_source_text`]，保证静态分析缓存同步失效。
+    source_text: String,
     /// 是否在模板列表中可见（`false` = 功能模块专用，程序可调用但不展示）。
     ///
     /// 这是**面向用户的视图过滤**，与模板的真实可用性解耦：被隐藏的模板
@@ -224,9 +225,9 @@ impl TemplateEntry {
     /// 需要结构化错误（行列定位）的调用方在 `Err` 分支自行 `nctool_tpl::parse`
     /// 重取一次——该分支只在模板本身有语法错误时走到。
     ///
-    /// # 与 `source_text` 可变性的关系
-    /// 本缓存以 `source_text` 为准。`source_text` 是 `pub` 字段，若在首次分析后
-    /// 改写它，必须调用 [`Self::invalidate_analysis`]，否则拿到的仍是旧源码的结论。
+    /// # 与源码更新的关系
+    /// 本缓存以私有 `source_text` 为准。源码只可通过 [`Self::with_source_text`] 替换，
+    /// 该方法会同步使缓存失效，避免继续使用旧源码的分析结论。
     pub fn analysis(&self) -> Result<&Analysis, &nctool_tpl::TplError> {
         match self
             .analysis
@@ -237,8 +238,20 @@ impl TemplateEntry {
         }
     }
 
-    /// 丢弃静态分析缓存（改写 [`Self::source_text`] 后必须调用）。
-    pub fn invalidate_analysis(&mut self) {
+    /// 读取模板源码。
+    pub fn source_text(&self) -> &str {
+        &self.source_text
+    }
+
+    /// 替换模板源码并失效旧静态分析缓存。
+    pub fn with_source_text(mut self, source_text: impl Into<String>) -> Self {
+        self.source_text = source_text.into();
+        self.invalidate_analysis();
+        self
+    }
+
+    /// 丢弃静态分析缓存；源码不可直接修改，故仅由安全的更新方法调用。
+    fn invalidate_analysis(&mut self) {
         self.analysis = OnceCell::new();
     }
 
@@ -1268,6 +1281,25 @@ mod tests {
 
         // `x` 有 default 兜底 → 可选；`b` 处于 is defined → 可选
         assert!(cached.variables.iter().all(|v| v.optional));
+    }
+
+    #[test]
+    fn replacing_source_invalidates_cached_analysis() {
+        let entry = TemplateEntry::new(
+            "cache_update",
+            TemplateCategory::General,
+            "",
+            TemplateSource::Memory,
+            vec![],
+            "G0 X{{ old_value }}",
+        );
+        let before = entry.analysis().unwrap();
+        assert!(before.variables.iter().any(|v| v.name == "old_value"));
+
+        let updated = entry.with_source_text("G0 Y{{ new_value }}");
+        let after = updated.analysis().unwrap();
+        assert!(after.variables.iter().any(|v| v.name == "new_value"));
+        assert!(!after.variables.iter().any(|v| v.name == "old_value"));
     }
 
     #[test]

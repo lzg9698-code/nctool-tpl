@@ -122,7 +122,7 @@ fn map_write_err(e: WriteError) -> CliError {
 ///
 /// 唯一消费者：[`PresetStore::import_presets`] 的 `E: From<WriteError>`
 /// 泛型约束（见 `preset import`），故语义 = **预设口径**（委托
-/// [`map_write_err`]：`Corrupt` → `io(3)`、`NotFound` → `preset_not_found(5)`）。
+/// `map_write_err`：`Corrupt` → `io(3)`、`NotFound` → `preset_not_found(5)`）。
 ///
 /// ⚠️ 其它命令族**不要**用 `.into()`/`?` 隐式转换：machine 的 `Corrupt` 应归
 /// `config(4)`，必须显式调

@@ -1,0 +1,33 @@
+{# ========== 配置区 (逻辑计算在模板中进行) ========== #}
+{# 接收原始参数: actual_sta_x, sta_z, end_z, ap_1, ap_2, sync_num_start, cut_num #}
+{# ==================================================== #}
+{# ========== 轨迹生成区 ========== #}
+;---SYT-Right-D{{ "%.1f"|format(end_x) }}---start---
+G0 Z{{ "%.3f"|format(sta_z + 4) }}
+G0 X{{ "%.3f"|format(actual_sta_x + 10) }}
+{% for warning in warnings %}
+{{ warning }}
+{% endfor %}
+WAITM({{ sync_num_start }},1,2)
+{% for i in range(1, cut_num + 1) %}
+{# --- 计算当前刀次的坐标 --- #}
+{% set x_val_ch1 = actual_sta_x - ap_1 - (i - 1) * (ap_1 + ap_2) %}
+{% set x_val_ch2 = actual_sta_x - i * (ap_1 + ap_2) %}
+{# ------------------------ #}
+{% if channel == 1 %}
+G0 Z{{ "%.3f"|format(sta_z + 2) }}
+G1 X{{ "%.3f"|format(x_val_ch1) }} F400
+{% else %}
+G0 Z{{ "%.3f"|format(sta_z + 4) }}
+G1 X{{ "%.3f"|format(x_val_ch2) }} F400
+{% endif %}
+WAITM({{ sync_num_start + i }},1,2)
+G1 Z{{ "%.3f"|format(end_z) }} F{{ "%.2f"|format(sync_feed) }}
+G91
+G1 X{{ "%.3f"|format(ap_1 + ap_2 + 4) }} F0.3
+G1 X2 Z1
+G90
+{% endfor %}
+G0 X{{ "%.3f"|format(actual_sta_x + 10) }}
+G0 Z{{ "%.3f"|format(end_z + 4) }}
+;---End---

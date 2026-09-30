@@ -59,6 +59,21 @@ pub(crate) fn write_atomic(path: &Path, bytes: &[u8]) -> Result<(), WriteError> 
     })
 }
 
+/// 删除文件目录项，并在支持的平台上同步父目录。
+///
+/// 调用方必须先在 `WriteKernel` 中持有对应路径锁并校验指纹。
+pub(crate) fn remove_file(path: &Path) -> Result<(), WriteError> {
+    with_retry(std::time::Duration::from_millis(10), || {
+        std::fs::remove_file(path).map_err(|e| map_io(e, path))
+    })?;
+    let parent = path
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(Path::new("."));
+    sync_parent_dir(parent);
+    Ok(())
+}
+
 /// 有限重试：仅对「权限被拒」重试，其余错误立即返回（重试无意义）。
 ///
 /// # 为什么要重试「权限被拒」

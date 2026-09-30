@@ -5,8 +5,9 @@
 
 > 编写语法、过滤器清单、常见陷阱见
 > [`docs/TEMPLATE_WRITING_GUIDE.md`](../docs/TEMPLATE_WRITING_GUIDE.md)。
-> 从外部项目移植模板的方法见
-> [`docs/TEMPLATE_INTEGRATION_PLAN.md`](../docs/TEMPLATE_INTEGRATION_PLAN.md) §5.5。
+> 从外部项目移植模板前请按
+> [`docs/OLD_PROJECT_TEMPLATE_IMPORT_CHECKLIST.md`](../docs/OLD_PROJECT_TEMPLATE_IMPORT_CHECKLIST.md) 盘点和留痕；
+> NCTool V3 本轮静态导入记录见 [`docs/TEMPLATE_ZIP_IMPORT_REPORT.md`](../docs/TEMPLATE_ZIP_IMPORT_REPORT.md)。
 
 ---
 

@@ -177,14 +177,10 @@ jobs:
   # 没有 tsc、没有 vite build —— 前端类型回归、依赖漂移、package-lock 失效
   # 全部绿灯放行。本 job 把三件事变成门禁：
   #   ① `npm ci` 严格按 package-lock 安装（顺带校验 lock 与 package.json 一致）；
-  #   ② `tsc --noEmit` 类型检查；
-  #   ③ `vite build` 产物级构建（与 tauri `beforeBuildCommand` 同一条命令）。
-  #
-  # **为什么不把 `npm audit` 设为门禁**：实测当前有 2 条已知告警
-  # （esbuild moderate / vite high，均为开发服务器面），修复需 vite 5 → 8
-  # 大版本升级。把"需要破坏性升级才能变绿"的门禁直接挂上，等于让 CI 从
-  # 上线第一天就常红——本仓库自己记录过"msrv job 长期红着没人看"的教训。
-  # vite 升级单独排期，升级完成后把 audit 补回本 job。
+  #   ② `npm audit` 安全审计；
+  #   ③ `tsc --noEmit` 类型检查；
+  #   ④ `vite build` 产物级构建（与 tauri `beforeBuildCommand` 同一条命令）。
+  # Vite 已从受影响的 5.x 升到有补丁的 7.x；`npm audit` 当前为零漏洞，故恢复门禁。
   frontend:
     name: Frontend (typecheck + build)
     runs-on: ubuntu-latest
@@ -201,6 +197,9 @@ jobs:
 
       - name: Install (npm ci, lockfile strictly)
         run: npm ci --prefix gui/frontend
+
+      - name: Audit frontend dependencies
+        run: npm audit --prefix gui/frontend --audit-level=moderate
 
       - name: Type check (tsc --noEmit)
         run: npx --prefix gui/frontend tsc --noEmit -p gui/frontend

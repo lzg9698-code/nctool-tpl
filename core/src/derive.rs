@@ -244,7 +244,8 @@ fn compute(
 }
 
 /// 规格中声明了 `derive` 的参数名（供校验层识别"系统注入"参数）。
-pub fn derived_names(specs: &[ParamSpec]) -> Vec<&str> {
+#[cfg(test)]
+fn derived_names(specs: &[ParamSpec]) -> Vec<&str> {
     specs
         .iter()
         .filter(|s| s.derive.is_some())

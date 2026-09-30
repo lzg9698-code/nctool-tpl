@@ -3,6 +3,11 @@
 > 适用阶段：nctool 0.x（API 演进期）→ 1.0（API 冻结期）。
 > 本文档说明**版本号、发布节奏、提交流程、兼容性窗口**。不属于发布材料的内容（如何写模板/配置机床）见其他 docs。
 
+> **2026-09-29 1.0 预备更新**：原计划放到 `nctool-core 0.4.0` 的 B-1/B-2 公共 API 收紧已
+> 提前进入当前 1.0 候选工作区：`derived_names` / `invalidate_analysis` 不再是公共 API，
+> `TemplateEntry.source_text` 改为私有字段，并提供 `source_text()` / `with_source_text()`。
+> 迁移方式见 §4.5；该窗口是有意的破坏性变更，需在 `Changed` 中显著说明。
+
 ## 1. 版本号策略
 
 遵循 [语义化版本](https://semver.org/) `MAJOR.MINOR.PATCH`。
@@ -13,7 +18,7 @@
   - `MINOR` 升级 = 向后兼容的新功能
   - `PATCH` 升级 = 向后兼容的修复
 
-**多 crate 同步**：本仓库是 workspace（`nctool-tpl` / `nctool-core` / `nctool-cli`）。版本号通常**一起 bump**，但允许 core/tpl 落后于 cli 一次（cli 是薄壳）。
+**多 crate 同步**：本仓库是 workspace（`nctool-tpl` / `nctool-core` / `nctool-cli`）。本次 1.0.0 将三个 crate 与 GUI 的内部版本约束同步升级；发布仍严格按 §2.5.2 的 `tpl → core → cli` 顺序逐个等 CI。
 
 ## 2. 发布节奏
 
@@ -161,21 +166,22 @@ error[E0599]: no method named `generate_outcome` found for struct `Rc<GCodeGener
 
 **二进制兼容**与**源码兼容**分开：
 - 0.x 阶段：源码与二进制都允许破坏
-- 1.0+：源码兼容（C API 同构不破坏 ABI），二进制兼容仅维护最新 minor
+- 1.0+：保证文档化的 Rust 公共 API 遵循 SemVer 源码兼容；当前没有稳定 C ABI 承诺。
+  二进制兼容只维护最新 minor。
 
-## 4.5 破坏性变更归档（下一次 minor 窗口执行）
+## 4.5 破坏性变更归档（1.0 冻结前执行）
 
 > 收录「**本轮不做、但已排定窗口**」的破坏性变更。原则是**无限期推迟等于遗忘**，
 > 故每条都要写清迁移说明要点，等窗口一到就能直接执行，不必重新论证。
 
-### B-1：`derived_names` / `invalidate_analysis` 可见性收窄（U-16 / P2-15）
+### B-1：`derived_names` / `invalidate_analysis` 可见性收窄（U-16 / P2-15；已实施）
 
 | 项 | 内容 |
 | --- | --- |
 | 位点 | `core/src/derive.rs:247` `pub fn derived_names`、`core/src/registry.rs:238` `pub fn invalidate_analysis` |
-| 目标 | `pub` → `pub(crate)`（或 `#[doc(hidden)]` 过渡一个 minor） |
+| 目标 | `pub` → 私有实现（测试仍可在 crate 内调用） |
 | 为什么是破坏性 | `nctool-core` 已发布 crates.io；收窄 `pub` 会让下游 `use nctool_core::derive::derived_names;` 直接编译失败 |
-| 窗口 | **下一个 minor（`nctool-core 0.4.0`）**，与同窗口其他破坏项一起做，避免连开两次破坏性窗口 |
+| 窗口 | ~~下一个 minor（`nctool-core 0.4.0`）~~ **1.0 冻结前已实施于当前候选工作区** |
 
 **迁移说明要点**（届时照抄进 CHANGELOG `Changed` 节）：
 
@@ -189,11 +195,14 @@ error[E0599]: no method named `generate_outcome` found for struct `Rc<GCodeGener
      使缓存失效由类型系统保证，届时 `invalidate_analysis` 直接删掉。
 3. 若担心误伤，先走 `#[doc(hidden)]` + CHANGELOG 提示一个 minor，再在下下个 minor 删除。
 
-### B-2（候选，同窗口评估）：`TemplateEntry::source_text` 私有化
+### B-2：`TemplateEntry::source_text` 私有化（已实施）
 
-B-1 的根因项。当前"改写源码后必须记得调 `invalidate_analysis`"全靠调用方自觉 ——
-这正是 P2-15 把它列为破坏性项的原因。私有化后由 `set_source` 之类的方法内部完成失效，
-不变量从"约定"变成"类型系统保证"。**与 B-1 同窗口做，否则 B-1 收窄后仍要留一个 pub 方法。**
+B-1 的根因项。当前工作区已把源码字段私有化，并提供 `source_text()` 读取与
+`with_source_text()` 更新方法；更新时自动丢弃静态分析缓存，不再依赖调用方手动失效。
+
+迁移：`entry.source_text` 读取改为 `entry.source_text()`；若仍持有未注册的
+`TemplateEntry` 并需要替换源码，使用 `entry.with_source_text(new_source)`。注册后条目
+不可变，不再暴露单独的 `invalidate_analysis()` 入口。
 
 ### 本轮已发生的收紧（已进 CHANGELOG，不属本归档）
 

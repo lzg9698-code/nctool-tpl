@@ -910,6 +910,20 @@ fn rm_yes_deletes_and_reports_deleted_action() {
 }
 
 #[test]
+fn rm_refuses_to_delete_the_configured_default_machine() {
+    let env = Env::new("rm_default");
+    env.add("hero_x9", &[]).code_is(0);
+    let before = env.read_config();
+    env.write_config(&format!("default_machine = \"hero_x9\"\n{before}"));
+    let configured = env.read_config();
+
+    env.run(&["machine", "rm", "hero_x9", "--yes"])
+        .code_is(2)
+        .stderr_contains(&["默认机床", "修改默认机床"]);
+    assert_eq!(env.read_config(), configured, "拒绝删除时配置不能变化");
+}
+
+#[test]
 fn rm_prunes_the_empty_machine_table() {
     let env = Env::new("rm15");
     env.add("hero_x9", &[]).code_is(0);

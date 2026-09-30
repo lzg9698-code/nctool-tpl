@@ -167,7 +167,7 @@ impl CliError {
     }
 
     /// 写内核错误 → CLI 错误（**共享映射**，kind/status 查
-    /// [`classify_write_error`] 单表，消除 preset / machine / templates 三份漂移）。
+    /// `classify_write_error` 单表，消除 preset / machine / templates 三份漂移）。
     ///
     /// 两个上下文参数由调用方显式传入，不再靠"谁调哪个 From"隐式决定：
     ///
@@ -178,7 +178,7 @@ impl CliError {
     ///   **配置**问题 → `"config"`(4)；preset / templates 是资产 → `"io"`(3)
     ///   ——二者有意不同，见设计 D4）。
     ///
-    /// 分类口径（单一来源 = [`classify_write_error`]）：
+    /// 分类口径（单一来源 = `classify_write_error`）：
     ///
     /// - `Conflict` → `write_conflict`(6)
     /// - `LockBusy`（P0-1 锁争用）→ `write_conflict`(6)，与 `Conflict` 同类

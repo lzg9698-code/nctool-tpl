@@ -271,6 +271,12 @@ fn edit(ctx: &Ctx, args: &MachineEditArgs) -> Result<(), CliError> {
 /// `machine rm`：删除自定义机床。
 fn rm(ctx: &Ctx, args: &MachineRmArgs) -> Result<(), CliError> {
     reject_if_builtin(&args.id, "machine add <新id> --from <内置id>")?;
+    if ctx.default_machine.as_deref() == Some(args.id.as_str()) {
+        return Err(CliError::new(
+            "args",
+            "该机床是当前默认机床，请先修改默认机床配置再删除",
+        ));
+    }
 
     let path = machine_path(ctx, &args.file)?;
     if !args.yes {
@@ -374,7 +380,7 @@ fn test(ctx: &Ctx, args: &MachineTestArgs) -> Result<(), CliError> {
 ///   故实际为全部通用模板；隐藏模板也纳入（它们可被 `include`/程序调用）。
 /// - 根名 = `registry.system_vars()` 里匹配到的注入变量名（默认 `"machine"`），
 ///   **不硬编码**（§7.10：系统注入变量名以 `system_vars()` 为单一来源）。
-/// - 每个模板：`nctool_tpl::parse(&e.source_text, &e.name)` →
+/// - 每个模板：`nctool_tpl::parse(e.source_text(), &e.name)` →
 ///   `nctool_tpl::extract_member_accesses(&ast, root)`（返回键按出现顺序去重）。
 ///
 /// **注册表构建失败同样降级**（典型：`template_dir` 指向不存在的目录）：返回空集 +
@@ -412,7 +418,7 @@ pub(crate) fn required_machine_keys(
     let mut keys = BTreeSet::new();
     let mut warnings = Vec::new();
     for entry in registry.list_for_machine(Some(machine_id), None, true) {
-        match nctool_tpl::parse(&entry.source_text, &entry.name) {
+        match nctool_tpl::parse(entry.source_text(), &entry.name) {
             Ok(ast) => {
                 for k in nctool_tpl::extract_member_accesses(&ast, &root) {
                     // 排除恒存在的元信息键（`machine.id/vendor/model`）：它们由

@@ -173,6 +173,7 @@ h1, h2, h3 { font-weight: 500; margin: 0; letter-spacing: -.2px; }
   border: 1px solid var(--border); color: var(--text-faint);
 }
 .tpl-item .badge.builtin { color: var(--accent); border-color: var(--accent); }
+.tpl-item .badge.review-pending { color: var(--warn); border-color: var(--warn); background: var(--warn-bg); }
 .tpl-item .desc {
   font-size: 12px; color: var(--text-dim); margin-top: 2px;
   overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
@@ -219,6 +220,10 @@ h1, h2, h3 { font-weight: 500; margin: 0; letter-spacing: -.2px; }
 }
 .param-input-wrap input:hover { border-color: var(--border-strong); }
 .param-input-wrap select:hover { border-color: var(--border-strong); }
+/* 数值通过键盘输入，隐藏浏览器默认的上下微调按钮。 */
+.param-input-wrap input[type=number] { appearance: textfield; -moz-appearance: textfield; }
+.param-input-wrap input[type=number]::-webkit-inner-spin-button,
+.param-input-wrap input[type=number]::-webkit-outer-spin-button { -webkit-appearance: none; margin: 0; }
 /* 派生参数提示（这些参数由系统算好注入，不出现在表单里） */
 .param-note { margin-top: 10px; font-size: 12px; color: var(--text-faint); line-height: 1.6; }
 .param-input-wrap .suffix { position: absolute; right: 11px; font-size: 12px; color: var(--text-faint); pointer-events: none; }
@@ -227,6 +232,7 @@ h1, h2, h3 { font-weight: 500; margin: 0; letter-spacing: -.2px; }
 .field-msg .hint { color: var(--text-faint); font-size: 11.5px; }
 .param-field.err .field-msg { display: block; }
 .param-field.err .range { display: none; }
+.machine-schema-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 8px; }
 
 .switch { position: relative; display: inline-block; width: 40px; height: 22px; flex: none; }
 .switch input { opacity: 0; width: 0; height: 0; }
@@ -479,6 +485,7 @@ h1, h2, h3 { font-weight: 500; margin: 0; letter-spacing: -.2px; }
   .tpl-item { padding: 10px 6px; text-align: center; }
   .tpl-item .name { font-size: 11.5px; display: block; overflow: hidden; text-overflow: ellipsis; }
   .tpl-item .badge { display: none; }
+  .tpl-item .badge.review-pending { display: inline-block; }
 }
 @media (max-width: 1023px) {
   .body { grid-template-columns: 64px minmax(0, 1fr); grid-template-rows: 52vh 1fr; }

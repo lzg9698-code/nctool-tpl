@@ -10,6 +10,7 @@ export default function RenderPage() {
   const templates = useAppStore((s) => s.templates);
   const machines = useAppStore((s) => s.machines);
   const selected = useAppStore((s) => s.selected);
+  const selectedTemplate = templates.find((t) => t.name === selected);
   const spec = useAppStore((s) => s.spec);
   const params = useAppStore((s) => s.params);
   const options = useAppStore((s) => s.options);
@@ -74,10 +75,15 @@ export default function RenderPage() {
           ↺ 重置参数
         </button>
         <span className="spacer" />
-        <span className="path">{selected ?? "未选择模板"}</span>
+        <span className="path">{selectedTemplate?.status === "unreviewed" ? `⚠ 未评审 · ${selected}` : selected ?? "未选择模板"}</span>
       </div>
 
       <div className="page-body">
+        {selectedTemplate?.status === "unreviewed" && (
+          <div className="config-warning" role="alert">
+            此模板尚未经工艺评审或目标机床空运行验证。生成结果仅供模板开发与检查，投产前必须由工艺人员核对。
+          </div>
+        )}
         <div className="form-row">
           <label>模板选择</label>
           <select
@@ -87,7 +93,7 @@ export default function RenderPage() {
             <option value="">— 请选择模板 —</option>
             {templates.map((t) => (
               <option key={t.name} value={t.name}>
-                {t.description} — {t.name}
+                {t.status === "unreviewed" ? "⚠ 未评审 · " : t.status === "reviewed" ? "已评审 · " : t.status === "verified" ? "已空运行 · " : ""}{t.description} — {t.name}
               </option>
             ))}
           </select>

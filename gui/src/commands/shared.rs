@@ -1,5 +1,7 @@
 //! 命令层共享设施：错误类型、契约调用、`spawn_blocking` 错误映射、URL 工具。
 
+use nctool_cli::context::Ctx;
+
 /// 命令错误：映射自 HTTP 包络 `error:{kind,message}`（或内部错误），
 /// 经 Tauri 的 Promise reject 回传前端，保留 `kind` 供前端分支。
 #[derive(Debug, serde::Serialize)]
@@ -62,6 +64,38 @@ pub(crate) fn run_route(
             status: 500,
         }),
     }
+}
+
+/// 在桌面命令中读取最新的层叠配置并重建共享服务上下文。
+///
+/// 每个命令都重新加载层叠配置；Web 与桌面入口通过同一 `Ctx`/`route`
+/// 路径执行核心用例。
+pub(crate) fn load_ctx() -> Result<Ctx, CommandError> {
+    let loaded = nctool_cli::config::load().map_err(|e| CommandError {
+        kind: "config".into(),
+        message: e.to_string(),
+        status: 500,
+    })?;
+    Ok(Ctx::for_embedded(
+        loaded.merged.template_dir.clone(),
+        loaded.merged.default_machine.clone(),
+        loaded,
+    ))
+}
+
+/// 将结构化 JSON 请求体送进 HTTP/Tauri 共用的纯函数路由。
+pub(crate) fn run_route_json(
+    ctx: &Ctx,
+    method: &str,
+    path: &str,
+    value: &serde_json::Value,
+) -> Result<serde_json::Value, CommandError> {
+    let body = serde_json::to_vec(value).map_err(|e| CommandError {
+        kind: "internal".into(),
+        message: format!("请求序列化失败: {e}"),
+        status: 500,
+    })?;
+    run_route(ctx, method, path, "", &body)
 }
 
 /// 路径段 / query 值百分号编码（RFC 3986 unreserved 之外全部编码）。

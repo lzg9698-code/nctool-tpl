@@ -93,6 +93,19 @@ fn atomic_write_fails_when_parent_missing() {
     assert!(!has_temp_residue(&dir), "失败后不应残留临时文件");
 }
 
+#[test]
+fn guarded_remove_preserves_external_edits() {
+    let dir = temp_dir("guarded_remove_conflict");
+    let target = dir.join("source.j2");
+    WriteKernel::write_guarded(&target, b"original", None).unwrap();
+    let opened = WriteKernel::read_fingerprint(&target).unwrap().unwrap();
+    std::fs::write(&target, b"external edit").unwrap();
+
+    let err = WriteKernel::remove_guarded(&target, Some(opened)).unwrap_err();
+    assert!(matches!(err, WriteError::Conflict { .. }), "{err}");
+    assert_eq!(std::fs::read(&target).unwrap(), b"external edit");
+}
+
 // ---------------------------------------------------------------------------
 // 乐观锁
 // ---------------------------------------------------------------------------

@@ -1,0 +1,148 @@
+{# NAME: 统一粗铣键槽模板 (keyway_rough.j2) #}
+{# 支持: 闭口非圆头/闭口圆头/左开口/右开口, 任意深度分层, 宽度2刀/3刀 #}
+{# 切削参数由core层计算后传入: rough_n, rough_vf, rough_vf_corner, semi_vf #}
+{# 分层信息由core层计算后传入: layer_count, depths (列表), is_last_layer 由循环判断 #}
+{# 走刀路径决策由core层计算后传入: path_type (closed_2pass/closed_3pass/round_2pass/right_open/left_open) #}
+
+;----粗铣键槽子程序----
+{% include 'milling/keyway/_keyway_header.j2' %}
+
+{# ========== 逐层加工 ========== #}
+{% for layer_idx in range(layer_count) %}
+    {% set depth = depths[layer_idx] %}
+    {% set is_last = (layer_idx == layer_count - 1) %}
+
+    {# ---- 刀具定位 ---- #}
+    {% if path_type in ['closed_2pass', 'closed_3pass', 'round_2pass'] %}
+        {# 闭口键槽: 斜向入刀起点 #}
+        {% set ramp_x_start = U_Q - U_ALBR - U_RTD - (depth + 2) / tan(U_ANG) %}
+        {% set ramp_x_end = U_Q - U_ALBR - U_RTD %}
+        G94 G40 G0 X={{ "%.3f" | format(ramp_x_start) }} Y0 C=DC(0.00)
+    {% else %}
+        {# 开口键槽: 开口外侧定位 #}
+        G94 G40 G0 X={{ "%.3f" | format(U_RTD / 2 + 5) }} Y0 C=DC(0.00)
+    {% endif %}
+    G0 Z10
+    G1 Z2 F400
+
+    {# ---- 入刀 ---- #}
+    {% if path_type in ['closed_2pass', 'closed_3pass', 'round_2pass'] %}
+        ; {{ "%.0f" | format(U_ANG) }}°斜向入刀 (第{{ layer_idx + 1 }}层, 切深{{ "%.2f" | format(depth) }})
+        G1 X={{ "%.3f" | format(ramp_x_end) }} Z={{ "%.1f" | format(-depth) }} F200
+    {% else %}
+        ; 开口端垂直入刀 (第{{ layer_idx + 1 }}层, 切深{{ "%.2f" | format(depth) }})
+        G1 Z={{ "%.1f" | format(-depth) }} F200
+    {% endif %}
+
+    {# ========== 走刀轮廓 (按path_type分支) ========== #}
+
+    {% if path_type == 'closed_2pass' %}
+        {# ---- 闭口非圆头 - 宽度2刀 (刀具半径≈圆角半径) ---- #}
+        G1 G41 X={{ "%.3f" | format(U_Q - U_ALBR) }} F={{ "%.0f" | format(rough_vf) }}
+        G1 Y={{ "%.3f" | format(U_B / 2 - U_ALBR) }} F={{ "%.0f" | format(rough_vf_corner) }}
+        G1 X={{ "%.3f" | format(-(U_A - U_Q)) }} F={{ "%.0f" | format(rough_vf) }}
+        G1 X={{ "%.3f" | format(-(U_A + U_Q - U_ALBR)) }} F={{ "%.0f" | format(rough_vf_corner) }}
+        G1 Y={{ "%.3f" | format(-(U_B / 2 - U_ALBR)) }} F={{ "%.0f" | format(rough_vf) }}
+        G1 X={{ "%.3f" | format(-U_Q) }} F={{ "%.0f" | format(rough_vf_corner) }}
+        G1 X={{ "%.3f" | format(U_Q - U_ALBR) }} F={{ "%.0f" | format(rough_vf) }}
+        G1 Y={{ "%.3f" | format(U_B / 2 - U_ALBR) }} F={{ "%.0f" | format(rough_vf_corner) }}
+
+    {% elif path_type == 'closed_3pass' %}
+        {# ---- 闭口非圆头 - 宽度3刀 (刀具半径<圆角半径, 含G3圆弧) ---- #}
+        G1 G41 X={{ "%.3f" | format(-(U_A + U_Q - U_ALBR)) }} F={{ "%.0f" | format(rough_vf) }}
+        G1 Y={{ "%.3f" | format(-(U_B / 2 - U_Q)) }} F={{ "%.0f" | format(rough_vf_corner) }}
+        G3 X={{ "%.3f" | format(-U_A) }} Y={{ "%.3f" | format(-(U_B / 2 - U_ALBR)) }} I={{ "%.3f" | format(U_Q - U_ALBR) }}
+        G1 X={{ "%.3f" | format(-U_Q) }} F={{ "%.0f" | format(rough_vf) }}
+        G1 X0 F={{ "%.0f" | format(rough_vf_corner) }}
+        G3 X={{ "%.3f" | format(U_Q - U_ALBR) }} Y={{ "%.3f" | format(-(U_B / 2 - U_Q)) }} J={{ "%.3f" | format(U_Q - U_ALBR) }}
+        G1 Y={{ "%.3f" | format(U_B / 2 - U_Q) }} F={{ "%.0f" | format(rough_vf) }}
+        G3 X0 Y={{ "%.3f" | format(U_B / 2 - U_ALBR) }} I={{ "%.3f" | format(-(U_Q - U_ALBR)) }}
+        G1 X={{ "%.3f" | format(-(U_A - U_Q)) }} F={{ "%.0f" | format(rough_vf_corner) }}
+        G1 X={{ "%.3f" | format(-U_A) }} F={{ "%.0f" | format(rough_vf) }}
+        G3 X={{ "%.3f" | format(-(U_A + U_Q - U_ALBR)) }} Y={{ "%.3f" | format(U_B / 2 - U_Q) }} J={{ "%.3f" | format(-(U_Q - U_ALBR)) }}
+
+    {% elif path_type == 'round_2pass' %}
+        {# ---- 闭口圆头 - 宽度2刀 (两端整圆G3, 半径=U_B/2) ---- #}
+        G1 G41 X={{ "%.3f" | format(U_B / 2 - U_ALBR) }} F={{ "%.0f" | format(rough_vf) }}
+        G3 X0 Y={{ "%.3f" | format(U_B / 2 - U_ALBR) }} I={{ "%.3f" | format(-U_B / 2 + U_ALBR) }} F={{ "%.0f" | format(rough_vf_corner) }}
+        G1 X={{ "%.3f" | format(-(U_A - U_B / 2)) }} F={{ "%.0f" | format(rough_vf) }}
+        G1 X={{ "%.3f" | format(-U_A) }} F={{ "%.0f" | format(rough_vf_corner) }}
+        G3 X={{ "%.3f" | format(-U_A) }} Y={{ "%.3f" | format(-(U_B / 2 - U_ALBR)) }} J={{ "%.3f" | format(-U_B / 2 + U_ALBR) }}
+        G1 X={{ "%.3f" | format(-U_B / 2) }} F={{ "%.0f" | format(rough_vf) }}
+        G1 X0 F={{ "%.0f" | format(rough_vf_corner) }}
+        G3 X={{ "%.3f" | format(U_B / 2 - U_ALBR) }} Y0 J={{ "%.3f" | format(U_B / 2 - U_ALBR) }}
+
+    {% elif path_type == 'right_open' %}
+        {# ---- 右开口非圆头 - 宽度2刀 (从开口端进刀, 半闭合轮廓) ---- #}
+        G1 G41 Y={{ "%.3f" | format(U_B / 2 - U_ALBR) }} F={{ "%.0f" | format(rough_vf_corner) }}
+        G1 X={{ "%.3f" | format(-(U_A - U_Q)) }} F={{ "%.0f" | format(rough_vf) }}
+        G1 X={{ "%.3f" | format(-(U_A + U_Q - U_ALBR)) }} F={{ "%.0f" | format(rough_vf_corner) }}
+        G1 Y={{ "%.3f" | format(-(U_B / 2 - U_ALBR)) }} F={{ "%.0f" | format(rough_vf) }}
+        G1 X={{ "%.3f" | format(U_RTD / 2 + 5) }} F={{ "%.0f" | format(rough_vf_corner) }}
+        G1 Y={{ "%.3f" | format(U_B / 2 - U_ALBR) }} F={{ "%.0f" | format(rough_vf) }}
+
+    {% elif path_type == 'left_open' %}
+        {# ---- 左开口非圆头 - 宽度2刀 (坐标系已旋转180°, 同右开口逻辑) ---- #}
+        G1 G41 Y={{ "%.3f" | format(U_B / 2 - U_ALBR) }} F={{ "%.0f" | format(rough_vf_corner) }}
+        G1 X={{ "%.3f" | format(-(U_A - U_Q)) }} F={{ "%.0f" | format(rough_vf) }}
+        G1 X={{ "%.3f" | format(-(U_A + U_Q - U_ALBR)) }} F={{ "%.0f" | format(rough_vf_corner) }}
+        G1 Y={{ "%.3f" | format(-(U_B / 2 - U_ALBR)) }} F={{ "%.0f" | format(rough_vf) }}
+        G1 X={{ "%.3f" | format(U_RTD / 2 + 5) }} F={{ "%.0f" | format(rough_vf_corner) }}
+        G1 Y={{ "%.3f" | format(U_B / 2 - U_ALBR) }} F={{ "%.0f" | format(rough_vf) }}
+    {% endif %}
+
+    {# ---- 层间处理 ---- #}
+    {% if is_last %}
+        {# 最后一层 → 半精铣 #}
+        ; 半精铣 (Z向到最终深度, 留{{ "%.2f" | format(U_ALBHF) }}单边余量)
+        G1 Z={{ "%.3f" | format(-U_C) }} F60
+        {% if path_type == 'closed_2pass' %}
+            G1 Y={{ "%.3f" | format(U_B / 2 - U_ALBHF) }} F={{ "%.0f" | format(semi_vf / 2) }}
+            G1 X={{ "%.3f" | format(-(U_A - U_Q)) }} F={{ "%.0f" | format(semi_vf) }}
+            G1 X={{ "%.3f" | format(-(U_A + U_Q - U_ALBHF)) }} F={{ "%.0f" | format(semi_vf / 2) }}
+            G1 Y={{ "%.3f" | format(-(U_B / 2 - U_ALBHF)) }} F={{ "%.0f" | format(semi_vf) }}
+            G1 X={{ "%.3f" | format(-U_Q) }} F={{ "%.0f" | format(semi_vf / 2) }}
+            G1 X={{ "%.3f" | format(U_Q - U_ALBHF) }} F={{ "%.0f" | format(semi_vf) }}
+            G1 Y={{ "%.3f" | format(U_B / 2 - U_ALBHF) }} F={{ "%.0f" | format(semi_vf / 2) }}
+            G1 X={{ "%.3f" | format(-U_RTD / 2) }}
+        {% elif path_type == 'closed_3pass' %}
+            G1 X={{ "%.3f" | format(-(U_A + U_Q - U_ALBHF)) }} Y={{ "%.3f" | format(-(U_B / 2 - U_Q)) }} F={{ "%.0f" | format(semi_vf / 2) }}
+            G3 X={{ "%.3f" | format(-U_A) }} Y={{ "%.3f" | format(-(U_B / 2 - U_ALBHF)) }} I={{ "%.3f" | format(U_Q - U_ALBHF) }}
+            G1 X={{ "%.3f" | format(-U_Q) }} F={{ "%.0f" | format(semi_vf) }}
+            G1 X0 F={{ "%.0f" | format(semi_vf / 2) }}
+            G3 X={{ "%.3f" | format(U_Q - U_ALBHF) }} Y={{ "%.3f" | format(-(U_B / 2 - U_Q)) }} J={{ "%.3f" | format(U_Q - U_ALBHF) }}
+            G1 Y={{ "%.3f" | format(U_B / 2 - U_Q) }} F={{ "%.0f" | format(semi_vf) }}
+            G3 X0 Y={{ "%.3f" | format(U_B / 2 - U_ALBHF) }} I={{ "%.3f" | format(-(U_Q - U_ALBHF)) }}
+            G1 X={{ "%.3f" | format(-(U_A - U_Q)) }} F={{ "%.0f" | format(semi_vf / 2) }}
+            G1 X={{ "%.3f" | format(-U_A) }} F={{ "%.0f" | format(semi_vf) }}
+            G3 X={{ "%.3f" | format(-(U_A + U_Q - U_ALBHF)) }} Y={{ "%.3f" | format(U_B / 2 - U_Q) }} J={{ "%.3f" | format(-(U_Q - U_ALBHF)) }}
+            G1 G40 Y0
+            G1 X={{ "%.3f" | format(U_Q - U_ALBHF - U_RTD) }} F={{ "%.0f" | format(semi_vf) }}
+        {% elif path_type == 'round_2pass' %}
+            G1 X={{ "%.3f" | format(U_B / 2 - U_ALBHF) }} F={{ "%.0f" | format(semi_vf / 2) }}
+            G3 X0 Y={{ "%.3f" | format(U_B / 2 - U_ALBHF) }} I={{ "%.3f" | format(-U_B / 2 + U_ALBHF) }}
+            G1 X={{ "%.3f" | format(-(U_A - U_B / 2)) }} F={{ "%.0f" | format(semi_vf) }}
+            G1 X={{ "%.3f" | format(-U_A) }} F={{ "%.0f" | format(semi_vf / 2) }}
+            G3 X={{ "%.3f" | format(-U_A) }} Y={{ "%.3f" | format(-(U_B / 2 - U_ALBHF)) }} J={{ "%.3f" | format(-U_B / 2 + U_ALBHF) }}
+            G1 X={{ "%.3f" | format(-U_B / 2) }} F={{ "%.0f" | format(semi_vf) }}
+            G1 X0 F={{ "%.0f" | format(semi_vf / 2) }}
+            G3 X={{ "%.3f" | format(U_B / 2 - U_ALBHF) }} Y0 J={{ "%.3f" | format(U_B / 2 - U_ALBR) }}
+            G1 G40 X0 Z2
+        {% else %}
+            {# 开口键槽半精铣 #}
+            G1 Y={{ "%.3f" | format(U_B / 2 - U_ALBHF) }} F={{ "%.0f" | format(semi_vf / 2) }}
+            G1 X={{ "%.3f" | format(-(U_A - U_Q)) }} F={{ "%.0f" | format(semi_vf) }}
+            G1 X={{ "%.3f" | format(-(U_A + U_Q - U_ALBHF)) }} F={{ "%.0f" | format(semi_vf / 2) }}
+            G1 Y={{ "%.3f" | format(-(U_B / 2 - U_ALBHF)) }} F={{ "%.0f" | format(semi_vf) }}
+            G1 X={{ "%.3f" | format(U_RTD / 2 + 5) }} F={{ "%.0f" | format(semi_vf / 2) }}
+            G1 G40 Y0 Z2
+        {% endif %}
+    {% else %}
+        {# 非最后一层 → 抬刀返回起点 #}
+        G1 G40 X={{ "%.3f" | format(U_Q - U_ALBR - U_RTD) }} Y0 Z2
+    {% endif %}
+
+{% endfor %}
+{# ========== 逐层加工结束 ========== #}
+
+{% include 'milling/keyway/_keyway_footer.j2' %}

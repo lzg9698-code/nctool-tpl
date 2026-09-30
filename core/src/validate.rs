@@ -373,7 +373,7 @@ pub fn validate_template(
 }
 
 /// 机床联动版（P0-2/Q-01）：`machine` 参与声明了 [`ParamSpec::max_from`] 的
-/// 动态上界判定（见 [`check_dynamic_bounds`] / [`resolve_bound`]）。
+/// 动态上界判定（见 `check_dynamic_bounds` / `resolve_bound`）。
 ///
 /// 传 `None` 等价于 [`validate_template`]（纯静态上界，旧行为）。
 pub fn validate_template_with_machine(
@@ -579,7 +579,7 @@ fn check_spec_defaults(
     }
 }
 
-/// [`check_spec_defaults`] 的报告形式（参数无关，独立成报告）。
+/// `check_spec_defaults` 的报告形式（参数无关，独立成报告）。
 ///
 /// 供 HTTP `POST /api/inspect` 在**不提交任何参数**时把规格问题放进
 /// `issues`——此前该字段是硬编码 `[]`，等于永远宣称"规格没问题"。

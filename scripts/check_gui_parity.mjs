@@ -17,7 +17,7 @@
  *   3. 断言集合相等（双向都报）：
  *        { routes[].gui 中非 null 的值 } ∪ { gui_only[].command }  ==  实际注册集合；
  *   4. 对每条 `gui` 非 null 的 route：在 `gui/src/commands/*.rs` 里必须能找到匹配的
- *      `run_route(...)` **生产**调用点 —— 该调用点须同时含该 route 的 `"<METHOD>"` 字面量与
+ *      `run_route(...)` / `run_route_json(...)` **生产**调用点 —— 该调用点须同时含该 route 的 `"<METHOD>"` 字面量与
  *      `"<path>"`（或 `covers` 前缀）字面量。`get_template` 动态拼路径，靠
  *      `covers: "/api/templates/"` 命中，故调用点取「run_route 行 + 前若干行」的窗口
  *      （`format!` 拼路径在上一行）。
@@ -44,6 +44,8 @@ const FRONTEND_API = join(root, "gui", "frontend", "src", "api", "nctool.ts");
 
 /** 调用点窗口回看行数：容纳 `let path = format!(...)` 这类紧邻 run_route 的拼路径行。 */
 const CALL_WINDOW_LOOKBACK = 6;
+/** 向前覆盖 run_route_json 的多行参数列表。 */
+const CALL_WINDOW_LOOKAHEAD = 5;
 
 /**
  * 把注释与字符串字面量替换为等长空格（保留列数）。
@@ -219,7 +221,7 @@ function cfgTestLineSet(lines) {
  * @returns {boolean} true 表示该行是函数定义而非调用
  */
 function isRunRouteDefinition(line) {
-  return /\bfn\s+run_route\b/.test(line);
+  return /\bfn\s+run_route(?:_json)?\b/.test(line);
 }
 
 const fixture = JSON.parse(readFileSync(FIXTURE, "utf8"));
@@ -327,7 +329,7 @@ for (const c of [...registered].sort()) {
 // ④ 每条 gui 非 null 的 route 必须有匹配的 run_route 调用点
 // ---------------------------------------------------------------------------
 const cmdFiles = readdirSync(COMMANDS_DIR).filter((f) => f.endsWith(".rs"));
-/** 所有 `run_route(...)` **生产调用**窗口：{ file, line, text }。 */
+/** 所有 `run_route(...)` / `run_route_json(...)` **生产调用**窗口：{ file, line, text }。 */
 const callWindows = [];
 /** 被 `#[cfg(test)]` 剔除的行数（仅用于日志，证明剔除真的生效）。 */
 let testLinesSkipped = 0;
@@ -336,14 +338,16 @@ for (const f of cmdFiles.sort()) {
   const testLines = cfgTestLineSet(lines);
   testLinesSkipped += testLines.size;
   lines.forEach((line, i) => {
-    if (!line.includes("run_route(")) return;
+    if (!line.includes("run_route(") && !line.includes("run_route_json(")) return;
     // ① 只认**生产**调用点：测试模块里的同路径调用不得充当"命中"
     //    （否则生产路径改错仍会被测试兜住 → 门禁盲区，P1-1）
     if (testLines.has(i)) return;
     // ② 排除函数定义行 `pub(crate) fn run_route(`：它不是调用点，
     //    留着会让"抽不到调用点就报错"的守卫失效（P2-2）
     if (isRunRouteDefinition(line)) return;
-    // ⚠️ 判定边界（已知、有意保留）：窗口是「run_route 行 + 前 CALL_WINDOW_LOOKBACK 行」的
+    // ⚠️ 判定边界（已知、有意保留）：窗口覆盖调用点前 CALL_WINDOW_LOOKBACK 行；
+    //    对结构化请求的 `run_route_json` 还覆盖后续参数行。
+    //    路径拼接与方法字面量需要在同一窗口内，
     //    文本块，命中条件是「块内**任意**位置含方法字面量」且「块内**任意**位置含路径字面量」
     //    —— 两者**各自独立** `includes`，不要求同行或相邻。故理论上可能出现"方法字面量来自
     //    某行、路径字面量来自窗口内另一行"的**假命中**（把两条不相关调用拼成一条）。影响面：
@@ -351,9 +355,12 @@ for (const f of cmdFiles.sort()) {
     //    当前 6 行窗口内无此实例。缩小窗口会误伤 `let path = format!(...)` 这类紧邻 run_route
     //    的拼路径行，故维持现状并在此注明边界。
     const start = Math.max(0, i - CALL_WINDOW_LOOKBACK);
-    // 窗口同样只取**生产**行：回看窗口里若混入测试行，等于变相放宽判定
+    const end = line.includes("run_route_json(")
+      ? Math.min(lines.length - 1, i + CALL_WINDOW_LOOKAHEAD)
+      : i;
+    // 窗口同样只取**生产**行：窗口里若混入测试行，等于变相放宽判定
     const windowLines = [];
-    for (let k = start; k <= i; k++) {
+    for (let k = start; k <= end; k++) {
       windowLines.push(testLines.has(k) ? "" : lines[k]);
     }
     callWindows.push({ file: f, line: i + 1, text: windowLines.join("\n") });
@@ -361,7 +368,7 @@ for (const f of cmdFiles.sort()) {
 }
 if (callWindows.length === 0) {
   console.error(
-    `✗ gui/src/commands/*.rs: 未找到任何 run_route(...) 生产调用点，正则或文件结构可能已变`,
+    `✗ gui/src/commands/*.rs: 未找到共享 route 的生产调用点，正则或文件结构可能已变`,
   );
   process.exit(1);
 }
@@ -381,7 +388,7 @@ for (const r of routes) {
   if (!hit) {
     fail(
       `route ${r.method} ${r.path}（gui="${r.gui}"）: gui/src/commands/*.rs 里找不到匹配的 ` +
-        `run_route 调用点 —— 该调用点须同时含 ${methodLit} 与 ${pathLits.join(" 或 ")}`,
+        `共享 route 调用点 —— 该调用点须同时含 ${methodLit} 与 ${pathLits.join(" 或 ")}`,
     );
   }
 }
@@ -425,7 +432,7 @@ console.log(
 );
 console.log(`  gui_only: ${guiOnly.length} 条 GUI 专有命令（已写 reason）`);
 console.log(
-  `  gui/src/commands/*.rs: 校验了 ${callWindows.length} 个 run_route **生产**调用点` +
+  `  gui/src/commands/*.rs: 校验了 ${callWindows.length} 个共享 route **生产**调用点` +
     `（另有 ${testLinesSkipped} 行位于 #[cfg(test)] 段，已排除）`,
 );
 console.log(

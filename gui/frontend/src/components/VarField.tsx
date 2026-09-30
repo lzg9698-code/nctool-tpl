@@ -18,7 +18,7 @@ function toInputValue(v: unknown): string {
 function coerce(spec: ParamSpec, raw: string): unknown {
   switch (spec.kind) {
     case "Bool":
-      return raw === "true";
+      return raw === "" ? undefined : raw === "true";
     case "Integer":
       if (raw.trim() === "") return "";
       return /^[+-]?\d+$/.test(raw.trim()) ? Number(raw) : raw;
@@ -58,9 +58,10 @@ export default function VarField({ spec, value, onChange }: Props) {
     if (spec.kind === "Bool") {
       return (
         <select
-          value={value === true ? "true" : "false"}
+          value={value === true ? "true" : value === false ? "false" : ""}
           onChange={(e) => onChange(spec.name, coerce(spec, e.target.value))}
         >
+          <option value="">（未设置）</option>
           <option value="true">true</option>
           <option value="false">false</option>
         </select>

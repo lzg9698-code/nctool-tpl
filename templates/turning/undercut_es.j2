@@ -14,7 +14,7 @@
      D2_COMP_CUT     number  required  D2 补偿切割值 (mm)
    #}
 {# 说明：本模板只做变量替换与格式化，所有中间量（Z_START / D1_CUT / ANG_1 等）
-   由调用方预计算后注入。计算规则见 docs/TEMPLATE_INTEGRATION_PLAN.md §3.3。
+   由调用方预计算后注入。计算上提约定见 docs/SYSTEM_DESIGN.md §1.1。
 
    与 undercut.j2 的区别：本模板**只含 ES 分支**，因此不需要 FS 专用参数。
    静态变量提取器会因此只要求 ES 相关参数——这正是拆分的目的（见方案 §4.4 缺口二）。 #}

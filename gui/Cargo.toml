@@ -21,12 +21,8 @@ tauri = { version = "2", features = [] }          # 默认 features（含 wry / 
 tauri-plugin-dialog = "2"                         # 保存对话框（前端 save() + 权限）
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
-nctool-core = { path = "../core", version = "0.3.0" }
-nctool-cli  = { path = "../cli",  version = "0.3.0" }
-# 静态检查（lint_template）与 CLI 的 `lint` 子命令复用**同一个**函数
-# `nctool_tpl::lint(&source, &name)` —— 不另写第二套实现（设计稿 §4.2）。
-# `nctool-tpl` 是仓库根 crate（package name = "nctool-tpl"，lib crate 名 = nctool_tpl）。
-nctool-tpl  = { path = "..",     version = "0.4.0" }
+nctool-core = { path = "../core", version = "1.0.0" }
+nctool-cli  = { path = "../cli",  version = "1.0.0" }
 
 [features]
 # 生产构建（把前端资源嵌进二进制）用；tauri CLI 构建时会启用。

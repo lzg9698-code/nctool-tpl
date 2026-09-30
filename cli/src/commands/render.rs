@@ -286,9 +286,9 @@ mod tests {
         assert_ne!(name, "a.j2", "同名冲突时注册名应退化为路径: {name}");
         let entry = gen.registry().get(&name).expect("应能取到刚注册的模板");
         assert!(
-            entry.source_text.contains("EXPLICIT"),
+            entry.source_text().contains("EXPLICIT"),
             "渲染的必须是用户指定的文件，而不是模板目录里的同名模板: {}",
-            entry.source_text
+            entry.source_text()
         );
 
         // 反向：路径指向的**就是**模板目录里那个文件时，仍复用注册表条目，
@@ -300,7 +300,7 @@ mod tests {
             .registry()
             .get("a.j2")
             .unwrap()
-            .source_text
+            .source_text()
             .contains("REGISTERED"));
 
         let _ = std::fs::remove_dir_all(&base);

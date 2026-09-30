@@ -1,0 +1,62 @@
+{# NAME: 21-闭口-非圆头键槽-精铣 #}
+;----精铣键槽子程序----
+GX73
+GZ73 Y0
+L184(0,0,,,,0)
+L171("{{ U_FT }}")
+L172(0)
+L171("{{ U_FTB }}")
+GX73
+GZ73 Y0
+L184(0,90,,,,0)
+L140(0.00,4,0)
+SETMS(1)
+DIAMOF
+G17
+G90
+D1
+;''''基础坐标系偏移''''
+XMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9{{ U_ID }} CMW_1=0
+G59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1
+;''''旋转-定位键槽''''
+AROT Y90
+AROT Z180
+ATRANS X{{ "%0.3f" | format(U_Z) }} Z{{ "%0.3f" | format(U_D / 2) }}
+;''''起转-给水''''
+G97 S1={{ "%0.0f" | format(U_FTRPM) }} M1=3
+M14=8 M10=150 H50=80
+;-----------
+;''''刀具定位''''
+G94 G40 G0 X0 Y0 C=DC(0.00)
+G0 Z10
+;''''入刀''''
+G1 Z{{ "%0.3f" | format(-(U_C - 5)) }} F3000
+G1 Z{{ "%0.3f" | format(-U_C) }} F100
+;''''精铣''''
+G1 G41 Y{{ "%0.3f" | format(U_B / 2) }} F{{ "%0.0f" | format(U_FTF) }}
+G1 X{{ "%0.3f" | format(-U_A) }}
+G3 X{{ "%0.3f" | format(-(U_A + U_Q)) }} Y={{ "%0.3f" | format(U_B / 2 - U_Q) }} J={{ "%0.3f" | format(-U_Q) }}
+G1 Y{{ "%0.3f" | format(-(U_B / 2 - U_Q)) }}
+G3 X{{ "%0.3f" | format(-U_A) }} Y{{ "%0.3f" | format(-U_B / 2) }} I={{ "%0.3f" | format(U_Q) }}
+G1 X0
+G3 X{{ "%0.3f" | format(U_Q) }} Y{{ "%0.3f" | format(-(U_B / 2 - U_Q)) }} J={{ "%0.3f" | format(U_Q) }}
+G1 Y{{ "%0.3f" | format(U_B / 2 - U_Q) }}
+G3 X0 Y{{ "%0.3f" | format(U_B / 2) }} I={{ "%0.3f" | format(-U_Q) }}
+G1 G40 Y0 Z2
+G0 Z100
+;-----------
+ROT
+TRANS
+DIAMON
+M14=9
+M13=9
+M10=151
+M1=5
+GX73
+GZ73 Y0
+M01
+;-----------
+RET
+
+
+;........

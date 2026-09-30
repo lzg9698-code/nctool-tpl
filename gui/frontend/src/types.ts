@@ -13,6 +13,7 @@ export interface TemplateSummary {
   name: string;
   category: string;
   description: string;
+  status?: "unreviewed" | "reviewed" | "verified" | null;
 }
 
 /** `ParamSpec` 的前端投影（`server.rs::spec_json`）。 */
@@ -45,9 +46,27 @@ export interface TemplateDetail {
   category: string;
   description: string;
   builtin: boolean;
+  status?: "unreviewed" | "reviewed" | "verified" | null;
   source: string;
   params: ParamSpec[];
   variables: { required: VarLoc[]; optional: VarLoc[] };
+  fingerprint?: string;
+}
+
+export interface MachineConfig {
+  id: string;
+  vendor: string;
+  model: string;
+  config: Record<string, string>;
+  builtin?: boolean;
+}
+
+export interface MachineKeySpec {
+  key: string;
+  kind: "String" | "Integer" | "Choice";
+  default: string;
+  description: string;
+  options: string[] | null;
 }
 
 /** `GET /api/machines` → `data.machines[]`。 */
@@ -195,5 +214,3 @@ export interface ValidationReport {
   warnings: number;
   issues: ValidationIssue[];
 }
-
-

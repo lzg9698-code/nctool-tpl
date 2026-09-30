@@ -136,6 +136,36 @@ impl WriteKernel {
         })
     }
 
+    /// 带指纹保护的删除：先持有目标锁，再核对内容快照，避免重命名时删除
+    /// 另一个编辑器刚写入的源文件。
+    pub fn remove_guarded(
+        path: &Path,
+        expect: Option<FileFingerprint>,
+    ) -> Result<WriteOutcome, WriteError> {
+        let _lock = lock::DirLock::acquire(path, CLI_LOCK_WAIT)?;
+        let snapshot = guard::read_snapshot(path)?;
+        let actual = snapshot.as_ref().map(|(_, fp)| *fp);
+        if actual != expect {
+            return Err(WriteError::Conflict {
+                path: path.to_path_buf(),
+                expected: expect,
+                actual,
+            });
+        }
+        if snapshot.is_none() {
+            return Err(WriteError::NotFound(format!(
+                "删除目标不存在: {}",
+                path.display()
+            )));
+        }
+        atomic::remove_file(path)?;
+        Ok(WriteOutcome {
+            path: path.to_path_buf(),
+            action: WriteAction::Deleted,
+            fingerprint: None,
+        })
+    }
+
     /// 读取文件指纹；文件不存在返回 `None`。
     ///
     /// 供调用方在编辑前取快照，编辑后作为 [`Self::write_guarded`] 的 `expect`。

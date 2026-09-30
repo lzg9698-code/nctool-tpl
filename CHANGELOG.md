@@ -10,7 +10,42 @@
 
 ---
 
+## [nctool-tpl 1.0.0] · [nctool-core 1.0.0] · [nctool-cli 1.0.0] - 2026-09-30
+
+> 首个稳定 API 版本。含本次 1.0 冻结前的 API 迁移，详见下方原「未发布」条目。
+
+---
+
 ## [未发布]
+
+### 2026-09-29：1.0 升级预备收口（当前工作区）
+
+#### Added
+
+- 导入 NCTool V3 导出模板 28 份；源文件哈希与归档 manifest 对照，模板清单状态均为
+  `unreviewed`。完整路径与 SHA-256 见 `docs/TEMPLATE_ZIP_IMPORT_REPORT.md`。
+- 桌面 GUI 增加模板管理、机床配置管理、配置诊断和预设编辑页面； Web UI 增加模板/机床资产
+  管理、预设导入导出/重命名和编辑器静态检查。
+
+#### Changed
+
+- **BREAKING（1.0 前公共 API 收紧）**：`nctool-core::derive::derived_names` 与
+  `TemplateEntry::invalidate_analysis` 不再是公共 API；`TemplateEntry::source_text` 改为私有，
+  读取改用 `source_text()`，替换源码改用 `with_source_text()`。后者自动使缓存分析失效。迁移说明见
+  `docs/RELEASE.md` §4.5。
+- Tauri 命令只负责参数适配；模板、机床、预设、lint、校验、渲染和配置视图都调用共享
+  `nctool_cli::server::route`。删除启动时配置快照，避免桌面端用旧配置。
+- 提交到 `/api/lint` 的 `source` 可覆盖磁盘源码，用于检查尚未保存的编辑器缓冲区。
+- 模板清单中的 `status` 暴露到 HTTP/Tauri 类型，Web 列表和桌面渲染页显式显示 `unreviewed` 工艺风险。
+- 模板清单更新经 core 资产写入接口做指纹保护；新模板已创建但清单更新失败时，响应包含警告。
+
+#### Fixed
+
+- 预设导入拒绝覆盖无法解析的现有预设文件，拒绝导入文档内重复名称；读取快照先取指纹，写入时冲突保护不再拿旧数据覆盖并发修改。
+- 模板重命名对源文件删除做指纹校验；并发编辑时保留源文件并返回冲突。
+- CLI / Web / 桌面端均阻止删除当前配置的默认机床，避免留下无法解析的默认机床 ID。
+- Web 编辑器重载源码时同步更新文件指纹；演示模式支持预设重命名和 YAML 导出。
+- 更新 Vite 与 React 插件，消除 `npm audit` 报告的开发服务器漏洞。
 
 本段收录 2026-09-18 第三轮代码审查（`docs/CODE_REVIEW_2026-09-18.md`）的修复，按报告 §3
 的批次顺序分两组：

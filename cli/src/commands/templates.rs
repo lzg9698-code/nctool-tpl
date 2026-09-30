@@ -118,7 +118,7 @@ pub fn resolve_source(ctx: &Ctx, name_or_path: &str) -> Result<ResolvedSource, C
     if let Some(entry) = gen.registry().get(name_or_path) {
         return Ok((
             entry.name.clone(),
-            entry.source_text.clone(),
+            entry.source_text().to_string(),
             Some(entry.params.clone()),
             gen.registry().system_vars().to_vec(),
         ));
@@ -777,7 +777,7 @@ fn collect_template_sources(ctx: &Ctx) -> Result<Vec<(String, String)>, CliError
         .registry()
         .list(None)
         .iter()
-        .map(|e| (e.name.clone(), e.source_text.clone()))
+        .map(|e| (e.name.clone(), e.source_text().to_string()))
         .collect())
 }
 

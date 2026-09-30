@@ -1,0 +1,71 @@
+{# NAME: 11-闭口-非圆头键槽-粗铣(深度1刀/宽度2刀/刀具半径=圆角半径) #}
+;----粗铣键槽子程序----
+GX73
+GZ73 Y0
+L184(0,0,,,,0)
+L171("{{ U_RT }}")
+L172(0)
+L171("{{ U_RTB }}")
+GX73
+GZ73 Y0
+L184(0,90,,,,0)
+L140(0.00,4,0)
+SETMS(1)
+DIAMOF
+G17
+G90
+D1
+;''''基础坐标系偏移''''
+XMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9{{ U_ID }} CMW_1=0
+G59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1
+;''''旋转-定位键槽''''
+AROT Y90
+AROT Z180
+ATRANS X{{ "%.3f"|format(U_Z) }} Z{{ "%.3f"|format(U_D/2) }}
+;''''起转-给水''''
+G97 S1={{ "%.0f"|format(U_RTRPM) }} M1=3
+M13=8 M10=150 H50=80
+;-----------
+;''''刀具定位''''
+G94 G40 G0 X{{ "%.3f"|format(U_Q-U_ALBR-U_RTD-(U_RC+2)/tan(U_ANG)) }} Y0 C=DC(0.00)
+G0 Z10
+G1 Z2 F400
+;''''{{ "%.0f"|format(U_ANG) }}°入刀''''
+G1 X{{ "%.3f"|format(U_Q-U_ALBR-U_RTD) }} Z{{ "%.1f"|format(-U_RC) }} F200
+;''''粗铣''''
+G1 G41 X{{ "%.3f"|format(U_Q-U_ALBR) }} F{{ "%.0f"|format(U_RTRF) }}
+G1 Y{{ "%.3f"|format(U_B/2-U_ALBR) }} F{{ "%.0f"|format(U_RTRF/2) }}
+G1 X{{ "%.3f"|format(-(U_A-U_Q)) }} F{{ "%.0f"|format(U_RTRF) }}
+G1 X{{ "%.3f"|format(-(U_A+U_Q-U_ALBR)) }} F{{ "%.0f"|format(U_RTRF/2) }}
+G1 Y{{ "%.3f"|format(-(U_B/2-U_ALBR)) }}
+G1 X{{ "%.3f"|format(-U_Q) }} F{{ "%.0f"|format(U_RTRF) }}
+G1 X{{ "%.3f"|format(U_Q-U_ALBR) }} F{{ "%.0f"|format(U_RTRF/2) }}
+G1 Y{{ "%.3f"|format(U_B/2-U_ALBR) }}
+;''''半精铣''''
+G1 Z{{ "%.3f"|format(-U_C) }} F60
+G1 Y{{ "%.3f"|format(U_B/2-U_ALBHF) }} F{{ "%.0f"|format(U_RTFF/2) }}
+G1 X{{ "%.3f"|format(-(U_A-U_Q)) }} F{{ "%.0f"|format(U_RTFF) }}
+G1 X{{ "%.3f"|format(-(U_A+U_Q-U_ALBHF)) }} F{{ "%.0f"|format(U_RTFF/2) }}
+G1 Y{{ "%.3f"|format(-(U_B/2-U_ALBHF)) }}
+G1 X{{ "%.3f"|format(-U_Q) }} F{{ "%.0f"|format(U_RTFF) }}
+G1 X{{ "%.3f"|format(U_Q-U_ALBHF) }} F{{ "%.0f"|format(U_RTFF/2) }}
+G1 Y{{ "%.3f"|format(U_B/2-U_ALBHF) }}
+G1 X{{ "%.3f"|format(-U_RTD/2) }}
+G1 G40 Y0 Z2
+G0 Z100
+;-----------
+ROT
+TRANS
+DIAMON
+M14=9
+M13=9
+M10=151
+M1=5
+GX73
+GZ73 Y0
+M01
+;-----------
+M17
+
+;........
+

@@ -19,7 +19,7 @@
      ANG_2           number  可选(FS) FS 型专用：第二角度 (°)
    #}
 {# 说明：本模板只做变量替换与格式化，所有中间量（Z_START / D1_CUT / ANG_1 等）
-   由调用方预计算后注入。计算规则见 docs/TEMPLATE_INTEGRATION_PLAN.md §3.3。 #}
+   由调用方预计算后注入。计算上提约定见 docs/SYSTEM_DESIGN.md §1.1。 #}
 {% if groove_type == "ES" and side == "Right" %}
 ; --- ES_Right ({{ STD_KEY }}) ---
 G0 Z{{ Z_START | nc_fixed(3) }}

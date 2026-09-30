@@ -325,8 +325,10 @@ impl PresetStore {
             rel: preset.name.clone(),
             reason,
         })?;
-        let loaded = Self::load(path)?;
+        // 先记下写入期望快照，再读取内容。若另一个进程在读取过程中写入，
+        // 最终 write_guarded 会因旧指纹而冲突，不能用新指纹覆盖旧内容。
         let expect = WriteKernel::read_fingerprint(path)?;
+        let loaded = Self::load(path)?;
         let mut file = if loaded.degraded {
             // 降级内容不可信：拒绝覆盖，避免把用户手写内容永久抹掉。
             return Err(WriteError::Corrupt(format!(
@@ -352,6 +354,7 @@ impl PresetStore {
             rel: new.to_string(),
             reason,
         })?;
+        let expect = WriteKernel::read_fingerprint(path)?;
         let loaded = Self::load(path)?;
         if loaded.degraded {
             return Err(WriteError::Corrupt(format!(
@@ -359,7 +362,6 @@ impl PresetStore {
                 loaded.warnings.join("；")
             )));
         }
-        let expect = WriteKernel::read_fingerprint(path)?;
         let mut file = loaded.file;
         if file.get(new).is_some() {
             return Err(WriteError::PathEscape {
@@ -390,6 +392,7 @@ impl PresetStore {
         name: &str,
         wait: std::time::Duration,
     ) -> Result<WriteOutcome, WriteError> {
+        let expect = WriteKernel::read_fingerprint(path)?;
         let loaded = Self::load(path)?;
         if loaded.degraded {
             return Err(WriteError::Corrupt(format!(
@@ -397,7 +400,6 @@ impl PresetStore {
                 loaded.warnings.join("；")
             )));
         }
-        let expect = WriteKernel::read_fingerprint(path)?;
         let mut file = loaded.file;
         if !file.take(name) {
             return Err(WriteError::NotFound(format!("预设不存在：{name}")));

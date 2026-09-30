@@ -73,7 +73,7 @@ pub enum Command {
     Preset(PresetArgs),
     /// 配置管理：初始化示例配置 / 查看生效配置
     Config(ConfigArgs),
-    /// 启动本地 Web UI（模板浏览 + 只读 API，阶段 C）
+    /// 启动本地 Web UI（模板管理、参数渲染、预设与批量生成）
     Ui(UiArgs),
     /// 零件级批量生成（规划于阶段 4）
     Part(PartArgs),

@@ -27,6 +27,10 @@
       "note": "模板详情：前端用 \"/api/templates/\" + encodeURIComponent(name) 拼接",
       "gui": "get_template"
     },
+    { "method": "POST", "path": "/api/templates/create", "query": "", "body": "{}", "gui": "create_template" },
+    { "method": "POST", "path": "/api/templates/save", "query": "", "body": "{}", "gui": "save_template" },
+    { "method": "POST", "path": "/api/templates/derive", "query": "", "body": "{}", "gui": "derive_template" },
+    { "method": "POST", "path": "/api/templates/rename", "query": "", "body": "{}", "gui": "rename_template" },
     {
       "method": "GET",
       "path": "/api/machines",
@@ -34,6 +38,9 @@
       "body": "",
       "gui": "list_machines"
     },
+    { "method": "POST", "path": "/api/machines", "query": "", "body": "{}", "gui": "save_machine" },
+    { "method": "POST", "path": "/api/machines/delete", "query": "", "body": "{}", "gui": "delete_machine" },
+    { "method": "GET", "path": "/api/config", "query": "", "body": "", "gui": "get_config" },
     {
       "method": "GET",
       "path": "/api/presets",
@@ -58,6 +65,9 @@
       "note": "删除预设，体 {\"name\"}。用 POST 而非 DELETE+路径段：预设名可含 . 与 -，放路径段需额外编码处理，且前端 API 封装只做 GET/POST",
       "gui": "delete_preset"
     },
+    { "method": "POST", "path": "/api/presets/rename", "query": "", "body": "{}", "gui": null, "gui_note": "Web UI 参数预设重命名；桌面 GUI 开发暂停，恢复后再接入。" },
+    { "method": "POST", "path": "/api/presets/export", "query": "", "body": "{}", "gui": null, "gui_note": "Web UI 参数预设导出；桌面 GUI 开发暂停，恢复后再接入。" },
+    { "method": "POST", "path": "/api/presets/import", "query": "", "body": "{}", "gui": null, "gui_note": "Web UI 参数预设导入；桌面 GUI 开发暂停，恢复后再接入。" },
     {
       "method": "POST",
       "path": "/api/inspect",
@@ -66,6 +76,7 @@
       "gui": null,
       "gui_note": "Phase 1 GUI 渲染表单改用 GET /api/templates/{name} 取 params（该端点返回 params，而 inspect 不返回，见勘误 E3）；inspect 仅 Web UI 使用。"
     },
+    { "method": "POST", "path": "/api/lint", "query": "", "body": "{}", "gui": "lint_template" },
     {
       "method": "POST",
       "path": "/api/validate",
@@ -93,16 +104,8 @@
   "frontend_only": [],
   "gui_only": [
     {
-      "command": "get_config",
-      "reason": "不经 route()：无对应 HTTP 端点，GUI 直接从进程内 AppState.loaded 投影只读视图（状态栏 / 设置页）。Web UI 无此概念（服务端进程本身就是配置源）。若将来要纳入契约，应新增 `GET /api/config` 路由臂，在本文件 routes[] 登记并同步 Web UI 与 GUI 两侧封装。"
-    },
-    {
       "command": "save_nc_file",
       "reason": "不经 route()：GUI 专有。渲染产物写入用户选定路径，路径由 Tauri 保存对话框（@tauri-apps/plugin-dialog 的 save()）取得，再 std::fs::write 落盘 —— NC 成品文件不是服务端资产，无对应 HTTP 端点。若将来要纳入契约，应新增 `POST /api/save`（体 {path,content}）并处理服务端路径安全，再在本文件与两侧封装登记。"
-    },
-    {
-      "command": "lint_template",
-      "reason": "不经 route()：① 无对应 HTTP 端点 —— `/api/lint` 不存在（cli/src/server.rs::route 无该路由臂），Web UI 目前也不做 lint，故不宜为 GUI 单方面新增端点（新增端点须同时改后端路由臂 + 本文件 + Web UI 封装 + GUI 封装四处，见本文件 description）。② 集成路径与 CLI `lint` 子命令**同源**：先 `GET /api/templates/{name}` 取 `data.template.source`，再调 `nctool_tpl::lint(&source, &name)`（与 cli/src/commands/lint.rs 同一函数，不写第二套实现），返回 `Vec<LintFinding>`（无级别）。③ 将来若 Web UI 也要 lint，应补 `POST /api/lint`（体 {template}）路由臂，并把本条从 gui_only 移入对应 routes[] 条目的 gui 键（同步 Web UI 封装与 scripts/check_api_parity.mjs）。"
     }
   ]
 }

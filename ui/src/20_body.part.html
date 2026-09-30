@@ -40,11 +40,12 @@
     <!-- 模板导航 -->
     <aside class="nav" aria-label="模板导航">
       <div class="nav-head">
-        <div class="search">
+      <div class="search">
           <input id="searchInput" type="text" placeholder="搜索模板名 / 描述…" autocomplete="off" aria-label="搜索模板">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.75" stroke-linecap="round"><circle cx="11" cy="11" r="7"/><path d="m21 21-4-4"/></svg>
-        </div>
-        <div class="chips" id="catBar"></div>
+      </div>
+      <button class="btn ghost" id="createTemplateBtn" style="width:100%;margin-top:8px">＋ 新建模板</button>
+      <div class="chips" id="catBar"></div>
       </div>
       <div class="tpl-list" id="tplList"></div>
     </aside>
@@ -139,25 +140,29 @@
     <div class="modal-head"><h3>模板源码</h3><button class="close" data-close="modalSrc">×</button></div>
     <div class="modal-body">
       <div class="field">
-        <label>模板名（只读）</label>
+        <label>模板名</label>
         <input type="text" id="srcName" readonly>
       </div>
       <div class="field">
-        <label>Jinja2 源码（只读预览；编辑请在外部编辑器中完成）</label>
-        <textarea id="srcArea" spellcheck="false" readonly></textarea>
+        <label>Jinja2 源码（磁盘模板可编辑；内置模板请先派生）</label>
+        <textarea id="srcArea" spellcheck="false"></textarea>
       </div>
-      <div class="field">
-        <label>在外部编辑器中打开（复制命令到终端执行；保存前会做分级校验）</label>
+      <div class="field" id="srcCommandField">
+        <label>CLI 编辑命令（演示模式可复制）</label>
         <input type="text" id="srcCmd" readonly>
       </div>
+      <div class="field"><pre id="lintResult" class="tip" style="white-space:pre-wrap;display:none"></pre></div>
       <div class="tip">支持 <code>{% set %}</code> <code>{% for %}</code> <code>{% if %}</code> <code>{% include %}</code>、
         过滤器 <code>nc_fixed</code> <code>nc_strip</code> <code>nc_pad</code> <code>default</code> <code>round</code> <code>int</code> 等，
-        以及 <code>machine.xxx</code> 机床变量。浏览器内不写盘，改完用命令落盘并重新加载预览。</div>
+        以及 <code>machine.xxx</code> 机床变量。服务模式可直接保存磁盘模板；保存前执行语法和参数规格校验。</div>
     </div>
     <div class="modal-foot">
       <button class="btn ghost" data-close="modalSrc">关闭</button>
-      <button class="btn" id="srcReloadBtn">重新加载预览</button>
-      <button class="btn primary" id="srcCopyCmdBtn">复制编辑命令</button>
+      <button class="btn" id="srcLintBtn">静态检查</button>
+      <button class="btn" id="srcReloadBtn">重新加载</button>
+      <button class="btn" id="srcRenameBtn">重命名</button>
+      <button class="btn primary" id="srcSaveBtn">保存源码</button>
+      <button class="btn" id="srcCopyCmdBtn">复制编辑命令</button>
     </div>
   </div>
 </div>
@@ -168,11 +173,11 @@
     <div class="modal-head"><h3>派生新模板</h3><button class="close" data-close="modalDerive">×</button></div>
     <div class="modal-body">
       <div class="field"><label>新模板名</label><input type="text" id="deriveName" placeholder="如 drill_deep"></div>
-      <div class="tip">源模板：<code id="deriveSrc"></code>。浏览器内不写盘；复制命令到终端执行，派生会复制源码与清单条目。</div>
+      <div class="tip">源模板：<code id="deriveSrc"></code>。派生模板会复制源码与清单条目。</div>
     </div>
     <div class="modal-foot">
       <button class="btn ghost" data-close="modalDerive">取消</button>
-      <button class="btn primary" id="deriveCopyBtn">复制派生命令</button>
+      <button class="btn primary" id="deriveCopyBtn">创建派生模板</button>
     </div>
   </div>
 </div>
@@ -185,6 +190,11 @@
       <div class="field" style="display:flex;gap:8px">
         <input type="text" id="presetName" placeholder="新预设名称，如「钻孔 D10 × 3 深」" style="flex:1">
         <button class="btn primary" id="presetSaveBtn">保存当前</button>
+      </div>
+      <div class="field" style="display:flex;gap:8px;align-items:center">
+        <button class="btn" id="presetExportBtn">导出全部 YAML</button>
+        <input type="file" id="presetImportFile" accept=".yaml,.yml,text/yaml" aria-label="选择预设 YAML 文件">
+        <button class="btn" id="presetImportBtn">导入预设</button>
       </div>
       <div class="field"><label>已保存预设（本地存储）</label>
         <ul class="preset-list" id="presetList"></ul>
@@ -243,22 +253,33 @@
   </div>
 </div>
 
-<!-- 机床配置（**只读**：写入通道只有 CLI，浏览器不写盘） -->
+<!-- 机床配置管理 -->
 <div class="modal-mask" id="modalMachineCfg">
   <div class="modal" style="max-width:560px">
     <div class="modal-head"><h3>机床配置</h3><button class="close" data-close="modalMachineCfg">×</button></div>
     <div class="modal-body">
-      <div class="tip">本页<strong>只读</strong>。机床的创建/修改/删除走 CLI —— 那里的写入带键名与取值校验、
-        缺键阻断与乐观锁；浏览器不写盘。</div>
+      <div class="tip">内置机床只读。自定义机床保存到项目 nctool.toml，并经过配置校验与并发冲突检查。</div>
+      <div id="mcEditForm" class="field" style="display:none">
+        <div class="field"><label>机床 ID</label><input id="mcEditId" type="text"></div>
+        <div class="field"><label>厂商</label><input id="mcEditVendor" type="text"></div>
+        <div class="field"><label>型号</label><input id="mcEditModel" type="text"></div>
+        <label>配置键值</label><div id="mcEditConfig" class="machine-schema-grid"></div>
+        <div style="display:flex;gap:8px;margin-top:10px"><button class="btn primary" id="mcSaveBtn">保存机床</button><button class="btn" id="mcCancelBtn">取消</button></div>
+      </div>
       <div class="field"><label>当前机床</label><div class="tip" id="mcHead"></div></div>
       <div class="field"><label>配置键值</label><dl class="about-kv" id="mcValues"></dl></div>
       <div class="field"><label>键规格（内建 schema）</label><dl class="about-kv" id="mcSchema"></dl></div>
       <div class="field"><label>命令（复制到终端执行）</label>
         <input type="text" id="mcCmd" readonly spellcheck="false">
       </div>
+      <div class="field"><label>配置诊断</label><pre id="configInfo" class="tip" style="white-space:pre-wrap">尚未加载</pre></div>
     </div>
     <div class="modal-foot">
       <button class="btn ghost" data-close="modalMachineCfg">关闭</button>
+      <button class="btn" id="mcConfigBtn">配置诊断</button>
+      <button class="btn" id="mcNewBtn">新建自定义</button>
+      <button class="btn" id="mcEditBtn">编辑当前</button>
+      <button class="btn" id="mcDeleteBtn">删除当前</button>
       <button class="btn" id="mcTestBtn">用该机床试渲染</button>
       <button class="btn primary" id="mcCopyBtn">复制命令</button>
     </div>
@@ -272,5 +293,3 @@
 </div>
 
 <div id="toast-wrap"></div>
-
-

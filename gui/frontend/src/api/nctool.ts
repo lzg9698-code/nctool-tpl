@@ -6,12 +6,14 @@ import type {
   GenOptions,
   LintFinding,
   MachineSummary,
+  MachineKeySpec,
   PresetDeleteResult,
   PresetListData,
   PresetSaveResult,
   RenderData,
   TemplateDetail,
   TemplateSummary,
+  MachineConfig,
 } from "../types";
 
 export type { CommandError };
@@ -52,7 +54,19 @@ export const api = {
     }),
   getTemplate: (name: string) =>
     call<{ template: TemplateDetail }>("get_template", { name }),
-  listMachines: () => call<{ machines: MachineSummary[] }>("list_machines"),
+  createTemplate: (name: string, category: string) =>
+    call<{ name: string; fingerprint: string; action: string; manifestWarning?: string | null }>("create_template", { name, category }),
+  saveTemplate: (name: string, source: string, expectHash: string) =>
+    call<{ name: string; fingerprint: string; action: string }>("save_template", { name, source, expectHash }),
+  deriveTemplate: (sourceName: string, newName: string) =>
+    call<{ name: string; fingerprint: string; manifestWarning?: string | null }>("derive_template", { sourceName, newName }),
+  renameTemplate: (oldName: string, newName: string) =>
+    call<{ oldName: string; name: string; manifestWarning?: string | null }>("rename_template", { oldName, newName }),
+  listMachines: () => call<{ machines: MachineSummary[]; schema: MachineKeySpec[]; fileFingerprint: string | null }>("list_machines"),
+  saveMachine: (machine: MachineConfig, expectHash?: string | null) =>
+    call<{ machine: MachineConfig; action: string; fileFingerprint: string | null; warnings: string[] }>("save_machine", { ...machine, expectHash: expectHash ?? null }),
+  deleteMachine: (id: string, expectHash?: string | null) =>
+    call<{ id: string; action: string }>("delete_machine", { id, expectHash: expectHash ?? null }),
   renderTemplate: (template: string, paramsJson: string, options: GenOptions) =>
     call<RenderData>("render_template", { template, paramsJson, options }),
   validateTemplate: (template: string, paramsJson: string) =>

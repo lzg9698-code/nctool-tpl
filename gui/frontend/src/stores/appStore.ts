@@ -51,7 +51,7 @@ function initialParams(spec: ParamSpec[]): Record<string, unknown> {
   const out: Record<string, unknown> = {};
   for (const s of spec) {
     if (s.default !== null && s.default !== undefined) out[s.name] = s.default;
-    else if (s.kind === "Bool") out[s.name] = false;
+    else if (s.kind === "Bool") out[s.name] = undefined;
     else out[s.name] = "";
   }
   return out;

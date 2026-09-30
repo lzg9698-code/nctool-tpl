@@ -401,7 +401,7 @@ nctool --template-dir templates inspect chamfer.j2   # 或临时用全局参数�
 ### 例 5：Web UI / 库调用
 
 ```bash
-# 本地 Web UI（仅绑定回环地址）：模板浏览 → 填参 → 实时预览 → 校验 → 导出
+# 本地 Web UI（仅绑定回环地址）：模板管理 → 填参 → 实时预览 → 校验 → 导出
 nctool ui --host 127.0.0.1 --port 8787
 ```
 
@@ -475,8 +475,8 @@ nctool machine test hero_x9 --template drill_cycle --param x=10 --param y=10
 nctool config init
 nctool completion bash          # 另支持 zsh / fish / elvish 及 Windows 系 shell
 
-# 启动本地 Web UI（模板浏览 + 只读 API；仅绑定回环地址）
-# 机床在 UI 里**只读**：展示键值与键规格 + 可复制的 CLI 命令；写入通道只有 CLI
+# 启动本地 Web UI（模板管理、渲染、预设、批量生成；仅绑定回环地址）
+# 机床内建预设只读；Web UI 可通过 schema 校验管理自定义机床
 nctool ui --host 127.0.0.1 --port 8787
 
 # 机器可读输出（--format json）：成功 {"ok":true,"data":...}，失败 {"ok":false,"error":{...}}
@@ -650,15 +650,17 @@ python3 scripts/check_coverage_caliber.py lcov.info --min 92
 | --- | --- |
 | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | **贡献指南完整版**：环境搭建、质量门、测试矩阵、提交与发版流程、审查清单 |
 | [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | **系统架构与设计说明**：三层 crate 架构、核心模块职责、数据流、错误模型、关键设计决策、扩展点。改动架构时请同步更新 |
-| [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md) | **系统设计文档（当前有效版 v2.2）**：含 derive / 变量 / manifest 外部化 / Web UI 后端 / 参数规格三来源、`core::asset` 写盘等后续演进；与 ARCHITECTURE.md 冲突时以此为准 |
+| [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md) | **系统设计文档（当前有效版 v2.3）**：含 derive / 变量 / manifest 外部化、Web/Tauri 共用 route、参数校验和 `core::asset` 写盘边界；与 ARCHITECTURE.md 冲突时以此为准 |
 | [docs/ROADMAP.md](docs/ROADMAP.md) | **开发路线与执行跟踪**：阶段划分、任务清单、交付物、排期、里程碑、风险登记、MVP 裁剪策略 |
 | [docs/MACHINE_CONFIG_GUIDE.md](docs/MACHINE_CONFIG_GUIDE.md) | **《机床配置指南》**：配置键清单、内建预设、nctool.toml 自定义、加载顺序、`line_number_digits` 夹紧到 32 的内存安全理由、未知键告警等 |
+| [docs/GUI_USER_GUIDE.md](docs/GUI_USER_GUIDE.md) | **桌面 GUI 使用说明**：页面能力、资产写入冲突处理及配置编辑边界 |
 | [docs/TEMPLATE_WRITING_GUIDE.md](docs/TEMPLATE_WRITING_GUIDE.md) | **《模板编写指南》**：NC/数学过滤器、必选/可选判定、引用机床配置、多模板 include/extends、validate/render 校验分层、反模式与发布前清单 |
 | [docs/RELEASE.md](docs/RELEASE.md) | **迭代节奏约定**：版本号策略、发布节奏、提交流程、兼容性窗口、决策机制、Backlog 加权打分 |
 | [docs/UI_ACCEPTANCE_CHECKLIST.md](docs/UI_ACCEPTANCE_CHECKLIST.md) | **Web UI 手工验收清单**（37 项可勾选）：端到端全链路 / 移动端 ≤480px / 校验定位 / 前后端逐字节一致 / 机床切换 / 主题 |
 | [docs/UI_DESIGN_PROPOSAL.html](docs/UI_DESIGN_PROPOSAL.html) | **Web UI 设计方案 v2**（设计交付物）：现状诊断、信息架构、设计系统与令牌、四档响应式断点、组件规格、状态与键盘交互、可访问性、37 项既有验收映射 + 12 项新增验收、P0–P3 实施路径。 |
 | [docs/REAL_PART_WALKTHROUGH.md](docs/REAL_PART_WALKTHROUGH.md) | **真实零件场景走查**（E5）：简化法兰盘的「端面+4 孔+切断」多工序演示与多机床对比，暴露行号续编/错误聚合/参数继承的局限 |
 | [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) | **当前状态快照**：各阶段完成情况与测试计数 |
+| [docs/UPGRADE_READINESS.md](docs/UPGRADE_READINESS.md) | **1.0 API 升级就绪度**：当前门禁、破坏性变更迁移和 tag 前置步骤 |
 | [docs/PROCESS_CHECKLIST.md](docs/PROCESS_CHECKLIST.md) | **工艺核对清单**（阶段 A1）：内置模板 × 机床预设逐行核对结论、发现项 F1–F5、外部工艺评审待办 |
 | [docs/DEV_PLAN_CLI_UI.md](docs/DEV_PLAN_CLI_UI.md) | CLI + Web UI 的设计细节（命令面 / API 契约 / 技术决策）。**其 §7 阶段计划已被 ROADMAP 取代** |
 | [CHANGELOG.md](CHANGELOG.md) | 版本演进记录 |
