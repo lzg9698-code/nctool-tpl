@@ -2089,6 +2089,7 @@ fn serve_requests_with_timeout(
         ctx,
         body_timeout,
         Arc::new(AtomicUsize::new(0)),
+        MAX_IN_FLIGHT_BODY_READERS,
     )
 }
 
@@ -2098,6 +2099,7 @@ fn serve_requests_with_timeout_and_counter(
     ctx: &Ctx,
     body_timeout: Duration,
     in_flight: Arc<AtomicUsize>,
+    max_in_flight_body_readers: usize,
 ) -> Result<(), CliError> {
     let allowed = allowed_origins(&addr);
     // 在读请求体的线程数（P1-8 第二道闸）。每个 serve 实例一份，理由见
@@ -2156,7 +2158,7 @@ fn serve_requests_with_timeout_and_counter(
 
         // 读线程数达到上限（P1-8 第二道闸）：说明已经堆了 `MAX_IN_FLIGHT_BODY_READERS`
         // 个"发一半就挂"的连接，此时对新请求直接回 503，而不是再赔一个线程进去。
-        let overloaded = in_flight.load(Ordering::SeqCst) >= MAX_IN_FLIGHT_BODY_READERS;
+        let overloaded = in_flight.load(Ordering::SeqCst) >= max_in_flight_body_readers;
 
         let mut respondable = request;
         let resp = if let Some(resp) = early {
@@ -4919,11 +4921,12 @@ presets:
 
     /// 起一个进程内服务，把 `f(port)` 的返回值与 `serve` 的返回值一起交回。
     fn with_server<T>(timeout: Duration, f: impl FnOnce(u16) -> T) -> (T, Result<(), CliError>) {
-        with_server_and_reader_counter(timeout, |port, _| f(port))
+        with_server_and_reader_limit(timeout, MAX_IN_FLIGHT_BODY_READERS, |port, _| f(port))
     }
 
-    fn with_server_and_reader_counter<T>(
+    fn with_server_and_reader_limit<T>(
         timeout: Duration,
+        max_in_flight_body_readers: usize,
         f: impl FnOnce(u16, Arc<AtomicUsize>) -> T,
     ) -> (T, Result<(), CliError>) {
         let (srv, actual) = bind("127.0.0.1:0".parse().unwrap()).expect("绑定回环应成功");
@@ -4932,6 +4935,15 @@ presets:
         std::thread::scope(|scope| {
             let srv_ref = &srv;
             let counter = Arc::clone(&in_flight);
+            // 测试中的断言若失败，也必须解除 incoming_requests()，否则 scope 会等
+            // 一个仍阻塞在服务循环里的线程，CI 表现为永久卡在 Test 步骤。
+            struct UnblockOnDrop<'a>(&'a tiny_http::Server);
+            impl Drop for UnblockOnDrop<'_> {
+                fn drop(&mut self) {
+                    self.0.unblock();
+                }
+            }
+            let _unblock = UnblockOnDrop(&srv);
             let t = scope.spawn(move || {
                 serve_requests_with_timeout_and_counter(
                     srv_ref,
@@ -4939,6 +4951,7 @@ presets:
                     &Ctx::for_test(),
                     timeout,
                     counter,
+                    max_in_flight_body_readers,
                 )
             });
             let out = f(port, in_flight);
@@ -5081,45 +5094,46 @@ presets:
 
     /// P1-8 的第二道闸：被放弃的读线程数达到上限后，新请求回 503 而不是继续赔线程。
     ///
-    /// 用 100ms 超时堆满 `MAX_IN_FLIGHT_BODY_READERS` 个"发一半就挂"的连接
-    /// （循环会逐个超时放弃，共约 0.8s），第 9 个请求必须拿到 503。
+    /// 用 100ms 超时和测试注入的 1 个读线程上限堆满服务，第 2 个请求必须拿到 503。
+    /// 生产服务仍使用 `MAX_IN_FLIGHT_BODY_READERS`（8）；小阈值让测试不依赖 runner
+    /// 的监听线程数和 socket 调度顺序。
     /// 没有这道闸时，这个测试会拿到 200（服务照旧再赔一个线程）。
     #[test]
     fn too_many_abandoned_body_readers_yield_503() {
         use std::io::Write;
         use std::net::TcpStream;
 
-        let (resp, joined) = with_server_and_reader_counter(
+        // 用 1 个 slot 验证饱和分支；生产入口仍将上限设为 8。小阈值避免测试依赖
+        // runner 的监听线程数和 socket 调度顺序。
+        let reader_limit = 1;
+        let (resp, joined) = with_server_and_reader_limit(
             Duration::from_millis(100),
+            reader_limit,
             |port, in_flight| {
-                // 堆满：每个连接声明 2000 字节、只发 1 字节、不关连接
-                let mut stuck: Vec<TcpStream> = (0..MAX_IN_FLIGHT_BODY_READERS)
-                .map(|_| {
-                    let mut s = TcpStream::connect_timeout(
-                        &format!("127.0.0.1:{port}").parse().unwrap(),
-                        Duration::from_millis(1000),
-                    )
-                    .expect("应能连上服务");
-                    s.write_all(
+                // 堆满：声明 2000 字节、只发 1 字节且保持连接打开。
+                let mut stuck = TcpStream::connect_timeout(
+                    &format!("127.0.0.1:{port}").parse().unwrap(),
+                    Duration::from_millis(1000),
+                )
+                .expect("应能连上服务");
+                stuck
+                    .write_all(
                         b"POST /api/inspect HTTP/1.1\r\nHost: 127.0.0.1\r\nContent-Length: 2000\r\n\r\nx",
                     )
                     .expect("写半包请求");
-                    s
-                })
-                .collect();
 
                 // 等待服务端确实接收并启动全部读线程。固定 sleep 会受慢 runner 的
                 // socket accept / 调度速度影响，容易在只堆积了部分连接时误取到 200。
                 let deadline = std::time::Instant::now() + Duration::from_secs(5);
-                while in_flight.load(Ordering::SeqCst) < MAX_IN_FLIGHT_BODY_READERS
+                while in_flight.load(Ordering::SeqCst) < reader_limit
                     && std::time::Instant::now() < deadline
                 {
                     std::thread::sleep(Duration::from_millis(10));
                 }
                 assert_eq!(
                     in_flight.load(Ordering::SeqCst),
-                    MAX_IN_FLIGHT_BODY_READERS,
-                    "超时窗口内服务端应接收并放弃到读线程上限"
+                    reader_limit,
+                    "超时窗口内服务端应接收并启动读线程"
                 );
 
                 let resp = raw_http(
@@ -5128,7 +5142,7 @@ presets:
                     b"",
                     true,
                 );
-                stuck.clear();
+                drop(stuck);
                 resp
             },
         );
