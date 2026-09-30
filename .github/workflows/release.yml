@@ -120,5 +120,8 @@ jobs:
       - name: Upload release assets
         uses: softprops/action-gh-release@v2
         with:
+          draft: true
+          prerelease: true
+          overwrite_files: true
           files: "target/${{ matrix.target }}/release/nctool-${{ matrix.target }}*"
           token: ${{ secrets.GITHUB_TOKEN }}

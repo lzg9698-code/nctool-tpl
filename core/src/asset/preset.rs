@@ -727,14 +727,37 @@ fn normalize(p: &Path) -> PathBuf {
     if let Ok(c) = std::fs::canonicalize(&abs) {
         return strip_verbatim(c);
     }
-    // 目标不存在（常态）：拆成「父目录 + 文件名」，只归一父目录。
+    // 目标不存在（常态）：拆成「最近存在的祖先 + 缺失路径后缀」。
+    // 不能只 canonicalize 直接父目录：`$TMP/link/missing/presets.yaml` 的
+    // `missing` 尚不存在时，父目录 canonicalize 会失败并保留 `link` 这个
+    // symlink 路径；模板根却会被解析为真实路径，包含性检查因此漏掉越界写。
     let (parent, name) = match (abs.parent(), abs.file_name()) {
         (Some(pa), Some(n)) => (pa, n),
         // 没有文件名（根 / `..` 结尾等）：退回逐段消 `..`
         _ => return strip_verbatim(resolve_dots(&abs)),
     };
-    let base = std::fs::canonicalize(parent).unwrap_or_else(|_| resolve_dots(parent));
-    strip_verbatim(base.join(name))
+    let mut suffix = vec![name.to_os_string()];
+    let mut ancestor = parent;
+    loop {
+        if let Ok(base) = std::fs::canonicalize(ancestor) {
+            let resolved = suffix
+                .into_iter()
+                .rev()
+                .fold(base, |path, component| path.join(component));
+            return strip_verbatim(resolved);
+        }
+        let Some(component) = ancestor.file_name() else {
+            return strip_verbatim(resolve_dots(&abs));
+        };
+        suffix.push(component.to_os_string());
+        let Some(parent) = ancestor.parent() else {
+            return strip_verbatim(resolve_dots(&abs));
+        };
+        if parent == ancestor {
+            return strip_verbatim(resolve_dots(&abs));
+        }
+        ancestor = parent;
+    }
 }
 
 /// 逐段压栈消解 `..`（起点须为绝对路径；不要求路径存在）。
@@ -1324,6 +1347,24 @@ mod tests {
         assert!(ensure_outside_template_root(&real.join("presets.yaml"), &link).is_err());
         // 对照：根之外的路径照常放行
         assert!(ensure_outside_template_root(&dir.join("elsewhere.yaml"), &link).is_ok());
+    }
+
+    /// 缺失的多级父目录也必须沿最近存在的祖先解析 symlink；只解析直接父目录
+    /// 会让“不存在于源树、但逻辑上位于模板根内”的预设路径绕过检查。
+    #[cfg(unix)]
+    #[test]
+    fn ensure_outside_template_root_resolves_missing_parents_through_symlink() {
+        let dir = tmpdir("symlink_missing_parent");
+        let real = dir.join("real_tpl");
+        let link = dir.join("link_tpl");
+        std::fs::create_dir_all(&real).unwrap();
+        std::os::unix::fs::symlink(&real, &link).unwrap();
+
+        let nested_missing = link.join("not_created").join("deeper").join("presets.yaml");
+        assert!(
+            ensure_outside_template_root(&nested_missing, &real).is_err(),
+            "不存在的多级父目录经 symlink 仍应命中模板根红线"
+        );
     }
 
     /// 回归（P2-3）：归一后**文件名不得出现两次**。

@@ -2083,10 +2083,25 @@ fn serve_requests_with_timeout(
     ctx: &Ctx,
     body_timeout: Duration,
 ) -> Result<(), CliError> {
+    serve_requests_with_timeout_and_counter(
+        server,
+        addr,
+        ctx,
+        body_timeout,
+        Arc::new(AtomicUsize::new(0)),
+    )
+}
+
+fn serve_requests_with_timeout_and_counter(
+    server: &tiny_http::Server,
+    addr: SocketAddr,
+    ctx: &Ctx,
+    body_timeout: Duration,
+    in_flight: Arc<AtomicUsize>,
+) -> Result<(), CliError> {
     let allowed = allowed_origins(&addr);
     // 在读请求体的线程数（P1-8 第二道闸）。每个 serve 实例一份，理由见
     // [`MAX_IN_FLIGHT_BODY_READERS`]。
-    let in_flight = Arc::new(AtomicUsize::new(0));
     // Keep the long-running server view in sync with guarded asset writes and edits made
     // by other tools while preserving explicit startup overrides.
     let mut active_ctx = ctx.clone();
@@ -4904,14 +4919,29 @@ presets:
 
     /// 起一个进程内服务，把 `f(port)` 的返回值与 `serve` 的返回值一起交回。
     fn with_server<T>(timeout: Duration, f: impl FnOnce(u16) -> T) -> (T, Result<(), CliError>) {
+        with_server_and_reader_counter(timeout, |port, _| f(port))
+    }
+
+    fn with_server_and_reader_counter<T>(
+        timeout: Duration,
+        f: impl FnOnce(u16, Arc<AtomicUsize>) -> T,
+    ) -> (T, Result<(), CliError>) {
         let (srv, actual) = bind("127.0.0.1:0".parse().unwrap()).expect("绑定回环应成功");
         let port = actual.port();
+        let in_flight = Arc::new(AtomicUsize::new(0));
         std::thread::scope(|scope| {
             let srv_ref = &srv;
+            let counter = Arc::clone(&in_flight);
             let t = scope.spawn(move || {
-                serve_requests_with_timeout(srv_ref, actual, &Ctx::for_test(), timeout)
+                serve_requests_with_timeout_and_counter(
+                    srv_ref,
+                    actual,
+                    &Ctx::for_test(),
+                    timeout,
+                    counter,
+                )
             });
-            let out = f(port);
+            let out = f(port, in_flight);
             srv.unblock();
             let joined = t.join().expect("serve 线程应正常结束");
             (out, joined)
@@ -5059,9 +5089,11 @@ presets:
         use std::io::Write;
         use std::net::TcpStream;
 
-        let (resp, joined) = with_server(Duration::from_millis(100), |port| {
-            // 堆满：每个连接声明 2000 字节、只发 1 字节、不关连接
-            let mut stuck: Vec<TcpStream> = (0..MAX_IN_FLIGHT_BODY_READERS)
+        let (resp, joined) = with_server_and_reader_counter(
+            Duration::from_millis(100),
+            |port, in_flight| {
+                // 堆满：每个连接声明 2000 字节、只发 1 字节、不关连接
+                let mut stuck: Vec<TcpStream> = (0..MAX_IN_FLIGHT_BODY_READERS)
                 .map(|_| {
                     let mut s = TcpStream::connect_timeout(
                         &format!("127.0.0.1:{port}").parse().unwrap(),
@@ -5076,20 +5108,30 @@ presets:
                 })
                 .collect();
 
-            // 等循环逐个超时放弃（每个 100ms），留足余量
-            std::thread::sleep(Duration::from_millis(
-                100 * (MAX_IN_FLIGHT_BODY_READERS as u64 + 4),
-            ));
+                // 等待服务端确实接收并启动全部读线程。固定 sleep 会受慢 runner 的
+                // socket accept / 调度速度影响，容易在只堆积了部分连接时误取到 200。
+                let deadline = std::time::Instant::now() + Duration::from_secs(5);
+                while in_flight.load(Ordering::SeqCst) < MAX_IN_FLIGHT_BODY_READERS
+                    && std::time::Instant::now() < deadline
+                {
+                    std::thread::sleep(Duration::from_millis(10));
+                }
+                assert_eq!(
+                    in_flight.load(Ordering::SeqCst),
+                    MAX_IN_FLIGHT_BODY_READERS,
+                    "超时窗口内服务端应接收并放弃到读线程上限"
+                );
 
-            let resp = raw_http(
-                port,
-                "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
-                b"",
-                true,
-            );
-            stuck.clear();
-            resp
-        });
+                let resp = raw_http(
+                    port,
+                    "GET /health HTTP/1.1\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+                    b"",
+                    true,
+                );
+                stuck.clear();
+                resp
+            },
+        );
         assert!(joined.is_ok(), "serve 应返回 Ok: {joined:?}");
         assert!(
             resp.contains("503") && resp.contains("service_unavailable"),

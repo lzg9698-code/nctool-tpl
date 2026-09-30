@@ -36,7 +36,7 @@ NC 程序已适用于某台具体机床。内置预设和新导入模板仍须�
 
 | 验证 | 结果 |
 | --- | --- |
-| `cargo test --workspace --all-targets` | **1195 passed / 0 failed / 3 ignored**（1 个 registry cost spike，2 个 release-only 10k 行实测） |
+| `cargo test --workspace --all-targets` | **1196 passed / 0 failed / 3 ignored**（1 个 registry cost spike，2 个 release-only 10k 行实测） |
 | `cargo test --workspace --doc` | **5 passed / 0 failed / 1 ignored** |
 | `cargo clippy --workspace --all-targets -- -D warnings` | 通过 |
 | `cargo doc --workspace --no-deps` + `RUSTDOCFLAGS=-D warnings` | 通过 |
