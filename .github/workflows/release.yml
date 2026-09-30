@@ -6,6 +6,13 @@ on:
       - "nctool-tpl-v*"
       - "nctool-core-v*"
       - "nctool-cli-v*"
+  workflow_dispatch:
+    inputs:
+      publish_crates:
+        description: "Publish this crate to crates.io (requires an explicit manual run)"
+        required: true
+        type: boolean
+        default: false
 
 # softprops/action-gh-release 需要写 release 权限；GitHub 新仓库默认 GITHUB_TOKEN 只读，
 # 必须在此显式声明（同时需仓库 Settings → Actions → General 允许 workflow 提升权限）。
@@ -38,28 +45,28 @@ jobs:
         run: cargo test -p nctool-tpl -p nctool-core -p nctool-cli --all-targets --locked
 
       - name: Publish nctool-tpl
-        if: startsWith(github.ref_name, 'nctool-tpl-') && env.CARGO_REGISTRY_TOKEN != ''
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_crates && startsWith(github.ref_name, 'nctool-tpl-') && env.CARGO_REGISTRY_TOKEN != ''
         run: cargo publish -p nctool-tpl
 
-      - name: Skip publish (tpl, token missing)
-        if: startsWith(github.ref_name, 'nctool-tpl-') && env.CARGO_REGISTRY_TOKEN == ''
-        run: echo "::notice::CARGO_REGISTRY_TOKEN 未配置，跳过发布。请配置仓库 Secret 后手动 publish，或重新推送 tag。"
+      - name: Skip publish (tpl)
+        if: startsWith(github.ref_name, 'nctool-tpl-') && (github.event_name != 'workflow_dispatch' || !inputs.publish_crates || env.CARGO_REGISTRY_TOKEN == '')
+        run: echo "::notice::Tag pushes never publish crates.io. To publish, explicitly run this workflow with publish_crates=true and configure CARGO_REGISTRY_TOKEN."
 
       - name: Publish nctool-core
-        if: startsWith(github.ref_name, 'nctool-core-') && env.CARGO_REGISTRY_TOKEN != ''
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_crates && startsWith(github.ref_name, 'nctool-core-') && env.CARGO_REGISTRY_TOKEN != ''
         run: cargo publish -p nctool-core
 
-      - name: Skip publish (core, token missing)
-        if: startsWith(github.ref_name, 'nctool-core-') && env.CARGO_REGISTRY_TOKEN == ''
-        run: echo "::notice::CARGO_REGISTRY_TOKEN 未配置，跳过发布。请配置仓库 Secret 后手动 publish，或重新推送 tag。"
+      - name: Skip publish (core)
+        if: startsWith(github.ref_name, 'nctool-core-') && (github.event_name != 'workflow_dispatch' || !inputs.publish_crates || env.CARGO_REGISTRY_TOKEN == '')
+        run: echo "::notice::Tag pushes never publish crates.io. To publish, explicitly run this workflow with publish_crates=true and configure CARGO_REGISTRY_TOKEN."
 
       - name: Publish nctool-cli
-        if: startsWith(github.ref_name, 'nctool-cli-') && env.CARGO_REGISTRY_TOKEN != ''
+        if: github.event_name == 'workflow_dispatch' && inputs.publish_crates && startsWith(github.ref_name, 'nctool-cli-') && env.CARGO_REGISTRY_TOKEN != ''
         run: cargo publish -p nctool-cli
 
-      - name: Skip publish (cli, token missing)
-        if: startsWith(github.ref_name, 'nctool-cli-') && env.CARGO_REGISTRY_TOKEN == ''
-        run: echo "::notice::CARGO_REGISTRY_TOKEN 未配置，跳过发布。请配置仓库 Secret 后手动 publish，或重新推送 tag。"
+      - name: Skip publish (cli)
+        if: startsWith(github.ref_name, 'nctool-cli-') && (github.event_name != 'workflow_dispatch' || !inputs.publish_crates || env.CARGO_REGISTRY_TOKEN == '')
+        run: echo "::notice::Tag pushes never publish crates.io. To publish, explicitly run this workflow with publish_crates=true and configure CARGO_REGISTRY_TOKEN."
 
   # F1.3：三平台原生构建二进制并上传为 GitHub Release assets。
   # 每个 target 在对应架构的 runner 上原生构建（无交叉编译工具链依赖）。

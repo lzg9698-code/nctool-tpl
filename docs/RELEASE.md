@@ -35,9 +35,9 @@
 > 本节把 U-22 / U-24 / U-23 / U-25 四条发版流程缺陷固化成**可重复的操作序列**。
 > 顺序是硬约束，不是建议。
 
-### 2.5.1 唯一入口：推 tag 交 CI（U-22）
+### 2.5.1 tag 验证与 crates.io 发布分离（U-22）
 
-**`cargo publish` 只允许在 CI 里执行，本地手工发布路径已废止。**
+**`cargo publish` 只允许在 CI 里执行，本地手工发布路径已废止。推 tag 只运行验证与二进制构建，永不自动发布 crates.io。**
 
 原因（2026-09-22 实测事故）：上一轮按「改版本号 → 提交 → 推 tag → **本地 publish**」
 顺序操作，CI 在 tag 推送后又尝试发布同一版本 → `crate version already uploaded`，
@@ -45,23 +45,24 @@
 而这类分辨正是应该被流程消除的东西。
 
 ```bash
-# ✅ 唯一正确姿势：只推 tag，发布由 release.yml 完成
-git tag nctool-tpl-v0.4.1 && git push origin nctool-tpl-v0.4.1
+# 推 tag：运行验证、三平台 CLI 构建与 GitHub Release，不上传 crates.io
+git tag nctool-tpl-v1.0.0 && git push origin nctool-tpl-v1.0.0
 ```
 
-若 `CARGO_REGISTRY_TOKEN` 未配置，release.yml 会打印 `::notice::` 并跳过
-（**不红**）——那是"凭据缺失"的既有跳过分支，不是失败。
+只有维护者在 GitHub Actions 手动运行 `Release` workflow、明确勾选
+`publish_crates=true` 且配置 `CARGO_REGISTRY_TOKEN` 时，才会运行 crate 发布步骤。
+tag 事件会明确跳过所有 crates.io 发布步骤。
 
 ### 2.5.2 顺序与同步点（U-24）：`tpl → core → cli`，逐个等绿
 
 依赖方向决定了顺序：`cli → core → tpl`。**必须按 tpl → core → cli 推 tag**，
-且**前一个的 `Publish` 步骤成功后，再推下一个**：
+且若将来要发布 crates.io，**前一个 crate 发布成功后，再手动发布下一个**：
 
 ```
-nctool-tpl  0.4.x   ← 最底层（模板解析/渲染/NC 过滤器）
-  ↑ nctool-core 0.3.x 依赖  nctool-tpl = "0.4.0"（core/Cargo.toml:16）
-  ↑ nctool-cli  0.3.x 依赖  nctool-core = "0.3.0"（cli/Cargo.toml:13）
-                         + nctool-tpl  = "0.4.0"（cli/Cargo.toml:14）
+nctool-tpl  1.0.0   ← 最底层（模板解析/渲染/NC 过滤器）
+  ↑ nctool-core 1.0.0 依赖  nctool-tpl = "1.0.0"（core/Cargo.toml:16）
+  ↑ nctool-cli  1.0.0 依赖  nctool-core = "1.0.0"（cli/Cargo.toml:13）
+                         + nctool-tpl  = "1.0.0"（cli/Cargo.toml:14）
 ```
 
 **版本约束同步点**（改版本号时三处必须一起看）：

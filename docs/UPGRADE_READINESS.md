@@ -58,10 +58,9 @@ NC 程序已适用于某台具体机床。内置预设和新导入模板仍须�
 1. 在支持的原生桌面环境按 [GUI 用户指南](GUI_USER_GUIDE.md) 和人工验收清单走查创建/编辑/冲突处理、
    默认机床保护、预设往返、保存 NC 文件和渲染错误反馈。当前完成的是 headless Chromium Web UI
    走查与 Tauri Rust 命令测试；Linux 容器没有可交互的桌面会话。
-2. 按 `docs/RELEASE.md` 顺序完成 crates.io 发布：先推 `nctool-tpl-v1.0.0` 并等待 CI 发布成功，
-   再推 `nctool-core-v1.0.0`，最后推 `nctool-cli-v1.0.0`。根 crate 的本地 dry-run 已通过；core/cli
-   需要前序 1.0.0 依赖先出现在 crates.io 后才能完成 registry dry-run。未经用户另行要求，不手工执行
-   `cargo publish`；tag workflow 是唯一发布入口。
+2. 版本与依赖约束已统一到 `1.0.0`。本次只打候选 tag，不发布 crates.io；tag 工作流已改为默认跳过
+   所有发布步骤。根 crate 的本地 `cargo publish --dry-run` 通过；core/cli 在前序依赖尚未发布时无法做
+   registry dry-run。若以后决定发布 crates.io，再按 `docs/RELEASE.md` 的依赖顺序显式手动运行发布工作流。
 3. 在 Windows / macOS CI 完成 release 构建和安装验证；本轮 Linux `custom-protocol` release 编译
    通过，但容器没有桌面会话，不能证明打包后的原生窗口可启动。
 4. 工艺人员仍需核对内置机床键值和计划用于实际加工的模板，并在目标机床空运行。项目应继续显著
