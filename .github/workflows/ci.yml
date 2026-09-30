@@ -249,7 +249,7 @@ jobs:
       # 改用官方 install-action 下载预编译二进制：绕开整条 cargo 构建链，
       # 不受索引状态影响，也没有数分钟的编译开销。
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@72f835688cb6c15903b796f704b01e652a2b8835 # cargo-llvm-cov
+        uses: taiki-e/install-action@92d7dcc5cea95573766c2776ceb1967a467bc919 # cargo-llvm-cov
 
       # 单独校验一步：把「没装上」与「装上了但跑不起来」区分开。
       - name: Verify cargo-llvm-cov
