@@ -14,29 +14,29 @@ on:
         type: boolean
         default: false
 
-# softprops/action-gh-release 需要写 release 权限；GitHub 新仓库默认 GITHUB_TOKEN 只读，
-# 必须在此显式声明（同时需仓库 Settings → Actions → General 允许 workflow 提升权限）。
+# 默认只读；只有二进制发布 job 需要更新 GitHub Release。
 permissions:
-  contents: write
+  contents: read
 
 env:
   CARGO_TERM_COLOR: always
-  # 未配置 secret 时为空字符串，publish 步骤按此跳过而非报错
-  CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
 jobs:
-  publish:
-    name: Publish ${{ startsWith(github.ref_name, 'nctool-tpl-') && 'nctool-tpl' || (startsWith(github.ref_name, 'nctool-core-') && 'nctool-core') || 'nctool-cli' }}
+  verify:
+    name: Verify publish crates
     runs-on: ubuntu-latest
+    timeout-minutes: 45
+    permissions:
+      contents: read
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # 只测三只发布 crate：`--workspace` 会把 nctool-gui 也拉进来，而本 runner
       # 没装 Tauri 的 Linux 系统库（libwebkit2gtk 等），ubuntu 上必编译失败；
@@ -44,29 +44,51 @@ jobs:
       - name: Verify (test publish crates)
         run: cargo test -p nctool-tpl -p nctool-core -p nctool-cli --all-targets --locked
 
-      - name: Publish nctool-tpl
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_crates && startsWith(github.ref_name, 'nctool-tpl-') && env.CARGO_REGISTRY_TOKEN != ''
-        run: cargo publish -p nctool-tpl
+  # crates.io 发布是独立的手动动作；tag push 只验证和构建，不触达 registry 凭据。
+  # CARGO_REGISTRY_TOKEN 仅注入到实际 cargo publish 的单一步骤。
+  publish:
+    name: Publish crate to crates.io
+    if: github.event_name == 'workflow_dispatch' && inputs.publish_crates && github.ref_type == 'tag'
+    needs: verify
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+    steps:
+      - name: Validate crate tag
+        shell: bash
+        run: |
+          case "$GITHUB_REF_NAME" in
+            nctool-tpl-v*|nctool-core-v*|nctool-cli-v*) ;;
+            *) echo "publish_crates requires an nctool crate tag" >&2; exit 1 ;;
+          esac
 
-      - name: Skip publish (tpl)
-        if: startsWith(github.ref_name, 'nctool-tpl-') && (github.event_name != 'workflow_dispatch' || !inputs.publish_crates || env.CARGO_REGISTRY_TOKEN == '')
-        run: echo "::notice::Tag pushes never publish crates.io. To publish, explicitly run this workflow with publish_crates=true and configure CARGO_REGISTRY_TOKEN."
+      - name: Checkout
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+
+      - name: Install Rust (stable)
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+
+      - name: Cache cargo
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+
+      - name: Publish nctool-tpl
+        if: startsWith(github.ref_name, 'nctool-tpl-')
+        run: cargo publish -p nctool-tpl
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Publish nctool-core
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_crates && startsWith(github.ref_name, 'nctool-core-') && env.CARGO_REGISTRY_TOKEN != ''
+        if: startsWith(github.ref_name, 'nctool-core-')
         run: cargo publish -p nctool-core
-
-      - name: Skip publish (core)
-        if: startsWith(github.ref_name, 'nctool-core-') && (github.event_name != 'workflow_dispatch' || !inputs.publish_crates || env.CARGO_REGISTRY_TOKEN == '')
-        run: echo "::notice::Tag pushes never publish crates.io. To publish, explicitly run this workflow with publish_crates=true and configure CARGO_REGISTRY_TOKEN."
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
       - name: Publish nctool-cli
-        if: github.event_name == 'workflow_dispatch' && inputs.publish_crates && startsWith(github.ref_name, 'nctool-cli-') && env.CARGO_REGISTRY_TOKEN != ''
+        if: startsWith(github.ref_name, 'nctool-cli-')
         run: cargo publish -p nctool-cli
-
-      - name: Skip publish (cli)
-        if: startsWith(github.ref_name, 'nctool-cli-') && (github.event_name != 'workflow_dispatch' || !inputs.publish_crates || env.CARGO_REGISTRY_TOKEN == '')
-        run: echo "::notice::Tag pushes never publish crates.io. To publish, explicitly run this workflow with publish_crates=true and configure CARGO_REGISTRY_TOKEN."
+        env:
+          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
 
   # F1.3：三平台原生构建二进制并上传为 GitHub Release assets。
   # 每个 target 在对应架构的 runner 上原生构建（无交叉编译工具链依赖）。
@@ -74,7 +96,12 @@ jobs:
   # 视用户反馈再补充（届时在 macos 上交叉编译 x86_64-apple-darwin）。
   binaries:
     name: Build binary assets (${{ matrix.target }})
+    if: github.event_name == 'push'
+    needs: verify
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 60
+    permissions:
+      contents: write
     strategy:
       fail-fast: false
       matrix:
@@ -87,15 +114,15 @@ jobs:
             target: aarch64-apple-darwin
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Rust (stable, with target)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           targets: ${{ matrix.target }}
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
         with:
           key: ${{ matrix.target }}
 
@@ -118,7 +145,7 @@ jobs:
           fi
 
       - name: Upload release assets
-        uses: softprops/action-gh-release@v2
+        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
         with:
           draft: true
           prerelease: true

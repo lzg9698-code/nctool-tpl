@@ -24,6 +24,7 @@
 | 项目 | 要求 |
 | --- | --- |
 | Rust | **1.89+**（MSRV = workspace 各 crate 的 `rust-version`）。CI 在 stable 上跑质量门，另有 `msrv` job 在 1.89 上 `cargo check --locked`（发布 crate，不含 gui），让这个承诺可验证。**抬 MSRV 前先看该 job**：1.82 时代它是红的（`clap_derive` 需要 `edition2024`），1.85→1.89 系 P0-1 跨进程写锁采用 std `File::try_lock`（1.89 稳定）所致 —— 本机 stable 不会暴露这种问题 |
+| Node.js | **24 LTS**（GUI 前端；本机可用 Node 22.12+ 或 24，见 `gui/frontend/.nvmrc` 与 `package.json` engines）。CI 从同一版本文件安装，npm 严格校验 engine |
 | 组件 | `rustfmt`、`clippy`（CI 用 `dtolnay/rust-toolchain@stable` 安装） |
 | 可选工具 | `cargo-audit`（安全审计）、`cargo-llvm-cov` + `python`（覆盖率，CI **阻断**项） |
 | 平台 | Linux / macOS / Windows 均需可用（CI 三平台矩阵） |
@@ -65,6 +66,9 @@ RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
 node scripts/check_param_parity.mjs   # --param 归一规则的 Rust / 前端对拍
 node scripts/check_gui_parity.mjs     # 端点契约 ↔ GUI Tauri command 封装的双向对拍
 cargo audit
+npm ci --prefix gui/frontend
+npm run build --prefix gui/frontend
+npm audit --prefix gui/frontend --audit-level=moderate
 ```
 
 > **`--workspace` 不能省**：根目录既是 workspace 根又是一个 package，cargo 在没有

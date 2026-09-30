@@ -16,6 +16,11 @@ on:
 permissions:
   contents: read
 
+# 新提交覆盖旧分支检查，避免过期 commit 长时间占用 runner；tag 发布由 release.yml 管理。
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
 env:
   CARGO_TERM_COLOR: always
   RUST_BACKTRACE: 1
@@ -24,6 +29,7 @@ jobs:
   quality:
     name: Test / Lint / Doc / Audit (${{ matrix.os }})
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 45
     strategy:
       # Windows 覆盖路径分隔符/配置目录等平台特有行为（开发环境即 Windows）；
       # macOS 按 ROADMAP B4.1 补充，覆盖 XDG_CONFIG_HOME 配置路径与 Unix 行尾
@@ -31,7 +37,7 @@ jobs:
         os: [ubuntu-latest, windows-latest, macos-latest]
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # 桌面 GUI（nctool-gui）作为 workspace 成员后，ubuntu runner 编译 tauri
       # 需要 WebKitGTK/GTK 系统库；缺则 `cargo clippy/test/doc --workspace` 全红。
@@ -53,9 +59,9 @@ jobs:
       # 只在 Linux 跑：脚本与系统无关，而 Rust 侧由三个系统的 cargo test 各覆盖一次。
       - name: Setup Node
         if: matrix.os == 'ubuntu-latest'
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '20'
+          node-version-file: gui/frontend/.nvmrc
 
       # UI 生成物与源片段一致：`ui/index.html` 与 `cli/ui/index.html` 都是
       # `ui/src/*.part.html` 的生成物。本步骤拦"改了片段忘生成"与"直接手改生成物"
@@ -122,12 +128,12 @@ jobs:
           echo "✓ refresh_golden.sh 语法与 CI 拒刷守卫均正常"
 
       - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           components: rustfmt, clippy
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       - name: Format check
         run: cargo fmt --all -- --check
@@ -167,7 +173,7 @@ jobs:
       # 固定版本 + 预编译二进制：此前 `cargo install cargo-audit --locked` 要在三个
       # runner 上各从源码编译一遍（连续两次卡在本步骤 exit 101）。
       - name: Install cargo-audit
-        uses: taiki-e/install-action@cargo-audit
+        uses: taiki-e/install-action@92d7dcc5cea95573766c2776ceb1967a467bc919 # cargo-audit
 
       # `--deny warnings`：默认只报漏洞（vulnerability），unmaintained / yanked 不失败
       - name: Security audit
@@ -184,14 +190,15 @@ jobs:
   frontend:
     name: Frontend (typecheck + build)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Setup Node
-        uses: actions/setup-node@v4
+        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
         with:
-          node-version: '20'
+          node-version-file: gui/frontend/.nvmrc
           cache: npm
           cache-dependency-path: gui/frontend/package-lock.json
 
@@ -210,9 +217,10 @@ jobs:
   coverage:
     name: Coverage (Ubuntu)
     runs-on: ubuntu-latest
+    timeout-minutes: 45
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       # 同 quality：gui 作为 workspace 成员后，ubuntu 编译 tauri 需要系统库。
       - name: Install Linux GUI deps (Tauri)
@@ -223,14 +231,14 @@ jobs:
             libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
 
       - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@stable
+        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
         with:
           # llvm-tools-preview 是 cargo-llvm-cov 生成插桩覆盖率数据的必需组件，
           # 缺失时 llvm-cov 直接失败
           components: llvm-tools-preview
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # 覆盖率门禁此前从未真正生效，有两层掩盖：
       # 1) `continue-on-error: true` 把持续失败粉饰成非阻断项，CI 全绿并不代表
@@ -241,7 +249,7 @@ jobs:
       # 改用官方 install-action 下载预编译二进制：绕开整条 cargo 构建链，
       # 不受索引状态影响，也没有数分钟的编译开销。
       - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@cargo-llvm-cov
+        uses: taiki-e/install-action@72f835688cb6c15903b796f704b01e652a2b8835 # cargo-llvm-cov
 
       # 单独校验一步：把「没装上」与「装上了但跑不起来」区分开。
       - name: Verify cargo-llvm-cov
@@ -354,7 +362,7 @@ jobs:
 
       - name: Upload coverage artifact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
         with:
           name: rust-coverage-lcov
           path: |
@@ -375,15 +383,16 @@ jobs:
   msrv:
     name: MSRV (1.89)
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
 
       - name: Install Rust (1.89)
-        uses: dtolnay/rust-toolchain@1.89
+        uses: dtolnay/rust-toolchain@b4f984c1e7daae8e175614de3e73a8411a20333c # 1.89
 
       - name: Cache cargo
-        uses: Swatinem/rust-cache@v2
+        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
 
       # 只 `check`、且**不带 `--all-targets`**：`rust-version` 承诺的是"下游能否
       # 编译本 crate"，而下游构建的是 lib + bin，不会去编译本仓库的 bench/example。

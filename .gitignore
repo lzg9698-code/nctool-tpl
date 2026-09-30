@@ -39,6 +39,10 @@ __pycache__/
 # 桌面 GUI 前端（Tauri 2 + React）构建产物
 gui/frontend/node_modules/
 gui/frontend/dist/
+# Vite 本地环境文件可能含部署地址或令牌；仅允许提交无机密示例文件。
+gui/frontend/.env
+gui/frontend/.env.*
+!gui/frontend/.env.example
 # tauri-build 生成的 ACL/权限 schema（每次构建自动重建，不提交）
 gui/gen/schemas/
 

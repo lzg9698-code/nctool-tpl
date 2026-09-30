@@ -12,6 +12,20 @@
 
 ## [未发布]
 
+### 2026-09-30：仓库工具链与发布配置收口
+
+#### Changed
+
+- GitHub Actions 改为固定完整 commit SHA，设定 runner 超时，并让分支新提交自动取消过期 CI。
+- Release workflow 按 job 缩小 `GITHUB_TOKEN` 权限；crates.io token 只在手动发布步骤注入，二进制 job 不可读取。
+- 前端开发基线改为 Node 24 LTS；保留 Node 22.12+ 兼容范围并由 npm 严格检查，CI 与本机共用 `.nvmrc`。
+- 前端生产构建同时类型检查应用代码和 Vite 配置；统一 `.editorconfig`、`.npmrc` 与本地 `.env` 忽略规则。
+
+#### Added
+
+- Dependabot 每周检查 GitHub Actions、Cargo workspace 和 GUI npm 锁文件依赖。
+- `gui/README.md` 记录 Tauri 本地开发、构建前置条件和当前 Windows NSIS 打包目标。
+
 ### 2026-09-30：1.0.0 候选版本准备
 
 - 三个 crates 及其 workspace 内依赖约束升级为 `1.0.0`；该版本尚未发布。

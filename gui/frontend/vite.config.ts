@@ -8,11 +8,10 @@ export default defineConfig({
   server: {
     port: 1420,
     strictPort: true, // 端口被占则失败，不静默换端口（否则 devUrl 对不上）
-    watch: { ignored: ["**/src-tauri/**"] },
   },
   envPrefix: ["VITE_", "TAURI_ENV_"], // Tauri 约定
   build: {
     target: "chrome105", // WebView2 基线
-    sourcemap: !!process.env.TAURI_DEBUG,
+    sourcemap: process.env.TAURI_DEBUG === "true",
   },
 });
