@@ -23,7 +23,7 @@ serde_yaml = "0.9"
 # toml_edit：格式/注释保全地 upsert `[machine.<id>]`（写 `nctool.toml`）。
 #   该 crate **已在依赖树中**（`toml 0.8` 的传递依赖），此处提为直接依赖
 #   **不新增任何 crate**（构建图零新增）；手写 TOML 文本更新正是"静默损坏"高发区。
-toml_edit = "0.22"
+toml_edit = "0.25"
 
 [dev-dependencies]
 # 集成测试中的 JSON 序列化往返验证
