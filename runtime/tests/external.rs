@@ -7,23 +7,59 @@ use nctool_runtime::{
 use std::{
     collections::BTreeMap,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
     time::{Duration, Instant},
 };
 struct Temp(PathBuf);
+static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
+const STARTUP_TIMEOUT_MS: u64 = 5000;
+const FAULT_TIMEOUT_MS: u64 = 2000;
+const FAULT_UPPER_BOUND: Duration = Duration::from_secs(8);
 impl Temp {
     fn new() -> Self {
-        let p = std::env::temp_dir().join(format!(
-            "nctool-rpc-{}-{}",
-            std::process::id(),
+        Self::at(
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir(&p).unwrap();
-        Self(p)
+                .as_nanos(),
+        )
     }
+    fn at(nanos: u128) -> Self {
+        loop {
+            let p = std::env::temp_dir().join(format!(
+                "nctool-rpc-{}-{}-{}",
+                std::process::id(),
+                nanos,
+                NEXT_TEMP.fetch_add(1, Ordering::Relaxed),
+            ));
+            match std::fs::create_dir(&p) {
+                Ok(()) => return Self(p),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("cannot create test directory {}: {error}", p.display()),
+            }
+        }
+    }
+}
+#[test]
+fn temporary_directories_remain_unique_with_a_fixed_clock() {
+    let directories = std::thread::scope(|scope| {
+        let threads = (0..32)
+            .map(|_| scope.spawn(|| Temp::at(0)))
+            .collect::<Vec<_>>();
+        threads
+            .into_iter()
+            .map(|thread| thread.join().unwrap())
+            .collect::<Vec<_>>()
+    });
+    let unique = directories
+        .iter()
+        .map(|temp| &temp.0)
+        .collect::<std::collections::BTreeSet<_>>();
+    assert_eq!(unique.len(), directories.len());
+    assert!(directories.iter().all(|temp| temp.0.is_dir()));
 }
 impl Drop for Temp {
     fn drop(&mut self) {
@@ -66,7 +102,7 @@ from plugin import invoke as compute
 def invoke(action,data,server,request_id):
     mode=data.pop('mode','')
     if mode=='crash': os._exit(9)
-    if mode=='sleep': time.sleep(2)
+    if mode=='sleep': time.sleep(10)
     if mode=='malformed':
         print('not-json',flush=True)
         time.sleep(2)
@@ -98,7 +134,7 @@ fn install_enable_handshake_host_callback_and_restart() {
     let temp = Temp::new();
     let source = temp.0.join("source");
     std::fs::create_dir(&source).unwrap();
-    fixture(&source, 1000);
+    fixture(&source, STARTUP_TIMEOUT_MS);
     let home = temp.0.join("home");
     assert_eq!(config::install(&home, &source).unwrap(), "python-report");
     assert_eq!(
@@ -130,7 +166,7 @@ fn install_enable_handshake_host_callback_and_restart() {
 #[test]
 fn faults_are_bounded_and_next_invocation_recovers() {
     let temp = Temp::new();
-    fixture(&temp.0, 300);
+    fixture(&temp.0, FAULT_TIMEOUT_MS);
     let runtime = boot(&temp.0, &temp.0.join("workspace"));
     for (mode, code) in [
         ("crash", "plugin_exited"),
@@ -143,7 +179,10 @@ fn faults_are_bounded_and_next_invocation_recovers() {
             .invoke("report.compute", json!({"values":[1],"mode":mode}))
             .unwrap_err();
         assert_eq!(error.code, code, "{mode}: {error}");
-        assert!(started.elapsed() < Duration::from_secs(3));
+        assert!(started.elapsed() < FAULT_UPPER_BOUND);
+        if mode == "sleep" {
+            assert!(started.elapsed() >= Duration::from_millis(FAULT_TIMEOUT_MS));
+        }
         assert!(
             runtime
                 .invoke("report.compute", json!({"values":[2]}))
@@ -166,7 +205,7 @@ fn faults_are_bounded_and_next_invocation_recovers() {
 #[test]
 fn cancellation_and_parallel_host_queries_do_not_block() {
     let temp = Temp::new();
-    fixture(&temp.0, 5000);
+    fixture(&temp.0, STARTUP_TIMEOUT_MS);
     let runtime = boot(&temp.0, &temp.0.join("workspace"));
     let worker = runtime.clone();
     let thread = std::thread::spawn(move || {
@@ -176,7 +215,7 @@ fn cancellation_and_parallel_host_queries_do_not_block() {
             json!({"values":[1],"mode":"sleep"}),
         )
     });
-    let deadline = Instant::now() + Duration::from_secs(2);
+    let deadline = Instant::now() + FAULT_UPPER_BOUND;
     while !runtime.cancel("slow") {
         assert!(Instant::now() < deadline);
         std::thread::sleep(Duration::from_millis(10));
@@ -192,7 +231,7 @@ fn cancellation_and_parallel_host_queries_do_not_block() {
 #[test]
 fn incompatible_manifest_and_package_symlink_rejected() {
     let temp = Temp::new();
-    fixture(&temp.0, 1000);
+    fixture(&temp.0, STARTUP_TIMEOUT_MS);
     let mut manifest = ExternalManifest::read(&temp.0).unwrap();
     manifest.descriptor.protocol_version = 2;
     assert_eq!(manifest.validate().unwrap_err().code, "protocol_version");
@@ -200,7 +239,7 @@ fn incompatible_manifest_and_package_symlink_rejected() {
     {
         let source = temp.0.join("pkg");
         std::fs::create_dir(&source).unwrap();
-        fixture(&source, 1000);
+        fixture(&source, STARTUP_TIMEOUT_MS);
         std::os::unix::fs::symlink("/etc/passwd", source.join("escape")).unwrap();
         assert_eq!(
             config::install(&temp.0.join("home"), &source)
@@ -213,7 +252,7 @@ fn incompatible_manifest_and_package_symlink_rejected() {
 #[test]
 fn blocked_stdin_writer_is_interrupted_by_timeout() {
     let temp = Temp::new();
-    fixture(&temp.0, 300);
+    fixture(&temp.0, FAULT_TIMEOUT_MS);
     let mut m: Value =
         serde_json::from_slice(&std::fs::read(temp.0.join("plugin.json")).unwrap()).unwrap();
     m["command"] = json!([python(), "blocked.py"]);
@@ -246,5 +285,6 @@ for line in sys.stdin:
             .code,
         "plugin_timeout"
     );
-    assert!(start.elapsed() < Duration::from_secs(3));
+    assert!(start.elapsed() >= Duration::from_millis(FAULT_TIMEOUT_MS));
+    assert!(start.elapsed() < FAULT_UPPER_BOUND);
 }
