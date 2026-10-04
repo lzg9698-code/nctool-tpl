@@ -1,19 +1,30 @@
 use nctool_cli::composition::App;
 use nctool_plugin_sdk::*;
-use std::{path::PathBuf, process::Command};
+use std::{
+    path::PathBuf,
+    process::Command,
+    sync::atomic::{AtomicU64, Ordering},
+};
 struct Temp(PathBuf);
+static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 impl Temp {
     fn new() -> Self {
-        let p = std::env::temp_dir().join(format!(
-            "nctool-v2-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir(&p).unwrap();
-        Self(p)
+        loop {
+            let p = std::env::temp_dir().join(format!(
+                "nctool-v2-{}-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos(),
+                NEXT_TEMP.fetch_add(1, Ordering::Relaxed),
+            ));
+            match std::fs::create_dir(&p) {
+                Ok(()) => return Self(p),
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("cannot create test directory {}: {error}", p.display()),
+            }
+        }
     }
     fn app(&self, profile: &str) -> std::sync::Arc<App> {
         App::boot(
