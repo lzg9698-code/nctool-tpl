@@ -18,7 +18,7 @@ include = ["/src/**", "/examples/demo.rs", "/benches/**", "/README.md", "/LICENS
 minijinja = { version = "~2.24.0", features = ["unstable_machinery", "loop_controls", "debug", "fuel"] }
 
 [dev-dependencies]
-criterion = "0.5"
+criterion = "0.8"
 
 [[bench]]
 name = "bench"
