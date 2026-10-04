@@ -15,9 +15,11 @@ use std::{
 };
 struct Temp(PathBuf);
 static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
-const STARTUP_TIMEOUT_MS: u64 = 5000;
-const FAULT_TIMEOUT_MS: u64 = 2000;
-const FAULT_UPPER_BOUND: Duration = Duration::from_secs(8);
+// Hosted Windows runners can delay a cold Python process by several seconds.
+// Keep failure detection bounded, and make the fixture sleep exceed that budget.
+const STARTUP_TIMEOUT_MS: u64 = 10_000;
+const FAULT_TIMEOUT_MS: u64 = 10_000;
+const FAULT_UPPER_BOUND: Duration = Duration::from_secs(20);
 impl Temp {
     fn new() -> Self {
         Self::at(
@@ -67,7 +69,12 @@ impl Drop for Temp {
     }
 }
 fn python() -> String {
-    for p in ["python3", "python"] {
+    let candidates = if cfg!(windows) {
+        ["python", "python3"]
+    } else {
+        ["python3", "python"]
+    };
+    for p in candidates {
         if std::process::Command::new(p)
             .arg("--version")
             .output()
@@ -102,7 +109,7 @@ from plugin import invoke as compute
 def invoke(action,data,server,request_id):
     mode=data.pop('mode','')
     if mode=='crash': os._exit(9)
-    if mode=='sleep': time.sleep(10)
+    if mode=='sleep': time.sleep(30)
     if mode=='malformed':
         print('not-json',flush=True)
         time.sleep(2)
