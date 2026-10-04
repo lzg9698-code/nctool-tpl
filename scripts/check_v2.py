@@ -10,7 +10,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 def run(*command):
-    result = subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True)
+    result = subprocess.run(command, cwd=ROOT, check=True, capture_output=True, text=True, encoding='utf-8')
     return result.stdout
 
 
@@ -22,17 +22,17 @@ def main():
     assert not re.search(r'nctool-plugin-(nc|process|math)\b', tree), tree
     assert 'tauri' not in tree
     assert {d['name'] for d in packages['nctool-tpl']['dependencies'] if d['kind'] is None} == {'minijinja'}
-    renderer = (ROOT / 'src/renderer.rs').read_text()
+    renderer = (ROOT / 'src/renderer.rs').read_text(encoding='utf-8')
     assert 'with_v3_whitespace' not in renderer
     assert not re.search(r'add_filter\("(?:nc_|sin|cos|tan|sqrt)', renderer)
     assert not (ROOT / 'src/lint.rs').exists()
     assert 'nctool-plugin-nc' not in {d['name'] for d in packages['nctool-plugin-process']['dependencies']}
     assert (ROOT / 'sdk/python/nctool_plugin.py').read_bytes() == (ROOT / 'examples/plugins/python-report/nctool_plugin.py').read_bytes()
     run('node', 'scripts/build_ui.mjs', '--check')
-    html = (ROOT / 'cli/ui/index.html').read_text()
+    html = (ROOT / 'cli/ui/index.html').read_text(encoding='utf-8')
     assert '/assets/' in html and 'type="module"' in html
     assert (ROOT/'ui/src/App.tsx').exists()
-    source=(ROOT/'ui/src/lib/api.ts').read_text()
+    source=(ROOT/'ui/src/lib/api.ts').read_text(encoding='utf-8')
     assert '/api/v2/' in source and 'encode(body)' in source
     assert (ROOT/'cli/ui/assets.rs').exists()
     package = run('cargo', 'package', '-p', 'nctool-tpl', '--list', '--allow-dirty', '--offline')
