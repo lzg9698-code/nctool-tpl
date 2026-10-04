@@ -1,0 +1,20 @@
+{
+  "name": "example",
+  "params": {
+    "x": 10
+  },
+  "options": {
+    "line_numbers": true
+  },
+  "ops": [
+    {
+      "source": "G0 X{{ x | nc_fixed(3) }}"
+    },
+    {
+      "source": "G1 X{{ x | nc_fixed(3) }}",
+      "params": {
+        "x": 20
+      }
+    }
+  ]
+}

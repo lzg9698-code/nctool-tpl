@@ -1,0 +1,10 @@
+{
+  "source": "O{{ program | nc_pad(4) }}\nG1 X{{ x | nc_fixed(3) }}\nM30",
+  "params": {
+    "program": 1,
+    "x": 10.5
+  },
+  "options": {
+    "line_numbers": true
+  }
+}

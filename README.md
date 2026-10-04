@@ -1,672 +1,115 @@
-# nctool-tpl
+# NCtool 2.2 工作台
 
-NCtool 模板解析核心：基于 [minijinja](https://github.com/mitsuhiko/minijinja) 的 Jinja2 模板解析 + 变量提取 + 渲染，面向数控加工 G-code 模板场景。
+通用 **Jinja 模板平台**：编辑模板、检查变量、输入 JSON 数据并生成任意文本。G 代码生成、机床配置和顺序多工序能力通过可选插件提供。
 
-- 近乎零依赖（仅 minijinja 一个 crate），Jinja2 作者本人维护的高性能引擎
-- 对标 Python `jinja2.meta`：能从模板中提取「引用的全部变量」与「需要外部上下文提供的未声明变量」
-- 内置一组数学过滤器（`f64` 标准库实现），供 G-code 计算使用
+模板引擎基于 MiniJinja，支持其 Jinja 兼容语法；不声称与 Python Jinja 的所有扩展完全等价。引擎默认不注册数学或 NC 过滤器，不注入机床上下文。
 
-> 本仓库是 workspace，含 `nctool-tpl`（本包）/ `nctool-core` / `nctool-cli` 三个 crate。
-> 想了解整体架构、模块职责与数据流，请看 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)。
->
-> ⚠️ **定位与风险声明（必读）**：本项目定位为**模板开发工具**，内置模板与机床预设
-> 输出尚未经真实工艺评审与机床空运行验证。G/M 代码错误可能导致撞刀、刀具或设备
-> 损坏——**投产前必须由熟悉目标机床的工艺人员逐行核对，并在机床上空运行确认**
-> （详见 [docs/PROCESS_CHECKLIST.md](docs/PROCESS_CHECKLIST.md) 的核对清单与
-> 【阶段 A】发现项 F1–F5）。机床预设默认值仅供开发测试。
+## WebUI 的日常操作
 
-## 目录
+- **使用模板**：在模板库选择模板，通过表单填写对象、数组、数值、开关等参数，再生成并导出文件。
+- 模板工作台明确显示生成方式。普通模板走通用文本渲染，带 NC 元数据的模板默认走 NC 插件校验、刀具联动与格式化；生成使用当前源码草稿。
+- **编辑模板**：使用带行号和语法高亮的 Jinja 编辑器，识别变量后明确选择参数类型，配置分组、数组元素、默认值、单位及范围。
+- **模板语法**：左侧导航或源码栏的“语法提示”可查看分类速查、搜索与复制片段，并用示例数据试跑；返回时保留编辑草稿。插件语法标明启用条件。
+- 草稿、参数和未填写完整的数值会按工作区恢复；切换模板不会覆盖其他文档。
+- 保存使用版本指纹。遇到其他编辑修改时，可比较、加载磁盘版本或另存副本，不静默覆盖。
+- 支持复制、稳定标识下修改名称、删除、导入 `.j2` / 模板 JSON、导出模板与结果文件。仍被其他模板静态引用的模板不能直接删除。
+- 数字使用无损 JSON 处理；大整数不会在表单切换时舍入，极小的非零数值会交给后端检查，而不是在浏览器中变成零。
+- 执行在后台进行，可以切页和取消；执行记录保留输入、插件版本及结果。通用模板生成会保留完整模板快照，历史输入可恢复为新草稿。
+- 修改输入后旧结果标为过期；当前任务失败或取消不会提供当前可交付文件。
 
-- [安装](#安装) · [功能](#功能) · [NC 数值格式化过滤器](#nc-数值格式化过滤器) · [严格 / 宽松模式](#严格--宽松模式)
-- [性能基线](#性能基线) · [错误类型](#错误类型) · [多模板渲染](#多模板渲染) · [快速开始](#快速开始)
-- [使用示例](#使用示例) · [命令行工具 nctool](#命令行工具-nctoolnctool-cli) · [退出码](#退出码)
-- [可选 / 必选判定规则](#可选--必选判定规则) · [数学过滤器](#数学过滤器) · [示例与测试](#示例与测试)
-- [定位精度与判定边界](#定位精度与判定边界) · [贡献指南](#贡献指南) · [相关文档](#相关文档)
+WebUI 已接入双模式、后台任务、执行历史，以及以下日常操作：
 
-## 安装
+- **NC 工作区**：保存机床配置、选择加工模板并填写参数；多工序页面支持添加、复制、排序、删除工序，以及公共参数、工序覆盖和机床切换。
+- **插件与设置**：从本地目录安装插件，查看声明和依赖，通过表单配置，检查启动顺序后保存；当前状态与下次启动状态分别显示。
+- **执行记录**：比较两次成功结果的行差异，使用历史输入重新执行。内置 NC 与多工序记录模板快照、机床及输出选项；插件版本仍以当前运行版本为准。
+- **工作区迁移**：导出当前启用插件的资产集合，保留模板引用、规格、默认值、元数据、预设和机床。导入先显示映射并检查冲突，已有同名资产不会被覆盖。
 
-### 环境要求
-
-| 项目 | 要求 |
-| --- | --- |
-| Rust 工具链 | **1.89 及以上**（`rust-version = "1.89"`；CI 使用 stable，另有 `msrv` job 在 1.89 上验证） |
-| 操作系统 | Linux / macOS / Windows（CI 三平台矩阵均需绿灯） |
-| 运行时依赖 | 无。CLI 是单一二进制，release 构建开启 LTO + strip |
-
-### 方式一：下载预编译二进制（无需 Rust 环境）
-
-从 [GitHub Releases](https://github.com/lzg9698-code/nctool-tpl/releases) 下载对应平台产物，
-改名后放入 `PATH` 中任意目录即可：
-
-| 平台 | 产物文件名 | 架构 |
-| --- | --- | --- |
-| Linux | `nctool-x86_64-unknown-linux-gnu` | x86_64 |
-| Windows | `nctool-x86_64-pc-windows-msvc.exe` | x86_64 |
-| macOS | `nctool-aarch64-apple-darwin` | Apple Silicon（Intel 版待需求） |
-
-```bash
-# Linux / macOS
-chmod +x nctool-x86_64-unknown-linux-gnu
-mv nctool-x86_64-unknown-linux-gnu /usr/local/bin/nctool
-
-# Windows（PowerShell，放到用户级 bin 目录并加入 PATH）
-# Move-Item nctool-x86_64-pc-windows-msvc.exe "$Env:LOCALAPPDATA\nctool\nctool.exe"
-```
-
-### 方式二：从源码安装 CLI
-
-```bash
-git clone https://github.com/lzg9698-code/nctool-tpl.git
-cd nctool-tpl
-cargo install --path cli --locked      # 二进制安装到 ~/.cargo/bin/nctool
-nctool --version                       # nctool 0.3.0
-```
-
-只想临时试用、不安装到全局，可直接从工作区运行：
-
-```bash
-cargo run -p nctool-cli -- templates list
-```
-
-### 方式三：作为 Rust 库引入
-
-只需「模板解析 + 变量提取 + 渲染」：
-
-```toml
-[dependencies]
-nctool-tpl = "0.3"
-```
-
-还需要「参数校验 + 模板注册表 + 机床配置 + G-code 生成管线」：
-
-```toml
-[dependencies]
-nctool-core = "0.2"      # 会一并带入 nctool-tpl
-```
-
-等价命令：`cargo add nctool-tpl@0.3` / `cargo add nctool-core@0.2`。
-若对应版本尚未发布到 crates.io，可改用 git 依赖：
-
-```toml
-[dependencies]
-nctool-core = { git = "https://github.com/lzg9698-code/nctool-tpl" }
-```
-
-### 验证安装
-
-```bash
-nctool templates list        # 应列出 7 个内置模板
-nctool machine show generic  # 应打印内建机床预设
-```
-
-## 功能
-
-| API | 说明 |
-| --- | --- |
-| `parse(source, name)` | 语法检查并生成 AST（带行列定位） |
-| `extract_variables(&ast)` | 提取模板中**引用过**的全部变量名（含模板内部声明的） |
-| `extract_undeclared(&ast)` | 提取引用但**未在模板内声明**的变量 —— 即渲染时必须由外部提供的参数；并区分**可选 / 必选** |
-| `Renderer` | 用上下文渲染出最终文本（G-code），内置数学过滤器集；支持多模板（`include`/`extends`/`import`） |
-
-## NC 数值格式化过滤器
-
-G-code 对数值格式敏感，`Renderer` 内置三个专用过滤器：
-
-| 过滤器 | 用法 | 输入 | 输出 | 用途 |
-| --- | --- | --- | --- | --- |
-| `nc_fixed(N)` | `{{ x \| nc_fixed(3) }}` | `21.0` | `21.000` | 固定小数位的坐标值 |
-| `nc_strip` | `{{ x \| nc_strip }}` | `21.0` | `21` | 去尾零，避免 `X21.0` |
-| `nc_pad(N)` | `{{ n \| nc_pad(4) }}` | `1` | `0001` | 程序号/行号前导零 |
-
-```jinja
-O{{ prog | nc_pad(4) }}
-N{{ line | nc_pad(4) }} G1 X{{ x | nc_fixed(3) }} Y{{ y | nc_fixed(3) }} F{{ feed | nc_strip }}
-```
-
-渲染结果（prog=1, line=10, x=21.0, y=15.5, feed=0.150）：
-```
-O0001
-N0010 G1 X21.000 Y15.500 F0.15
-```
-
-所有 NC 过滤器对非有限数（NaN/Inf）报错，防止非法数值写入 G-code。该防线覆盖本库注册的过滤器；裸 `{{ x }}` 输出或 minijinja 内建操作（如 `round`、算术）产生的 NaN/Inf 不经此校验，请先经上层参数校验（`nctool-core`）保证参数值有限。
-
-## 严格 / 宽松模式
-
-`Renderer` 默认**严格模式**：引用未定义变量直接渲染失败，避免静默输出不完整 G-code。需要宽松渲染时用 `with_lenient()` 切换：
-
-```rust
-// 严格模式（默认）：未定义变量报错
-let r = Renderer::new();
-r.render("X{{ x }}", "t.j2", &minijinja::context!{})?;  // Err(UndefinedVariable)
-
-// 宽松模式：未定义变量渲染为空字符串
-let r = Renderer::new().with_lenient();
-r.render("X{{ x }}", "t.j2", &minijinja::context!{})?;  // Ok("X")
-```
-
-典型流程：`extract_undeclared` 先校验必选参数是否齐全，校验通过后再用严格模式渲染（保证输出完整）；宽松模式适合「参数可缺省、缺失即留空」的柔性模板。`is_lenient()` 可查询当前模式。
-
-## 性能基线
-
-基于 criterion benchmark（`cargo bench`），中等复杂度 G-code 模板（~260 字节，含 set/default、数学过滤器、for 循环、if 条件）：
-
-| 操作 | 耗时（中位数） | 吞吐 |
-| --- | --- | --- |
-| `parse` | 2.61 µs | 98 MiB/s |
-| `extract_undeclared` | 1.97 µs | — |
-| `render` | 5.32 µs | 48 MiB/s |
-
-生成管线侧（`nctool-core`，`cargo bench -p nctool-core --bench pipeline`）：
-
-| 操作 | 耗时（中位数） | 吞吐 |
-| --- | --- | --- |
-| 端到端 `generate`（drill_cycle） | 9.54 µs | — |
-| 后处理 3000 行（仅清空行） | 386.89 µs | 142 MiB/s |
-| 后处理 3000 行 + 行号 | 438.10 µs | 126 MiB/s |
-| 后处理 3000 行 + ASCII 清洗 | 516.04 µs | — |
-
-行号前缀每行约 17 ns，规模增大时可据此外推。
-
-**万行级实测**（`cargo test --release -p nctool-core --test large_program -- --ignored`）：
-10000 行带行号 **1.77 ms / 203 KB**。行号位宽取自机床配置且已夹紧到 32 位上限——
-即便把 `line_number_digits` 配成 `1000000000`，输出也只到 **231 KB / 1.81 ms**，
-不会出现内存放大（位宽若缺失上界，Rust 的分配失败是进程 abort，不可捕获）。
-
-测试环境：release 构建（LTO + strip + codegen-units=1）。重复渲染相同模板时，建议用 `add_template` + `render_template`（minijinja 会缓存编译结果），避免每次重新编译。
-
-## 错误类型
-
-`TplError` 已细分，上层可精准处理（`#[non_exhaustive]`，match 请保留通配分支）：
-
-| 变体 | 触发场景 | 关键字段 |
-| --- | --- | --- |
-| `Parse` | 模板语法错误 | `line`, `col`（真实行列定位） |
-| `TemplateNotFound` | `include`/`extends`/`get_template` 引用了不存在的模板 | `template` |
-| `UndefinedVariable` | Strict 模式下引用了未定义变量 | —（minijinja 不携带变量名，可结合模板源码定位） |
-| `UnknownFilter` | 使用了未注册的过滤器 | `filter` |
-| `UnknownTest` | 使用了未注册的测试 | `test` |
-| `Render` | 其他渲染错误（无效操作、参数错误等兜底） | — |
-
-## 多模板渲染
-
-`Renderer` 支持模板间引用，两种注册方式：
-
-```rust
-use nctool_tpl::Renderer;
-
-let mut r = Renderer::new();
-
-// 方式一：内存注册（owned 字符串，无生命周期约束）
-r.add_template("header.j2", "O{{ prog }} ({{ name }})").unwrap();
-r.add_template("main.j2", "{% include \"header.j2\" %}\nG1 X{{ diameter / 2 }}").unwrap();
-
-// 方式二：从文件系统目录动态加载（按需加载并缓存）
-// r.set_path_loader("templates/");
-
-let ctx = minijinja::context! { prog => 1000, name => "DEMO", diameter => 42.0 };
-let out = r.render_template("main.j2", &ctx).unwrap();
-// out = "O1000 (DEMO)\nG1 X21.0"
-```
-
-`{% include %}` / `{% extends %}` / `{% import %}` 均能正确解析到已注册或目录中的模板。
-
-每个返回的 `Variable` 都带有 `optional: bool` 字段：`true` 表示该变量的**全部引用**都处于「兜底上下文」（作为 `default`/`d` 过滤器或 `is defined`/`is undefined` 测试的**直接裸变量操作数**）——对 `extract_undeclared` 而言即**可选参数**（缺失时模板仍可安全渲染），`false` 为**必选参数**。详见下方[可选 / 必选判定规则](#可选--必选判定规则)。
+外部插件使用 Schema 表单；专用页面由内置插件的视图贡献注册。默认通用模板组合不加载 NC 页面代码。
 
 ## 快速开始
 
-```rust
-use nctool_tpl::{parse, extract_undeclared, Renderer, Variable};
-
-let source = r#"{% set feed = 0.15 %}G1 X{{ diameter / 2 }} F{{ feed }}"#;
-let ast = parse(source, "demo.j2").unwrap();
-
-// 未声明变量 = 需要外部上下文提供的参数
-let undeclared: Vec<Variable> = extract_undeclared(&ast);
-assert_eq!(undeclared.len(), 1);
-assert_eq!(undeclared[0].name, "diameter");
-assert!(!undeclared[0].optional); // 必选
-
-// 可选参数：有 default 兜底 / defined 检查
-let src = "G1 F{{ feed | default(0.15) }} {% if coolant is defined %}M8{% endif %}";
-let vars: Vec<Variable> = extract_undeclared(&parse(src, "o.j2").unwrap());
-assert!(vars.iter().all(|v| v.optional)); // feed / coolant 均为可选
-
-// 渲染（Strict 模式：缺失变量直接报错，不静默输出不完整 G-code）
-let renderer = Renderer::new();
-let ctx = minijinja::context! { diameter => 42.0 };
-let out = renderer.render(source, "demo.j2", &ctx).unwrap();
-assert_eq!(out, "G1 X21.0 F0.15");
-```
-
-## 使用示例
-
-以下示例的命令与输出均为**实测结果**（`nctool 0.3.0`），可逐条复制执行。
-命令面全貌见 [命令行工具](#命令行工具-nctoolnctool-cli)，库 API 见[快速开始](#快速开始)。
-
-### 例 1：内置模板端到端 —— 浏览 → 查参数 → 校验 → 生成
+需要 Rust **1.89+**；WebUI 开发和构建需要 Node.js **22.12+**。下载后的完整二进制已包含 WebUI 静态资源，运行时不需要 Node.js。Python 外部插件示例需要 Python 3，主程序和纯模板模式不依赖 Python。
 
 ```bash
-# 1) 有哪些模板
-nctool templates list
+# 首次从源码构建：安装前端依赖并生成嵌入资源。
+npm ci --prefix ui
+node scripts/build_ui.mjs
+
+# 默认构建只有通用模板能力；启动本地 WebUI。
+cargo run -p nctool-cli -- ui
+# 浏览器访问 http://127.0.0.1:8788
+
+# 查看动作及输入/输出规格，渲染一个普通模板。
+cargo run -p nctool-cli -- actions
+cargo run -p nctool-cli -- run template.render --input examples/v2/render.json
+
+# 完整构建包含可选 NC 插件；默认启动组合仍然是 template。
+cargo run -p nctool-cli --features nc-bundle -- --profile nc ui
+cargo run -p nctool-cli --features nc-bundle -- --profile nc run process.generate --input examples/v2/process.json
 ```
 
-```
-模板列表（7 个）
-  drill_cycle                      钻孔   .NC   钻孔循环：G81 标准钻孔
-  facing                           铣削   .NC   面铣：矩形区域往复行切（zigzag）
-  program_footer                   通用   .NC   程序尾：主轴/冷却关闭 + 取消循环 + 程序结束 + 纸带结束符
-  program_header                   通用   .NC   程序头：纸带起始符 + 程序号 + 注释头 + 单位/坐标系/取消态初始化
-  safe_move                        通用   .NC   安全移动：抬刀到安全高度 + 定位
-  slot_milling                     铣削   .NC   键槽铣：X 方向直槽一刀成型（下刀→切削→抬刀→返回）
-  tool_change                      通用   .NC   换刀：主轴停止 + 换刀 + 刀长补偿 + 启动主轴与冷却
+全局参数：`--home <插件配置目录>`、`--workspace <资产目录>`、`--profile template|nc`。资产目录默认是当前目录，插件配置默认 `$NCTOOL_HOME`、`$XDG_CONFIG_HOME/nctool` 或 `~/.config/nctool`；Windows 默认使用 `%LOCALAPPDATA%/nctool`。
 
-（隐藏模板未显示；用 --all 查看全部）
-```
+`run --input -` 从标准输入读取 JSON。`--out <文件>` 只在整个动作成功后原子写入文本产物。结果中的 `diagnostics` 与正文分离，错误不会混入生成文本。
+
+## 外部插件：无需重新编译
 
 ```bash
-# 2) 这个模板需要哪些参数（带行列定位）
-nctool inspect drill_cycle
+cargo run -p nctool-cli -- plugins install examples/plugins/python-report
+cargo run -p nctool-cli -- plugins enable python-report
+cargo run -p nctool-cli -- run report.compute --input examples/v2/report.json
 ```
 
-```
-模板: drill_cycle
-
-必选参数（5）:
-  x        行 1 列 24  数值  单位 mm  孔 X 坐标
-  y        行 1 列 47  数值  单位 mm  孔 Y 坐标
-  r_plane  行 2 列 12  数值  ≥ 0；单位 mm  R 平面（安全高度，应高于工件表面）
-  depth    行 2 列 41  数值  ≤ 0；单位 mm  钻孔深度
-  feed     行 2 列 68  数值  ≥ 0.001；单位 mm/min  进给速度
-
-条件必选参数（满足条件时必填）（0）:
-
-派生参数（系统注入，无需提供）（0）:
-
-可选参数（0）:
-```
+示例由 Python 计算合计，通过双向 JSON-RPC 调用宿主的 `template.render`，生成一个非加工领域报告。安装不自动启用；安装、启用、停用在下一次启动生效。已运行的 WebUI 需重启，新的 CLI 调用自动使用最新配置。
 
 ```bash
-# 3) 参数不全时，validate 报错并返回退出码 1（不产出任何 G-code）
-nctool validate drill_cycle --param x=21
-echo $?   # 1
+nctool plugins list
+nctool plugins disable python-report
+nctool plugins uninstall python-report
 ```
 
-```
-模板: drill_cycle
-错误 [y] 必选参数缺失（模板引用且无默认值兜底，参数集未提供）（第 1 行第 47 列引用）
-错误 [depth] 必选参数缺失（模板引用且无默认值兜底，参数集未提供）（第 2 行第 41 列引用）
-错误 [feed] 必选参数缺失（模板引用且无默认值兜底，参数集未提供）（第 2 行第 68 列引用）
-error: 参数校验未通过（详见上方报告）
-```
+Windows 如没有 `python3` 命令，安装前将示例 `plugin.json` 的 `command[0]` 改为 `python` 或 Python 可执行文件路径。插件包不能包含符号链接，首次安装后不静默覆盖同名插件。首版支持本地目录安装，不包含插件市场、任意外部表达式过滤器或操作系统级沙箱。
 
-```bash
-# 4) 参数补齐后生成：加行号 + 头部注释 + 写文件
-nctool render drill_cycle --param x=21 --param y=15 --param r_plane=2 \
-    --param depth=-10 --param feed=100 --line-numbers --header --out demo.nc
-```
+## 模板与领域能力的边界
 
-`demo.nc` 内容：
-
-```
-( ================================== )
-( nctool generated G-code )
-( template: drill_cycle )
-( ================================== )
-N0010 G0 X21.000 Y15.000
-N0020 G98 G81 R2.000 Z-10.000 F100.000
-N0030 G80 (取消循环)
-```
-
-### 例 2：写自己的模板文件
-
-`chamfer.j2`：
-
-```jinja
-( 倒角：{{ diameter }} 外圆，C{{ chamfer }} )
-G0 X{{ (diameter / 2 - chamfer) | nc_fixed(3) }} Z{{ z_start | nc_fixed(3) }}
-G1 X{{ (diameter / 2) | nc_fixed(3) }} Z{{ (z_start - chamfer) | nc_fixed(3) }} F{{ feed | nc_strip }}
-```
-
-```bash
-nctool inspect chamfer.j2      # 直接传文件路径即可
-nctool render chamfer.j2 --param diameter=40 --param chamfer=1 \
-    --param z_start=0 --param feed=0.12
-```
-
-```
-( 倒角：40.0 外圆，C1.0 )
-G0 X19.000 Z0.000
-G1 X20.000 Z-1.000 F0.12
-```
-
-写模板前建议先读 [《模板编写指南》](docs/TEMPLATE_WRITING_GUIDE.md)；`nc_fixed` / `nc_strip` / `nc_pad`
-的行为见 [NC 数值格式化过滤器](#nc-数值格式化过滤器)。
-
-### 例 3：参数文件 + 脚本/CI 集成
-
-参数多时用 JSON 文件批量传入，显式 `--param` 可覆盖文件里的值：
-
-```bash
-cat > params.json <<'EOF'
-{ "x": 21, "y": 15, "r_plane": 2, "depth": -10, "feed": 100 }
-EOF
-
-nctool render drill_cycle --params-file params.json --param feed=80
-```
-
-脚本里用 `--format json` + 退出码判分支（成功 `{"ok":true,"data":...}`，失败 `{"ok":false,"error":{...}}`）：
-
-```bash
-out=$(nctool render drill_cycle --params-file params.json --format json)
-rc=$?
-if [ $rc -ne 0 ]; then
-  echo "生成失败（退出码 $rc）" >&2
-  exit $rc
-fi
-echo "$out" | jq -r '.data.output' > program.nc
-```
-
-失败时的 JSON（报告走 stderr，stdout 上只有 JSON，故可直接管道给 `jq`）：
-
-```json
-{
-  "error": {
-    "kind": "validation",
-    "message": "参数校验未通过（详见上方报告）"
-  },
-  "ok": false
-}
-```
-
-### 例 4：目录模板与配置
-
-`templates new` 生成的骨架落在 `./templates/` 下，但**目录模板不会自动被加载**——
-需要通过 `nctool.toml` 的 `template_dir` 或全局参数 `--template-dir` 指定目录：
-
-```bash
-nctool templates new chamfer            # 生成 templates/chamfer.j2 骨架
-nctool config init                      # 生成 ./nctool.toml（示例中 template_dir 默认被注释）
-# 取消注释生效：template_dir = "templates"
-
-nctool templates list                   # 此时列表里多出 chamfer.j2（共 8 个）
-nctool --template-dir templates inspect chamfer.j2   # 或临时用全局参数指定
-```
-
-> **注意**：目录模板的模板名是**完整文件名（含 `.j2` 后缀）**，如 `chamfer.j2`；
-> 内置模板名不带后缀（如 `drill_cycle`）。这样两者不会重名冲突。
-> 配置层级：项目 `./nctool.toml`（向上递归查找）覆盖全局 `~/.config/nctool/config.toml`。
-> 详见 [《机床配置指南》](docs/MACHINE_CONFIG_GUIDE.md)。
-
-### 例 5：Web UI / 库调用
-
-```bash
-# 本地 Web UI（仅绑定回环地址）：模板管理 → 填参 → 实时预览 → 校验 → 导出
-nctool ui --host 127.0.0.1 --port 8787
-```
-
-界面能力（v2 设计见 [docs/UI_DESIGN_PROPOSAL.html](docs/UI_DESIGN_PROPOSAL.html)）：
-必填进度与分组表单、**出错字段就地提示**（模板行列定位降为次级信息）、可选参数折叠、
-模板卡挂载命名预设、最近使用、长程序**工序索引**（≥40 行可点击跳转）、机床 chip 切换、
-输出选项（行号 / 头注释 / ASCII 清洗 / 删空行 / 宽松模式）、复制与下载、批量生成、亮暗主题。
-快捷键：`⌘/Ctrl+K` 命令面板、`⌘/Ctrl+⏎` 立即生成、`⌘/Ctrl+S` 存为预设、`Esc` 关闭面板/抽屉。
-
-> 单文件前端也可直接双击 `ui/index.html` 打开：`file://` 下自动进入**演示模式**，
-> 用内置模板库 + 迷你渲染器离线跑通全链路；经 `nctool ui` 访问则走服务模式调用真实后端。
-
-库调用见[快速开始](#快速开始)（解析 → 变量提取 → 渲染三段式），
-完整管线（校验 + 机床配置 + 后处理）见 [core/README.md](core/README.md)。
-
-## 命令行工具 nctool（nctool-cli）
-
-工作区新增 `cli/` crate，提供二进制 `nctool`，覆盖模板浏览、变量提取、参数校验与 G-code 生成全流程（基于 `nctool-core` 管线，golden 测试保证输出逐字节一致）：
-
-```bash
-# 浏览内置模板
-nctool templates list
-nctool templates show drill_cycle        # 查看源码与参数表
-nctool templates new my_op               # 在当前 templates/ 下新建骨架
-
-# 模板资产的创建 / 修改 / 复用（写入前校验，失败不落盘）
-nctool templates edit my_op --from-file new_body.j2
-nctool templates derive drill_cycle drill_deep
-nctool templates rename my_op drilling_v2
-
-# 参数预设：一份可复用的参数集，CLI / HTTP / Web UI 读写同一份 presets.yaml
-nctool preset save 钻孔D10 drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100
-nctool preset list
-nctool preset show 钻孔D10
-nctool preset apply 钻孔D10 another_template --confirm   # 跨模板复用须显式确认
-nctool preset export 钻孔D10 preset.json
-nctool preset import preset.json
-
-# 提取模板必选/可选参数（含行列定位）
-nctool inspect drill_cycle
-
-# 静态检查：发现会导致错误 G-code 的笔误（如三角函数度制风险）
-nctool lint my_op.j2            # 有发现 → 退出码 1；干净 → 0
-
-# 参数校验（缺失必选 → 退出码 1 + 结构化报告）
-nctool validate drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100
-
-# 生成 G-code：行号 + 头部注释 + 写文件
-nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100 \
-    --line-numbers --header --out demo.nc
-
-# 行号步进与上限可调（与 Web UI 的选项一一对应，默认 10 / 9999）
-nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100 \
-    --line-numbers --line-step 100 --max-line 500
-
-# `generate` 与 `render` 同签名，是后处理全开时的规范入口（默认输出逐字节一致）
-nctool generate drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100
-
-# 参数文件（JSON）批量输入；显式 --param 覆盖文件值
-nctool render my_op.j2 --params-file params.json
-
-# 机床配置查看 / 编辑 / 试渲染
-nctool machine show wfl_m65
-nctool machine add hero_x9 --from generic --vendor ACME --model X9   # 基线预填 + 四重校验
-nctool machine edit hero_x9 --set max_spindle_rpm=4200
-nctool machine rm hero_x9 --yes                                     # 破坏性操作须显式 --yes
-nctool machine test hero_x9 --template drill_cycle --param x=10 --param y=10
-#   内置预设（generic / wfl_m65 / index_ms40）只读，需定制请 --from <内置id> 派生
-#   写入只改目标段：nctool.toml 的其余段与注释逐字节不变
-
-nctool config init
-nctool completion bash          # 另支持 zsh / fish / elvish 及 Windows 系 shell
-
-# 启动本地 Web UI（模板管理、渲染、预设、批量生成；仅绑定回环地址）
-# 机床内建预设只读；Web UI 可通过 schema 校验管理自定义机床
-nctool ui --host 127.0.0.1 --port 8787
-
-# 机器可读输出（--format json）：成功 {"ok":true,"data":...}，失败 {"ok":false,"error":{...}}
-nctool render drill_cycle --param x=21 --param y=15 --param depth=-10 --param feed=100 --format json
-```
-
-运行方式：开发 `cargo run -p nctool-cli -- <命令>`；安装 `cargo install --path cli` 后直接使用 `nctool`。
-
-### 退出码
-
-`nctool` 用退出码传递失败类型，便于脚本判分支：
-
-| 码 | 含义 | 典型触发 |
-| --- | --- | --- |
-| 0 | 成功 | — |
-| 1 | 参数校验未通过 | 缺失必选参数、类型不匹配 |
-| 2 | 参数/用法错误（与 clap 一致） | 未知子命令、`templates new ../x`（含路径分隔符）、`ui --host 0.0.0.0` |
-| 3 | IO 失败 | `--params-file` 指向不存在的文件 |
-| 4 | 配置错误 | `config init` 时 `nctool.toml` 已存在 |
-| 5 | 模板/机床未找到 | `inspect nope`、`machine show nope` |
-| 6 | 渲染/注册表失败 | `templates new` 重名（重名是业务冲突，非 IO） |
-| 7 | 功能尚未实现 | （当前无触发路径；保留给后续占位命令） |
-
-该矩阵是稳定的对外契约，由 `cli/tests/cli_e2e.rs` 的 **53 个** E2E 用例逐条断言
-（覆盖全部 **11** 个子命令 × 正常/异常路径）；变更退出码必须同步更新该测试与 CHANGELOG。
-用例数会随功能增删变化，改动该表时以 `cli_e2e.rs` 的实际断言为准。
-
-> `part generate` 的两种失败分别落在 **1**（工序参数校验未通过）与 **3**（零件定义文件读不到）；
-> 定义形状不合法（非 JSON、`ops` 为空）走 **2**。
-
-## 可选 / 必选判定规则
-
-- **可选**：变量的**全部**引用都是 `x | default(默认值)`（别名 `d`）或 `x is defined` / `x is undefined` 的**直接裸变量操作数**。
-- **必选**：变量在任意非兜底位置被引用（如 `{{ x }}`、`{{ x / 2 }}`、过滤器/函数参数等），或既有兜底引用又有非兜底引用。
-
-**兜底不向下传播**——这是最容易踩的坑。minijinja 会**先求值操作数、再套用过滤器/测试**，
-因此只有裸变量能被安全兜底；操作数是运算、属性或下标时，undefined 参与求值即直接报错，
-`default` / `defined` 根本来不及生效：
-
-| 模板 | 判定 | 原因 |
-| --- | --- | --- |
-| `{{ x \| default(1) }}` | `x` **可选** | 操作数即裸变量，undefined 被兜底 |
-| `{{ x \| default(1) \| nc_fixed(3) }}` | `x` **可选** | 兜底后串接过滤器仍安全 |
-| `{% if x is defined %}` | `x` **可选** | 同上 |
-| `{{ (a+b) \| default(1) }}` | `a`、`b` **必选** | 先算 `a+b`，undefined 参与运算即报错 |
-| `{{ a.b \| default(1) }}` | `a` **必选** | 先对 undefined 的 `a` 取属性，报错 |
-| `{% if a.b is defined %}` | `a` **必选** | 同上 |
-
-若把后三类误判为可选，上层校验会放行、严格模式渲染却失败，产出**不完整的 G-code**。
-因此判定策略是**宁多勿漏**：有疑问即记为必选。
-- 模板内部 `set`/`for`/`with`/宏参数等声明的局部变量不进未声明集合，不受此规则影响。
-
-## 数学过滤器
-
-全部基于 Rust 标准库 `f64`，零额外依赖：
-
-`sin` `cos` `tan` `asin` `acos` `atan` `sqrt` `exp` `ln` `log10` `pow` `floor` `ceil`
-
-**有限性校验**：所有数学过滤器对结果做 `is_finite()` 检查，一旦产生 `NaN`/`Inf`（如 `sqrt(-1)`、`ln(0)`），渲染立即失败并报错，避免非法坐标静默写入 G-code。同 NC 过滤器一样，该防线仅覆盖本库注册的过滤器；裸输出与内建操作不在保护范围。
-
-## 示例与测试
-
-```bash
-# 运行可执行示例（解析 + 变量提取 + 渲染 templates/turning/demo_gcode.j2）
-cargo run --example demo
-
-# 运行全部测试（单元 + 集成 + 文档）
-cargo test --workspace
-
-# 静态检查与格式
-cargo clippy --workspace --all-targets -- -D warnings
-cargo fmt --all -- --check
-```
-
-## 定位精度与判定边界
-
-- **解析错误列号**：`TplError::Parse.col` 取自 minijinja 错误携带的字节范围（需启用 `debug` feature）换算而来，指向**解析器停止处**的 token，是对错误位置的最佳近似（多数场景精确，个别场景如"未闭合块"只精确到行）。无法取得字节范围时回退为 `col = 1`。
-- **可选 / 必选判定边界**：只把 `default`/`d` 过滤器与 `defined`/`undefined` 测试的**直接裸变量操作数**记为可选，兜底**不向下传播**到子树（`(a+b) | default(1)`、`a.b | default(1)`、`a.b is defined` 中的变量均记为必选）；`defined` 保护块**内部**的引用仍记为必选（保守策略，宁多勿漏）；`default(参数)` 的默认值表达式里的变量仍记为必选（它必须存在才能求值默认值）。
-
-## 贡献指南
-
-欢迎提 issue / PR。完整版见 [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md)，速览如下。
-
-### 开始之前
-
-- 先读 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md)（三层 crate 与数据流）和
-  [docs/ROADMAP.md](docs/ROADMAP.md)（阶段计划与 Backlog），避免方向冲突或重复劳动。
-- 涉及模板 / 机床的内容，请务必先读开头的**定位与风险声明**与
-  [docs/PROCESS_CHECKLIST.md](docs/PROCESS_CHECKLIST.md)：内置模板与机床预设**未经真实工艺评审**，
-  工艺正确性问题**不属于工具 bug**，不按 issue 流程处理。
-
-### 开发环境
-
-```bash
-git clone https://github.com/lzg9698-code/nctool-tpl.git
-cd nctool-tpl
-cargo build --workspace
-cargo test --workspace              # 全量测试（数量见 CI run 的 job summary）
-cargo install cargo-audit --locked  # 安全审计，CI 必查
-```
-
-### 提交前质量门（与 CI 完全一致）
-
-```bash
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets -- -D warnings
-cargo test --workspace --all-targets
-cargo test --workspace --doc          # --all-targets 不跑 doctest，CI 为此单列一步
-RUSTDOCFLAGS="-D warnings" cargo doc --workspace --no-deps
-node scripts/check_param_parity.mjs   # --param 归一规则的 Rust/前端对拍
-node scripts/check_option_parity.mjs  # 生成选项（行号/步进/上限/…）的 CLI/前端对拍
-node scripts/check_gui_parity.mjs     # 端点契约 ↔ GUI Tauri command 封装的双向对拍
-python3 scripts/check_package_contents.py  # 发布包不得含非库资产（--offline）
-cargo audit
-
-# 覆盖率门（与 CI 逐字同款；需先装 rustup component add llvm-tools-preview
-# 与 cargo install cargo-llvm-cov，另需 python3）
-# `--ignore-filename-regex` 同时接受 `/` 与 `\`：CI(Ubuntu) 是正斜杠、Windows 本机是
-# 反斜杠，只写 `/` 在 Windows 上一个 gui 文件都排除不掉。
-# 阈值 92%（2026-09-26 口径修订后由 91% 上调，见 docs/CONTRIBUTING.md §3）。
-cargo llvm-cov --workspace --lcov --output-path lcov.info --ignore-filename-regex '(^|[\\/])gui[\\/]'
-python3 scripts/check_coverage_caliber.py lcov.info --min 92
-```
-
-> 覆盖率门判定的是**可执行生产代码**口径，**不是** `cargo llvm-cov` 的原始口径 ——
-> llvm-cov 既把 `src/*.rs` 内的 `#[cfg(test)]` 段本身计入分母（新增测试会推高数字、
-> 新增未覆盖的生产代码反被稀释），又会给注释行 / 空行 / `impl Foo {` 这类**非可执行行**
-> 也写 `DA:0`（计入分母等于测「注释覆盖率」，数值还会随工具链版本漂移）。
-> 故由 `scripts/check_coverage_caliber.py` 同时剔除**测试段**与**非可执行行**后重新
-> 统计，细节见 [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) §3。
-
-> `--workspace` 一个字都不能省：根目录**既是 workspace 根又是一个 package**，
-> 而 cargo 在没有 `default-members` 时默认只选根 package —— 漏掉它，
-> 上面三条 cargo 命令就只对 `nctool-tpl` 生效，`core` / `cli`（代码主体、
-> 绝大多数测试）会被静默跳过，质量门却照样显示全绿。
-
-> Windows 上 `cargo package` 在 rustc 1.98 有打包期 ICE 的已知问题，
-> 需加 `CARGO_INCREMENTAL=0`：`CARGO_INCREMENTAL=0 cargo package --workspace --allow-dirty`。
-
-### 改动要求
-
-| 改了什么 | 必须同步更新 |
+| 层 | 内容 |
 | --- | --- |
-| 公共 API / 错误类型 / 行为 | `CHANGELOG.md` 的 `Added` / `Changed` 节 + 相关文档；破坏性变更要写迁移方式 |
-| CLI 退出码或 `--format json` 字段 | `cli/tests/cli_e2e.rs`（44 个用例）+ CHANGELOG —— 这两者是对外**稳定契约** |
-| G-code 输出字节 | golden 基线（`tests/golden/`，45 个文件 = 21 组正向 ×2 + 3 份负向报告）：走 `bash scripts/refresh_golden.sh` 刷新（带 CI 拒刷/数量守卫），**必须人工 diff 复核**后再提交 |
-| 架构 / 模块职责 / 数据流 | `docs/ARCHITECTURE.md` |
-| 机床配置键 | `docs/MACHINE_CONFIG_GUIDE.md`（键清单、未知键告警） |
-| 新增内置模板 | golden 用例 + `docs/PROCESS_CHECKLIST.md` 登记，并声明未经工艺评审 |
-| `--param` 取值归一规则（`cli/src/args.rs` 或 UI 的 `coerceParamValue`） | 另一侧实现 + 共享 fixture `scripts/param_parity_cases.json`；两侧漂移会让 CLI 与 Web UI 对同一输入产出不同 G-code |
-| 生成选项（`--line-numbers`/`--line-step`/`--max-line`/`--header`/`--strip-blank`/`--ascii`/`--lenient` 或 UI 的 `normalizeOpts`） | 共享 fixture `scripts/option_parity_cases.json` + Rust 侧测试 `option_mapping_matches_shared_fixture`；CLI 与 Web API 必须映射到同一份 `GenerationOptions` |
-| 发布包内容（`Cargo.toml` 的 `package.exclude`） | `scripts/check_package_contents.py` 的黑名单；新增仓库级资产（如新的 `output/` 子目录）时同步该列表，否则 CI 的 `Package contents` 步骤会红 |
+| `nctool-tpl` | Jinja 解析、变量与模板引用提取、严格/宽松渲染、显式过滤器注册 |
+| `nctool-assets` | 通用 JSON 资产、路径约束、原子写、跨进程锁、完整版本指纹、数值精度检查 |
+| `nctool-plugin-sdk` | 插件、服务、动作、诊断、取消、渲染扩展和事件契约 |
+| `nctool-runtime` | 依赖解析、注册与释放、提供方选择、外部进程协议 |
+| `plugins/template` | 模板、参数规格、默认值、元数据、通用预设 |
+| `plugins/math` | 可选数学/角度过滤器 |
+| `plugins/nc` | 机床、参数派生与校验、NC 格式化、G 代码后处理 |
+| `plugins/process` | 参数继承、工序覆盖、顺序执行、行号连续、整体交付 |
+| `cli` / `ui` | 宿主入口、能力目录、插件贡献的页面与表单 |
 
-### 提交与分支
+模板服务接受嵌套对象、数组、字符串、数字、布尔和空值。普通渲染不经过 NC 生成管线。NC 的硬校验不会因模板宽松模式而跳过。多工序插件依赖版本化 `nc.generate` 服务，不导入 NC 的 Rust 模型。
 
-- 主分支 `master`。commit message 请写清**动机**（why），每条 commit 自包含（可独立编译、独立测试通过），
-  便于 `git bisect` 与 `git revert`。
-- 0.x 阶段：master 上直推 + 事后 review；1.0 后启用 PR 流程（1 个 approve + 三平台 CI 全绿），
-  详见 [docs/RELEASE.md](docs/RELEASE.md)。CI **全部 job 均为阻断项**（含覆盖率门与
-  MSRV 1.89 检查），没有可以当噪音忽略的红灯。
+WebUI 从插件贡献描述生成导航与动作表单；默认组合不会出现机床或工序页面。服务仅绑定回环地址，并限制请求体、跨站访问、消息大小与并发调用。
 
-### 报告问题
+## 2.0 与旧版
 
-- Bug / Feature → [issue 模板](https://github.com/lzg9698-code/nctool-tpl/issues/new/choose)（Bug / Feature 两类）。
-- 用法、配置、模板写法疑问 → [Discussions](https://github.com/lzg9698-code/nctool-tpl/discussions)。
-- 工艺 / G 代码安全性 → [《工艺核对清单》](docs/PROCESS_CHECKLIST.md)，**不要**当作工具 bug 提 issue。
+这是允许接口不兼容的主版本升级：旧 CLI 命令、`/api` 路由、工序文件格式和业务模板不迁移。旧模板、V3 模板和内置机床方案不进入新发行包；新示例只用于架构与行为验证。实际 NC 使用需要创建并验证自己的领域资产。
 
-## 相关文档
+桌面 GUI 保留为旧版代码，已退出 2.0 workspace 与发布检查。历史设计文档仍可查阅，当前规范以以下文档为准：
 
-| 文档 | 内容 |
-| --- | --- |
-| [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | **贡献指南完整版**：环境搭建、质量门、测试矩阵、提交与发版流程、审查清单 |
-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | **系统架构与设计说明**：三层 crate 架构、核心模块职责、数据流、错误模型、关键设计决策、扩展点。改动架构时请同步更新 |
-| [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md) | **系统设计文档（当前有效版 v2.3）**：含 derive / 变量 / manifest 外部化、Web/Tauri 共用 route、参数校验和 `core::asset` 写盘边界；与 ARCHITECTURE.md 冲突时以此为准 |
-| [docs/ROADMAP.md](docs/ROADMAP.md) | **开发路线与执行跟踪**：阶段划分、任务清单、交付物、排期、里程碑、风险登记、MVP 裁剪策略 |
-| [docs/MACHINE_CONFIG_GUIDE.md](docs/MACHINE_CONFIG_GUIDE.md) | **《机床配置指南》**：配置键清单、内建预设、nctool.toml 自定义、加载顺序、`line_number_digits` 夹紧到 32 的内存安全理由、未知键告警等 |
-| [docs/GUI_USER_GUIDE.md](docs/GUI_USER_GUIDE.md) | **桌面 GUI 使用说明**：页面能力、资产写入冲突处理及配置编辑边界 |
-| [docs/TEMPLATE_WRITING_GUIDE.md](docs/TEMPLATE_WRITING_GUIDE.md) | **《模板编写指南》**：NC/数学过滤器、必选/可选判定、引用机床配置、多模板 include/extends、validate/render 校验分层、反模式与发布前清单 |
-| [docs/RELEASE.md](docs/RELEASE.md) | **迭代节奏约定**：版本号策略、发布节奏、提交流程、兼容性窗口、决策机制、Backlog 加权打分 |
-| [docs/UI_ACCEPTANCE_CHECKLIST.md](docs/UI_ACCEPTANCE_CHECKLIST.md) | **Web UI 手工验收清单**（37 项可勾选）：端到端全链路 / 移动端 ≤480px / 校验定位 / 前后端逐字节一致 / 机床切换 / 主题 |
-| [docs/UI_DESIGN_PROPOSAL.html](docs/UI_DESIGN_PROPOSAL.html) | **Web UI 设计方案 v2**（设计交付物）：现状诊断、信息架构、设计系统与令牌、四档响应式断点、组件规格、状态与键盘交互、可访问性、37 项既有验收映射 + 12 项新增验收、P0–P3 实施路径。 |
-| [docs/REAL_PART_WALKTHROUGH.md](docs/REAL_PART_WALKTHROUGH.md) | **真实零件场景走查**（E5）：简化法兰盘的「端面+4 孔+切断」多工序演示与多机床对比，暴露行号续编/错误聚合/参数继承的局限 |
-| [docs/PROJECT_STATUS.md](docs/PROJECT_STATUS.md) | **当前状态快照**：各阶段完成情况与测试计数 |
-| [docs/UPGRADE_READINESS.md](docs/UPGRADE_READINESS.md) | **1.0 API 升级就绪度**：当前门禁、破坏性变更迁移和 tag 前置步骤 |
-| [docs/PROCESS_CHECKLIST.md](docs/PROCESS_CHECKLIST.md) | **工艺核对清单**（阶段 A1）：内置模板 × 机床预设逐行核对结论、发现项 F1–F5、外部工艺评审待办 |
-| [docs/DEV_PLAN_CLI_UI.md](docs/DEV_PLAN_CLI_UI.md) | CLI + Web UI 的设计细节（命令面 / API 契约 / 技术决策）。**其 §7 阶段计划已被 ROADMAP 取代** |
-| [CHANGELOG.md](CHANGELOG.md) | 版本演进记录 |
-| [core/README.md](core/README.md) | `nctool-core` 独立说明（数据模型 / 校验 / 注册表 / 生成管线） |
-| [ui/index.html](ui/index.html) | Web UI 单文件前端设计与后端 API 契约 |
+- [架构与依赖边界](docs/ARCHITECTURE.md)
+- [插件协议与服务契约](docs/PLUGIN_PROTOCOL.md)
+- [系统设计与配置](docs/SYSTEM_DESIGN.md)
+- [开发与验收](docs/CONTRIBUTING.md)
+- [升级状态及验证边界](docs/PROJECT_STATUS.md)
 
-## License
+## 验证
 
-MIT，见 [LICENSE](LICENSE)。
+```bash
+npm run --prefix ui test
+node scripts/build_ui.mjs --check
+python3 scripts/check_v2.py
+cargo test --workspace --all-targets --all-features --locked
+cargo test --workspace --all-features --doc --locked
+cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+cargo +1.89.0 check --workspace --all-features --locked
+```
+
+Linux、Windows、macOS 的构建、测试和外部协议检查由 CI 矩阵执行。本机通过的检查不等价于其他平台已实际执行，也不等价于工艺或机床验收。

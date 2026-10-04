@@ -1,0 +1,92 @@
+{
+  "descriptor": {
+    "id": "python-report",
+    "version": "2.0.0",
+    "protocol_version": 1,
+    "requires": [
+      {
+        "id": "template.render",
+        "version": 1
+      }
+    ],
+    "provides": [
+      {
+        "id": "report.compute",
+        "version": 1,
+        "action": "report.compute"
+      }
+    ],
+    "config_schema": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "panels": [
+      {
+        "id": "report",
+        "title": "数据报告",
+        "actions": [
+          "report.compute"
+        ],
+        "view": "form"
+      }
+    ]
+  },
+  "command": [
+    "python3",
+    "plugin.py"
+  ],
+  "actions": [
+    {
+      "id": "report.compute",
+      "title": "生成数据报告",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "values": {
+            "type": "array",
+            "items": {
+              "type": "number"
+            },
+            "maxItems": 10000
+          },
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "values"
+        ],
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "total": {
+            "type": "number"
+          },
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "total",
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "example": {
+        "values": [
+          10,
+          20,
+          30
+        ],
+        "title": "Monthly report"
+      }
+    }
+  ],
+  "limits": {
+    "timeout_ms": 30000,
+    "max_message_bytes": 1048576,
+    "max_concurrency": 8
+  }
+}

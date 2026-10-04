@@ -1,0 +1,226 @@
+[
+  {
+    "source": "INDEX G420/1_0.MPF_A.j2",
+    "target": "core/assets/v3/INDEX G420/1_0.MPF_A.j2",
+    "source_sha256": "ed90497bad692fa2811726cb806695aefd4331a5ea09f4f797ae96d44e3eeb1c",
+    "target_sha256": "189563dfcef382eab08f5c847ad3e635f7006e47ee497aba77a71f52cdf9f109",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/1_0.MPF_B.j2",
+    "target": "core/assets/v3/INDEX G420/1_0.MPF_B.j2",
+    "source_sha256": "d2c57f5cc50111771619c702e5739ec7967e52b39ff6b4a893a4975a7cdc28be",
+    "target_sha256": "0c906ef0a35aa8a369e70729a270491df74c7b3249098c0791a961f9e98a3af3",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/2_0.MPF_A.j2",
+    "target": "core/assets/v3/INDEX G420/2_0.MPF_A.j2",
+    "source_sha256": "45c0c9fd21312cd3689346d44275ffb48187de100bbbc04e22ace18014a5b86a",
+    "target_sha256": "e730804a8c704e55698b0b426e75585bc354ea801667a2807da6847f69a97d47",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/2_0.MPF_B.j2",
+    "target": "core/assets/v3/INDEX G420/2_0.MPF_B.j2",
+    "source_sha256": "f310c83a91df908014555d9378d2bab211eb8519858dcf21009d26ec2695745a",
+    "target_sha256": "415351dbd0e08eba1b103f05a429220dd18b7292c31883e09cebb5915e6fa09b",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/3_0.MPF_A.j2",
+    "target": "core/assets/v3/INDEX G420/3_0.MPF_A.j2",
+    "source_sha256": "f236cbd8306ac62d0ee450f53ddfc3fea2379e89d84b8d88eeed71a0335666dd",
+    "target_sha256": "5f90e988420f8a2857c971a9d98656b54e28fe6a4e46a32a67a07179491a45dd",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/3_0.MPF_B.j2",
+    "target": "core/assets/v3/INDEX G420/3_0.MPF_B.j2",
+    "source_sha256": "c00251a6bf4a49eb779f6eb6bc5e59030031defa39caea90ab05c1efbab6ea55",
+    "target_sha256": "4e487ebe050c8f9eeacda586110c66ad756eb5c06758a482032bd954a69a0356",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/DG_CAL_IR9.SPF.j2",
+    "target": "core/assets/v3/INDEX G420/DG_CAL_IR9.SPF.j2",
+    "source_sha256": "d96fe4d70a2fe6091ba082964b5c2a0feb747f771cbfd9f29df7eb8776634a53",
+    "target_sha256": "a973abb3cb1993eff1eb797ee4c2273513c0bc7e5e89cef9fafce51bfd45b132",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/UZ_DJ_X.j2",
+    "target": "core/assets/v3/INDEX G420/UZ_DJ_X.j2",
+    "source_sha256": "b4165f6281b4a71e3de03e210be175b88e8cf0b906728d6fda8161877aea13d7",
+    "target_sha256": "fec5a407719706552c63e2cd0d020268460b17d5af7aabec6c8febb91f14e868",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/UZ_FKM_temp1.j2",
+    "target": "core/assets/v3/INDEX G420/UZ_FKM_temp1.j2",
+    "source_sha256": "32eb2e9d426b0d6a5cb42b0453e0f4fbc39da24f833f81b060d7eaeb866b60f1",
+    "target_sha256": "5ebfe6b97846faeecd5b634c68e28cfeb3ee12289281be240a937be82e6cf3ca",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/UZ_FKM_temp2.j2",
+    "target": "core/assets/v3/INDEX G420/UZ_FKM_temp2.j2",
+    "source_sha256": "fdfc0063a9ef129195845e50df9529a816c38241d42d855a0fcc12aef0ac8e44",
+    "target_sha256": "875be001950ec8c57fc6c3b92bde60437a7b0485b7d71977e061d51fc6403c1c",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/UZ_FKM_temp3.j2",
+    "target": "core/assets/v3/INDEX G420/UZ_FKM_temp3.j2",
+    "source_sha256": "8829ba4398803e6038c53812956b7a47f329dab1b0785e623ca0de3dde4cb902",
+    "target_sha256": "9a05288018a58fbc2c8630f2f3b0ce42ba10b8780321c7061e8c115b9535762d",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/UZ_FKM_temp4.j2",
+    "target": "core/assets/v3/INDEX G420/UZ_FKM_temp4.j2",
+    "source_sha256": "d84fa6765466276fb94aee6d968adacbaf06c6a3b965467d7f120ae82dd63f54",
+    "target_sha256": "9db4f00a22d80eea5977aec271afb2e546990be657712e226f791256d2a2f589",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/UZ_RKM_temp1.j2",
+    "target": "core/assets/v3/INDEX G420/UZ_RKM_temp1.j2",
+    "source_sha256": "a0bac5d2692f2f41aa18c65197b48b3e93e2aad54dc345e5c0baa01b4a82fc4e",
+    "target_sha256": "32708856d51b4b3ea862f8f3d417a9ec0f65e0a846250e3447b93309e66eeb99",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/UZ_RKM_temp2.j2",
+    "target": "core/assets/v3/INDEX G420/UZ_RKM_temp2.j2",
+    "source_sha256": "3c4168696dd6def87600c50700dcafe55371050f5748a5bd56644e1cabf3e9c1",
+    "target_sha256": "3545493fd8b2069e1ac366f21e6e05523f7e4b5be0367b74eca1116b1dd771ec",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/UZ_RKM_temp3.j2",
+    "target": "core/assets/v3/INDEX G420/UZ_RKM_temp3.j2",
+    "source_sha256": "6d8203490939ebe0524754fedf759ac043aca69c86c91cbee6db666eb5c6ac91",
+    "target_sha256": "63fb74a1ca7b68f2a46471695c4534ecf345d42937c6ed728b0a0b13b8af483a",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/UZ_RKM_temp4.j2",
+    "target": "core/assets/v3/INDEX G420/UZ_RKM_temp4.j2",
+    "source_sha256": "b6f5a31e1ce52160c7a7f8ac26148fb19ac1eed4afc805fae2dcf64977e42db4",
+    "target_sha256": "1033565ebb1a74606ee56450fe2af1f320c6b30c465781b50512b713445e4c6b",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/UZ_RKM_temp5.j2",
+    "target": "core/assets/v3/INDEX G420/UZ_RKM_temp5.j2",
+    "source_sha256": "56b7d5b341166c28aea2777375cc9906bee2ef30314da5eb2c07fe1e12cf3b5d",
+    "target_sha256": "d1a6823a3b12bfa1c63ffe451d5bc4300b9472ccd7271c9fca3524895db518c7",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/UZ_RKM_temp6.j2",
+    "target": "core/assets/v3/INDEX G420/UZ_RKM_temp6.j2",
+    "source_sha256": "ab46b6008594b47f179e00faa93e417744cf4692aa7b0f034fe94ee6067b9027",
+    "target_sha256": "19cc576d7ed1133e8dbe608b6f875abc29798c45ae5452c2a386ecee11cf58da",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "INDEX G420/UZ_RKM_temp7.j2",
+    "target": "core/assets/v3/INDEX G420/UZ_RKM_temp7.j2",
+    "source_sha256": "1fc07dfbd47a8252fe0256fbafb548bb1b349a0f9f94a2399e5593373aab7f30",
+    "target_sha256": "0b641a050ed1ba1912d54adc6d3f73ba4752cc88d6c8f8c3b3fd94306d1e2394",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "circlip_groove_template.j2",
+    "target": "core/assets/v3/circlip_groove_template.j2",
+    "source_sha256": "a44a464f62541adc9bbb8e776d51a82c5b3de03b344187ec571d028eb1163166",
+    "target_sha256": "05163da8c92840b01535e9a888a6df3e01cf979f60fa2fc4759b46cdced9003a",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "keyway/_keyway_footer.j2",
+    "target": "core/assets/v3/keyway/_keyway_footer.j2",
+    "source_sha256": "aca757e45f306bd5952d871631a393f741f241a9ff12776f86df57324eb136d7",
+    "target_sha256": "c77d40d9275af1875f89fbcbc915e1be4a1002b35c1117b4f6cc12c266093ca8",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "keyway/_keyway_header.j2",
+    "target": "core/assets/v3/keyway/_keyway_header.j2",
+    "source_sha256": "c3d48ac1f5c2e9f321595f85f167aa5fc6a37435649e752d1198da167f9c1872",
+    "target_sha256": "d1ab05492c95c038986af907c7ea0a6784e9ad02ce1e09a43a4cd16b8e838443",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "keyway/keyway_chamfer.j2",
+    "target": "core/assets/v3/keyway/keyway_chamfer.j2",
+    "source_sha256": "98c8db9277276076b9a02f2325578ccf42763654a59433b8e52e1999d498d843",
+    "target_sha256": "62ce948429c24e09351cf0f3913c3cf143cc45e3f4b1963f3772a181db46d574",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "keyway/keyway_finish.j2",
+    "target": "core/assets/v3/keyway/keyway_finish.j2",
+    "source_sha256": "df7413dbf473a8a33369272dc6f63321355d7e572fa3d2dcc59dc1d7c3c5b0d2",
+    "target_sha256": "2319b3c8c89849840bd2ad94433fedfdee3abc76adc106b97f8fddaf4ff41d75",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "keyway/keyway_rough.j2",
+    "target": "core/assets/v3/keyway/keyway_rough.j2",
+    "source_sha256": "036b181baaca0ca1adfca907433ab53c3f428dc3562e9524f6baf3717cd18f27",
+    "target_sha256": "c1d2be2e9665aa081b0e072dbd166055edb9cd510f773f98bb5aea2cc1d6fbc5",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "sync_turning_left_template.j2",
+    "target": "core/assets/v3/sync_turning_left_template.j2",
+    "source_sha256": "81943f99b8224c9fb72703b8978dc8ef518c3e0da0b9b0cde61ed7b11cf83815",
+    "target_sha256": "f6b5d82e426cb814e6e268f4da06d1526a245d213f7ac92f366784cb4ea19d65",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "sync_turning_right_template.j2",
+    "target": "core/assets/v3/sync_turning_right_template.j2",
+    "source_sha256": "1da12f1ef5d8a77560fcf14276aa7da74989ff848146752e4979193d4e1a94cd",
+    "target_sha256": "e4f1ea1de41ca3807962c4f38a85a04058f2fcc0ba478cbce871207717b5997e",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  },
+  {
+    "source": "undercut_template.j2",
+    "target": "core/assets/v3/undercut_template.j2",
+    "source_sha256": "f2f8ddc00d7c394eff097bd0bada8cd1bd191331848987053aad121f74efd3c8",
+    "target_sha256": "052775c24c64cfc683b33c0c4dbe5025c41b443f3a0629de92f0a97c85abe8f7",
+    "adaptation": "UTF-8 LF; Python percent float formatting -> nc_fixed; fmt_coord/fmt_val -> nc_signed/nc_fixed",
+    "status": "unreviewed"
+  }
+]

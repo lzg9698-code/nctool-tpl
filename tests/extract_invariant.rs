@@ -47,7 +47,7 @@ const FRAGMENTS: &[&str] = &[
     "{{ {a} | default(1) }}",
     "{{ {a} + {b} }}",
     "{{ ({a} + {b}) | default(1) }}",
-    "{{ {a} | nc_fixed(3) }}",
+    "{{ {a} | round(3) }}",
     "{{ {a} | default({b}) }}",
     "{% if {a} is defined %}{{ {a} }}{% endif %}",
     "{% if {a} | default(0) %}{{ {b} }}{% endif %}",

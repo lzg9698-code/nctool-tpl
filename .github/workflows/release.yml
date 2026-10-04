@@ -1,154 +1,71 @@
-name: Release
-
+name: NCtool 2.0 release
 on:
   push:
-    tags:
-      - "nctool-tpl-v*"
-      - "nctool-core-v*"
-      - "nctool-cli-v*"
-  workflow_dispatch:
-    inputs:
-      publish_crates:
-        description: "Publish this crate to crates.io (requires an explicit manual run)"
-        required: true
-        type: boolean
-        default: false
-
-# 默认只读；只有二进制发布 job 需要更新 GitHub Release。
+    tags: ['v2.*']
 permissions:
-  contents: read
-
-env:
-  CARGO_TERM_COLOR: always
-
+  contents: write
 jobs:
-  verify:
-    name: Verify publish crates
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
+  validation:
+    uses: ./.github/workflows/ci.yml
     permissions:
       contents: read
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      # 只测三只发布 crate：`--workspace` 会把 nctool-gui 也拉进来，而本 runner
-      # 没装 Tauri 的 Linux 系统库（libwebkit2gtk 等），ubuntu 上必编译失败；
-      # 发布物也不含 GUI，跑它的测试没有意义。
-      - name: Verify (test publish crates)
-        run: cargo test -p nctool-tpl -p nctool-core -p nctool-cli --all-targets --locked
-
-  # crates.io 发布是独立的手动动作；tag push 只验证和构建，不触达 registry 凭据。
-  # CARGO_REGISTRY_TOKEN 仅注入到实际 cargo publish 的单一步骤。
-  publish:
-    name: Publish crate to crates.io
-    if: github.event_name == 'workflow_dispatch' && inputs.publish_crates && github.ref_type == 'tag'
-    needs: verify
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    permissions:
-      contents: read
-    steps:
-      - name: Validate crate tag
-        shell: bash
-        run: |
-          case "$GITHUB_REF_NAME" in
-            nctool-tpl-v*|nctool-core-v*|nctool-cli-v*) ;;
-            *) echo "publish_crates requires an nctool crate tag" >&2; exit 1 ;;
-          esac
-
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      - name: Publish nctool-tpl
-        if: startsWith(github.ref_name, 'nctool-tpl-')
-        run: cargo publish -p nctool-tpl
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: Publish nctool-core
-        if: startsWith(github.ref_name, 'nctool-core-')
-        run: cargo publish -p nctool-core
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-      - name: Publish nctool-cli
-        if: startsWith(github.ref_name, 'nctool-cli-')
-        run: cargo publish -p nctool-cli
-        env:
-          CARGO_REGISTRY_TOKEN: ${{ secrets.CARGO_REGISTRY_TOKEN }}
-
-  # F1.3：三平台原生构建二进制并上传为 GitHub Release assets。
-  # 每个 target 在对应架构的 runner 上原生构建（无交叉编译工具链依赖）。
-  # macOS 仅发布 Apple Silicon（arm64）版；Intel 版按 ROADMAP R10 延后，
-  # 视用户反馈再补充（届时在 macos 上交叉编译 x86_64-apple-darwin）。
   binaries:
-    name: Build binary assets (${{ matrix.target }})
-    if: github.event_name == 'push'
-    needs: verify
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 60
-    permissions:
-      contents: write
+    needs: validation
     strategy:
-      fail-fast: false
       matrix:
         include:
           - os: ubuntu-latest
+            artifact: nctool-linux-x86_64
             target: x86_64-unknown-linux-gnu
+            binary: target/x86_64-unknown-linux-gnu/release/nctool
           - os: windows-latest
+            artifact: nctool-windows-x86_64.exe
             target: x86_64-pc-windows-msvc
+            binary: target/x86_64-pc-windows-msvc/release/nctool.exe
           - os: macos-latest
+            artifact: nctool-macos-arm64
             target: aarch64-apple-darwin
+            binary: target/aarch64-apple-darwin/release/nctool
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Install Rust (stable, with target)
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           targets: ${{ matrix.target }}
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
+      - uses: actions/setup-python@v5
         with:
-          key: ${{ matrix.target }}
-
-      - name: Verify (cli tests on this platform)
-        run: cargo test -p nctool-cli --locked
-
-      - name: Build release binary
-        run: cargo build -p nctool-cli --release --target ${{ matrix.target }}
-
-      # 不同 target 的二进制同名（nctool / nctool.exe），直接上传会互相覆盖；
-      # 统一加上 target 后缀再上传，用户下载即可区分平台。
-      - name: Rename binary with target suffix
-        shell: bash
+          python-version: '3.12'
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm ci --prefix ui
+      - run: node scripts/build_ui.mjs
+      - run: cargo build --release -p nctool-cli --features nc-bundle --target ${{ matrix.target }} --locked
+      - shell: bash
+        run: cp '${{ matrix.binary }}' '${{ matrix.artifact }}'
+      - name: Record binary checksum
+        shell: python
         run: |
-          dir="target/${{ matrix.target }}/release"
-          if [ "$RUNNER_OS" = "Windows" ]; then
-            mv "$dir/nctool.exe" "$dir/nctool-${{ matrix.target }}.exe"
-          else
-            mv "$dir/nctool" "$dir/nctool-${{ matrix.target }}"
-          fi
-
-      - name: Upload release assets
-        uses: softprops/action-gh-release@3bb12739c298aeb8a4eeaf626c5b8d85266b0e65 # v2.6.2
+          import hashlib
+          from pathlib import Path
+          binary = Path('${{ matrix.artifact }}')
+          checksum = hashlib.sha256(binary.read_bytes()).hexdigest()
+          Path(str(binary) + '.sha256').write_text(checksum + '  ' + binary.name + '\n', encoding='utf-8')
+      - uses: actions/upload-artifact@v4
         with:
-          draft: true
-          prerelease: true
-          overwrite_files: true
-          files: "target/${{ matrix.target }}/release/nctool-${{ matrix.target }}*"
-          token: ${{ secrets.GITHUB_TOKEN }}
+          name: ${{ matrix.artifact }}
+          path: |
+            ${{ matrix.artifact }}
+            ${{ matrix.artifact }}.sha256
+  publish:
+    needs: binaries
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          path: dist
+          merge-multiple: true
+      - uses: softprops/action-gh-release@v2
+        with:
+          files: dist/*
+          generate_release_notes: true

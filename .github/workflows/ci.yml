@@ -1,408 +1,52 @@
-name: CI
-# 注意：`name:` 的值里不要出现「冒号 + 空格」（如 `(gate: lines >= 89%)`）——
-# YAML 会把它当键值分隔符，**整个工作流直接加载失败**，且失败形态很迷惑：
-# run 的名字退化成文件路径 `.github/workflows/ci.yml`、jobs API 返回 total_count=null、
-# 页面上看不到任何步骤。改完本文件请先做一次 YAML 解析校验再推。
-
+name: NCtool 2.0 CI
 on:
   push:
-    branches: [master, main]
   pull_request:
-    branches: [master, main]
-
-# 最小权限：默认 GITHUB_TOKEN 权限随仓库/组织设置走，若为 read-write，
-# 任一被 pin 的第三方 action（下面全用可变 tag）被篡改即可向仓库写入。
-# 本工作流全程只读源码 + 上传 artifacts，`contents: read` 足够。
+  workflow_call:
 permissions:
   contents: read
-
-# 新提交覆盖旧分支检查，避免过期 commit 长时间占用 runner；tag 发布由 release.yml 管理。
-concurrency:
-  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
-  cancel-in-progress: true
-
-env:
-  CARGO_TERM_COLOR: always
-  RUST_BACKTRACE: 1
-
 jobs:
-  quality:
-    name: Test / Lint / Doc / Audit (${{ matrix.os }})
-    runs-on: ${{ matrix.os }}
-    timeout-minutes: 45
+  platform:
     strategy:
-      # Windows 覆盖路径分隔符/配置目录等平台特有行为（开发环境即 Windows）；
-      # macOS 按 ROADMAP B4.1 补充，覆盖 XDG_CONFIG_HOME 配置路径与 Unix 行尾
+      fail-fast: false
       matrix:
         os: [ubuntu-latest, windows-latest, macos-latest]
+    runs-on: ${{ matrix.os }}
     steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      # 桌面 GUI（nctool-gui）作为 workspace 成员后，ubuntu runner 编译 tauri
-      # 需要 WebKitGTK/GTK 系统库；缺则 `cargo clippy/test/doc --workspace` 全红。
-      # 只对 ubuntu 生效（windows/macos 的 webview 由系统提供）。
-      - name: Install Linux GUI deps (Tauri)
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
-            libayatana-appindicator3-dev librsvg2-dev patchelf \
-            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
-
-      # `--param` 取值归一的规则有两份实现：后端 args.rs 与前端片段
-      # （ui/src/32_script_ui.part.html，经 build_ui.mjs 进两份生成物，上一步已校验新鲜度）。
-      # 两者漂移会让 CLI 与 Web UI 对同一输入产出
-      # 不同的 G-code —— 静默错误，必须拦。做法是用同一份 fixture
-      # （scripts/param_parity_cases.json）对拍：Rust 侧由下面的 cargo test 消费，
-      # 前端由本步骤消费。放在最前面是为了让 JS 漂移在几十秒内红，不必等完整构建。
-      # 只在 Linux 跑：脚本与系统无关，而 Rust 侧由三个系统的 cargo test 各覆盖一次。
-      - name: Setup Node
-        if: matrix.os == 'ubuntu-latest'
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
-        with:
-          node-version-file: gui/frontend/.nvmrc
-
-      # UI 生成物与源片段一致：`ui/index.html` 与 `cli/ui/index.html` 都是
-      # `ui/src/*.part.html` 的生成物。本步骤拦"改了片段忘生成"与"直接手改生成物"
-      # 两种漂移，**必须排在对拍脚本之前** —— 否则下面是拿陈旧产物在判定。
-      # 注意它只能看到**提交的这一份**，本地改动仍需 `cargo test` 里那条重拼接
-      # 断言来拦（见 cli/tests/cli.rs 的 ui_html_copies_stay_in_sync）。
-      - name: UI build check (fragments -> index.html)
-        if: matrix.os == 'ubuntu-latest'
-        run: node scripts/build_ui.mjs --check
-
-      - name: Param parity (Rust <-> UI)
-        if: matrix.os == 'ubuntu-latest'
-        run: node scripts/check_param_parity.mjs
-
-      # 生成选项对拍：CLI 的 --line-numbers/--line-step/--max-line/--header/
-      # --strip-blank/--ascii/--lenient 与 Web API 的 options 必须映射到同一份
-      # GenerationOptions。--line-step/--max-line 曾只存在于 UI，CLI 无法复现
-      # 同一输出（隐患修复，2026-09-22）。fixture：scripts/option_parity_cases.json；
-      # 本步骤查前端侧（normalizeOpts），Rust 侧由 cargo test 的
-      # option_mapping_matches_shared_fixture 查后端侧。
-      - name: Option parity (CLI <-> UI)
-        if: matrix.os == 'ubuntu-latest'
-        run: node scripts/check_option_parity.mjs
-
-      # 接口集合对拍：后端 route() 的路由臂与前端 API 封装天然两份，此前没有任何
-      # 机制提示「前端调的接口后端并没有」（/api/part/generate 就是这么悬空的）。
-      # fixture 同样是 scripts/api_routes.json：本步骤查前端侧，Rust 侧由
-      # cargo test 的 api_routes_are_routable 查后端侧。
-      #
-      # GUI（nctool-gui）走 Tauri `invoke`，不含 `/api/` 字面量，故不参与本对拍
-      # —— 它由下面的 `GUI parity` 步骤单独覆盖。
-      - name: API routes parity (backend <-> UI)
-        if: matrix.os == 'ubuntu-latest'
-        run: node scripts/check_api_parity.mjs
-
-      # GUI command 面对拍：nctool-gui 走 Tauri invoke，不含 /api/ 字面量，
-      # 上面那条 check_api_parity.mjs 看不到它。本步骤把 GUI 的 command 封装也
-      # 纳入同一份 fixture（scripts/api_routes.json），双向校验
-      # 「契约声明的 command 集合」与「gui/src/main.rs 实际注册的 command 集合」
-      # 相等，并核对每条被封装端点在 commands/*.rs 里确有对应 run_route 调用点、
-      # 每个 command 在前端 API 封装里确有接线。GUI 是第四个交付面，漏接线即红。
-      # 注意：步骤名里不得出现「冒号 + 空格」，否则整个工作流静默加载失败。
-      - name: GUI parity (contract <-> Tauri commands)
-        if: matrix.os == 'ubuntu-latest'
-        run: node scripts/check_gui_parity.mjs
-
-      # 文档链接与锚点检查：`CONTRIBUTING.md` §3 早已文档化其用法，却始终没有调用点
-      # ——「工具闲置」等于这道门不存在（PROJECT_STATUS 登记过）。脚本对坏链接 exit 1，
-      # 可以直接当门禁。与对拍脚本一样与系统无关，只在 ubuntu 跑一次。
-      - name: Docs links & anchors
-        if: matrix.os == 'ubuntu-latest'
-        run: python3 scripts/check_docs_links.py README.md docs templates/README.md
-
-      # golden 刷新脚本的语法与「CI 拒刷」守卫自测（B4.2）。
-      # 两个断言：① bash -n 语法；② 带 CI=1 运行必须退出非 0（不得在 CI 刷新）。
-      # 只依赖 bash，无需 Rust，放这里几毫秒完成。
-      - name: Golden refresh script guards
-        if: matrix.os == 'ubuntu-latest'
-        run: |
-          bash -n scripts/refresh_golden.sh
-          if CI=1 bash scripts/refresh_golden.sh --yes; then
-            echo "✗ refresh_golden.sh 在 CI 环境未被拒绝" >&2; exit 1
-          fi
-          echo "✓ refresh_golden.sh 语法与 CI 拒刷守卫均正常"
-
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
         with:
           components: rustfmt, clippy
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      - name: Format check
-        run: cargo fmt --all -- --check
-
-      # `--workspace` 一个字都不能省：根目录同时是 workspace 根和一个 package，
-      # 而 cargo 在没有 default-members 时**默认只选根 package** —— 不加它，
-      # 下面三条命令就只对 nctool-tpl 生效，core / cli（代码主体、绝大多数测试）
-      # 从未被 CI 真正检查过，却一直显示全绿。这与覆盖率命令踩的是同一个坑。
-      - name: Clippy
-        run: cargo clippy --workspace --all-targets -- -D warnings
-
-      - name: Test
-        # `--locked`：Cargo.lock 已提交，CI 必须与它一致（否则"本地能过、CI 红了"无解）
-        run: cargo test --workspace --all-targets --locked
-
-      # 发布包内容守卫：根 crate 是库，仓库里却住着 CLI/UI/开发脚本/原型产物。
-      # Cargo.toml 的 exclude 是唯一真源；本步骤对 `cargo package --list` 做黑名单
-      # 断言，防止非库资产（output/ scripts/ ui/ gui/ …）又被打进 .crate。
-      #
-      # **必须在 Rust 安装且依赖已就绪之后**（即 Test 之后）：`cargo package --list`
-      # 需要 cargo 与可解析的依赖图；放在 job 开头（Rust 未装/注册表为空）会因
-      # 找不到 registry 而失败。用 --offline 确保不依赖 crates.io 网络。
-      - name: Package contents (no repo junk in .crate)
-        if: matrix.os == 'ubuntu-latest'
-        run: python3 scripts/check_package_contents.py
-
-      # `--all-targets` 不跑 doctest：实测 `cargo test --workspace --all-targets`
-      # 的输出里没有 Doc-tests 段。README 声称"单元 + 集成 + 文档"全跑，故单独补一步。
-      - name: Doc tests
-        run: cargo test --workspace --doc
-
-      - name: Doc check (zero warnings)
-        run: cargo doc --workspace --no-deps
-        env:
-          RUSTDOCFLAGS: "-D warnings"
-
-      # 固定版本 + 预编译二进制：此前 `cargo install cargo-audit --locked` 要在三个
-      # runner 上各从源码编译一遍（连续两次卡在本步骤 exit 101）。
-      - name: Install cargo-audit
-        uses: taiki-e/install-action@92d7dcc5cea95573766c2776ceb1967a467bc919 # cargo-audit
-
-      # `--deny warnings`：默认只报漏洞（vulnerability），unmaintained / yanked 不失败
-      - name: Security audit
-        run: cargo audit --deny warnings
-
-  # GUI 前端（gui/frontend，React + TS）此前从未被 CI 触达：没有 npm ci、
-  # 没有 tsc、没有 vite build —— 前端类型回归、依赖漂移、package-lock 失效
-  # 全部绿灯放行。本 job 把三件事变成门禁：
-  #   ① `npm ci` 严格按 package-lock 安装（顺带校验 lock 与 package.json 一致）；
-  #   ② `npm audit` 安全审计；
-  #   ③ `tsc --noEmit` 类型检查；
-  #   ④ `vite build` 产物级构建（与 tauri `beforeBuildCommand` 同一条命令）。
-  # Vite 已从受影响的 5.x 升到有补丁的 7.x；`npm audit` 当前为零漏洞，故恢复门禁。
-  frontend:
-    name: Frontend (typecheck + build)
-    runs-on: ubuntu-latest
-    timeout-minutes: 20
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Setup Node
-        uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+      - uses: actions/setup-node@v4
         with:
-          node-version-file: gui/frontend/.nvmrc
-          cache: npm
-          cache-dependency-path: gui/frontend/package-lock.json
-
-      - name: Install (npm ci, lockfile strictly)
-        run: npm ci --prefix gui/frontend
-
-      - name: Audit frontend dependencies
-        run: npm audit --prefix gui/frontend --audit-level=moderate
-
-      - name: Type check (tsc --noEmit)
-        run: npx --prefix gui/frontend tsc --noEmit -p gui/frontend
-
-      - name: Build (vite build)
-        run: npm --prefix gui/frontend run build
-
-  coverage:
-    name: Coverage (Ubuntu)
-    runs-on: ubuntu-latest
-    timeout-minutes: 45
-    steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      # 同 quality：gui 作为 workspace 成员后，ubuntu 编译 tauri 需要系统库。
-      - name: Install Linux GUI deps (Tauri)
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y libwebkit2gtk-4.1-dev libgtk-3-dev \
-            libayatana-appindicator3-dev librsvg2-dev patchelf \
-            libsoup-3.0-dev libjavascriptcoregtk-4.1-dev
-
-      - name: Install Rust (stable)
-        uses: dtolnay/rust-toolchain@6bed0761d98439e5a578e2877258200ad565ba87 # stable
+          node-version: 22
+      - uses: actions/setup-python@v5
         with:
-          # llvm-tools-preview 是 cargo-llvm-cov 生成插桩覆盖率数据的必需组件，
-          # 缺失时 llvm-cov 直接失败
-          components: llvm-tools-preview
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      # 覆盖率门禁此前从未真正生效，有两层掩盖：
-      # 1) `continue-on-error: true` 把持续失败粉饰成非阻断项，CI 全绿并不代表
-      #    覆盖达标 —— 已移除，让它成为真门禁；
-      # 2) 安装方式：`cargo install` 要在 runner 上从源码编译整套依赖，连续两次
-      #    都以 exit 101 卡在本步骤 —— `--locked` 撞上 crates.io 索引漂移；
-      #    改固定版本后耗时 <1s 即失败，说明压根没进入构建。
-      # 改用官方 install-action 下载预编译二进制：绕开整条 cargo 构建链，
-      # 不受索引状态影响，也没有数分钟的编译开销。
-      - name: Install cargo-llvm-cov
-        uses: taiki-e/install-action@72f835688cb6c15903b796f704b01e652a2b8835 # cargo-llvm-cov
-
-      # 单独校验一步：把「没装上」与「装上了但跑不起来」区分开。
-      - name: Verify cargo-llvm-cov
-        run: cargo llvm-cov --version
-
-      # 生成与判定分成两步，但**判定必须用生产口径**：
-      #
-      # `--fail-under-lines` 不能用 —— llvm-cov 会把两类**不该进分母**的行也算进去：
-      #   ① `src/*.rs` 内的 `#[cfg(test)]` 段本身（`src/lib.rs` 1824 行里测试段从
-      #      第 64 行起占 1760 行）——「新增测试」会**推高**数字、「新增未覆盖的
-      #      生产代码」反被稀释；
-      #   ② **非可执行行**（注释 / 空行 / 纯分隔符）——llvm-cov 给它们也写 `DA:0`
-      #      （实测：某命中 388 次的函数，其函数体内紧跟的注释行仍是 `DA:137,0`）。
-      #      计入分母等于测「注释覆盖率」，且数值随 llvm-cov / rustc 版本漂移。
-      # `--ignore-filename-regex` 只能按文件路径排除，管不到 `src/` 内部，故改由
-      # `scripts/check_coverage_caliber.py` **同时剔除**这两类行后重新统计。
-      # （2026-09-26 加入②：剔除前本机 88.76%、剔除后 92.88%，多出的 ~4.1pt 全是
-      #  注释/空行/续行 —— 门禁此前测的是"注释覆盖率"，不是代码覆盖率。）
-      #
-      # 阈值 92% 的依据见下方「【2026-09-26 口径修订 + 阈值 91% → 92%】」段；
-      # 以下为 2026-09-22 上调到 91% 时的**历史依据**（已被上段取代，保留以溯因）：
-      # 补齐 `ui.rs`（20% → 98%）/ `inspect.rs`（81% → 93%）/ `variables.rs`（84% → 97%）
-      # 三处覆盖洼地后，本机生产口径 **4672/5068 = 92.19%**，余量 1.19pt ≈ 60 行。
-      # 此前 89% 的门槛对应 90.34%（Ubuntu CI 实测）。**沿用「不贴着实测值设阈值」的原则**：
-      # 本机与 CI 可能差 ~0.3pt，留 1.19pt 余量可避免小改动误触 ——
-      # 而"经常误报的门禁会被当成噪音忽略"，msrv job 长期红着没人看就是前车之鉴。
-      # 覆盖率提升后请继续上调此值（只改下面 `python3` 那一行的 `--min`）。
-      #
-      # 【2026-09-26 口径修订 + 阈值 91% → 92%】
-      # ① **为什么剔除「不可执行行」**：llvm-cov 的 lcov 导出会给**注释 / 空行 /
-      #    纯分隔符行**也写 `DA:<line>,0`（实证：某函数命中 388 次，其函数体内紧跟
-      #    的注释行仍是 `DA:137,0`；`impl Ctx {` 是 `DA:62,0`）。这些行不含任何
-      #    可执行语句、**任何测试都覆盖不到**；计入分母，门禁测的其实是「注释 +
-      #    空行的覆盖率」，且数值随 llvm-cov / rustc 版本漂移（同一份源码换个工具链，
-      #    注释行的 DA 记录有无就会变）。脚本实际剔除的是**注释 / 空行 / 纯分隔符**
-      #    这三类；`impl` / `mod` 等无语句声明头行、控制流头行、match 分支头行实测
-      #    总量 < 0.1pt，**有意保留**（详见脚本 `executable_line_mask` docstring；
-      #    `fn` 签名行承载函数入口覆盖、1299 行 `DA>0`，更不可剔除）。
-      # ② **三口径 × 两基线对照**（本仓库实测；基线 lcov 无 gui，当前 lcov 已排除 gui，两者可比）：
-      #                             09-24 旧基线            当前（补测后）
-      #      ① 原始 llvm-cov        17121/17999 = 95.12%   17438/19230 = 90.68%
-      #      ② 剔 #[cfg(test)] 段   8226/8886  = 92.57%    8262/9308  = 88.76%
-      #      ③ 生产（再剔不可执行行） 6278/6758 = 92.90%    6600/7106  = 92.88%   ← 门禁判定
-      #    → **③ 生产口径下当前代码与 GUI 之前的基线持平**（92.90% → 92.88%，−0.02pt）；
-      #      **② 口径下看似下滑 −3.81pt**（92.57% → 88.76%），成因是**库化把 `cli` 的插桩
-      #      范围扩大了**（bin target 下被死代码消除的 `pub`/`pub(crate)` 项成为 lib 的公开
-      #      API 面后被完整插桩，约 404 行此前从未被度量的生产代码进入分母），**不是覆盖
-      #      质量退化**。
-      # ③ **阈值随之上调到 92%**：口径修正对**同一份代码**的抬高幅度取决于该代码里
-      #    注释/空行的占比 —— 当前代码为 **+4.12pt**（88.76% → 92.88%），09-24 基线为
-      #    **+0.33pt**（92.57% → 92.90%）。就**阈值**而言，相关的量是**基线的变化**：
-      #    同一份基线代码由旧口径 92.57% 变为新口径 92.90%，故 91% 的余量语义由
-      #    **1.57pt 变成 1.90pt** —— 比当初设 91% 时更松，等于门禁被悄悄放松。按本项目
-      #    「只上调、不下调」的政策（见 docs/CONTRIBUTING.md §3），此处**保守地只上调
-      #    1pt** 到 **92%**：余量 **0.88pt ≈ 63 行**，仍是项目自述「本机与 CI 差 ~0.3pt」
-      #    的约 3 倍，不至于让小改动频繁误触。
-      #
-      # ⚠️ 桌面 GUI 作为 workspace 成员后的两处必要改动：
-      #   ① **去掉 `--all-features`**：它会启用 gui 的 `custom-protocol` → 编译期
-      #      要求 `frontend/dist` 存在 → 本 job 直接失败（且三个现有 crate 均无
-      #      `[features]`，去掉无副作用）。
-      #   ② **加 `--ignore-filename-regex '(^|[\\/])gui[\\/]'`**：gui 的未覆盖生产代码
-      #      会把 92% 门禁击穿（余量仅 ~63 行），排除 gui 文件后门禁口径不变。
-      #      **正则必须同时接受 `/` 与 `\`**：CI 在 Ubuntu 上 SF: 路径是正斜杠，但
-      #      Windows 本地跑出来的是反斜杠（`D:\...\gui\src\...`）。此前只写
-      #      `(^|/)gui/`，在 Windows 上**一个 gui 文件都排除不掉**（实测：lcov 里
-      #      9 个 gui 文件仍在，把本机数字进一步压低），造成"本机能过/CI 口径不一致"
-      #      的隐患。`[\\/]` 在 Rust 正则里表示「反斜杠或正斜杠」，两平台通吃。
-      #
-      # **先删旧产物**：`lcov.info` 是 gitignore 的本地产物。生成与判定分成两步，
-      # 若生成步骤失败而判定步仍读到**上次遗留的旧文件**，门禁会假绿。删除后判定步
-      # 拿到的必然是本次产物（`check_coverage_caliber.py` 在文件缺失时也会硬失败）。
-      - name: Generate coverage report (no gate)
+          python-version: '3.12'
+      - run: npm ci --prefix ui
+      - run: npm run --prefix ui test
+      - run: node scripts/build_ui.mjs
+      - run: cargo fmt --all -- --check
+      - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --workspace --all-targets --all-features --locked
+      - run: cargo test --workspace --all-features --doc --locked
+      - run: python scripts/check_v2.py
+      - run: python -m unittest discover -s scripts/tests -p 'test_*.py'
+      - run: cargo build -p nctool-cli --no-default-features --locked
+      - name: Browser acceptance
+        if: runner.os == 'Linux'
+        shell: bash
         run: |
-          rm -f lcov.info
-          cargo llvm-cov --workspace --lcov --output-path lcov.info \
-            --ignore-filename-regex '(^|[\\/])gui[\\/]'
-
-      - name: Check production coverage (line gate 92%)
-        run: python3 scripts/check_coverage_caliber.py lcov.info --min 92
-
-      # 判定口径（`check_coverage_caliber.py`）：在生产分母里**同时**剔除
-      #   ① `#[cfg(test)]` 段（llvm-cov 会把测试代码本身算进分母）；
-      #   ② **非可执行行**（注释 / 空行 / 纯分隔符）——llvm-cov 会给这些行也写
-      #      `DA:0`（实测：某命中 388 次的函数，其函数体内紧跟的注释行仍是
-      #      `DA:137,0`；`impl Ctx {` 是 `DA:62,0`）。计入分母等于让门禁去测
-      #      "注释覆盖率"，且数值会随 llvm-cov / rustc 版本漂移，而不是随真实
-      #      代码覆盖率变化。剔除后门禁如实反映可执行生产代码的覆盖率。
-
-      # 把覆盖率数字打进 job summary：没有数字的门禁等于没有门禁。
-      # `--workspace` 不可省：漏掉它只会统计根 crate（nctool-tpl），
-      # 而 core / cli 才是代码主体——摘要会"看起来有数字"却漏掉大部分代码。
-      # `--ignore-filename-regex` **必须与上面生成/门禁两步逐字一致**：
-      # 否则 summary 显示的是"含 gui 的总百分比"（gui 生产代码覆盖为 0），
-      # 而门禁判的是"排除 gui 的百分比"——两个数字对不上，排障时必被误导。
-      #
-      # `if: always()`：阈值门失败时摘要与产物**仍要产出**——
-      # 排查"覆盖为什么掉下去"恰恰需要这两样东西。
-      - name: Coverage summary
-        if: always()
-        run: |
-          cargo llvm-cov report --workspace --summary-only \
-            --ignore-filename-regex '(^|[\\/])gui[\\/]' | tee coverage-summary.txt
-          {
-            echo '## 覆盖率'
-            echo '```'
-            cat coverage-summary.txt
-            echo '```'
-          } >> "$GITHUB_STEP_SUMMARY"
-
-      - name: Upload coverage artifact
-        if: always()
-        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
-        with:
-          name: rust-coverage-lcov
-          path: |
-            lcov.info
-            coverage-summary.txt
-
-  # `rust-version` 写在三个 Cargo.toml 里、README 与 CONTRIBUTING 也对外承诺，
-  # 本 job 就是为了让声明变成可验证的事实。
-  #
-  # **为什么是 1.85 而不是更早的 1.82**：本 job 一上线就是红的 —— `clap_derive`
-  # 的清单声明 `edition = "2024"` + `rust-version = "1.85"`，而 Cargo 1.82 连
-  # 解析它的清单都做不到（`feature 'edition2024' is required`）。实测 1.85.1 可
-  # 通过，故声明改为 1.85。抬 MSRV 时请先看本 job 的红绿，别只看本机 stable。
-  #
-  # **为什么是 1.89 而不是 1.85（2026-09-27，P0-1）**：跨进程写锁采用 std 的
-  # `File::try_lock` / `File::unlock`（Rust 1.89 稳定，2025-08 发布），零新增
-  # 依赖；四份 `rust-version`、README / CONTRIBUTING / ROADMAP 同步抬到 1.89。
+          cargo build -p nctool-cli --features nc-bundle --locked
+          npm install --prefix "$RUNNER_TEMP/nctool-browser" --no-save playwright@1.62.1
+          "$RUNNER_TEMP/nctool-browser/node_modules/.bin/playwright" install --with-deps chromium
+          NCTOOL_PLAYWRIGHT="$RUNNER_TEMP/nctool-browser/node_modules/playwright" node scripts/browser_v2.cjs
+          NCTOOL_PLAYWRIGHT="$RUNNER_TEMP/nctool-browser/node_modules/playwright" node scripts/browser_review_fixes.cjs
   msrv:
-    name: MSRV (1.89)
     runs-on: ubuntu-latest
-    timeout-minutes: 20
     steps:
-      - name: Checkout
-        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-
-      - name: Install Rust (1.89)
-        uses: dtolnay/rust-toolchain@b4f984c1e7daae8e175614de3e73a8411a20333c # 1.89
-
-      - name: Cache cargo
-        uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      # 只 `check`、且**不带 `--all-targets`**：`rust-version` 承诺的是"下游能否
-      # 编译本 crate"，而下游构建的是 lib + bin，不会去编译本仓库的 bench/example。
-      # 带上 `--all-targets` 会把 criterion / assert_cmd 等 dev-dependencies 拉进来，
-      # 它们的 MSRV 通常高于生产依赖，属于本仓库自己的开发工具链问题，
-      # 不该让对外承诺失真。
-      #
-      # **排除 nctool-gui**：tauri 的传递依赖（time/icu_*/plist/serde_with 等）
-      # 要求 rustc ≥1.88，而 GUI 是本仓库的桌面壳、不发布到 crates.io，
-      # 下游也不会以 1.89 依赖它。`--workspace` 把它拉进来只会让本 job 确定性
-      # 变红（实测 exit 101），MSRV 信号反而失效。三只发布 crate 才是承诺对象。
-      - name: Check on 1.89 (publish crates only, gui excluded)
-        run: cargo check -p nctool-tpl -p nctool-core -p nctool-cli --locked
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: '1.89.0'
+      - run: cargo check --workspace --all-features --locked

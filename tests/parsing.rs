@@ -94,41 +94,6 @@ fn extract_covers_more_branches() {
 
 /// 数学过滤器对 NaN/Inf 必须报渲染错误，而不是把非法值写入 G-code。
 #[test]
-fn render_rejects_nonfinite_math() {
-    let renderer = Renderer::new();
-    let ctx = minijinja::context! {};
-
-    // sqrt(-1) -> NaN
-    let err = renderer
-        .render("G1 X{{ -1 | sqrt }}", "gcode.j2", &ctx)
-        .unwrap_err();
-    match err {
-        TplError::Render { message, .. } => {
-            assert!(
-                message.contains("非有限数") || message.contains("NaN"),
-                "NaN 应触发渲染错误: {message}"
-            );
-        }
-        _ => panic!("应为渲染错误"),
-    }
-
-    // ln(0) -> -Inf
-    let err = renderer
-        .render("G1 X{{ 0 | ln }}", "gcode.j2", &ctx)
-        .unwrap_err();
-    match err {
-        TplError::Render { message, .. } => {
-            assert!(
-                message.contains("非有限数") || message.contains("NaN"),
-                "Inf 应触发渲染错误: {message}"
-            );
-        }
-        _ => panic!("应为渲染错误"),
-    }
-}
-
-/// 解析错误应带真实列号定位，而非恒为 1 的占位值。
-#[test]
 fn parse_error_locates_column() {
     let err = parse("G0 X10\n{{ (1 + 2 }}", "bad.j2").unwrap_err();
     match err {
@@ -350,37 +315,5 @@ fn parse_error_multiline_line_number() {
             assert_eq!(line, 3, "应定位到第 3 行，实际 {line}");
         }
         _ => panic!("应为 Parse 错误"),
-    }
-}
-
-/// 所有数学过滤器在正常值下可渲染。
-///
-/// 逐过滤器**精确**断言。此前把 9 个过滤器拼成一行再 `assert!(out.contains("2"))`
-/// —— `"2"` 可由 `sqrt(4)` / `log10(100)` / `ceil(1.5)` 任一个满足，最后两条断言
-/// 甚至重复检查同一个 `"2"`，等于没测。
-#[test]
-fn all_math_filters_render() {
-    let r = Renderer::new();
-    let ctx = minijinja::context! {};
-
-    // 统一按**数值**比较：这些过滤器返回的是浮点（`sqrt(4)` 渲染成 `"2.0"`），
-    // 逐字符比对会把平台相关的浮点格式化文本写进断言。
-    for (src, want) in [
-        ("{{ 4 | sqrt }}", 2.0),
-        ("{{ 100 | log10 }}", 2.0),
-        ("{{ 2 | pow(3) }}", 8.0),
-        ("{{ 1.5 | floor }}", 1.0),
-        ("{{ 1.5 | ceil }}", 2.0),
-        ("{{ 0 | sin }}", 0.0),
-        ("{{ 0 | cos }}", 1.0),
-        ("{{ 2 | exp }}", std::f64::consts::E.powi(2)),
-        ("{{ 10 | ln }}", 10f64.ln()),
-    ] {
-        let out = r.render(src, "math.j2", &ctx).unwrap();
-        let got: f64 = out
-            .trim()
-            .parse()
-            .unwrap_or_else(|e| panic!("{src} 输出不是数值 {out:?}: {e}"));
-        assert!((got - want).abs() < 1e-9, "{src}: got {got}, want {want}");
     }
 }

@@ -1,773 +1,107 @@
-# nctool 系统设计文档
+# NCtool 2.0 系统设计
 
-> 版本：v2.3 · 2026-09-29（**当前架构**：Web 与 Tauri 写操作收敛到共享 route）
-> **v2.2 修订说明（2026-09-21）**：三大编辑模块 T01–T04 全部落地，本版据其收口 ——
-> ① **前端改为构建期拼接**（T04-c）：源码上移到 `ui/src/*.part.html`，`ui/index.html` 与
-> `cli/ui/index.html` 降级为**生成物**（§3 相应段落已改），行数约束迁移为"每片段 ≤ 3000"；
-> ② 当时机床编辑走 CLI、UI 只读：`machine add/edit/rm/test` 是唯一写入通道，
-> 未新增 HTTP 写端点，`GET /api/machines` 只增只读 `schema` 字段 ——
-> 与 **D19**（资产写全部经 `core::asset`）一致，未新增例外；
-> ③ `core::asset` 的三种编辑策略（`toml_edit` 合并写 / YAML 定点文本编辑 / serde 全量往返）
-> 至此全部落地。**本次仅改文档，未改源码/测试**。
->
-> **v2.3 修订说明（2026-09-29）**：① Web UI 已增加模板与机床资产管理 API；Tauri 模板、
-> 机床、预设、校验、lint、渲染与配置命令均只做参数适配，并调用同一
-> `nctool_cli::server::route`；② 移除启动时 `AppState` 配置快照，所有 Tauri 命令按请求加载
-> 最新层叠配置；③ 机床完整性键收集复用 CLI 的同一实现；④ 模板清单写入失败显式报告，
-> 预设导入拒绝覆盖损坏文件，重命名源文件删除增加指纹保护；⑤ 更新桌面 GUI 与 API 对拍契约。
-> 桌面 GUI 仍依赖 `nctool-cli` 的 `Ctx` 与 `route`，尚未拆为独立应用服务 crate。
->
-> **v2.1 修订说明**：依据 T01「共用写盘底座」落地并通过独立验证，记档一项**架构性变更** —— `nctool-core` **首次承担资产写入职责**（新增 `core::asset` 写内核：原子写 / 乐观锁 / 路径防护）。本次修订 §2.1（依赖图补 `core::asset`）、§2.2（crate 职责矩阵两行）、§2.3（补 `core::asset` 模块）、§6（新增 D19）、§7（补"新增写操作"扩展点）、§8（补 T01 已登记边界）；另据编辑模块（T02）定案，§3.2 记 `core::validate` 新增 `check_spec_consistency`（保存前 L2，须复用 `check_spec_defaults`）与 `check_param_values`（保存前 L3，值级、不查缺失）两个入口。**（v2.1 收准）** D19 例外改为**分类全枚举**——交付层生产口径 `fs::write` 共 3 处、全部非资产写（`config init` / `render --out` / `$EDITOR` 临时副本）；**资产写全部经 `core::asset`，D19 规则成立**。**仅改文档，未改源码/测试**。
-> 对应代码：`nctool-tpl` v0.4.0 / `nctool-core` v0.3.0 / `nctool-cli` v0.3.0 / `nctool-gui` v0.1.0（GUI 不发布）。源码规模表保留历史快照，不用于估算当前规模。
-> 范围：三个 crate 的分层架构、核心模块职责、数据结构、端到端数据流与设计决策。
-> 读者：本仓库贡献者、基于本库二次开发的下游用户。
->
-> **与 `docs/ARCHITECTURE.md` 的关系**：`ARCHITECTURE.md` 是 2026-09-03 的 v1.0 快照，
-> 缺 `derive` / `variables` / `manifest` 外部化 / Web UI 后端 / 参数规格三来源等后续演进。
-> 本文档为当前有效版本（v2.3），两者冲突时以本文档为准。
+当前实现规范。历史 1.x 的配置、模型和路由不再作为 2.0 契约。
 
----
+## 配置组合
 
-## 1. 系统定位与设计主线
+`home/config.json`：
 
-nctool 是一套**面向数控加工（CNC）的 G-code 模板工具链**：用 Jinja2 语法描述加工程序片段，
-在渲染前自动推导模板需要哪些参数、哪些必填，校验参数合法性，最后渲染并后处理成可直接上机的 G-code。
-
-它要解决的工程问题很具体：**G-code 是发给机床的指令，写错一个坐标就是撞刀**。
-因此整个架构围绕一条主线设计 —— **渲染前可发现错误**。参数缺失、类型不符、越界、
-非法枚举值、NaN/Inf 全部在渲染前拦截，而不是在生成出一段"看起来正常"的程序之后才暴露。
-
-### 1.1 四条不可退让的设计原则
-
-| 编号 | 原则 | 违反后的后果 | 落地位置 |
-| --- | --- | --- | --- |
-| **P1** | **渲染前可发现错误** | 错误推迟到渲染期 → 只能拿到残缺 G-code | `core/src/validate.rs`、`core/src/pipeline.rs` |
-| **P2** | **模板只做变量替换，计算在 Rust 侧完成** | 工艺计算散落在模板里，无法测试、无法复用 | `core/src/derive.rs`（查表换算）、`pipeline.rs`（上下文注入） |
-| **P3** | **静默出错零容忍，宁可渲染失败** | "渲染成功但结果错误"是撞刀的直接来源 | `src/filters.rs`、`validate.rs` |
-| **P4** | **单一来源 + 双输入面共用同一内核** | CLI 与 Web UI 输出不一致 | `ParamValue::display()`、`server::spec_json`、`coerce_param_value` |
-
-P2 决定了 compute-heavy 模板（如 `machines/index_g420/` 下的同步车削类模板）必须先做
-「计算上提」再移植：所有中间量（`Z_START` / `D1_CUT` / `ANG_1` 等）由调用方或 `derive`
-规则预计算后注入，模板内不写工艺计算逻辑。
-
-### 1.2 当前状态
-
-| 项 | 状态 |
-| --- | --- |
-| 模板 | 以 `templates/templates.yaml` 和文件树为准；新增导入模板均标记为 `unreviewed`，不可据此推断工艺已核验 |
-| 变量库 | `templates/variables.yaml`，58 条按名全局规格（源自 NCTool_V3 的 62 个变量） |
-| 机床预设 | 3 个内置（`generic` / `wfl_m65` / `index_ms40`）+ 配置文件自定义 |
-| 测试 | **项数不在此硬编码**（每加一个测试就过期）——**以 CI run 的 job summary 为准**；本机复现约 3 分钟，须后台跑 |
-| 覆盖率 | 门禁 = **生产口径行覆盖 ≥ 92%**（`scripts/check_coverage_caliber.py`；2026-09-26 口径修订后由 91% 上调）；实测值以 CI 的 coverage job summary 为准，不在本文档写死 |
-| CLI | 完整：`templates` / `inspect` / `lint` / `validate` / `render` / `machine` / `preset` / `config` / `ui` / `part` / `completion` |
-| Web UI | `nctool ui` 已可用：回环 `tiny_http` 服务 + 模板/机床/预设读写、校验、渲染 API + 单文件前端 |
-| Desktop GUI | `nctool-gui`（Tauri 2 + React）；命令适配层调用共享 route，源码和机床写操作不另写一套校验流程 |
-
-> **文档状态提示**：v2.3 之后的源码行为以本节和 `docs/PROJECT_STATUS.md` 顶部增量为准；下文较早的 T 阶段记录是历史决策背景，不代表当前未完成项。
-
----
-
-## 2. 分层架构
-
-### 2.1 分层与依赖方向
-
-```mermaid
-graph TD
-    subgraph CLI["nctool-cli v0.3.0 · binary: nctool"]
-        C1[cli.rs<br/>clap 命令树]
-        C2[config.rs<br/>全局+项目配置层叠]
-        C3[context.rs<br/>注册表/机床装配]
-        C4[args.rs<br/>--param 归一]
-        C5[server.rs<br/>tiny_http Web 后端]
-        C6[output.rs<br/>text/JSON 双通道 + 退出码]
-    end
-
-    subgraph GUI["nctool-gui v0.1.0 · publish = false"]
-        G1[React 前端<br/>页面与表单]
-        G2[Tauri 命令<br/>轻量参数适配]
-    end
-
-    subgraph CORE["nctool-core v0.3.0"]
-        R1[model<br/>参数 / 机床数据模型]
-        R2[manifest<br/>清单 + 头部元数据 + 规格覆盖]
-        R3[variables<br/>全局变量库]
-        R4[derive<br/>派生参数计算]
-        R5[validate<br/>渲染前校验引擎]
-        R6[registry<br/>模板注册表 + include 闭包]
-        R7[machine<br/>机床预设 + 配置键 schema]
-        R8[pipeline<br/>GCodeGenerator 端到端管线]
-        R9[asset<br/>写内核：原子写 / 乐观锁 / 路径防护]
-    end
-
-    subgraph TPL["nctool-tpl v0.4.0"]
-        T1[extract<br/>AST 遍历 + 可选/必选判定]
-        T2[renderer<br/>严格 / 宽松渲染]
-        T3[filters<br/>nc_fixed / nc_pad / 数学]
-        T4[error<br/>行列定位 + 根因链]
-    end
-
-    MJ[minijinja ~2.24<br/>unstable_machinery / loop_controls / debug]
-
-    CLI -->|依赖| CORE
-    GUI -->|调用共享 Ctx / route| CLI
-    GUI -->|资产类型与模型| CORE
-    G1 -->|invoke| G2
-    CORE -->|依赖| TPL
-    TPL -->|依赖| MJ
+```json
+{
+  "profile": "template",
+  "enabled": ["python-report"],
+  "disabled": [],
+  "providers": {},
+  "plugins": {}
+}
 ```
 
-Rust 核心依赖保持单向：`core → tpl → minijinja`。CLI 依赖 core；桌面 GUI 当前依赖
-CLI 的 `Ctx` / `route` 与 core 模型。GUI 命令不复制校验和资产写入编排，但 CLI 作为 GUI
-依赖仍把入口层职责带入桌面构建，是后续是否抽 `nctool-app` 的评估点。
+启动选择顺序：CLI `--profile` 覆盖已保存 profile；profile 的基础插件加 `enabled`；最后移除 `disabled`。`template` 加载模板服务；`nc` 加载模板、math、NC、多工序。外部插件只在显式启用后启动。
 
-规格合并、机床键完整性校验、资产安全写入与 G-code 生成逻辑集中在 core/共享 route。
-CLI 子命令和两种 UI 都调用这些路径；Tauri 保留单独的 `save_nc_file`，因为输出路径来自
-桌面保存对话框，而不是应用配置目录。
+`plugins` 是按插件 ID 保存的配置，按插件的 `config_schema` 验证；`providers` 是服务 ID 到提供方插件 ID 的显式映射。多候选服务没有选择时失败，不默认选择最后加载者。
 
-> **（v2.1 修订）** `core::asset`（图中 `R9`）是 `nctool-core` 内的**新增写内核子模块**：原子写 / 乐观锁 / 路径防护 / 模板·机床·预设的落盘。它是 `core` 的**内部**模块（依赖既有 core 模块与 `nctool-tpl`），**不新增任何跨 crate 边**，`cli → core → tpl → minijinja` 的单向依赖不变。自本次起，**`nctool-core` 承担资产写入职责**（此前 core 只读不写）——这是本版记档的架构性变更，详见 §2.2 与 D19。
+配置修改需要旧指纹，安装不执行插件代码。运行中不热替换插件，当前能力目录与下次启动配置分别显示。
 
-### 2.2 Crate 职责矩阵
+## 资产
 
-| Crate | 定位 | 对外承诺 | 明确不负责 |
-| --- | --- | --- | --- |
-| `nctool-tpl` | 通用模板引擎封装 | Jinja2 解析、变量提取、NC 数值过滤器、严格/宽松渲染 | 不懂 G-code 语义、不做参数校验、不读文件 |
-| `nctool-core` | G-code 领域层 | 参数模型、规格解析与合并、校验引擎、模板注册表、机床适配、派生计算、生成管线、**资产写入内核（原子写 / 乐观锁 / 路径防护 / 模板·机床·预设的落盘）** | 不感知命令行、不感知终端输出、不起 HTTP 服务、**不决定写盘目标路径策略（由交付层传入已解析路径与安全根）**、**不打印面向用户的报告** |
-| `nctool-cli` | 交付面 | 命令解析、配置层叠、参数归一、结果渲染、退出码、本地 Web 服务、**编辑命令的参数编排与结果/报告呈现** | 不含任何校验/渲染/后处理逻辑、**不持有任何资产（模板 / 机床 / 预设）的文件写入原语** |
-| `nctool-gui` | 桌面交付面（不发布） | React 页面、Tauri invoke、保存 NC 输出 | 不复制模板/机床/预设的写入校验；通过 `nctool_cli::server::route` 调用共享用例 |
+工作区下 `templates/<id>.json`、`presets/<id>.json`、可选 `machines/<id>.json`。资产 ID 是单个合法路径段；引用别的模板使用资产 ID，不借助全局目录分类推断加工类型。
 
-> **（v2.1 修订，后续持续适用）** 上表 `nctool-core` 与 `nctool-cli` 两行按"资产写入内核下沉到领域层"修订（见 D19）。关键边界：core 提供**写内核**但**不决定写盘目标路径策略**（目标路径与安全根由交付层解析后传入）；cli **不持有任何资产（模板 / 机床 / 预设）的文件写入原语**——三类资产落盘经 `core::asset`。**注意：D19 的作用域是"资产写"、不是"一切文件写"** —— 交付层的配置引导、渲染产物和 `$EDITOR` 临时副本仍是已登记例外（见 D19）。
->
-> **当前边界**：模板、机床和预设资产修改全部经 `core::asset`；配置初始化、渲染输出和 `$EDITOR` 临时副本仍是 D19 范围外的交付层写操作。旧版关于 `templates new` 直写的 R-11 已由 T02 收口，作为历史记录保留在 §8。
+模板资产示例：
 
-### 2.3 源码规模分布
-
-| Crate | 模块 | 行数 | 说明 |
-| --- | --- | ---: | --- |
-| `nctool-tpl` | `lib.rs` | 1821 | 对外 API 再导出 + 大量行为契约测试 |
-| | `extract.rs` | 607 | 变量提取核心（AST 遍历 + 可选/必选判定） |
-| | `error.rs` | 396 | `TplError` 六变体 + 行列定位 + 根因链 |
-| | `renderer.rs` | 236 | `minijinja::Environment` 封装（严格/宽松） |
-| | `filters.rs` | 142 | NC 数值格式化 + 13 个数学过滤器（含有限性校验） |
-| `nctool-core` | `validate.rs` | 1635 | 参数校验引擎（`IssueKind` 15 类） |
-| | `manifest.rs` | 1474 | `templates.yaml` + 头部 `{# PARAMS: #}` 解析 + 规格覆盖层 |
-| | `registry.rs` | 1374 | 模板注册表 + `include`/`extends` 闭包收集 |
-| | `model.rs` | 1213 | 参数/机床数据模型 + 规格构建器 |
-| | `pipeline.rs` | 1006 | 端到端生成管线 + 后处理 |
-| | `machine.rs` | 455 | 机床预设 + 配置键 schema |
-| | `variables.rs` | 379 | 变量库（`variables.yaml`，全局按名定义） |
-| | `derive.rs` | 317 | 参数派生（Rust 侧查表计算后注入） |
-| | `asset/*`（`mod` / `atomic` / `guard` / `path` / `spec_fingerprint`） | 1138 | **新增写内核**（原子写 / 乐观锁 / 路径防护 / 指纹）；T01 落地，T02 续加 `template` / `machine` / `preset` 编辑策略 |
-| `nctool-cli` | `server.rs` | 848 | HTTP API（Web UI 后端）+ `spec_json` 单一来源 |
-| | `args.rs` | 445 | `--param k=v` 按规格归一（先白名单后类型） |
-| | `cli.rs` | 341 | clap 命令树 |
-| | `context.rs` | 563 | 命令上下文 + 模板目录装载 |
-| | `commands/templates.rs` | 293 | 模板列表/查看/新建 |
-| | `config.rs` | 240 | 配置层叠加载 |
-| | `commands/inspect.rs` | 224 | 参数规格展示（四桶分组） |
-| | `commands/render.rs` | 202 | 渲染命令 |
-| | `output.rs` | 181 | 统一错误 + 双通道输出 + 退出码 |
-| | 其余（`core/src/lib.rs` + `main` / `machine` / `config_cmd` / `validate` / `ui` / `part` / `completion` / `mod`） | 469 | 再导出与子命令分发 |
-| **合计** | | **14 861** | |
-
-> **（v2.1 注）** 上表规模为 **v2.0（T01 之前）快照**，尚未把 T01 新增的 `core::asset`（表中已补入 1138 行）计入"合计"，且 T02 正在为 `core::asset` 增补 `template`/`machine`/`preset` 策略、并在 `cli` 侧扩展编辑命令 —— **待 T02 落地后统一重新实测**。此外，原文件头的"workspace 共 16 139 行 Rust"与本节"合计 14 861"口径不一（前者疑含测试/基准），本次一并标注为**待重测**，不再沿用旧数。
-
----
-
-## 3. 核心模块详解
-
-### 3.1 `nctool-tpl` —— 模板解析与渲染层
-
-对外 API 只有五个函数 + 四个类型：
-
-```
-parse(source, name) -> Ast
-extract_variables(&Ast) -> Vec<Variable>
-extract_undeclared(&Ast) -> Vec<Variable>
-extract_template_refs(&Ast) -> Vec<String>
-Renderer::{new, with_lenient, with_strict, render, add_template, set_path_loader, render_template}
+```json
+{
+  "source": "Hello {{ user.name }}",
+  "tags": ["letters"],
+  "schema": {"type":"object","required":["user"]},
+  "defaults": {"user":{"name":"Ada"}},
+  "metadata": {"custom":{"language":"en"}}
+}
 ```
 
-`Ast` 内部字段已私有化，`TplError` 标注 `#[non_exhaustive]`，为扩展留空间而不破坏下游。
+NC 规格可放在 `metadata.nc.specs`，通用模板服务只保存扩展元数据。`template.render` 的请求规格/defaults 优先于资产规格/defaults，调用方显式 context 覆盖同名默认值；默认值采用顶层合并。
 
-#### `extract.rs` —— 可选 / 必选判定（本层最有价值的部分）
+读资产返回完整 `{hash,len,mtime}` 的不透明 JSON 字符串指纹。新建时 expected 为 null/缺省；修改必须携带读取到的指纹。写入在文件锁内比较、原子替换并取得返回指纹，拒绝陈旧覆盖和符号链接越界。
 
-对标 Python `jinja2.meta.find_undeclared_variables`，但补上了 jinja2 没有的能力：
-**区分可选参数与必选参数**。
+JSON 输入经过数值下溢扫描与实际解析器确认：非零十进制值被解析为零时失败；字符串内容和合法次正规数不受影响。
 
-| 模板写法 | 判定 | 原因 |
-| --- | --- | --- |
-| `{{ x }}` | 必选 | 裸引用，缺失即渲染失败 |
-| `{{ x \| default(0.15) }}` | 可选 | 有兜底，缺失仍可渲染 |
-| `{% if x is defined %}` | 可选 | 同上 |
-| `{% set x = x \| default(v) %}` | 可选 | 自赋值兜底惯用法（源项目大量使用） |
-| `{{ x \| nc_fixed(3) }}` | 必选 | 过滤器需具体值求值，无法以空串替代 |
-| `{{ (a+b) \| default(1) }}` | `a`/`b` 均**必选** | **兜底不向下传播** |
-| `{{ a.b \| default(1) }}` | `a` **必选** | 同上，取属性先于 `default` 求值 |
-| `{% set total = total + x %}` | `total` **必选** | RHS 先于目标声明求值，此刻 `total` 还不是局部量 |
+## 动作数据流
 
-「兜底不向下传播」是最容易写错的地方。minijinja 先对子表达式求值，
-undefined 参与运算或取属性会直接报错，`default` 来不及兜底。若此处误判为可选，
-上层校验放行后严格渲染依然失败 —— **把一个渲染期崩溃推迟成崩溃**，等于没做。
+`template.render`：支持 `source` 或已保存的 `template`、`templates` 内存引用集合、`context` 对象、`schema/defaults`、`lenient`、`trim_blocks/lstrip_blocks`、显式 `extensions`。
 
-同时排除引擎内置名 `loop` / `self` / `super` / `caller`，以及 `debug` feature 注入的全局
-（`range` / `dict` / `debug` 等），避免把引擎自己的东西误报成"你需要提供的参数"。
+`template.inspect`：递归收集静态模板引用及变量的必选/可选、文件名和行列位置。动态引用无法静态穷举，最终由渲染器解析。`include_snapshot:true` 同时返回模板集合和主模板资产元数据的不可变快照；`template.render` 可仅传入该 `snapshot` 和 context，完全不重读资产。NC 校验、规格解析和渲染使用同一份快照，避免编辑发生在校验与渲染之间时改变程序内容。
 
-#### `filters.rs` —— NC 数值格式化与数学过滤器
+`nc.generate`：支持 `source/template/templates`、`params`、领域 `specs`、`machine` 或 `machine_id`、`options`。不使用普通模板 context 作为领域参数。NC 规格保留原有范围、整数、白名单、条件必选、查表派生和机床动态上界算法；任何领域错误都会失败。模板 lenient 不绕过领域校验。
 
-| 过滤器 | 作用 | 示例 |
-| --- | --- | --- |
-| `nc_fixed(N)` | 固定小数位 | `21` → `21.000` |
-| `nc_strip` | 去尾零 | `21.0` → `21` |
-| `nc_pad(N)` | 前导零填充 | `1` → `0001` |
-| `nc_signed(N)` | 带符号（仅用于有符号语义的值） | `21` → `+21.000` |
-| `sin_d` / `cos_d` / `tan_d` / `asin_d` / `acos_d` / `atan_d` | **度制**三角函数 | `30 \| sin_d` → `0.5` |
-| `sin` / `cos` / `tan` / `sqrt` / `pow` / `ln` / `abs` … | 弧度制 / 通用数学 | 与 Rust 标准库一致 |
+`process.generate`：支持 name、公共 params/machine/options、非空 ops。工序覆盖公共参数与选项；每段从上一段真实末行号续编，不能自行重置。任何工序失败时返回聚合诊断，成功工序正文不交付。先在内存构造最终结果，再由 CLI `--out` 原子写出。
 
-两条硬约束：
+动作实例与 JSON Schema 以 `nctool actions` / `/api/v2/capabilities` 为运行时真值。
 
-1. **所有过滤器对结果做有限性校验**：一旦产生 NaN/Inf（`sqrt(-1)`、`ln(0)`），渲染立即失败。
-2. **宽度参数均有上界**（`MAX_NC_FIXED_DECIMALS = 32`、`MAX_NC_PAD_WIDTH = 1024`），
-   防止用户配置一个巨大宽度拖垮内存。
-3. `nc_pad` **拒绝小数与负数输入**（`1.7` 会被 `trunc()` 成 `O0001`，程序号写错却不报错；
-   负数会拼出 `O-001` 这类非法 G-code）。
+## HTTP 与运行约束
 
-> ⚠️ **该防线只覆盖本 crate 注册的过滤器**。裸 `{{ x }}` 输出、minijinja 内建运算
-> 产生的 NaN/Inf 不在保护范围内，需由上层校验拦截 —— 这正是 `nctool-core` 存在的理由之一。
+- `GET /api/v2/plugins`：当前插件状态、下次启动配置与是否需要重启。
+- `GET /api/v2/capabilities`：动作 Schema、服务绑定、插件贡献的页面。
+- `GET /api/v2/config`；`POST /api/v2/config`，体 `{config,expected}`。
+- `POST /api/v2/plugins/<id>/enable|disable`。
+- `POST /api/v2/actions/<action-id>`，体 `{input,request_id?}`。
+- `POST /api/v2/cancel/<request-id>`。
 
-> ⚠️ **角度制陷阱**：本库裸 `sin`/`cos`/`tan` 是**弧度制**，度制一律带 `_d` 后缀。
-> 迁移 Python/Jinja2 模板时尤其危险：源项目常把 `math.sin(math.radians(x))` 暴露为 `sin`
-> （即那个 `sin` 是度制），与本库同名不同义，必须逐处改成 `sin_d`。
-> `sin(30)` = -0.988 而 `sin_d(30)` = 0.5，且是**静默**错误 —— 错误坐标写进 G-code 会撞刀。
+成功响应 `{ok:true,data:...}`，错误 `{ok:false,error:{code,message,diagnostics}}`。动作结果为 data/artifacts/diagnostics。冲突 409，未知入口 404，插件并发上限 503，插件超时 504。
 
-#### `error.rs` —— 结构化错误与可诊断性
+模板集合最多 1024 份、合计 16 MiB；单次渲染默认 1,000,000 条指令预算和 16 MiB 流式输出上限，避免失控循环和输出分配。
 
-`TplError` 六个变体：`Parse`（带 line/col）、`TemplateNotFound`、`UndefinedVariable`、
-`UnknownFilter`、`UnknownTest`、`Render`。后三者会**从 minijinja 的错误详情里反解出**
-变量名 / 过滤器名 / 测试名，并尽力从源码字节偏移恢复标识符。
+HTTP 使用 Axum/Tokio，仅回环地址；普通请求体上限 1 MiB，资产包校验/导入请求上限 64 MiB，读取超时 10 秒，工作线程并发上限 8。取消入口不竞争动作执行配额。POST 必须 application/json，校验 Host、Origin 和 Sec-Fetch-Site。
 
-两条实测补强（"信息被吞掉"的案例）：
+外部进程默认超时 30 秒、单条消息 1 MiB、并发 8；可配置范围见协议。超时或取消会终止进程，所以同一进程中的其他活动请求也会失败；其他插件与宿主仍可用。首版不提供副作用回滚或操作系统级沙箱。插件应通过宿主服务交付产物，避免在执行过程中提前写出成品。
 
-| 场景 | 问题 | 处理 |
-| --- | --- | --- |
-| 嵌套 `{% include %}` 失败 | minijinja 只给外层包装 `could not render include: error in "sub.j2" (in main.j2:2)`，**根因被吞** | 沿 `std::error::Error::source()` 链收集各层描述，以 ` ← ` 追加 |
-| 无 `detail` 的错误 | 消息退化成 `invalid operation (in x.j2:83)` | 用 `range()` 取出**出错表达式片段**补上（`（出错表达式：-U_A）`） |
+## 2.1 工作台接口
 
-第二条仅在 `detail` 为空且 `err.name() == 所传模板名` 时取 ——
-子模板的字节范围不适用于主模板源码，强行取会得到无关片段。
+新增通用动作 `template.catalog`、`template.copy`、`template.remove`、`preset.copy`、`preset.remove`。目录返回显示名称、说明、标签和版本指纹。复制不会覆盖已有资产；删除需要指纹且拒绝已知静态模板引用。重命名在元数据中修改显示名称，内部标识和 include 引用保持稳定。
 
-### 3.2 `nctool-core` —— G-code 领域层
+- `GET /api/v2/workspace`：工作区标识与当前插件组合。
+- `POST /api/v2/runs`，体 `{action,input,title?}`：创建异步任务，返回 ID。
+- `GET /api/v2/runs`：最近 100 条轻量索引；完整记录仍保留在磁盘。
+- `GET /api/v2/runs/<id>`：实际输入、状态、结果、错误与插件版本。
+- `POST /api/v2/runs/<id>/cancel` / `remove`：取消任务或删除已结束记录。
 
-#### `model.rs` —— 数据模型
+任务保存在工作区 `.nctool/runs/`，单条记录上限 64 MiB，最多并发 8 个任务。生成成功后才记录可交付产物；取消、失败和服务中断不提供当前产物。通用模板记录完整源集合快照；第三方/领域任务保留动作输入和插件版本，其额外领域快照由提供方接口决定。
 
-| 类型 | 职责 |
-| --- | --- |
-| `ParamValue` | 参数值，**扁平值模型**：`Number` / `Integer` / `String` / `Bool` / `List` |
-| `ParamKind` | 参数类型：`Number` / `Integer` / `String` / `Bool` / `List` / `Choice` / `Any` |
-| `ParamSpec` | 参数规格：类型 + 必选性 + 描述 + `min`/`max` + `unit` + `options` 白名单 + `required_if` + `derive` + `default` |
-| `ParameterSet` | 参数集合（`BTreeMap<String, ParamValue>`），`to_minijinja_value()` 转换为渲染上下文 |
-| `MachineConfig` | 机床配置（键值字符串表，`get(key)` 读取） |
-| `DeriveRule` | 派生规则：源参数名 + 查表 + 回退值 |
-| `RequiredIf` | 条件必选：控制参数 + 触发值集合 |
+WebUI 使用模式只显示参数表单与结果，编辑模式显示源码和参数定义。JSON 属于高级入口，无效 JSON 会保留并阻止执行，不能回退到旧的有效输入。生成结果带有输入关联，修改输入后旧结果的导出会禁用。
 
-**`ParamValue` 只有扁平类型，JSON 对象被拒绝**（`不支持对象类型`）。需要结构时建模为
-「平行列表」（`xs` + `zs` 两个数组），或在模板内用列表元素字段组合表达。
+## 2.2 插件管理与工作区迁移
 
-序列化约定：
+- `POST /api/v2/config/validate {config}`：仅校验描述、配置、服务提供方与依赖，返回启动顺序。保存和启停接口也执行同一预检查，错误不会保存。
+- `POST /api/v2/plugins/inspect {source}`：检查本地插件目录，返回声明，不启动入口。
+- `POST /api/v2/plugins/install {source}`：校验后复制到 home/plugins；不自动启用。
+- `POST /api/v2/plugins/uninstall {id}`：只卸载当前未运行的外部插件。
+- `POST /api/v2/runs/<id>/rerun`：生成新任务，优先使用提供方的 replay_input。成功的内置 NC/工序结果固定模板、机床和选项；执行器版本仍是当前版本，不承诺跨版本逐字一致。
+- `GET /api/v2/bundle`：导出当前启用插件声明的所有资产集合。
+- `POST /api/v2/bundle/validate {bundle}`：检查完整性、提供方可用性、资产结构与同名冲突，返回集合及稳定标识映射，不写入资产。
+- `POST /api/v2/bundle/import {bundle}`：全部预检查后应用，失败时通过各集合返回的 receipt 反向回滚已导入资产。指纹不匹配时不会删除其他编辑写入的数据，回滚冲突会明确报告。
 
-- 序列化**恒为带标签形式**且标签**小写**（`{type: integer, value: 8}`，与 `ParamKind` 一致）；
-- 反序列化**额外接受裸标量**（`options: ["闭口", 8, 12.5]`），手写 YAML 用这个；
-- 读取时类型名**大小写不敏感**（兼容历史 PascalCase 载荷）；
-- 带标签形式仍做类型自洽校验：`{type: integer, value: 8.5}` 报错而非静默截断。
+资产包结构为 `{format:"nctool-workspace",version:1,collections:{id:data},manifest:[{collection,provider,version,fingerprint}]}`。内容指纹用于发现改动，不是签名或来源认证。导出保留所有稳定标识，模板引用无需重写；首版导入拒绝同名冲突，不自动重命名，也不导入运行历史或宿主启动配置。
 
-`ParamValue::display()` 是**参数值渲染的单一来源**，被报错消息、`inspect` 展示、
-候选值列表三处共用。
+模板集合包含 templates/presets，NC 集合包含 machines。单个资产最多 1 MiB、每集合最多 2048 项、整体包最多 64 MiB。集合插件负责内容与路径校验；外部提供方必须遵守 validate_only 和回滚契约。内置导入具备受保护的原子单文件写入和回滚，跨插件导入不提供隔离外部副作用的数据库事务。
 
-#### `manifest.rs` —— 模板清单与元数据三级回退
+NC 视图通过已保存模板的 schema 生成参数控件；metadata.nc.specs 优先作为领域规格，无领域规格时可从通用 schema 提取数值类型和范围。临时源码使用独立参数，不沿用先前所选模板的规格。机床配置和工序草稿按工作区恢复，未完成数值不转成合法旧值。
 
-元数据优先级：**`templates/templates.yaml` 清单 > 模板头部注释 > 文件名/目录名**。
-
-- 分类默认按目录推断（`turning/` → 车削，`milling/` → 铣削，`drilling/` → 钻孔，
-  `grooving/` → 切槽，`machines/` → 机床，`general/` → 通用），清单可覆盖。
-  因此**清单只需描述「与默认值不同」的部分**。
-- `ResolvedMeta::resolve(rel_path, source, manifest_entry, library)` 是三级回退的汇聚点，
-  由 `cli/src/context.rs::build_registry` 逐模板调用。
-
-**头部 `{# NAME: #}` / `{# DESCRIPTION: #}` / `{# PARAMS: #}` 中，只有 `PARAMS` 会生成规格**：
-
-- 两种写法可混用：`name 必选 描述`（类型省略 → `ParamKind::Any`）与
-  `name type required 描述`。
-- 必选标记：`必选`/`可选`/`条件必选`/`required`/`optional`/`req`/`opt`，
-  可带**分支限定词** `可选(ES)`（限定词保留进描述）。
-- `NAME`/`DESCRIPTION` 只扫前 10 行，**`PARAMS` 另设 200 行界**（机床模板 18 个参数，
-  收尾 `#}` 会落到第 20 行）。
-- 解析失败的行**告警**（`warning: <模板>: 第 N 行无法解析…`），不静默跳过 ——
-  静默跳过等于静默少一条参数约束。
-- 收尾行的 `-#}` 要 `trim_matches('-')` 后再判空，否则会解析出名为 `-` 的假参数。
-- **`{# MACHINE: #}` / `{# OUTPUT: #}` 从未实现**，要设机床与输出后缀请用清单字段。
-
-`ParamOverride` + `merge_params` 是**稀疏覆盖机制**：约束字段为 `Option<Option<T>>`，
-能区分「没写 → 沿用继承值」「写 `null` → 清空该条继承」「写成值 → 设值」三种意图
-（`options` 上 `[]` 与 `null` 等价）；`deny_unknown_fields` 让拼错的字段名直接报错。
-少一层 `Option` 就分不出「不改」与「清空」，继承来的 `min` / 白名单 / `derive`
-便在**所有**模板上生效且无从解除——某模板确实需要负值或不要派生时只能去改变量库，
-那会波及全部模板。
-
-#### `variables.rs` —— 全局变量库（按名生效）
-
-`templates/variables.yaml` 是**按变量名**生效的全局参数规格：同一变量名在多台机床/多个模板上
-含义一致时只写一次，避免在 12 个模板里重复声明 `U_Q` 的候选值。
-
-**三条刻意的"不导入"红线**（改这个文件前先读，都是为了不产出"跑得通但错误"的 G-code）：
-
-| 不导入 | 原因 |
-| --- | --- |
-| `default_value` | 源库默认值是**针对特定样件的预填值**（`U_A = 141.25` 是那根轴的长度）。规格默认值会让缺参**静默通过**，用户少填一个零件尺寸就拿到另一根轴的程序。CNC 零件尺寸没有合理默认值。 |
-| `description` | 头部描述更贴近模板上下文；源库描述以 YAML 注释形式保留。 |
-| `read_only` 变量的 `options` | 源库 `read_only` 意为"由机床设置/派生计算决定"，其 `options` 是**某次装夹的取值快照**（`U_ANG:[20]`、`R1:[4000]`）。当用户可选集会禁掉合法的换刀/换料调整。**只导入类型。** |
-
-`options` 与类型全量导入。**生效范围**：只对"模板确实引用了"的变量生效
-（头部声明 ∪ `extract_undeclared`）—— 否则会注入一堆未引用规格并触发 `SpecUnused` 噪声。
-同名重复定义**直接报错**。
-
-#### `derive.rs` —— 派生参数（查表换算不写在模板里）
-
-落实 P2：查表型换算（如 `tip_model → tip_depth`）用 `derive` 规则声明在
-`variables.yaml` / 清单 `params`，由 Rust 侧算好注入，模板只写 `{{ tip_depth }}`。
-
-| 情形 | 行为 |
-| --- | --- |
-| 派生参数未提供 | **不要求调用方提供**（与 `machine` 同属系统注入值） |
-| 调用方提供了 | **派生值恒胜** + `ShadowedSystemVar` 警告 |
-| 源缺失/未命中且无 `fallback` | `DeriveFailed`（Error），**不取 0** |
-| 派生值 | 照常过类型/白名单/区间检查 —— **派生不是绕过校验的后门** |
-| 求值时机 | 校验前（`check_vars`）+ 渲染前（pipeline 两条路径） |
-| 顺序 | **先派生、再 `apply_spec_defaults`**（源参数可能靠默认值才存在） |
-| 表键比较 | `matches_option`（数值/整数跨变体按数值相等） |
-
-首个用例：`machines/index_g420/dg_cal_ir9.j2` 的 `tip_depth`（12 项表，回退 29.61 = DM24），
-表已从模板搬到 `variables.yaml`，**数据表只此一份**。
-
-> 刻意**没有**加 `ParamSpec.read_only` 字段：源库 `read_only` 分两类 ——
-> 可派生的（用 `derive` 建模）与由调用方预生成的（轨迹段参数，保持普通必选）。
-> 不产生行为的字段只会误导。
-
-#### `validate.rs` —— 渲染前校验引擎
-
-对外入口三个：`validate_template`（从源码）、`validate_with_vars`（复用已提取变量）、
-`spec`（构造规格）。共享核心是 `check_vars`。
-
-> **（v2.1 追加）** 编辑模块（见 `docs/ARCH_DESIGN_EDIT_MODULES.md` §7.15 / §3.2）将新增**两个对外入口**，**归属均在 `core::validate`**（不在写模块 `core::asset`），均进 1.0 冻结清单：
-> - **`check_spec_consistency(specs) -> ValidationReport`** —— **不依赖参数值**的规格自洽校验（`spec.default` 判定 + `required_if` 控制参数 / `derive` 源参数的存在性），供"保存前 L2 校验"用。**必须复用**既有私有 `check_spec_defaults`（`default` 判定），**禁止重写**；须有"两路一致"测试防漂移（P4：同一判定不得两处各写一份）。
-> - **`check_param_values(specs, params) -> ValidationReport`** —— 只对**已提供**参数做值级校验、**不查缺失**，供"保存前 L3 校验"用。**正向集合**入口（遍历已提供参数逐个检查）；**不得**用"完整 `validate` + 降级 `Missing`"——那要依赖 `downgrade_errors_except` 的**白名单反向** `keep`，新增 `IssueKind` 会被静默降级。
-
-`IssueKind` 结构化类别（**调用方据此做程序化决策，禁止依赖 `message` 文本**）：
-
-| 类别 | 级别 | 含义 |
-| --- | --- | --- |
-| `Missing` | Error | 必选参数缺失 |
-| `TypeMismatch` | Error | 类型不匹配 |
-| `NonFinite` | Error | 数值为 NaN / Inf |
-| `OutOfRange` | Error | 超出 `min`/`max` 区间 |
-| `NotInteger` | Error | 违反整数约束 |
-| `NotInOptions` | Error | 不在 `options` 白名单内 |
-| `DeriveFailed` | Error | 派生参数无法计算（源缺失/未命中且无回退） |
-| `ConditionalSkipped` | Info | 条件必选未命中：该分支本次不可达（**正常情况**） |
-| `Unused` | Warning | 参数集提供了模板未引用的参数 |
-| `SpecInert` | Warning | 规格中存在**永不生效**的声明（配置侧静默失效） |
-| `ShadowedSystemVar` | Warning | 参数与系统注入变量同名 / 派生值覆盖了用户值 |
-| `ParseError` | Error | 模板解析失败 |
-| `Other` | — | 未分类兜底 |
-
-两处**必须区分**的类别（混用会让统计失去意义）：
-
-- `ConditionalSkipped` ≠ `Missing`：前者是"该分支本次不可达"（正常），
-  后者是"生成结果不完整"。混用会让"缺参"统计虚高。
-- `SpecInert` ≠ `Unused`：前者是**配置侧**问题（参数名拼错、或 `min`/`max`/`integer`
-  声明在 `String`/`Bool` 上永不执行），后者是"用户多传了参数"（无副作用）。
-
-**枚举白名单**（`ParamKind::Choice` + `ParamSpec.options`）的三条约定：
-
-1. `Choice` 的类型匹配有意放宽为"任意标量"（String/Number/Integer/Bool），只有 `List` 被拒。
-   真正的约束是白名单而非类型；若只收 `String`，数值枚举（`U_Q` = 0/8/10/12.5）
-   会先被类型检查挡掉、永远走不到白名单比较。
-   **副作用**：填错类型的标量报 `NotInOptions` 而不是 `TypeMismatch`。
-2. `options` 对**所有类型**生效，不只 `Choice`：`Number + options` 表达数值枚举。
-   空列表 / `None` = 不约束。
-3. **数值/整数跨变体按数值相等**：`Integer(8)` ≡ `Number(8.0)`（CLI/JSON 常把 `8` 解析成
-   `8.0`，按变体严格比较是**假拒绝**）。但文本 `"8"` 与数值 `8` 仍是不同候选项。
-
-> **实现位置陷阱**：白名单检查必须是独立的 `check_value_options()`，
-> **不能塞进 `check_value_constraints()`** —— 后者对非数值类型在 `as_f64()` 处提前
-> `return`，而字符串枚举正是白名单的主要用途，放进去等于永不执行。
-> 两个调用点：逐变量检查、规格默认值自洽性检查（`spec.default` 也要过白名单）。
-
-**条件必选 `required_if`** 判定规则：
-
-- 控制参数生效取值（用户提供值 > 规格 `default`）命中触发值 → 必选；
-- 未命中 → 可缺失，报**提示级** `ConditionalSkipped`；
-- 不可判定（未提供且无规格默认值）→ **保守判必选**；
-- **只支持单个控制参数**，表达不了合取（`groove_type==FS && side==Right`），
-  故 `turning/undercut.j2` 这类 4 分支完整版不声明 `required_if`。
-
-**不允许用 `| default(0)` 规避互斥参数** —— 那会静默产出 `Z0`。
-
-#### `registry.rs` —— 模板注册表
-
-统一管理内存模板、文件系统模板与内置模板库。核心能力：
-
-| 方法 | 作用 |
-| --- | --- |
-| `add_memory` / `add_file` / `add_entry` | 注册模板（重名报 `Duplicate`） |
-| `list` / `list_visible` / `list_for_machine` | 列表（按分类/可见性/机床方案包筛选） |
-| `extract_params(name)` | 提取**完整参数闭包**（穿透 `include`/`extends`），剔除系统注入变量 |
-| `validate(name, params)` | 渲染前校验（同样穿透模板间引用，带环引用防护） |
-| `render_template` / `render_template_lenient` | 渲染（应用规格默认值兜底） |
-| `system_vars` / `set_system_vars` | 系统注入变量名列表（默认 `["machine"]`） |
-
-`extract_params` 与 `validate` **必须穿透 `{% include %}`**：否则组合模板会只列出主模板
-自身的变量，用户按表填参会渲染失败。被引用但未注册的模板静默跳过（其变量无法静态并入）。
-
-**两级缓存**（都为消除"同一份工作反复重做"）：
-
-| 缓存 | 位置 | 键 / 失效 | 说明 |
-| --- | --- | --- | --- |
-| 静态分析 `Analysis` | `TemplateEntry::analysis()`（`OnceCell`） | 随条目生命周期 | 缓存「未声明变量 + 模板引用」。`Ast` 借用源码、无法自引用存入条目，故缓存解析**产物**。`extract_params` / `validate` / `include` 闭包共用一份 |
-| 宽松渲染器 | `TemplateRegistry::lenient_cache`（`OnceCell`） | `add_entry` 时清空 | 宽松是建 `Environment` 时的标志，无法在同一渲染器上切换，故需第二个环境；惰性构建一次，构建失败原因一并缓存 |
-
-> 严格渲染走 `renderer`（注册时已编译，minijinja 内部缓存），无重复解析。
-
-
-#### `machine.rs` —— 机床适配
-
-3 个内置预设（`generic` / `wfl_m65` / `index_ms40`），每个是一张 `MachineConfig` 键值表，
-实现「换机床即换编程约定」。`KNOWN_CONFIG_KEYS` 是配置键 schema（键名 + 类型 + 说明），
-`validate_config_keys` 对未知键给出提示。
-
-#### `pipeline.rs` —— 端到端生成管线
-
-`GCodeGenerator` 持有 `TemplateRegistry`，提供三条入口：
-
-- `generate()` —— 严格模式：任何 Error 级问题都中止
-- `generate_lenient()` —— 宽松模式：未定义变量渲染为空，问题降级为警告
-- `generate_lenient_with_report()` —— 宽松 + 返回降级后的报告
-
-宽松模式的**唯一硬失败是 `NonFinite`**：参数缺失可以留空，但非法坐标会让机床走到错误位置 ——
-这不是"参数可缺省"，而是"参数值非法"，宽松模式没有放行理由。
-
-> 早期实现宽松路径直接跳过 `validate`，导致 `X{{ x }}` 能吐出 `XNaN` ——
-> 校验层唯一的"防非法数值写入 G-code"防线在宽松路径上完全失效。现已修正为
-> "照常校验 + 仅降级非 `NonFinite` 问题"。
-
-**后处理**（`postprocess`）：
-
-| 项 | Text 格式 | Gcode 格式 |
-| --- | --- | --- |
-| 行号 | 不做 | 可开启；程序号行（`O` 开头）与已有 `N` 前缀行不重复编号；`step=0` 视为 1 |
-| 空行清理 | 不做 | 可开启 |
-| 行首尾 trim | 不做 | 每行 trim |
-| ASCII 清洗 | 不做 | `ascii_only` 时非 ASCII → `?`（头部注释与模板名同样清洗） |
-| 头部注释 | 用户显式开启时生效 | 同左 |
-
-行号前缀/宽度与程序号前缀**来自机床配置**（`line_number_prefix` / `line_number_digits` /
-`program_prefix`），实现"换机床即换编程约定"。宽度夹在 `[1, MAX_LINE_NUMBER_DIGITS = 32]`：
-机床配置是用户可编辑的字符串，缺失上界则一行就能触发 GB 级分配 ——
-而 **Rust 的分配失败是进程 abort，不可捕获**。取 32 而非对齐 `nc_pad` 的 1024，
-是因为行号前缀作用于**每一行**，总分配量是 `行数 × 位宽`。
-
-### 3.3 `nctool-cli` —— 命令行交付面
-
-| 模块 | 职责 |
-| --- | --- |
-| `cli.rs` | clap 命令树 + 全局选项（`--machine` / `--template-dir` / `--format` / `--verbose`） |
-| `config.rs` | 配置层叠：全局配置 + 项目 `nctool.toml` 合并；**损坏时降级为空配置 + 警告**，不阻断 |
-| `context.rs` | `Ctx`：装配注册表（递归扫描 `template_dir` 的 `*.j2`）、解析机床 |
-| `args.rs` | `--param k=v` 归一 + `--params-file` 加载 |
-| `output.rs` | `CliError`（分类 + 消息 + 静默标记）、text/JSON 双通道、退出码矩阵 |
-| `server.rs` | `tiny_http` 本地 Web 服务 + `spec_json` 单一来源 |
-| `commands/*` | 各子命令实现；`Command::run` 统一分发 |
-
-`Command::run` 的分发有两处刻意设计：
-
-- `completion` / `part` **不读配置文件**，避免 CWD 存在损坏的 `nctool.toml` 时
-  连补全生成也被拦下；
-- `ui` 需要配置层叠（模板目录 / 自定义机床），走正常分支 —— 配置损坏时
-  `config::load` 已降级为空配置 + 警告，不会阻断启动。
-
-**`--param` / 表单取值归一顺序**（后端 `args::coerce_param_value` 与前端
-`coerceParamValue` 必须同一顺序）：
-
-> **显式后缀 > 白名单命中 > 声明类型 > 启发式**
-
-显式后缀指 `k:s=v`（强制字符串）、`k:n=v`（强制数值）、`k:b=v`（强制布尔）；
-另有约定：**前导零的纯数字按字符串处理**（`0008` 是程序号/刀号而非数值 8）。
-
-**UI 是构建产物**（v2.2 修订）：
-
-> **源码**：`ui/src/*.part.html`（7 个片段，按文件名升序）——**改前端改这里**。
-> **生成物**：`ui/index.html`（供 `file://` 演示）与 `cli/ui/index.html`（被
-> `include_str!` 嵌入二进制），由 `scripts/build_ui.mjs` 从**同一份 Buffer** 写出，
-> 因此两份天然字节一致，不再依赖人工同步。
-> **两条防线**：CI 的 `node scripts/build_ui.mjs --check`（对提交物）与
-> `cli/tests/cli.rs::ui_html_copies_stay_in_sync` 的**重拼接断言**（本机 `cargo test`
-> 即可拦住"改了片段忘生成"，不依赖 node）。
-> **行数约束**：从"单文件 ≤ 3000"迁移为"**每个片段** ≤ 3000"（最大片段 1160 行）。
-
----
-
-## 4. 数据流
-
-### 4.1 主数据流：端到端 G-code 生成
-
-```mermaid
-sequenceDiagram
-    participant U as 用户 / Web UI
-    participant CLI as nctool-cli
-    participant CTX as Ctx (context.rs)
-    participant REG as TemplateRegistry
-    participant VAL as validate.rs
-    participant DER as derive.rs
-    participant REN as Renderer (minijinja)
-    participant POST as postprocess
-
-    U->>CLI: nctool render <tpl> --param k=v --machine m
-    CLI->>CTX: Ctx::from_global(全局选项)
-    CTX->>CTX: config::load() 层叠全局+项目配置
-    CTX->>REG: build_registry(): 扫描 template_dir
-    Note over CTX,REG: 每个 *.j2 → ResolvedMeta::resolve<br/>(清单 > 头部注释 > 目录/文件名)
-    CLI->>CLI: args::build_parameter_set(--param / --params-file)
-    CLI->>REG: validate(tpl, params)
-    REG->>VAL: check_vars(vars, specs, params, system_vars)
-    VAL->>DER: derive::apply(specs, params)
-    DER-->>VAL: 派生后的参数集
-    VAL-->>CLI: ValidationReport
-    alt 报告含 Error
-        CLI-->>U: 校验失败报告（stderr）+ 退出码 1
-    else 校验通过
-        CLI->>DER: derive::apply（渲染前再算一次）
-        CLI->>CLI: apply_spec_defaults + build_render_context(params + machine)
-        CLI->>REN: render_template(tpl, context)
-        REN-->>CLI: 渲染文本
-        CLI->>POST: 行号 / 头部注释 / ASCII / 空行清理
-        POST-->>CLI: 最终 G-code
-        CLI-->>U: G-code（stdout 或 --out 文件）
-    end
-```
-
-要点：
-
-1. **校验前置于渲染**（P1）。校验失败时 `stdout` 不含任何 G-code。
-2. **派生在两条路径各算一次**：校验前（让派生值参与校验）+ 渲染前（管线兜底）。
-   顺序恒为 **先派生、再 `apply_spec_defaults`** —— 派生依赖源参数取值，
-   而源参数可能靠规格默认值兜底才存在（`derive::apply` 内部已对源参数应用一次默认值）。
-3. **报告走 stderr，G-code 走 stdout**。错误行只留一句摘要 ——
-   把多行报告塞进 `CliError::message` 会让首行被当成摘要，提示行排在最前时
-   输出 `error: 提示 …` 这种自相矛盾的结果。
-
-### 4.2 参数规格的解析与合并（三个来源）
-
-**优先级：清单 `params` > `variables.yaml` > 头部 `{# PARAMS: #}`**（越靠后越具体）。
-
-```mermaid
-graph LR
-    A["模板头部<br/>{# PARAMS: name type required 描述 #}"] -->|基础层| M
-    B["templates/variables.yaml<br/>全局按名：类型 / options"] -->|按字段稀疏覆盖| M
-    C["templates.yaml 的 params<br/>本模板显式覆盖"] -->|按字段稀疏覆盖| M
-    M["merge_params()<br/>ParamOverride 稀疏合并"] --> D["TemplateEntry.params<br/>Vec&lt;ParamSpec&gt;"]
-    D --> E["validate / inspect / 表单渲染"]
-```
-
-| 来源 | 作用域 | 职责 |
-| --- | --- | --- |
-| 头部 `{# PARAMS: #}` | 本模板 | 这个模板用哪些参数：名字 / 类型 / 必选性 / 描述 |
-| `templates/variables.yaml` | **全局按名** | 同一变量在多模板间的共同类型与候选值 |
-| `templates.yaml` 的 `params` | 本模板 | 本模板显式覆盖（最高优先级，补头部表达不了的 `min`/`max`/`integer`/`options`/`required_if`/`default`） |
-
-三者复用同一套稀疏覆盖机制（`ParamOverride` + `merge_params`），
-"只写要改的字段"这一约定在三个层级完全一致。
-
-`ParamKind::Any` 是**过渡态**：头部只写 `name 必选 描述` 时类型记为 `Any`
-（不查类型，但 `options`/`required_if`/`default` 生效）。19 个 INDEX G420 模板的头部
-都是这种写法 —— 已由变量库补上类型，**无需改头部**。
-
-### 4.3 模板装载数据流（`build_registry`）
-
-```mermaid
-graph TD
-    A["--template-dir / 配置 template_dir"] --> B{"目录存在?"}
-    B -->|否| B1["CliError: 模板目录不存在<br/>退出码 3"]
-    B -->|是| C["canonicalize(root)"]
-    C --> D["TemplateManifest::load()<br/>失败→空清单+warning"]
-    C --> E["VariableLibrary::load()<br/>失败→空库+warning"]
-    D --> F["collect_templates()<br/>递归收集 *.j2<br/>跳过隐藏/清单/符号链接逃逸"]
-    E --> F
-    F --> G["按路径排序（输出稳定）"]
-    G --> H["逐模板 ResolvedMeta::resolve()"]
-    H --> I["TemplateEntry::new(name, category, desc, source, params, text)<br/>.with_visible().with_output().with_machine().with_status()"]
-    I --> J["registry.add_entry()<br/>重名→Duplicate 错误"]
-    J --> K["GCodeGenerator"]
-```
-
-要点：
-
-- **目录模板以「相对模板目录的路径」为模板名**（如 `turning/undercut.j2`），
-  用 `/` 分隔 —— 相对名唯一，不与内置模板的扁平名冲突。
-- **先完成整目录遍历再注册**，避免遍历中途发现重名时报错而留下半成品注册表。
-- **清单/变量库加载失败不阻断**：都是可选文件，损坏时降级为空并告警，
-  这样模板仍可用，用户也能看到问题所在。
-- 清单/变量库/头部 `PARAMS` 的解析警告都**逐条 eprintln**，不静默。
-- **注册表按目录指纹缓存**（`Ctx::build_registry`）：键是「模板目录 + 目录树最新
-  mtime」，命中则复用同一份 `Rc<GCodeGenerator>`。Web UI 每个请求都要用它，
-  而构建一次要遍历目录、读取并解析全部模板源码（成本 O(模板数)）。
-  **指纹不可省**：无条件长期缓存会让用户改完模板仍拿到旧注册表，渲染出与图纸
-  不符的 G-code —— 属于本项目零容忍的"静默产出错误程序"。
-  指纹取不到（IO 异常）时放弃缓存，宁可重算。
-- 需要**可变**注册表的调用方走 `Ctx::build_registry_fresh`（`render` 注册临时
-  文件模板的路径）：缓存中的注册表由所有调用方共享，就地改动会让临时模板
-  泄漏进后续调用。
-
-### 4.4 渲染上下文的构造
-
-```
-渲染上下文 = 参数集（派生 + 规格默认值兜底后的 effective）
-           + machine（机床配置，供 {{ machine.xxx }} 引用）
-```
-
-`ParameterSet::to_minijinja_value()` 负责把扁平值模型转成 minijinja 的 `Value`。
-`machine` 属**系统注入变量**，在 `registry.system_vars()` 中登记，
-校验时视为已提供，不参与缺失/冗余检查。
-
-### 4.5 HTTP 数据流（Web UI）
-
-`nctool ui` 启动 `tiny_http` 服务（**仅绑定回环地址**，本地开发工具定位）：
-
-| 方法 | 路径 | 作用 |
-| --- | --- | --- |
-| GET | `/health` | 健康检查 |
-| GET | `/api/templates` | 模板列表（可按分类筛选） |
-| GET | `/api/templates/{name}` | 模板详情（含参数规格） |
-| GET | `/api/machines` | 机床预设列表 |
-| POST | `/api/inspect` | 变量提取 |
-| POST | `/api/validate` | 参数校验 |
-| POST | `/api/render` | 渲染 |
-| GET | `/` · `/index.html` | 内嵌单文件 UI |
-
-**规格字段的 JSON 形状只有一处定义**：`server::spec_json`（`pub(crate)`），
-HTTP API 与 `inspect --format json` 共用 —— 新增规格字段只改这一处。
-
-安全边界：HTTP 服务**只允许访问注册表中的逻辑模板名**，
-不得调用 `Ctx::find_template_file`（那会允许按任意路径读文件）。
-
----
-
-## 5. 错误模型与退出码
-
-### 5.1 三层错误类型
-
-| 层 | 类型 | 承载信息 |
-| --- | --- | --- |
-| 模板层 | `TplError` | 解析位置（line/col）、未定义变量名、根因链、出错表达式 |
-| 领域层 | `PipelineError` / `RegistryError` / `DeriveError` / `ManifestError` | 模板未找到 / 校验失败（含完整报告）/ 渲染失败 / 派生失败 / 清单解析失败 |
-| 交付层 | `CliError` | 分类标识（`kind`）+ 人类可读消息 + 静默标记 |
-
-`output.rs` 为各领域错误实现 `From`，统一收敛到 `CliError`。
-
-### 5.2 退出码矩阵
-
-| 退出码 | 含义 | 触发分类 |
-| ---: | --- | --- |
-| 0 | 成功 | — |
-| 1 | 参数校验未通过 | `validation`（含未分类兜底） |
-| 2 | 参数/用法错误 | `args`（与 clap 一致） |
-| 3 | IO 失败 | `io` |
-| 4 | 配置错误 | `config` |
-| 5 | 模板/机床未找到 | `template_not_found` / `machine_not_found` |
-| 6 | 渲染/注册表失败 | `render` / `pipeline` / `registry` / `template_duplicate` / `template_empty` / `template_compile` |
-| 7 | 功能尚未实现 | `not_implemented` |
-
----
-
-## 6. 关键设计决策
-
-| 编号 | 决策 | 理由 |
-| --- | --- | --- |
-| **D1** | `minijinja::Value` 由 `nctool-tpl` 单点再导出 | 下游不必直接依赖 minijinja，避免版本漂移导致类型不兼容 |
-| **D2** | 严格模式为默认，宽松为显式 opt-in | 默认行为必须安全；宽松是"我知道我在做什么"的选择 |
-| **D3** | 校验前置于渲染 | P1：错误必须在写出任何 G-code 之前暴露 |
-| **D4** | 必选性由"模板实际引用"决定，而非规格声明 | 规格可能声明了模板不引用的参数；以模板为准才不会误报 |
-| **D5** | 兜底不向下传播（`default` 只兜自己那一层） | 与 minijinja 求值顺序一致，否则把渲染崩溃推迟成崩溃 |
-| **D6** | `Integer` 作为独立参数类型 | G-code 里刀号/程序号/次数必须是整数，`8.0` 与 `8` 语义不同 |
-| **D7** | `IssueKind` 结构化类别，禁止按消息文本决策 | 文本匹配脆弱（如靠 `message.contains("NaN")` 判非有限数），改文案即失效 |
-| **D8** | 宽松模式仍硬失败 `NonFinite` | 参数可缺省 ≠ 参数值可非法；非法坐标会撞刀 |
-| **D9** | `include`/`extends` 穿透校验 + 防环 | 组合模板的参数缺失必须在校验期暴露，而非渲染期 |
-| **D10** | 后处理所有尺寸参数夹紧上界 | 用户可编辑配置 + 分配失败是进程 abort（不可捕获） |
-| **D11** | 输出格式语义分离：`Gcode` vs `Text` | `Text` 用于查看渲染结果原文，不应被行号/清洗干扰 |
-| **D12** | CLI 不复制业务逻辑 | 保证 `nctool render` 与 Web UI 输出逐字节一致 |
-| **D13** | 配置/清单/变量库损坏降级为警告而非错误 | 只读命令仍应可用；用户需要看到问题但不该被阻断 |
-| **D14** | 文件路径加载做双层安全校验 | 防符号链接逃逸模板根目录 |
-| **D15** | 参数规格外部化到三个声明式来源 | 新增模板只需放文件 + 加清单条目，不必改 Rust 代码重编译 |
-| **D16** | 派生用 `derive` 规则建模，而非给 `ParamSpec` 加 `read_only` 字段 | 不产生行为的字段只会误导；`read_only` 的两类语义已分别落到 `derive` 与普通必选 |
-| **D17** | 白名单检查独立于约束检查 | `check_value_constraints` 对非数值类型提前 return，塞进去等于永不执行 |
-| **D18** | 参数值渲染 / 规格 JSON 形状 / 取值归一顺序各自单一来源 | 三处若各写一份必然漂移，表现为 CLI 与 UI 行为不一致 |
-| **D19** | **资产写入内核下沉到领域层，交付层不持有"资产（模板 / 机床 / 预设）"的文件写入原语。** 写内核 `core::asset`（原子写 / 乐观锁 / 路径防护 / 落盘）归 `nctool-core`；`nctool-cli` 只做参数编排与结果呈现，**不持有三类资产的写入原语** —— 三类资产落盘一律经 `core::asset`。**作用域是"资产写"、不是"一切文件写"**：交付层生产口径的 `fs::write` 共 **3 处、全部非资产写** —— ① `config init` 配置引导（`config.rs::init_config`，仅目标不存在时创建）；② `render --out` 渲染产物（`render.rs`）；③ `$EDITOR` 临时副本（`templates.rs`，写系统临时目录）。另有 `create_dir_all`（建目录）与 `remove_file`（清临时文件），均非文件写。**结论：生产代码确无写模板 / 清单的 `fs::write` 旁路 —— 资产写全部经 `core::asset`，D19 规则成立**（全枚举见 `docs/ARCH_DESIGN_EDIT_MODULES.md` §9.1）。 | 写前校验编排、冲突判定、路径防护、完整性检查都是**领域逻辑**；若放交付层，会与"CLI 不含校验逻辑"的既有承诺（§2.2 / D12）直接冲突。代价是 **core 首次承担写职责、对外面扩大**，故须显式记档（本版 v2.1 即为此）。**（v2.1 收准）** 原措辞"不 `fs::write` / `File::create`"是**绝对句**、与 `config init` 等代码不符；绝对化表述会误导后来者以为"扫一遍 `fs::write` 即可证明交付层干净"，故收准到"资产写"并**分类枚举全部例外** |
-
----
-
-## 7. 扩展点
-
-| 想做的事 | 改哪里 |
-| --- | --- |
-| 新增模板 | 放 `templates/<分类>/x.j2` + 在 `templates.yaml` 加条目（只写与默认值不同的部分） |
-| 新增参数约束 | 优先写模板头部 `{# PARAMS: #}`；跨模板共性写 `variables.yaml`；单模板特例写清单 `params` |
-| 新增查表换算 | 在 `variables.yaml` / 清单 `params` 写 `derive` 规则，不要在模板里写计算 |
-| 新增机床预设 | `core/src/machine.rs` 的 `MachinePreset` + `KNOWN_CONFIG_KEYS` 补键 |
-| 新增数学/NC 过滤器 | `src/filters.rs`（务必做有限性校验 + 宽度上界） |
-| 新增校验规则 | `core/src/validate.rs`，并新增 `IssueKind` 类别（勿复用语义不同的类别） |
-| 新增 HTTP 端点 | `cli/src/server.rs::route`；规格字段形状统一走 `spec_json` |
-| 新增子命令 | `cli/src/cli.rs` 命令树 + `cli/src/commands/` + `Command::run` 分发 |
-| 新增写操作（新的资产类型 / 新的落盘目标） | `core/src/asset/`（复用 `WriteKernel` 与 `SafePath`，**不得在交付层新起文件写入**）；CLI 侧仅在 `commands/` 做参数编排与结果呈现，落盘一律经内核（D19） |
-
----
-
-## 8. 约束与已知边界
-
-- **参数是扁平值模型**：JSON 对象被拒绝，需要结构时用「平行列表」建模。
-- **`required_if` 只支持单个控制参数**：表达不了合取条件，多分支模板需拆分为单分支模板
-  （如 `undercut.j2` → `undercut_es.j2` + `undercut_fs.j2`）。
-- **`filters.rs` 的有限性防线不覆盖裸输出与内建运算**，依赖 `validate` 层拦截。
-- **`nc_pad` 拒绝小数/负数**，这是刻意的静默出错防线，不要"顺手放宽"。
-- **`variables.yaml` 的生效范围限于被引用变量**，库内未引用条目不会注入规格。
-- **Web 服务仅绑定回环地址**，定位是本地开发工具，未做鉴权与并发压测。
-- **G-code 输出仍须工艺人员复核与目标机床空运行**；自动化校验不判断控制器模态冲突或切削工艺正确性。
-- **源项目变量库（62 个变量）的类型/候选值已导入 58 条**，剩余条目按需补齐。
-- **（历史 R-11，已关闭）`templates new` 旧直写路径**：曾是 `path.exists()` 后 `std::fs::write` 的 check-then-write，T02 已迁移到 `TemplateWriter` / `WriteKernel`。保留这条记录是为了说明资产写必须继续走 core 写内核，不能恢复为调用层直接写文件。
-- **（v2.1 补）悬空符号链接向量未实测**：本机（Windows）**无法创建真正的文件符号链接**（`symlink_dir` 返回 `Ok(())` 却不创建；无开发者模式/特权），故"悬空链接逃逸"场景**未实测**，上述结论系**代码推演**；已改用 junction 验证"指向根外**已存在**目标"的逃逸被正确拒绝（通过）。后续若在具备权限的环境（Linux CI）复验，应补此用例（风险 R-13）。
-
----
-
-## 9. 质量基座
-
-测试项数与覆盖率随源码变化，不在设计文档中冻结数字。当前必须执行的门禁、命令和覆盖率校准口径
-见 `docs/CONTRIBUTING.md`、`.github/workflows/ci.yml` 与 `scripts/check_coverage_caliber.py`；
-本轮 1.0 候选验证结果见 `docs/UPGRADE_READINESS.md`。
-
-稳定质量资产仍包括：`cargo test --workspace --all-targets`、MSRV 1.89、三平台 CI、
-production-line coverage 门禁、Rust 文档零警告、前端 TypeScript/Vite 构建、HTTP/Tauri API
-对拍，以及 `tests/golden/` 的逐字节基线。golden 证明回归一致，不证明机床工艺正确。
-
----
-
-## 附：相关文档
-
-| 文档 | 内容 |
-| --- | --- |
-| `docs/ARCHITECTURE.md` | v1.0 架构说明（2026-09-03 快照，部分内容已被本文档取代） |
-| `docs/TEMPLATE_WRITING_GUIDE.md` | 模板编写指南（§3 NC 过滤器、§4 三角函数与 R6 约定、§9 反模式） |
-| `docs/OLD_PROJECT_TEMPLATE_IMPORT_CHECKLIST.md` | 外部模板完整盘点、迁移、适配和静态验证清单 |
-| `docs/TEMPLATE_ZIP_IMPORT_REPORT.md` | NCTool V3 模板归档的文件路径和哈希对照 |
-| `docs/MACHINE_CONFIG_GUIDE.md` | 机床配置键清单 |
-| `docs/PROCESS_CHECKLIST.md` | 工艺检查清单 |
-| `docs/UPGRADE_READINESS.md` | 1.0 API 升级就绪度、门禁结果与 tag 前置步骤 |
-| `docs/GUI_USER_GUIDE.md` | Tauri 桌面 GUI 页面与文件写入行为 |
-| `docs/HANDOFF_2026-09-14.md` | 阶段交接（§12 第一轮、§13 第二轮修问题 + 参数规格外部化） |
-| `templates/README.md` | 模板目录约定（`{# PARAMS: #}` 规格、清单 `params` 覆盖层、两种隐藏语义） |
-| `README.md` | 用户向快速上手 |
+NC 资产可声明 `metadata.nc.render_options:{trim_blocks,lstrip_blocks}` 作为该领域的空白选项默认值；请求中显式布尔值优先。有效选项进入 replay_input。普通 template.render 不读取领域选项，仍由调用方显式指定。此能力支持用户选择的 V3 模板转换，不恢复发行包的旧业务模板。

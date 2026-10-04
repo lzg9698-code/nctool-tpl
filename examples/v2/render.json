@@ -1,0 +1,12 @@
+{
+  "source": "Hello {{ user.name }}!{% for item in items %}\n- {{ item }}{% endfor %}",
+  "context": {
+    "user": {
+      "name": "Ada"
+    },
+    "items": [
+      "templates",
+      "plugins"
+    ]
+  }
+}

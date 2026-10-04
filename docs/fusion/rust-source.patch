@@ -1,0 +1,77 @@
+diff --git a/README.md b/README.md
+index e92c12b..a005edb 100644
+--- a/README.md
++++ b/README.md
+@@ -649,8 +649,8 @@ python3 scripts/check_coverage_caliber.py lcov.info --min 92
+ | 文档 | 内容 |
+ | --- | --- |
+ | [docs/CONTRIBUTING.md](docs/CONTRIBUTING.md) | **贡献指南完整版**：环境搭建、质量门、测试矩阵、提交与发版流程、审查清单 |
+-| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | **系统架构与设计说明**：三层 crate 架构、核心模块职责、数据流、错误模型、关键设计决策、扩展点。改动架构时请同步更新 |
+-| [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md) | **系统设计文档（当前有效版 v2.3）**：含 derive / 变量 / manifest 外部化、Web/Tauri 共用 route、参数校验和 `core::asset` 写盘边界；与 ARCHITECTURE.md 冲突时以此为准 |
++| [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md) | **当前项目架构图**：入口、crate 边界、生成数据流、资产写入边界与前端构建关系 |
++| [docs/SYSTEM_DESIGN.md](docs/SYSTEM_DESIGN.md) | **系统设计细节**：模块职责、数据结构、校验与渲染流程、关键设计决策；与架构图互补 |
+ | [docs/ROADMAP.md](docs/ROADMAP.md) | **开发路线与执行跟踪**：阶段划分、任务清单、交付物、排期、里程碑、风险登记、MVP 裁剪策略 |
+ | [docs/MACHINE_CONFIG_GUIDE.md](docs/MACHINE_CONFIG_GUIDE.md) | **《机床配置指南》**：配置键清单、内建预设、nctool.toml 自定义、加载顺序、`line_number_digits` 夹紧到 32 的内存安全理由、未知键告警等 |
+ | [docs/GUI_USER_GUIDE.md](docs/GUI_USER_GUIDE.md) | **桌面 GUI 使用说明**：页面能力、资产写入冲突处理及配置编辑边界 |
+diff --git a/docs/ARCHITECTURE.md b/docs/ARCHITECTURE_2026-09-03.md
+similarity index 100%
+rename from docs/ARCHITECTURE.md
+rename to docs/ARCHITECTURE_2026-09-03.md
+diff --git a/docs/CONTRIBUTING.md b/docs/CONTRIBUTING.md
+index 3041dd4..4504586 100644
+--- a/docs/CONTRIBUTING.md
++++ b/docs/CONTRIBUTING.md
+@@ -10,7 +10,7 @@
+ 
+ 1. **README 开头的「定位与风险声明」** —— 本项目是**模板开发工具**，内置模板与机床预设
+    **未经真实工艺评审与机床空运行验证**。G/M 代码错误可能导致撞刀、刀具或设备损坏。
+-2. [ARCHITECTURE.md](ARCHITECTURE.md) —— 三层 crate 架构、模块职责、数据流、错误模型、扩展点。
++2. [ARCHITECTURE.md](ARCHITECTURE.md) —— 当前项目架构图；模块细节见 [SYSTEM_DESIGN.md](SYSTEM_DESIGN.md)。
+ 3. [ROADMAP.md](ROADMAP.md) —— 当前阶段、任务清单与 Backlog 排序，避免方向冲突或重复劳动。
+ 4. [TEMPLATE_WRITING_GUIDE.md](TEMPLATE_WRITING_GUIDE.md) —— 改模板前必读（必选/可选判定、过滤器、反模式）。
+ 
+diff --git a/docs/PROJECT_STATUS.md b/docs/PROJECT_STATUS.md
+index 63cf008..a5d1fe5 100644
+--- a/docs/PROJECT_STATUS.md
++++ b/docs/PROJECT_STATUS.md
+@@ -219,7 +219,7 @@ CLI E2E 契约、HTTP 契约、21 组正向 golden + 3 组负向报告、错误
+ 
+ **四、文档与安全**
+ 
+-`docs/SYSTEM_DESIGN.md`（当前架构）、`docs/ARCHITECTURE.md`（早期分层快照）、`docs/TEMPLATE_WRITING_GUIDE.md` 与 `docs/PROCESS_CHECKLIST.md`；本地 UI 加跨站防护与安全响应头；后续实施状态以本文顶部增量为准。
++`docs/SYSTEM_DESIGN.md`（系统设计细节）、`docs/ARCHITECTURE.md`（当前架构图）、`docs/TEMPLATE_WRITING_GUIDE.md` 与 `docs/PROCESS_CHECKLIST.md`；本地 UI 加跨站防护与安全响应头；后续实施状态以本文顶部增量为准。
+ 
+ ---
+ 
+diff --git a/docs/SYSTEM_DESIGN.md b/docs/SYSTEM_DESIGN.md
+index de9c20b..0e1091f 100644
+--- a/docs/SYSTEM_DESIGN.md
++++ b/docs/SYSTEM_DESIGN.md
+@@ -18,13 +18,13 @@
+ > 桌面 GUI 仍依赖 `nctool-cli` 的 `Ctx` 与 `route`，尚未拆为独立应用服务 crate。
+ >
+ > **v2.1 修订说明**：依据 T01「共用写盘底座」落地并通过独立验证，记档一项**架构性变更** —— `nctool-core` **首次承担资产写入职责**（新增 `core::asset` 写内核：原子写 / 乐观锁 / 路径防护）。本次修订 §2.1（依赖图补 `core::asset`）、§2.2（crate 职责矩阵两行）、§2.3（补 `core::asset` 模块）、§6（新增 D19）、§7（补"新增写操作"扩展点）、§8（补 T01 已登记边界）；另据编辑模块（T02）定案，§3.2 记 `core::validate` 新增 `check_spec_consistency`（保存前 L2，须复用 `check_spec_defaults`）与 `check_param_values`（保存前 L3，值级、不查缺失）两个入口。**（v2.1 收准）** D19 例外改为**分类全枚举**——交付层生产口径 `fs::write` 共 3 处、全部非资产写（`config init` / `render --out` / `$EDITOR` 临时副本）；**资产写全部经 `core::asset`，D19 规则成立**。**仅改文档，未改源码/测试**。
+-> 对应代码：`nctool-tpl` v0.4.0 / `nctool-core` v0.3.0 / `nctool-cli` v0.3.0 / `nctool-gui` v0.1.0（GUI 不发布）。源码规模表保留历史快照，不用于估算当前规模。
++> 对应代码版本号已随 1.0.0 发布线演进；源码规模表保留历史快照，不用于估算当前规模。
+ > 范围：三个 crate 的分层架构、核心模块职责、数据结构、端到端数据流与设计决策。
+ > 读者：本仓库贡献者、基于本库二次开发的下游用户。
+ >
+-> **与 `docs/ARCHITECTURE.md` 的关系**：`ARCHITECTURE.md` 是 2026-09-03 的 v1.0 快照，
+-> 缺 `derive` / `variables` / `manifest` 外部化 / Web UI 后端 / 参数规格三来源等后续演进。
+-> 本文档为当前有效版本（v2.3），两者冲突时以本文档为准。
++> **与 `docs/ARCHITECTURE.md` 的关系**：`ARCHITECTURE.md` 是当前代码结构的图示入口；
++> 本文档提供更完整的模块说明、数据流和设计决策。旧版 v1.0 架构快照保留在
++> `docs/ARCHITECTURE_2026-09-03.md`。
+ 
+ ---
+ 
+@@ -760,7 +760,8 @@ production-line coverage 门禁、Rust 文档零警告、前端 TypeScript/Vite
+ 
+ | 文档 | 内容 |
+ | --- | --- |
+-| `docs/ARCHITECTURE.md` | v1.0 架构说明（2026-09-03 快照，部分内容已被本文档取代） |
++| `docs/ARCHITECTURE.md` | 当前架构图与项目入口 |
++| `docs/ARCHITECTURE_2026-09-03.md` | v1.0 历史架构快照 |
+ | `docs/TEMPLATE_WRITING_GUIDE.md` | 模板编写指南（§3 NC 过滤器、§4 三角函数与 R6 约定、§9 反模式） |
+ | `docs/OLD_PROJECT_TEMPLATE_IMPORT_CHECKLIST.md` | 外部模板完整盘点、迁移、适配和静态验证清单 |
+ | `docs/TEMPLATE_ZIP_IMPORT_REPORT.md` | NCTool V3 模板归档的文件路径和哈希对照 |

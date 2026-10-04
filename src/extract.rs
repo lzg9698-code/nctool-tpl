@@ -79,6 +79,11 @@ pub struct Ast<'a> {
 }
 
 impl<'a> Ast<'a> {
+    /// Read-only AST access for extension analyzers.
+    pub fn statement(&self) -> &minijinja::machinery::ast::Stmt<'_> {
+        &self.stmt
+    }
+
     /// 模板名（用于错误信息）。
     pub fn name(&self) -> &str {
         self.name

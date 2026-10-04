@@ -49,3 +49,12 @@ gui/gen/schemas/
 
 # Vite 打包配置时生成的临时文件（vite.config.ts.timestamp-*.mjs）
 *.timestamp-*
+
+# Local recovery snapshots and asset advisory locks
+/.nctool-backups/
+*.nctool.lock
+
+# Standalone WebUI dependency/cache folders
+ui/node_modules/
+ui/.vite/
+/.nctool/

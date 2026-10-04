@@ -1,62 +1,18 @@
-//! 渲染器：minijinja `Environment` + 数学过滤器集 + NC 数值格式化过滤器。
-//!
-//! 提供严格/宽松模式的模板渲染、多模板注册（include/extends/import）
-//! 与文件系统目录加载（含路径安全校验）。
-
+//! Domain-neutral Jinja rendering with explicit, checked extension registration.
 use std::path::Path;
 
 use minijinja::Environment;
 
 use crate::error::{from_minijinja_error, TplError};
-use crate::filters::{
-    checked_math, filter_nc_fixed, filter_nc_pad, filter_nc_signed, filter_nc_strip,
-};
 
-// 渲染器：minijinja Environment + 数学过滤器集
-// ---------------------------------------------------------------------------
-
-/// 渲染器。内部持有 minijinja `Environment`，并注册一组数学过滤器和 NC 数值格式化过滤器。
-///
-/// 数学过滤器集（全部基于 Rust 标准库 `f64`，零额外依赖）：
-/// `sin` `cos` `tan` `asin` `acos` `atan` `sqrt` `exp` `ln` `log10` `pow` `floor` `ceil`
-///
-/// **角度制三角函数**（工艺图纸按度输入，见下）：
-/// - `sin_d(D)` `cos_d(D)` `tan_d(D)`：以**度**为输入
-/// - `asin_d(x)` `acos_d(x)` `atan_d(x)`：以**度**为输出
-///
-/// NC 数值格式化过滤器（G-code 专用）：
-/// - `nc_fixed(N)`：固定小数位，`{{ x | nc_fixed(3) }}` → `21.000`
-/// - `nc_signed(N)`：强制正号 + 固定小数位，`{{ x | nc_signed(3) }}` → `+21.000`
-///   （负数为 `-4.500`）。用于**增量坐标/旋转量**——部分控制器要求显式正号，
-///   省略号会被误判为绝对值。对应源项目 Jinja2 的 `fmt_coord`
-/// - `nc_strip`：去尾零，`{{ x | nc_strip }}` → `21`（输入 21.0）
-/// - `nc_pad(N)`：前导零填充，`{{ n | nc_pad(4) }}` → `0001`（程序号/行号用）
-///
-/// # 角度制 vs 弧度制（重要）
-///
-/// `sin`/`cos`/`tan` 等**不带 `_d` 后缀**的过滤器一律按**弧度**计算（与 Rust 标准库一致）。
-/// 工艺图纸上的角度是**度**，直接写 `x | sin` 会得到错误的坐标——且是**静默**的错误
-/// （`sin(30°) = 0.5`，而 `sin(30 rad) ≈ -0.988`），错误的坐标会写进 G-code 导致撞刀。
-///
-/// 迁移自 Python/Jinja2 的模板尤其危险：Python 侧常写成 `math.sin(math.radians(x))`
-/// 并暴露为 `sin`，也就是**那个 `sin` 是度制**，而本 crate 的 `sin` 是弧度制。
-/// 迁移时必须二选一：
-/// - 写成 `x | sin_d`（推荐，意图明确）
-/// - 或显式换算 `(x * pi / 180) | sin`
-///
-/// 因此**新模板一律用 `_d` 后缀**；裸 `sin`/`cos`/`tan` 只应在确认输入本就是弧度时使用。
-///
-/// 所有数学过滤器和 NC 过滤器对结果做**有限性校验**：一旦产生 `NaN`/`Inf`（如 `sqrt(-1)`、
-/// `asin(2)`、`ln(0)`），渲染立即失败并报 [`TplError::Render`]，避免非法坐标静默写入 G-code。
-///
-/// 注意：该防线只覆盖**本 crate 注册的过滤器**。裸 `{{ x }}` 输出、minijinja 内建
-/// 过滤器/运算（如 `round`、`x + 1`）产生的 NaN/Inf 不在保护范围内——请先经上层
-/// 参数校验逻辑（如 `nctool-core`）保证上下文数值有限。
+/// A domain-neutral Jinja renderer. Extensions are opt-in per instance.
 #[derive(Debug)]
 pub struct Renderer {
     env: Environment<'static>,
     /// 宽松模式下未定义变量渲染为空字符串（而非报错）。
     lenient: bool,
+    filters: std::collections::HashSet<String>,
+    output_limit: usize,
 }
 
 impl Default for Renderer {
@@ -66,56 +22,109 @@ impl Default for Renderer {
 }
 
 impl Renderer {
-    /// 新建渲染器（带数学过滤器集）。
+    /// 新建通用渲染器，不注册领域过滤器。
     ///
     /// 默认使用 **Strict** 未定义变量策略：模板引用缺失变量时直接渲染失败并报错，
-    /// 避免静默输出不完整 G-code（与 `jinja2.meta` + `StrictUndefined` 的做法一致）。
+    /// 避免静默输出不完整文本（与 `jinja2.meta` + `StrictUndefined` 的做法一致）。
     pub fn new() -> Self {
         let mut env = Environment::new();
         env.set_undefined_behavior(minijinja::UndefinedBehavior::Strict);
-        env.add_filter("sin", |v: f64| checked_math(v.sin(), "sin"));
-        env.add_filter("cos", |v: f64| checked_math(v.cos(), "cos"));
-        env.add_filter("tan", |v: f64| checked_math(v.tan(), "tan"));
-        env.add_filter("asin", |v: f64| checked_math(v.asin(), "asin"));
-        env.add_filter("acos", |v: f64| checked_math(v.acos(), "acos"));
-        env.add_filter("atan", |v: f64| checked_math(v.atan(), "atan"));
-        env.add_filter("sqrt", |v: f64| checked_math(v.sqrt(), "sqrt"));
-        env.add_filter("exp", |v: f64| checked_math(v.exp(), "exp"));
-        env.add_filter("ln", |v: f64| checked_math(v.ln(), "ln"));
-        env.add_filter("log10", |v: f64| checked_math(v.log10(), "log10"));
-        env.add_filter("pow", |v: f64, e: f64| checked_math(v.powf(e), "pow"));
-        env.add_filter("floor", |v: f64| checked_math(v.floor(), "floor"));
-        env.add_filter("ceil", |v: f64| checked_math(v.ceil(), "ceil"));
-        // 角度制三角函数（工艺图纸按度输入）：`_d` 后缀 = degrees。
-        // 见上方「角度制 vs 弧度制」——新模板一律用这组，避免静默错坐标。
-        env.add_filter("sin_d", |v: f64| {
-            checked_math(v.to_radians().sin(), "sin_d")
-        });
-        env.add_filter("cos_d", |v: f64| {
-            checked_math(v.to_radians().cos(), "cos_d")
-        });
-        env.add_filter("tan_d", |v: f64| {
-            checked_math(v.to_radians().tan(), "tan_d")
-        });
-        // 反三角以度输出（`asin_d(0.5)` → `30`）
-        env.add_filter("asin_d", |v: f64| {
-            checked_math(v.asin().to_degrees(), "asin_d")
-        });
-        env.add_filter("acos_d", |v: f64| {
-            checked_math(v.acos().to_degrees(), "acos_d")
-        });
-        env.add_filter("atan_d", |v: f64| {
-            checked_math(v.atan().to_degrees(), "atan_d")
-        });
-        // NC 数值格式化过滤器（G-code 专用）
-        env.add_filter("nc_fixed", filter_nc_fixed);
-        env.add_filter("nc_signed", filter_nc_signed);
-        env.add_filter("nc_strip", filter_nc_strip);
-        env.add_filter("nc_pad", filter_nc_pad);
+        env.set_fuel(Some(1_000_000));
         Self {
             env,
             lenient: false,
+            filters: std::collections::HashSet::new(),
+            output_limit: 16 * 1024 * 1024,
         }
+    }
+
+    /// Set instruction and output budgets; both must be nonzero.
+    pub fn with_limits(mut self, instructions: u64, output_bytes: usize) -> Result<Self, TplError> {
+        if instructions == 0 || output_bytes == 0 {
+            return Err(TplError::Render {
+                name: "limits".into(),
+                message: "render budgets must be nonzero".into(),
+            });
+        }
+        self.env.set_fuel(Some(instructions));
+        self.output_limit = output_bytes;
+        Ok(self)
+    }
+    /// Configure standard Jinja whitespace options without a domain-specific preset.
+    pub fn with_whitespace(mut self, trim_blocks: bool, lstrip_blocks: bool) -> Self {
+        self.env.set_trim_blocks(trim_blocks);
+        self.env.set_lstrip_blocks(lstrip_blocks);
+        self
+    }
+    /// Register an extension filter. Duplicate and built-in names are rejected.
+    pub fn add_filter<F, Rv, Args>(&mut self, name: &str, filter: F) -> Result<(), TplError>
+    where
+        F: minijinja::functions::Function<Rv, Args>,
+        Rv: minijinja::value::FunctionResult,
+        Args: for<'a> minijinja::value::FunctionArgs<'a>,
+    {
+        if self.filters.contains(name)
+            || [
+                "abs",
+                "attr",
+                "batch",
+                "bool",
+                "capitalize",
+                "chain",
+                "count",
+                "d",
+                "default",
+                "dictsort",
+                "e",
+                "escape",
+                "first",
+                "float",
+                "format",
+                "groupby",
+                "indent",
+                "int",
+                "items",
+                "join",
+                "last",
+                "length",
+                "lines",
+                "list",
+                "lower",
+                "map",
+                "max",
+                "min",
+                "pprint",
+                "reject",
+                "rejectattr",
+                "replace",
+                "reverse",
+                "round",
+                "safe",
+                "select",
+                "selectattr",
+                "slice",
+                "sort",
+                "split",
+                "string",
+                "sum",
+                "title",
+                "tojson",
+                "trim",
+                "unique",
+                "upper",
+                "urlencode",
+                "zip",
+            ]
+            .contains(&name)
+        {
+            return Err(TplError::Render {
+                name: name.into(),
+                message: "duplicate filter registration".into(),
+            });
+        }
+        self.filters.insert(name.to_owned());
+        self.env.add_filter(name.to_owned(), filter);
+        Ok(())
     }
 
     /// 切换为**宽松模式**：模板中未定义变量渲染为空字符串，而非报错。
@@ -161,8 +170,10 @@ impl Renderer {
             .env
             .template_from_named_str(name, source)
             .map_err(|err| from_minijinja_error(err, name, Some(source)))?;
-        tmpl.render(context)
-            .map_err(|err| from_minijinja_error(err, name, Some(source)))
+        let mut writer = LimitedOutput::new(self.output_limit);
+        tmpl.render_captured_to(context, &mut writer)
+            .map_err(|err| from_minijinja_error(err, name, Some(source)))?;
+        Ok(writer.into_string())
     }
 
     /// 注册一个内存模板（owned 字符串，无生命周期约束）。
@@ -209,13 +220,40 @@ impl Renderer {
         self.env.set_loader(move |name| {
             if name.is_empty()
                 || name.contains(':')
-                || name.starts_with('/')
-                || name.starts_with('\\')
+                || name.contains('\\')
+                || std::path::Path::new(name)
+                    .components()
+                    .any(|c| !matches!(c, std::path::Component::Normal(_)))
             {
-                // 视为模板不存在（loader 约定：Ok(None) = 未找到）
                 return Ok(None);
             }
-            minijinja::path_loader(&dir)(name)
+            let root = match dir.canonicalize() {
+                Ok(r) => r,
+                Err(_) => return Ok(None),
+            };
+            let path = match root.join(name).canonicalize() {
+                Ok(p) if p.starts_with(&root) => p,
+                _ => return Ok(None),
+            };
+            let file = std::fs::File::open(path).map_err(|e| {
+                minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, e.to_string())
+            })?;
+            use std::io::Read;
+            let mut bytes = Vec::new();
+            file.take(1024 * 1024 + 1)
+                .read_to_end(&mut bytes)
+                .map_err(|e| {
+                    minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, e.to_string())
+                })?;
+            if bytes.len() > 1024 * 1024 {
+                return Err(minijinja::Error::new(
+                    minijinja::ErrorKind::InvalidOperation,
+                    "template exceeds 1 MiB",
+                ));
+            }
+            String::from_utf8(bytes).map(Some).map_err(|e| {
+                minijinja::Error::new(minijinja::ErrorKind::InvalidOperation, e.to_string())
+            })
         });
     }
 
@@ -232,7 +270,37 @@ impl Renderer {
             .env
             .get_template(name)
             .map_err(|err| from_minijinja_error(err, name, None))?;
-        tmpl.render(context)
-            .map_err(|err| from_minijinja_error(err, name, Some(tmpl.source())))
+        let mut writer = LimitedOutput::new(self.output_limit);
+        tmpl.render_captured_to(context, &mut writer)
+            .map_err(|err| from_minijinja_error(err, name, Some(tmpl.source())))?;
+        Ok(writer.into_string())
+    }
+}
+
+struct LimitedOutput {
+    bytes: Vec<u8>,
+    limit: usize,
+}
+impl LimitedOutput {
+    fn new(limit: usize) -> Self {
+        Self {
+            bytes: Vec::new(),
+            limit,
+        }
+    }
+    fn into_string(self) -> String {
+        String::from_utf8(self.bytes).expect("Jinja emits valid UTF-8")
+    }
+}
+impl std::io::Write for LimitedOutput {
+    fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+        if bytes.len() > self.limit.saturating_sub(self.bytes.len()) {
+            return Err(std::io::Error::other("rendered output exceeds byte budget"));
+        }
+        self.bytes.extend_from_slice(bytes);
+        Ok(bytes.len())
+    }
+    fn flush(&mut self) -> std::io::Result<()> {
+        Ok(())
     }
 }

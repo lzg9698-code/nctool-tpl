@@ -1,39 +1,28 @@
 [package]
 name = "nctool-cli"
-version = "1.0.0"
+version = "2.2.0"
 edition = "2021"
 rust-version = "1.89"
-description = "nctool 命令行工具：模板浏览 / 变量提取 / 参数校验 / G-code 生成"
 license = "MIT"
-repository = "https://github.com/lzg9698-code/nctool-tpl"
-keywords = ["gcode", "nc", "cli", "template", "jinja2"]
-categories = ["command-line-utilities", "template-engine"]
 
 [dependencies]
-nctool-core = { path = "../core", version = "1.0.0" }
-nctool-tpl = { path = "..", version = "1.0.0" }
-clap = { version = "4", features = ["derive"] }
-clap_complete = "4"
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-# serde_yaml：`preset export` 的 YAML 序列化（core 侧已用同名依赖解析/写盘，
-# 此处提为直接依赖，**构建图零新增 crate**）。
-serde_yaml = "0.9"
-toml = "0.8"
-# tiny_http：本地 Web UI 服务（阶段 C，ROADMAP Q10 选型——轻量、传递依赖少；
-# API 端点超过 8 个再考虑迁移 axum）。仅绑定回环地址，本地开发工具定位
-tiny_http = "0.12"
+nctool-runtime={path="../runtime",version="2.0.0"}
+nctool-plugin-sdk={path="../sdk",version="2.0.0"}
+nctool-plugin-template={path="../plugins/template",version="2.0.0"}
+nctool-plugin-math={path="../plugins/math",version="2.0.0",optional=true}
+nctool-plugin-nc={path="../plugins/nc",version="2.0.0",optional=true}
+nctool-plugin-process={path="../plugins/process",version="2.0.0",optional=true}
+clap={version="4",features=["derive"]}
+serde_json="1"
+serde={version="1",features=["derive"]}
+nctool-assets={path="../assets",version="2.0.0"}
+axum="0.8"
+tokio={version="1",features=["rt-multi-thread","macros","net","signal","sync","time"]}
 
-[dev-dependencies]
-assert_cmd = "2"
-predicates = "3"
-
-# 库形态（T01 契约层库化）：GUI（nctool-gui）复用 `server::route` / `Ctx` /
-# `config` / `output`。显式声明 [lib] 以求清晰（cargo 本可自动发现 src/lib.rs）。
-[lib]
-name = "nctool_cli"
-path = "src/lib.rs"
+[features]
+default=[]
+nc-bundle=["dep:nctool-plugin-math","dep:nctool-plugin-nc","dep:nctool-plugin-process"]
 
 [[bin]]
-name = "nctool"
-path = "src/main.rs"
+name="nctool"
+path="src/main.rs"
