@@ -109,7 +109,19 @@ pub fn installed(home: &Path) -> PluginResult<Vec<(ExternalManifest, PathBuf)>> 
 pub fn external_plugins(home: &Path, config: &Config) -> PluginResult<Vec<Arc<dyn Plugin>>> {
     let installed = installed(home)?;
     for id in &config.enabled {
-        if !["template", "math", "nc", "process"].contains(&id.as_str())
+        if ![
+            "template",
+            "parameters",
+            "math",
+            "nc",
+            "nc-parameters",
+            "nc-managed",
+            "sync-turning",
+            "undercut",
+            "process",
+            "process-parameters",
+        ]
+        .contains(&id.as_str())
             && !installed.iter().any(|(m, _)| &m.descriptor.id == id)
         {
             return Err(PluginError::new("plugin_missing", id));
@@ -126,7 +138,20 @@ pub fn external_plugins(home: &Path, config: &Config) -> PluginResult<Vec<Arc<dy
 pub fn install(home: &Path, source: &Path) -> PluginResult<String> {
     let source = source.canonicalize()?;
     let manifest = ExternalManifest::read(&source)?;
-    if ["template", "math", "nc", "process"].contains(&manifest.descriptor.id.as_str()) {
+    if [
+        "template",
+        "parameters",
+        "math",
+        "nc",
+        "nc-parameters",
+        "nc-managed",
+        "sync-turning",
+        "undercut",
+        "process",
+        "process-parameters",
+    ]
+    .contains(&manifest.descriptor.id.as_str())
+    {
         return Err(PluginError::new(
             "reserved_plugin_id",
             &manifest.descriptor.id,

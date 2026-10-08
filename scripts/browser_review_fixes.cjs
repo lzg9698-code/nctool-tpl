@@ -302,7 +302,7 @@ async function main() {
       .count(),
     0,
   );
-  const out = path.join(root, "target/fixes-browser");
+  const out = process.env.NCTOOL_REPORT || path.join(root, "target/fixes-browser");
   fs.mkdirSync(out, { recursive: true });
   await page.screenshot({ path: path.join(out, "plugin.png"), fullPage: true });
   const nc = await serve("nc");
@@ -375,6 +375,28 @@ main()
   })
   .finally(async () => {
     if (browser) await browser.close();
-    for (const child of children) child.kill("SIGINT");
-    fs.rmSync(temp, { recursive: true, force: true });
+    await Promise.all(
+      children.map((child) => {
+        if (child.exitCode !== null) return Promise.resolve();
+        return new Promise((resolve) => {
+          child.once("exit", resolve);
+          if (process.platform === "win32")
+            execFileSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+              stdio: "ignore",
+            });
+          else child.kill();
+        });
+      }),
+    );
+    if (
+      path.dirname(temp) !== path.resolve(os.tmpdir()) ||
+      !path.basename(temp).startsWith("nctool-")
+    )
+      throw new Error("unexpected cleanup path");
+    fs.rmSync(temp, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
   });

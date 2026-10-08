@@ -6,6 +6,7 @@ const fs = require("node:fs"),
   path = require("node:path"),
   assert = require("node:assert/strict");
 const root = path.resolve(__dirname, "..");
+const reportDir = process.env.NCTOOL_REPORT || path.join(root, "target/ui22-browser");
 const binary =
   process.env.NCTOOL_BINARY ||
   path.join(
@@ -137,7 +138,10 @@ async function main() {
   const snippet = await firstExample.locator(".syntax-code").innerText();
   await firstExample.getByRole("button", { name: /^复制示例/ }).click();
   assert.equal(
-    await page.evaluate(() => navigator.clipboard.readText()),
+    (await page.evaluate(() => navigator.clipboard.readText())).replace(
+      /\r\n/g,
+      "\n",
+    ),
     snippet,
   );
   const syntaxCategories = [
@@ -175,7 +179,7 @@ async function main() {
     .getByRole("button", { name: "试跑示例", exact: true })
     .all())
     assert(await button.isDisabled());
-  const syntaxOut = path.join(root, "target/syntax-guide");
+  const syntaxOut = process.env.NCTOOL_REPORT ? path.join(reportDir, "syntax-guide") : path.join(root, "target/syntax-guide");
   fs.mkdirSync(syntaxOut, { recursive: true });
   await page.getByRole("button", { name: "基础与数据", exact: true }).click();
   await page.setViewportSize({ width: 390, height: 844 });
@@ -387,7 +391,7 @@ async function main() {
   await page.locator(".plugin-columns .run-status.succeeded").waitFor();
   assert((await content("历史生成结果").innerText()).includes("Total: 60"));
   // Domain contributions are proper resource and operation editors, without JSON commands.
-  const out = path.join(root, "target/ui22-browser");
+  const out = reportDir;
   fs.mkdirSync(out, { recursive: true });
   const nc = await serve("nc");
   await page.goto(nc);
@@ -694,6 +698,7 @@ async function main() {
     path: path.join(out, "history.png"),
     fullPage: true,
   });
+  await page.getByLabel("工作区资产", { exact: true }).click();
   const exportDownload = page.waitForEvent("download");
   await page
     .getByRole("button", { name: "导出工作区资产", exact: true })
@@ -705,6 +710,7 @@ async function main() {
     workspace: path.join(temp, "recipient-workspace"),
   });
   await page.goto(recipient);
+  await page.getByLabel("工作区资产", { exact: true }).click();
   await page
     .getByRole("button", { name: "导入工作区资产", exact: true })
     .waitFor();
@@ -776,9 +782,9 @@ main()
     console.error(error);
     if (page) {
       console.error((await page.locator("body").innerText()).slice(-2400));
-      fs.mkdirSync(path.join(root, "target/ui22-browser"), { recursive: true });
+      fs.mkdirSync(reportDir, { recursive: true });
       await page.screenshot({
-        path: path.join(root, "target/ui22-browser/failure.png"),
+        path: path.join(reportDir, "failure.png"),
         fullPage: true,
       });
     }
@@ -786,6 +792,28 @@ main()
   })
   .finally(async () => {
     if (browser) await browser.close();
-    for (const child of children) child.kill("SIGTERM");
-    fs.rmSync(temp, { recursive: true, force: true });
+    await Promise.all(
+      children.map((child) => {
+        if (child.exitCode !== null) return Promise.resolve();
+        return new Promise((resolve) => {
+          child.once("exit", resolve);
+          if (process.platform === "win32")
+            execFileSync("taskkill", ["/PID", String(child.pid), "/T", "/F"], {
+              stdio: "ignore",
+            });
+          else child.kill();
+        });
+      }),
+    );
+    if (
+      path.dirname(temp) !== path.resolve(os.tmpdir()) ||
+      !path.basename(temp).startsWith("nctool-")
+    )
+      throw new Error("unexpected cleanup path");
+    fs.rmSync(temp, {
+      recursive: true,
+      force: true,
+      maxRetries: 10,
+      retryDelay: 100,
+    });
   });

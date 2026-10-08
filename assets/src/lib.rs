@@ -13,7 +13,7 @@ pub use path::{validate_asset_name, SafePath};
 
 /// CLI 通道取锁的有界等待（`nctool` 子命令：可短等，2 秒）。
 ///
-/// 服务侧（`nctool ui` / GUI 内嵌 `route`）**不**用本值，传 `Duration::ZERO`
+/// 服务侧（`nctool ui`）**不**用本值，传 `Duration::ZERO`
 /// 走 try-lock —— `serve_requests` 是单线程顺序循环，阻塞等锁会钉死整个 UI。
 pub const CLI_LOCK_WAIT: Duration = Duration::from_secs(2);
 

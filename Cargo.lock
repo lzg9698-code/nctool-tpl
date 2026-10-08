@@ -871,9 +871,12 @@ dependencies = [
  "nctool-assets",
  "nctool-plugin-math",
  "nctool-plugin-nc",
+ "nctool-plugin-parameters",
  "nctool-plugin-process",
  "nctool-plugin-sdk",
+ "nctool-plugin-sync-turning",
  "nctool-plugin-template",
+ "nctool-plugin-undercut",
  "nctool-runtime",
  "serde",
  "serde_json",
@@ -896,11 +899,21 @@ dependencies = [
  "minijinja",
  "nctool-assets",
  "nctool-plugin-math",
+ "nctool-plugin-parameters",
  "nctool-plugin-sdk",
  "nctool-tpl",
  "serde",
  "serde_json",
  "serde_yaml",
+]
+
+[[package]]
+name = "nctool-plugin-parameters"
+version = "2.0.0"
+dependencies = [
+ "nctool-assets",
+ "nctool-plugin-sdk",
+ "serde_json",
 ]
 
 [[package]]
@@ -924,6 +937,16 @@ dependencies = [
 ]
 
 [[package]]
+name = "nctool-plugin-sync-turning"
+version = "2.0.0"
+dependencies = [
+ "nctool-plugin-nc",
+ "nctool-plugin-parameters",
+ "nctool-plugin-sdk",
+ "serde_json",
+]
+
+[[package]]
 name = "nctool-plugin-template"
 version = "2.0.0"
 dependencies = [
@@ -931,6 +954,16 @@ dependencies = [
  "nctool-assets",
  "nctool-plugin-sdk",
  "nctool-tpl",
+ "serde_json",
+]
+
+[[package]]
+name = "nctool-plugin-undercut"
+version = "2.0.0"
+dependencies = [
+ "nctool-plugin-nc",
+ "nctool-plugin-parameters",
+ "nctool-plugin-sdk",
  "serde_json",
 ]
 

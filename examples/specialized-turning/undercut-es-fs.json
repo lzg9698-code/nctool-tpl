@@ -1,0 +1,32 @@
+{
+  "target": "all",
+  "raw_diameter": 100.0,
+  "safety_dis": 2.0,
+  "sides": {
+    "right": {
+      "rows": [
+        {
+          "id": "ES-1",
+          "gtype": "ES",
+          "std_key": "DIN509-E 0,2 x 0,1",
+          "d1": 80.0,
+          "z": 30.0,
+          "d2": 85.0,
+          "c": 0.5,
+          "angle": 45.0
+        }
+      ]
+    },
+    "left": {
+      "rows": [
+        {
+          "id": "FS-1",
+          "gtype": "FS",
+          "std_key": "DIN509-F 0,2 x 0,1",
+          "d1": 80.0,
+          "z": 30.0
+        }
+      ]
+    }
+  }
+}

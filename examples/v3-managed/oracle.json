@@ -1,0 +1,4877 @@
+[
+  {
+    "name": "keyway/keyway_rough.j2",
+    "id": "v3-keyway-keyway-rough",
+    "operation": "keyway.rough",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "闭口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "闭口",
+          "U_ID": "[100]",
+          "U_RT": "T15",
+          "U_RTB": "D1",
+          "U_RTD": 12.0,
+          "U_RC": 5.0,
+          "U_ANG": 45.0,
+          "U_ALBR": 0.3,
+          "U_ALBHF": 0.1,
+          "rough_n": 2653,
+          "rough_vf": 531,
+          "rough_vf_corner": 266,
+          "semi_vf": 637,
+          "layer_count": 3,
+          "depths": [
+            5.0,
+            5.0,
+            3.1
+          ],
+          "target_depths": [
+            5.0,
+            10.0,
+            13.1
+          ],
+          "path_type": "closed_3pass",
+          "is_left_open": false,
+          "tool_num": "T15",
+          "tool_offset": "D1",
+          "spindle_speed": 2653,
+          "next_tool_num": "T16"
+        }
+      ],
+      "texts": [
+        "\n;----粗铣键槽子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T15\")\nL172(0)\nL171(\"T16\")\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=2653 M1=3\nM14=8 M10=150 H50=80\n\n        G94 G40 G0 X=-11.300 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第1层, 切深5.00)\n        G1 X=-4.300 Z=-5.000 F200\n\n\n        G1 G41 X=-107.700 F=531\n        G1 Y=-2.000 F=266\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=531\n        G1 X0 F=266\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=531\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=266\n        G1 X=-100.000 F=531\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        G1 G40 X=-4.300 Y0 Z2\n\n\n        G94 G40 G0 X=-16.300 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第2层, 切深5.00)\n        G1 X=-4.300 Z=-10.000 F200\n\n\n        G1 G41 X=-107.700 F=531\n        G1 Y=-2.000 F=266\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=531\n        G1 X0 F=266\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=531\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=266\n        G1 X=-100.000 F=531\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        G1 G40 X=-4.300 Y0 Z2\n\n\n        G94 G40 G0 X=-19.400 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第3层, 切深3.10)\n        G1 X=-4.300 Z=-13.100 F200\n\n\n        G1 G41 X=-107.700 F=531\n        G1 Y=-2.000 F=266\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=531\n        G1 X0 F=266\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=531\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=266\n        G1 X=-100.000 F=531\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        ; 半精铣 (Z向到最终深度, 留0.10单边余量)\n        G1 Z=-13.100 F60\n            G1 X=-107.900 Y=-2.000 F=318\n            G3 X=-100.000 Y=-9.900 I=7.900\n            G1 X=-8.000 F=637\n            G1 X0 F=318\n            G3 X=7.900 Y=-2.000 J=7.900\n            G1 Y=2.000 F=637\n            G3 X0 Y=9.900 I=-7.900\n            G1 X=-92.000 F=318\n            G1 X=-100.000 F=637\n            G3 X=-107.900 Y=2.000 J=-7.900\n            G1 G40 Y0\n            G1 X=-4.100 F=637\n\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET\n\n;-----------\n"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_finish.j2",
+    "id": "v3-keyway-keyway-finish",
+    "operation": "keyway.finish",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "闭口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "闭口",
+          "U_ID": "[100]",
+          "U_FT": "T16",
+          "U_FTB": "D1",
+          "U_FTD": 8.0,
+          "finish_n": 3979,
+          "finish_vf": 637,
+          "path_type": "closed_non_round",
+          "is_left_open": false,
+          "tool_num": "T16",
+          "tool_offset": "D1",
+          "spindle_speed": 3979,
+          "next_tool_num": "T20"
+        }
+      ],
+      "texts": [
+        "\n;----精铣键槽子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T16\")\nL172(0)\nL171(\"T20\")\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=3979 M1=3\nM14=8 M10=150 H50=80\n    G94 G40 G0 X0 Y0 C=DC(0.00)\nG0 Z10\n\nG1 Z=-8.100 F3000\nG1 Z=-13.100 F100\n\n    G1 G41 Y=10.000 F=637\n    G1 X=-100.000\n    G3 X=-108.000 Y=2.000 J=-8.000\n    G1 Y=-2.000\n    G3 X=-100.000 Y=-10.000 I=8.000\n    G1 X0\n    G3 X=8.000 Y=-2.000 J=8.000\n    G1 Y=2.000\n    G3 X0 Y=10.000 I=-8.000\n    G1 G40 Y0 Z2\n\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET\n\n;-----------\n"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_chamfer.j2",
+    "id": "v3-keyway-keyway-chamfer",
+    "operation": "keyway.chamfer",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "闭口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "闭口",
+          "U_ID": "[100]",
+          "U_CT": "T20",
+          "U_CTB": "D1",
+          "U_CHAMFER_DEPTH": 0.5,
+          "R1": 4000,
+          "R2": 1200,
+          "R3": 8.0,
+          "R4": 2.0,
+          "R5": 0.0,
+          "R6": 40.0,
+          "tool_num": "T20",
+          "tool_offset": "D1",
+          "spindle_speed": 4000,
+          "is_left_open": false,
+          "next_tool_num": ""
+        }
+      ],
+      "texts": [
+        "\n\n;----键槽倒角子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T20\")\nL172(0)\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=4000 M1=3\nM14=8 M10=150 H50=80\nG94 G40 G0 X=0.000 Y=0 C=DC(0.000)\nG64\nG0 Z=5\n\n        ; --- 闭口带圆弧 (CLOSE_WITH_CIR) ---\n        G01 Z=-4.216 F100\n        G40 Y=8.000 F=1200\n        G01 X=-100.000\n        G03 X=-106.000 Y=2.000 I=0 J=-6.000 Z=-2.567\n        G01 Y=0 Z=-2.500\n        G01 Y=-2.000 Z=-2.567\n        G03 X=-100.000 Y=-8.000 I=6.000 Z=-4.216\n        G01 X=0.000\n        G03 X=6.000 Y=-2.000 I=0 J=6.000 Z=-2.567\n        G01 Y=0 Z=-2.500\n        G01 Y=2.000 Z=-2.567\n        G03 X=0.000 Y=8.000 I=-6.000 Z=-4.216\n        G01 Y=0\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_rough.j2",
+    "id": "v3-keyway-keyway-rough",
+    "operation": "keyway.rough",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "闭口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "闭口",
+          "U_ID": "[100]",
+          "U_RT": "T15",
+          "U_RTB": "D1",
+          "U_RTD": 8.0,
+          "U_RC": 5.0,
+          "U_ANG": 45.0,
+          "U_ALBR": 0.3,
+          "U_ALBHF": 0.1,
+          "rough_n": 3979,
+          "rough_vf": 796,
+          "rough_vf_corner": 398,
+          "semi_vf": 637,
+          "layer_count": 3,
+          "depths": [
+            5.0,
+            5.0,
+            3.1
+          ],
+          "target_depths": [
+            5.0,
+            10.0,
+            13.1
+          ],
+          "path_type": "closed_3pass",
+          "is_left_open": false,
+          "tool_num": "T15",
+          "tool_offset": "D1",
+          "spindle_speed": 3979,
+          "next_tool_num": "T16"
+        }
+      ],
+      "texts": [
+        "\n;----粗铣键槽子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T15\")\nL172(0)\nL171(\"T16\")\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=3979 M1=3\nM14=8 M10=150 H50=80\n\n        G94 G40 G0 X=-7.300 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第1层, 切深5.00)\n        G1 X=-0.300 Z=-5.000 F200\n\n\n        G1 G41 X=-107.700 F=796\n        G1 Y=-2.000 F=398\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=796\n        G1 X0 F=398\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=796\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=398\n        G1 X=-100.000 F=796\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        G1 G40 X=-0.300 Y0 Z2\n\n\n        G94 G40 G0 X=-12.300 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第2层, 切深5.00)\n        G1 X=-0.300 Z=-10.000 F200\n\n\n        G1 G41 X=-107.700 F=796\n        G1 Y=-2.000 F=398\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=796\n        G1 X0 F=398\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=796\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=398\n        G1 X=-100.000 F=796\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        G1 G40 X=-0.300 Y0 Z2\n\n\n        G94 G40 G0 X=-15.400 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第3层, 切深3.10)\n        G1 X=-0.300 Z=-13.100 F200\n\n\n        G1 G41 X=-107.700 F=796\n        G1 Y=-2.000 F=398\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=796\n        G1 X0 F=398\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=796\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=398\n        G1 X=-100.000 F=796\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        ; 半精铣 (Z向到最终深度, 留0.10单边余量)\n        G1 Z=-13.100 F60\n            G1 X=-107.900 Y=-2.000 F=318\n            G3 X=-100.000 Y=-9.900 I=7.900\n            G1 X=-8.000 F=637\n            G1 X0 F=318\n            G3 X=7.900 Y=-2.000 J=7.900\n            G1 Y=2.000 F=637\n            G3 X0 Y=9.900 I=-7.900\n            G1 X=-92.000 F=318\n            G1 X=-100.000 F=637\n            G3 X=-107.900 Y=2.000 J=-7.900\n            G1 G40 Y0\n            G1 X=-0.100 F=637\n\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET\n\n;-----------\n"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_finish.j2",
+    "id": "v3-keyway-keyway-finish",
+    "operation": "keyway.finish",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "闭口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "闭口",
+          "U_ID": "[100]",
+          "U_FT": "T16",
+          "U_FTB": "D1",
+          "U_FTD": 8.0,
+          "finish_n": 3979,
+          "finish_vf": 637,
+          "path_type": "closed_non_round",
+          "is_left_open": false,
+          "tool_num": "T16",
+          "tool_offset": "D1",
+          "spindle_speed": 3979,
+          "next_tool_num": "T20"
+        }
+      ],
+      "texts": [
+        "\n;----精铣键槽子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T16\")\nL172(0)\nL171(\"T20\")\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=3979 M1=3\nM14=8 M10=150 H50=80\n    G94 G40 G0 X0 Y0 C=DC(0.00)\nG0 Z10\n\nG1 Z=-8.100 F3000\nG1 Z=-13.100 F100\n\n    G1 G41 Y=10.000 F=637\n    G1 X=-100.000\n    G3 X=-108.000 Y=2.000 J=-8.000\n    G1 Y=-2.000\n    G3 X=-100.000 Y=-10.000 I=8.000\n    G1 X0\n    G3 X=8.000 Y=-2.000 J=8.000\n    G1 Y=2.000\n    G3 X0 Y=10.000 I=-8.000\n    G1 G40 Y0 Z2\n\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET\n\n;-----------\n"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_chamfer.j2",
+    "id": "v3-keyway-keyway-chamfer",
+    "operation": "keyway.chamfer",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "闭口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "闭口",
+          "U_ID": "[100]",
+          "U_CT": "T20",
+          "U_CTB": "D1",
+          "U_CHAMFER_DEPTH": 0.5,
+          "R1": 4000,
+          "R2": 1200,
+          "R3": 8.0,
+          "R4": 2.0,
+          "R5": 0.0,
+          "R6": 40.0,
+          "tool_num": "T20",
+          "tool_offset": "D1",
+          "spindle_speed": 4000,
+          "is_left_open": false,
+          "next_tool_num": ""
+        }
+      ],
+      "texts": [
+        "\n\n;----键槽倒角子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T20\")\nL172(0)\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=4000 M1=3\nM14=8 M10=150 H50=80\nG94 G40 G0 X=0.000 Y=0 C=DC(0.000)\nG64\nG0 Z=5\n\n        ; --- 闭口带圆弧 (CLOSE_WITH_CIR) ---\n        G01 Z=-4.216 F100\n        G40 Y=8.000 F=1200\n        G01 X=-100.000\n        G03 X=-106.000 Y=2.000 I=0 J=-6.000 Z=-2.567\n        G01 Y=0 Z=-2.500\n        G01 Y=-2.000 Z=-2.567\n        G03 X=-100.000 Y=-8.000 I=6.000 Z=-4.216\n        G01 X=0.000\n        G03 X=6.000 Y=-2.000 I=0 J=6.000 Z=-2.567\n        G01 Y=0 Z=-2.500\n        G01 Y=2.000 Z=-2.567\n        G03 X=0.000 Y=8.000 I=-6.000 Z=-4.216\n        G01 Y=0\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_rough.j2",
+    "id": "v3-keyway-keyway-rough",
+    "operation": "keyway.rough",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 10.0,
+        "form": "闭口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 10.0,
+          "U_FX": "闭口",
+          "U_ID": "[100]",
+          "U_RT": "T15",
+          "U_RTB": "D1",
+          "U_RTD": 12.0,
+          "U_RC": 5.0,
+          "U_ANG": 45.0,
+          "U_ALBR": 0.3,
+          "U_ALBHF": 0.1,
+          "rough_n": 2653,
+          "rough_vf": 531,
+          "rough_vf_corner": 266,
+          "semi_vf": 637,
+          "layer_count": 3,
+          "depths": [
+            5.0,
+            5.0,
+            3.1
+          ],
+          "target_depths": [
+            5.0,
+            10.0,
+            13.1
+          ],
+          "path_type": "round_2pass",
+          "is_left_open": false,
+          "tool_num": "T15",
+          "tool_offset": "D1",
+          "spindle_speed": 2653,
+          "next_tool_num": "T16"
+        }
+      ],
+      "texts": [
+        "\n;----粗铣键槽子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T15\")\nL172(0)\nL171(\"T16\")\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=2653 M1=3\nM14=8 M10=150 H50=80\n\n        G94 G40 G0 X=-9.300 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第1层, 切深5.00)\n        G1 X=-2.300 Z=-5.000 F200\n\n\n        G1 G41 X=9.700 F=531\n        G3 X0 Y=9.700 I=-9.700 F=266\n        G1 X=-90.000 F=531\n        G1 X=-100.000 F=266\n        G3 X=-100.000 Y=-9.700 J=-9.700\n        G1 X=-10.000 F=531\n        G1 X0 F=266\n        G3 X=9.700 Y0 J=9.700\n\n\n        G1 G40 X=-2.300 Y0 Z2\n\n\n        G94 G40 G0 X=-14.300 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第2层, 切深5.00)\n        G1 X=-2.300 Z=-10.000 F200\n\n\n        G1 G41 X=9.700 F=531\n        G3 X0 Y=9.700 I=-9.700 F=266\n        G1 X=-90.000 F=531\n        G1 X=-100.000 F=266\n        G3 X=-100.000 Y=-9.700 J=-9.700\n        G1 X=-10.000 F=531\n        G1 X0 F=266\n        G3 X=9.700 Y0 J=9.700\n\n\n        G1 G40 X=-2.300 Y0 Z2\n\n\n        G94 G40 G0 X=-17.400 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第3层, 切深3.10)\n        G1 X=-2.300 Z=-13.100 F200\n\n\n        G1 G41 X=9.700 F=531\n        G3 X0 Y=9.700 I=-9.700 F=266\n        G1 X=-90.000 F=531\n        G1 X=-100.000 F=266\n        G3 X=-100.000 Y=-9.700 J=-9.700\n        G1 X=-10.000 F=531\n        G1 X0 F=266\n        G3 X=9.700 Y0 J=9.700\n\n\n        ; 半精铣 (Z向到最终深度, 留0.10单边余量)\n        G1 Z=-13.100 F60\n            G1 X=9.900 F=318\n            G3 X0 Y=9.900 I=-9.900\n            G1 X=-90.000 F=637\n            G1 X=-100.000 F=318\n            G3 X=-100.000 Y=-9.900 J=-9.900\n            G1 X=-10.000 F=637\n            G1 X0 F=318\n            G3 X=9.900 Y0 J=9.900\n            G1 G40 X0 Z2\n\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET\n\n;-----------\n"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_finish.j2",
+    "id": "v3-keyway-keyway-finish",
+    "operation": "keyway.finish",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 10.0,
+        "form": "闭口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 10.0,
+          "U_FX": "闭口",
+          "U_ID": "[100]",
+          "U_FT": "T16",
+          "U_FTB": "D1",
+          "U_FTD": 8.0,
+          "finish_n": 3979,
+          "finish_vf": 637,
+          "path_type": "closed_round",
+          "is_left_open": false,
+          "tool_num": "T16",
+          "tool_offset": "D1",
+          "spindle_speed": 3979,
+          "next_tool_num": "T20"
+        }
+      ],
+      "texts": [
+        "\n;----精铣键槽子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T16\")\nL172(0)\nL171(\"T20\")\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=3979 M1=3\nM14=8 M10=150 H50=80\n    G94 G40 G0 X0 Y0 C=DC(0.00)\nG0 Z10\n\nG1 Z=-8.100 F3000\nG1 Z=-13.100 F100\n\n    G1 G41 Y=10.000 F=637\n    G1 X=-100.000\n    G3 X=-100.000 Y=-10.000 J=-10.000\n    G1 X0\n    G3 X0 Y=10.000 J=10.000\n    G1 G40 Y0 Z2\n\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET\n\n;-----------\n"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_chamfer.j2",
+    "id": "v3-keyway-keyway-chamfer",
+    "operation": "keyway.chamfer",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 10.0,
+        "form": "闭口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 10.0,
+          "U_FX": "闭口",
+          "U_ID": "[100]",
+          "U_CT": "T20",
+          "U_CTB": "D1",
+          "U_CHAMFER_DEPTH": 0.5,
+          "R1": 4000,
+          "R2": 1200,
+          "R3": 8.0,
+          "R4": 2.0,
+          "R5": 0.0,
+          "R6": 40.0,
+          "tool_num": "T20",
+          "tool_offset": "D1",
+          "spindle_speed": 4000,
+          "is_left_open": false,
+          "next_tool_num": ""
+        }
+      ],
+      "texts": [
+        "\n\n;----键槽倒角子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T20\")\nL172(0)\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=4000 M1=3\nM14=8 M10=150 H50=80\nG94 G40 G0 X=0.000 Y=0 C=DC(0.000)\nG64\nG0 Z=5\n\n        ; --- 闭口带圆弧 (CLOSE_WITH_CIR) ---\n        G01 Z=-4.216 F100\n        G40 Y=8.000 F=1200\n        G01 X=-100.000\n        G03 X=-108.000 Y=0.000 I=0 J=-8.000 Z=-2.500\n        G01 Y=0 Z=-2.500\n        G01 Y=-0.000 Z=-2.500\n        G03 X=-100.000 Y=-8.000 I=8.000 Z=-4.216\n        G01 X=0.000\n        G03 X=8.000 Y=-0.000 I=0 J=8.000 Z=-2.500\n        G01 Y=0 Z=-2.500\n        G01 Y=0.000 Z=-2.500\n        G03 X=0.000 Y=8.000 I=-8.000 Z=-4.216\n        G01 Y=0\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_rough.j2",
+    "id": "v3-keyway-keyway-rough",
+    "operation": "keyway.rough",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "左开口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "左开口",
+          "U_ID": "[100]",
+          "U_RT": "T15",
+          "U_RTB": "D1",
+          "U_RTD": 12.0,
+          "U_RC": 5.0,
+          "U_ANG": 45.0,
+          "U_ALBR": 0.3,
+          "U_ALBHF": 0.1,
+          "rough_n": 2653,
+          "rough_vf": 531,
+          "rough_vf_corner": 266,
+          "semi_vf": 637,
+          "layer_count": 3,
+          "depths": [
+            5.0,
+            5.0,
+            3.1
+          ],
+          "target_depths": [
+            5.0,
+            10.0,
+            13.1
+          ],
+          "path_type": "left_open",
+          "is_left_open": true,
+          "tool_num": "T15",
+          "tool_offset": "D1",
+          "spindle_speed": 2653,
+          "next_tool_num": "T16"
+        }
+      ],
+      "texts": [
+        "\n;----粗铣键槽子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T15\")\nL172(0)\nL171(\"T16\")\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X-50.000 Z30.000\nAROT Z180\n;''''起转-给水''''\nG97 S1=2653 M1=3\nM14=8 M10=150 H50=80\n\n        G94 G40 G0 X=11.000 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 开口端垂直入刀 (第1层, 切深5.00)\n        G1 Z=-5.000 F200\n\n\n        G1 G41 Y=9.700 F=266\n        G1 X=-92.000 F=531\n        G1 X=-107.700 F=266\n        G1 Y=-9.700 F=531\n        G1 X=11.000 F=266\n        G1 Y=9.700 F=531\n\n        G1 G40 X=-4.300 Y0 Z2\n\n\n        G94 G40 G0 X=11.000 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 开口端垂直入刀 (第2层, 切深5.00)\n        G1 Z=-10.000 F200\n\n\n        G1 G41 Y=9.700 F=266\n        G1 X=-92.000 F=531\n        G1 X=-107.700 F=266\n        G1 Y=-9.700 F=531\n        G1 X=11.000 F=266\n        G1 Y=9.700 F=531\n\n        G1 G40 X=-4.300 Y0 Z2\n\n\n        G94 G40 G0 X=11.000 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 开口端垂直入刀 (第3层, 切深3.10)\n        G1 Z=-13.100 F200\n\n\n        G1 G41 Y=9.700 F=266\n        G1 X=-92.000 F=531\n        G1 X=-107.700 F=266\n        G1 Y=-9.700 F=531\n        G1 X=11.000 F=266\n        G1 Y=9.700 F=531\n\n        ; 半精铣 (Z向到最终深度, 留0.10单边余量)\n        G1 Z=-13.100 F60\n            G1 Y=9.900 F=318\n            G1 X=-92.000 F=637\n            G1 X=-107.900 F=318\n            G1 Y=-9.900 F=637\n            G1 X=11.000 F=318\n            G1 G40 Y0 Z2\n\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET\n\n;-----------\n"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_finish.j2",
+    "id": "v3-keyway-keyway-finish",
+    "operation": "keyway.finish",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "左开口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "左开口",
+          "U_ID": "[100]",
+          "U_FT": "T16",
+          "U_FTB": "D1",
+          "U_FTD": 8.0,
+          "finish_n": 3979,
+          "finish_vf": 637,
+          "path_type": "left_open",
+          "is_left_open": true,
+          "tool_num": "T16",
+          "tool_offset": "D1",
+          "spindle_speed": 3979,
+          "next_tool_num": "T20"
+        }
+      ],
+      "texts": [
+        "\n;----精铣键槽子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T16\")\nL172(0)\nL171(\"T20\")\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X-50.000 Z30.000\nAROT Z180\n;''''起转-给水''''\nG97 S1=3979 M1=3\nM14=8 M10=150 H50=80\n    G94 G40 G0 X=9.000 Y0 C=DC(0.00)\nG0 Z10\n\nG1 Z=-8.100 F3000\nG1 Z=-13.100 F100\n\n    G1 G41 Y=10.000 F=637\n    G1 X=-100.000\n    G3 X=-108.000 Y=2.000 J=-8.000\n    G1 Y=-2.000\n    G3 X=-100.000 Y=-10.000 I=8.000\n    G1 X=9.000\n    G1 G40 Y0 Z2\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET\n\n;-----------\n"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_chamfer.j2",
+    "id": "v3-keyway-keyway-chamfer",
+    "operation": "keyway.chamfer",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "左开口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "左开口",
+          "U_ID": "[100]",
+          "U_CT": "T20",
+          "U_CTB": "D1",
+          "U_CHAMFER_DEPTH": 0.5,
+          "R1": 4000,
+          "R2": 1200,
+          "R3": 8.0,
+          "R4": 2.0,
+          "R5": 0.0,
+          "R6": 40.0,
+          "tool_num": "T20",
+          "tool_offset": "D1",
+          "spindle_speed": 4000,
+          "is_left_open": true,
+          "next_tool_num": ""
+        }
+      ],
+      "texts": [
+        "\n\n;----键槽倒角子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T20\")\nL172(0)\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X-50.000 Z30.000\nAROT Z180\n;''''起转-给水''''\nG97 S1=4000 M1=3\nM14=8 M10=150 H50=80\nG94 G40 G0 X=14.000 Y=0 C=DC(0.000)\nG64\nG0 Z=5\n\n        ; --- 开口带圆弧 (OPEN_WITH_CIR) ---\n        G01 Z=-4.216 F100\n        G40 Y=8.000 F=1200\n        G01 X=-100.000\n        G03 X=-106.000 Y=2.000 I=0 J=-6.000 Z=-2.567\n        G01 Y=0 Z=-2.500\n        G01 Y=-2.000 Z=-2.567\n        G03 X=-100.000 Y=-8.000 I=6.000 Z=-4.216\n        G01 X=14.0\n        G01 Y=0\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_rough.j2",
+    "id": "v3-keyway-keyway-rough",
+    "operation": "keyway.rough",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "右开口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "右开口",
+          "U_ID": "[100]",
+          "U_RT": "T15",
+          "U_RTB": "D1",
+          "U_RTD": 12.0,
+          "U_RC": 5.0,
+          "U_ANG": 45.0,
+          "U_ALBR": 0.3,
+          "U_ALBHF": 0.1,
+          "rough_n": 2653,
+          "rough_vf": 531,
+          "rough_vf_corner": 266,
+          "semi_vf": 637,
+          "layer_count": 3,
+          "depths": [
+            5.0,
+            5.0,
+            3.1
+          ],
+          "target_depths": [
+            5.0,
+            10.0,
+            13.1
+          ],
+          "path_type": "right_open",
+          "is_left_open": false,
+          "tool_num": "T15",
+          "tool_offset": "D1",
+          "spindle_speed": 2653,
+          "next_tool_num": "T16"
+        }
+      ],
+      "texts": [
+        "\n;----粗铣键槽子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T15\")\nL172(0)\nL171(\"T16\")\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=2653 M1=3\nM14=8 M10=150 H50=80\n\n        G94 G40 G0 X=11.000 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 开口端垂直入刀 (第1层, 切深5.00)\n        G1 Z=-5.000 F200\n\n\n        G1 G41 Y=9.700 F=266\n        G1 X=-92.000 F=531\n        G1 X=-107.700 F=266\n        G1 Y=-9.700 F=531\n        G1 X=11.000 F=266\n        G1 Y=9.700 F=531\n\n\n        G1 G40 X=-4.300 Y0 Z2\n\n\n        G94 G40 G0 X=11.000 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 开口端垂直入刀 (第2层, 切深5.00)\n        G1 Z=-10.000 F200\n\n\n        G1 G41 Y=9.700 F=266\n        G1 X=-92.000 F=531\n        G1 X=-107.700 F=266\n        G1 Y=-9.700 F=531\n        G1 X=11.000 F=266\n        G1 Y=9.700 F=531\n\n\n        G1 G40 X=-4.300 Y0 Z2\n\n\n        G94 G40 G0 X=11.000 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 开口端垂直入刀 (第3层, 切深3.10)\n        G1 Z=-13.100 F200\n\n\n        G1 G41 Y=9.700 F=266\n        G1 X=-92.000 F=531\n        G1 X=-107.700 F=266\n        G1 Y=-9.700 F=531\n        G1 X=11.000 F=266\n        G1 Y=9.700 F=531\n\n\n        ; 半精铣 (Z向到最终深度, 留0.10单边余量)\n        G1 Z=-13.100 F60\n            G1 Y=9.900 F=318\n            G1 X=-92.000 F=637\n            G1 X=-107.900 F=318\n            G1 Y=-9.900 F=637\n            G1 X=11.000 F=318\n            G1 G40 Y0 Z2\n\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET\n\n;-----------\n"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_finish.j2",
+    "id": "v3-keyway-keyway-finish",
+    "operation": "keyway.finish",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "右开口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "右开口",
+          "U_ID": "[100]",
+          "U_FT": "T16",
+          "U_FTB": "D1",
+          "U_FTD": 8.0,
+          "finish_n": 3979,
+          "finish_vf": 637,
+          "path_type": "right_open",
+          "is_left_open": false,
+          "tool_num": "T16",
+          "tool_offset": "D1",
+          "spindle_speed": 3979,
+          "next_tool_num": "T20"
+        }
+      ],
+      "texts": [
+        "\n;----精铣键槽子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T16\")\nL172(0)\nL171(\"T20\")\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=3979 M1=3\nM14=8 M10=150 H50=80\n    G94 G40 G0 X=9.000 Y0 C=DC(0.00)\nG0 Z10\n\nG1 Z=-8.100 F3000\nG1 Z=-13.100 F100\n\n    G1 G41 Y=10.000 F=637\n    G1 X=-100.000\n    G3 X=-108.000 Y=2.000 J=-8.000\n    G1 Y=-2.000\n    G3 X=-100.000 Y=-10.000 I=8.000\n    G1 X=9.000\n    G1 G40 Y0 Z2\n\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET\n\n;-----------\n"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_chamfer.j2",
+    "id": "v3-keyway-keyway-chamfer",
+    "operation": "keyway.chamfer",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "右开口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "右开口",
+          "U_ID": "[100]",
+          "U_CT": "T20",
+          "U_CTB": "D1",
+          "U_CHAMFER_DEPTH": 0.5,
+          "R1": 4000,
+          "R2": 1200,
+          "R3": 8.0,
+          "R4": 2.0,
+          "R5": 0.0,
+          "R6": 40.0,
+          "tool_num": "T20",
+          "tool_offset": "D1",
+          "spindle_speed": 4000,
+          "is_left_open": false,
+          "next_tool_num": ""
+        }
+      ],
+      "texts": [
+        "\n\n;----键槽倒角子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T20\")\nL172(0)\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=4000 M1=3\nM14=8 M10=150 H50=80\nG94 G40 G0 X=14.000 Y=0 C=DC(0.000)\nG64\nG0 Z=5\n\n        ; --- 开口带圆弧 (OPEN_WITH_CIR) ---\n        G01 Z=-4.216 F100\n        G40 Y=8.000 F=1200\n        G01 X=-100.000\n        G03 X=-106.000 Y=2.000 I=0 J=-6.000 Z=-2.567\n        G01 Y=0 Z=-2.500\n        G01 Y=-2.000 Z=-2.567\n        G03 X=-100.000 Y=-8.000 I=6.000 Z=-4.216\n        G01 X=14.0\n        G01 Y=0\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET"
+      ]
+    }
+  },
+  {
+    "name": "sync_turning_left_template.j2",
+    "id": "v3-sync-turning-left-template",
+    "operation": "sync.left",
+    "inputs": {
+      "sta_x": 60.0,
+      "sta_z": 0.0,
+      "end_x": 50.0,
+      "end_z": -10.0,
+      "ap_1": 2.0,
+      "ap_2": 3.0,
+      "sync_feed": 0.2,
+      "current_sync_num": 10
+    },
+    "expected": {
+      "contexts": [
+        {
+          "side": "Left",
+          "end_x": 50.0,
+          "sta_x": 60.0,
+          "actual_sta_z": -2.0,
+          "actual_sta_x": 60.0,
+          "end_z": -10.0,
+          "sync_feed": 0.2,
+          "ap_1": 2.0,
+          "ap_2": 3.0,
+          "cut_num": 2,
+          "sync_num_start": 10,
+          "channel": 1
+        },
+        {
+          "side": "Left",
+          "end_x": 50.0,
+          "sta_x": 60.0,
+          "actual_sta_z": -2.0,
+          "actual_sta_x": 60.0,
+          "end_z": -10.0,
+          "sync_feed": 0.2,
+          "ap_1": 2.0,
+          "ap_2": 3.0,
+          "cut_num": 2,
+          "sync_num_start": 10,
+          "channel": 2
+        }
+      ],
+      "texts": [
+        ";---SYT-Left--D50.0---start---\nG0 Z-2.000\nG0 X70.000\nWAITM(10,1,2)\nG0 Z0.000\nG0 X64.000\nWAITM(11,1,2)\nG1 Z-2.000 ANG=225 F0.2\nG1 X58.000 ANG=205 F0.2\nG1 Z-10.000 F0.2\nG91\nG1 X9.000 F40\nG90\nG0 Z-5.361\nG0 X59.000\nWAITM(12,1,2)\nG1 Z-7.361 ANG=225 F0.2\nG1 X53.000 ANG=205 F0.2\nG1 Z-10.000 F0.2\nG91\nG1 X9.000 F40\nG90\nG0 X70.000\nG0 Z-10.000\n;---End---",
+        ";---SYT-Left--D50.0---start---\nG0 Z-2.000\nG0 X70.000\nWAITM(10,1,2)\nG0 Z2.000\nG0 X68.000\nWAITM(11,1,2)\nG1 Z0.000 ANG=225 F0.2\nG1 Z-2.000 ANG=225 F0.2\nG1 X55.000 ANG=205 F0.2\nG1 Z-10.000 F0.2\nG91\nG1 X9.000 F40\nG90\nG0 Z-3.361\nG0 X63.000\nWAITM(12,1,2)\nG1 Z-5.361 ANG=225 F0.2\nG1 Z-7.361 ANG=225 F0.2\nG1 X50.000 ANG=205 F0.2\nG1 Z-10.000 F0.2\nG91\nG1 X9.000 F40\nG90\nG0 X70.000\nG0 Z-10.000\n;---End---"
+      ],
+      "next_sync_num": 13
+    }
+  },
+  {
+    "name": "sync_turning_left_template.j2",
+    "id": "v3-sync-turning-left-template",
+    "operation": "sync.left",
+    "inputs": {
+      "sta_x": 61.0,
+      "sta_z": 0.0,
+      "end_x": 50.0,
+      "end_z": -10.0,
+      "ap_1": 2.0,
+      "ap_2": 3.0,
+      "sync_feed": 0.2,
+      "current_sync_num": 10
+    },
+    "expected": {
+      "contexts": [
+        {
+          "side": "Left",
+          "end_x": 50.0,
+          "sta_x": 61.0,
+          "actual_sta_z": 2.289013841019117,
+          "actual_sta_x": 65.0,
+          "end_z": -10.0,
+          "sync_feed": 0.2,
+          "ap_1": 2.0,
+          "ap_2": 3.0,
+          "cut_num": 3,
+          "sync_num_start": 10,
+          "channel": 1
+        },
+        {
+          "side": "Left",
+          "end_x": 50.0,
+          "sta_x": 61.0,
+          "actual_sta_z": 2.289013841019117,
+          "actual_sta_x": 65.0,
+          "end_z": -10.0,
+          "sync_feed": 0.2,
+          "ap_1": 2.0,
+          "ap_2": 3.0,
+          "cut_num": 3,
+          "sync_num_start": 10,
+          "channel": 2
+        }
+      ],
+      "texts": [
+        ";---SYT-Left--D50.0---start---\nG0 Z2.289\nG0 X75.000\nWAITM(10,1,2)\nG0 Z4.289\nG0 X69.000\nWAITM(11,1,2)\nG1 Z2.289 ANG=225 F0.2\nG1 X63.000 ANG=205 F0.2\nG1 Z-10.000 F0.2\nG91\nG1 X9.000 F40\nG90\nG0 Z-1.072\nG0 X64.000\nWAITM(12,1,2)\nG1 Z-3.072 ANG=225 F0.2\nG1 X58.000 ANG=205 F0.2\nG1 Z-10.000 F0.2\nG91\nG1 X9.000 F40\nG90\nG0 Z-6.434\nG0 X59.000\nWAITM(13,1,2)\nG1 Z-8.434 ANG=225 F0.2\nG1 X53.000 ANG=205 F0.2\nG1 Z-10.000 F0.2\nG91\nG1 X9.000 F40\nG90\nG0 X75.000\nG0 Z-10.000\n;---End---",
+        ";---SYT-Left--D50.0---start---\nG0 Z2.289\nG0 X75.000\nWAITM(10,1,2)\nG0 Z6.289\nG0 X73.000\nWAITM(11,1,2)\nG1 Z4.289 ANG=225 F0.2\nG1 Z2.289 ANG=225 F0.2\nG1 X60.000 ANG=205 F0.2\nG1 Z-10.000 F0.2\nG91\nG1 X9.000 F40\nG90\nG0 Z0.928\nG0 X68.000\nWAITM(12,1,2)\nG1 Z-1.072 ANG=225 F0.2\nG1 Z-3.072 ANG=225 F0.2\nG1 X55.000 ANG=205 F0.2\nG1 Z-10.000 F0.2\nG91\nG1 X9.000 F40\nG90\nG0 Z-4.434\nG0 X63.000\nWAITM(13,1,2)\nG1 Z-6.434 ANG=225 F0.2\nG1 Z-8.434 ANG=225 F0.2\nG1 X50.000 ANG=205 F0.2\nG1 Z-10.000 F0.2\nG91\nG1 X9.000 F40\nG90\nG0 X75.000\nG0 Z-10.000\n;---End---"
+      ],
+      "next_sync_num": 14
+    }
+  },
+  {
+    "name": "sync_turning_left_template.j2",
+    "id": "v3-sync-turning-left-template",
+    "operation": "sync.left",
+    "inputs": {
+      "sta_x": 60.000000005,
+      "sta_z": 0.0,
+      "end_x": 50.0,
+      "end_z": -10.0,
+      "ap_1": 2.0,
+      "ap_2": 3.0,
+      "sync_feed": 0.2,
+      "current_sync_num": 10
+    },
+    "expected": {
+      "contexts": [
+        {
+          "side": "Left",
+          "end_x": 50.0,
+          "sta_x": 60.000000005,
+          "actual_sta_z": -2.000000005361264,
+          "actual_sta_x": 60.0,
+          "end_z": -10.0,
+          "sync_feed": 0.2,
+          "ap_1": 2.0,
+          "ap_2": 3.0,
+          "cut_num": 2,
+          "sync_num_start": 10,
+          "channel": 1
+        },
+        {
+          "side": "Left",
+          "end_x": 50.0,
+          "sta_x": 60.000000005,
+          "actual_sta_z": -2.000000005361264,
+          "actual_sta_x": 60.0,
+          "end_z": -10.0,
+          "sync_feed": 0.2,
+          "ap_1": 2.0,
+          "ap_2": 3.0,
+          "cut_num": 2,
+          "sync_num_start": 10,
+          "channel": 2
+        }
+      ],
+      "texts": [
+        ";---SYT-Left--D50.0---start---\nG0 Z-2.000\nG0 X70.000\nWAITM(10,1,2)\nG0 Z-0.000\nG0 X64.000\nWAITM(11,1,2)\nG1 Z-2.000 ANG=225 F0.2\nG1 X58.000 ANG=205 F0.2\nG1 Z-10.000 F0.2\nG91\nG1 X9.000 F40\nG90\nG0 Z-5.361\nG0 X59.000\nWAITM(12,1,2)\nG1 Z-7.361 ANG=225 F0.2\nG1 X53.000 ANG=205 F0.2\nG1 Z-10.000 F0.2\nG91\nG1 X9.000 F40\nG90\nG0 X70.000\nG0 Z-10.000\n;---End---",
+        ";---SYT-Left--D50.0---start---\nG0 Z-2.000\nG0 X70.000\nWAITM(10,1,2)\nG0 Z2.000\nG0 X68.000\nWAITM(11,1,2)\nG1 Z-0.000 ANG=225 F0.2\nG1 Z-2.000 ANG=225 F0.2\nG1 X55.000 ANG=205 F0.2\nG1 Z-10.000 F0.2\nG91\nG1 X9.000 F40\nG90\nG0 Z-3.361\nG0 X63.000\nWAITM(12,1,2)\nG1 Z-5.361 ANG=225 F0.2\nG1 Z-7.361 ANG=225 F0.2\nG1 X50.000 ANG=205 F0.2\nG1 Z-10.000 F0.2\nG91\nG1 X9.000 F40\nG90\nG0 X70.000\nG0 Z-10.000\n;---End---"
+      ],
+      "next_sync_num": 13
+    }
+  },
+  {
+    "name": "sync_turning_left_template.j2",
+    "id": "v3-sync-turning-left-template",
+    "operation": "sync.left",
+    "inputs": {
+      "sta_x": 50.0,
+      "sta_z": 0.0,
+      "end_x": 50.0,
+      "end_z": -10.0,
+      "ap_1": 2.0,
+      "ap_2": 3.0,
+      "sync_feed": 0.2,
+      "current_sync_num": 10
+    },
+    "expected": {
+      "contexts": [],
+      "texts": [
+        ";No cut",
+        ";No cut"
+      ],
+      "next_sync_num": 10
+    }
+  },
+  {
+    "name": "sync_turning_right_template.j2",
+    "id": "v3-sync-turning-right-template",
+    "operation": "sync.right",
+    "inputs": {
+      "sta_x": 60.0,
+      "sta_z": 0.0,
+      "end_x": 50.0,
+      "end_z": -10.0,
+      "ap_1": 2.0,
+      "ap_2": 3.0,
+      "sync_feed": 0.2,
+      "current_sync_num": 10
+    },
+    "expected": {
+      "contexts": [
+        {
+          "side": "Right",
+          "end_x": 50.0,
+          "sta_z": 0.0,
+          "actual_sta_x": 60.0,
+          "end_z": -10.0,
+          "sync_feed": 0.2,
+          "ap_1": 2.0,
+          "ap_2": 3.0,
+          "cut_num": 2,
+          "sync_num_start": 10,
+          "warnings": [],
+          "channel": 1
+        },
+        {
+          "side": "Right",
+          "end_x": 50.0,
+          "sta_z": 0.0,
+          "actual_sta_x": 60.0,
+          "end_z": -10.0,
+          "sync_feed": 0.2,
+          "ap_1": 2.0,
+          "ap_2": 3.0,
+          "cut_num": 2,
+          "sync_num_start": 10,
+          "warnings": [],
+          "channel": 2
+        }
+      ],
+      "texts": [
+        ";---SYT-Right-D50.0---start---\nG0 Z4.000\nG0 X70.000\nWAITM(10,1,2)\nG0 Z2.000\nG1 X58.000 F400\nWAITM(11,1,2)\nG1 Z-10.000 F0.20\nG91\nG1 X9.000 F0.3\nG1 X2 Z1\nG90\nG0 Z2.000\nG1 X53.000 F400\nWAITM(12,1,2)\nG1 Z-10.000 F0.20\nG91\nG1 X9.000 F0.3\nG1 X2 Z1\nG90\nG0 X70.000\nG0 Z-6.000\n;---End---",
+        ";---SYT-Right-D50.0---start---\nG0 Z4.000\nG0 X70.000\nWAITM(10,1,2)\nG0 Z4.000\nG1 X55.000 F400\nWAITM(11,1,2)\nG1 Z-10.000 F0.20\nG91\nG1 X9.000 F0.3\nG1 X2 Z1\nG90\nG0 Z4.000\nG1 X50.000 F400\nWAITM(12,1,2)\nG1 Z-10.000 F0.20\nG91\nG1 X9.000 F0.3\nG1 X2 Z1\nG90\nG0 X70.000\nG0 Z-6.000\n;---End---"
+      ],
+      "next_sync_num": 13
+    }
+  },
+  {
+    "name": "sync_turning_right_template.j2",
+    "id": "v3-sync-turning-right-template",
+    "operation": "sync.right",
+    "inputs": {
+      "sta_x": 61.0,
+      "sta_z": 0.0,
+      "end_x": 50.0,
+      "end_z": -10.0,
+      "ap_1": 2.0,
+      "ap_2": 3.0,
+      "sync_feed": 0.2,
+      "current_sync_num": 10
+    },
+    "expected": {
+      "contexts": [
+        {
+          "side": "Right",
+          "end_x": 50.0,
+          "sta_z": 0.0,
+          "actual_sta_x": 65.0,
+          "end_z": -10.0,
+          "sync_feed": 0.2,
+          "ap_1": 2.0,
+          "ap_2": 3.0,
+          "cut_num": 3,
+          "sync_num_start": 10,
+          "warnings": [],
+          "channel": 1
+        },
+        {
+          "side": "Right",
+          "end_x": 50.0,
+          "sta_z": 0.0,
+          "actual_sta_x": 65.0,
+          "end_z": -10.0,
+          "sync_feed": 0.2,
+          "ap_1": 2.0,
+          "ap_2": 3.0,
+          "cut_num": 3,
+          "sync_num_start": 10,
+          "warnings": [],
+          "channel": 2
+        }
+      ],
+      "texts": [
+        ";---SYT-Right-D50.0---start---\nG0 Z4.000\nG0 X75.000\nWAITM(10,1,2)\nG0 Z2.000\nG1 X63.000 F400\nWAITM(11,1,2)\nG1 Z-10.000 F0.20\nG91\nG1 X9.000 F0.3\nG1 X2 Z1\nG90\nG0 Z2.000\nG1 X58.000 F400\nWAITM(12,1,2)\nG1 Z-10.000 F0.20\nG91\nG1 X9.000 F0.3\nG1 X2 Z1\nG90\nG0 Z2.000\nG1 X53.000 F400\nWAITM(13,1,2)\nG1 Z-10.000 F0.20\nG91\nG1 X9.000 F0.3\nG1 X2 Z1\nG90\nG0 X75.000\nG0 Z-6.000\n;---End---",
+        ";---SYT-Right-D50.0---start---\nG0 Z4.000\nG0 X75.000\nWAITM(10,1,2)\nG0 Z4.000\nG1 X60.000 F400\nWAITM(11,1,2)\nG1 Z-10.000 F0.20\nG91\nG1 X9.000 F0.3\nG1 X2 Z1\nG90\nG0 Z4.000\nG1 X55.000 F400\nWAITM(12,1,2)\nG1 Z-10.000 F0.20\nG91\nG1 X9.000 F0.3\nG1 X2 Z1\nG90\nG0 Z4.000\nG1 X50.000 F400\nWAITM(13,1,2)\nG1 Z-10.000 F0.20\nG91\nG1 X9.000 F0.3\nG1 X2 Z1\nG90\nG0 X75.000\nG0 Z-6.000\n;---End---"
+      ],
+      "next_sync_num": 14
+    }
+  },
+  {
+    "name": "sync_turning_right_template.j2",
+    "id": "v3-sync-turning-right-template",
+    "operation": "sync.right",
+    "inputs": {
+      "sta_x": 60.000000005,
+      "sta_z": 0.0,
+      "end_x": 50.0,
+      "end_z": -10.0,
+      "ap_1": 2.0,
+      "ap_2": 3.0,
+      "sync_feed": 0.2,
+      "current_sync_num": 10
+    },
+    "expected": {
+      "contexts": [
+        {
+          "side": "Right",
+          "end_x": 50.0,
+          "sta_z": 0.0,
+          "actual_sta_x": 60.0,
+          "end_z": -10.0,
+          "sync_feed": 0.2,
+          "ap_1": 2.0,
+          "ap_2": 3.0,
+          "cut_num": 2,
+          "sync_num_start": 10,
+          "warnings": [],
+          "channel": 1
+        },
+        {
+          "side": "Right",
+          "end_x": 50.0,
+          "sta_z": 0.0,
+          "actual_sta_x": 60.0,
+          "end_z": -10.0,
+          "sync_feed": 0.2,
+          "ap_1": 2.0,
+          "ap_2": 3.0,
+          "cut_num": 2,
+          "sync_num_start": 10,
+          "warnings": [],
+          "channel": 2
+        }
+      ],
+      "texts": [
+        ";---SYT-Right-D50.0---start---\nG0 Z4.000\nG0 X70.000\nWAITM(10,1,2)\nG0 Z2.000\nG1 X58.000 F400\nWAITM(11,1,2)\nG1 Z-10.000 F0.20\nG91\nG1 X9.000 F0.3\nG1 X2 Z1\nG90\nG0 Z2.000\nG1 X53.000 F400\nWAITM(12,1,2)\nG1 Z-10.000 F0.20\nG91\nG1 X9.000 F0.3\nG1 X2 Z1\nG90\nG0 X70.000\nG0 Z-6.000\n;---End---",
+        ";---SYT-Right-D50.0---start---\nG0 Z4.000\nG0 X70.000\nWAITM(10,1,2)\nG0 Z4.000\nG1 X55.000 F400\nWAITM(11,1,2)\nG1 Z-10.000 F0.20\nG91\nG1 X9.000 F0.3\nG1 X2 Z1\nG90\nG0 Z4.000\nG1 X50.000 F400\nWAITM(12,1,2)\nG1 Z-10.000 F0.20\nG91\nG1 X9.000 F0.3\nG1 X2 Z1\nG90\nG0 X70.000\nG0 Z-6.000\n;---End---"
+      ],
+      "next_sync_num": 13
+    }
+  },
+  {
+    "name": "sync_turning_right_template.j2",
+    "id": "v3-sync-turning-right-template",
+    "operation": "sync.right",
+    "inputs": {
+      "sta_x": 50.0,
+      "sta_z": 0.0,
+      "end_x": 50.0,
+      "end_z": -10.0,
+      "ap_1": 2.0,
+      "ap_2": 3.0,
+      "sync_feed": 0.2,
+      "current_sync_num": 10
+    },
+    "expected": {
+      "contexts": [],
+      "texts": [
+        ";(No cutting required)",
+        ";(No cutting required)"
+      ],
+      "next_sync_num": 10
+    }
+  },
+  {
+    "name": "keyway/keyway_rough.j2",
+    "id": "v3-keyway-keyway-rough",
+    "operation": "keyway.rough",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 5.0,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "闭口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 5.0,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "闭口",
+          "U_ID": "[100]",
+          "U_RT": "T15",
+          "U_RTB": "D1",
+          "U_RTD": 12.0,
+          "U_RC": 5.0,
+          "U_ANG": 45.0,
+          "U_ALBR": 0.3,
+          "U_ALBHF": 0.1,
+          "rough_n": 2653,
+          "rough_vf": 531,
+          "rough_vf_corner": 266,
+          "semi_vf": 637,
+          "layer_count": 1,
+          "depths": [
+            5.0
+          ],
+          "target_depths": [
+            5.0
+          ],
+          "path_type": "closed_3pass",
+          "is_left_open": false,
+          "tool_num": "T15",
+          "tool_offset": "D1",
+          "spindle_speed": 2653,
+          "next_tool_num": "T16"
+        }
+      ],
+      "texts": [
+        "\n;----粗铣键槽子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T15\")\nL172(0)\nL171(\"T16\")\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=2653 M1=3\nM14=8 M10=150 H50=80\n\n        G94 G40 G0 X=-11.300 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第1层, 切深5.00)\n        G1 X=-4.300 Z=-5.000 F200\n\n\n        G1 G41 X=-107.700 F=531\n        G1 Y=-2.000 F=266\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=531\n        G1 X0 F=266\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=531\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=266\n        G1 X=-100.000 F=531\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        ; 半精铣 (Z向到最终深度, 留0.10单边余量)\n        G1 Z=-5.000 F60\n            G1 X=-107.900 Y=-2.000 F=318\n            G3 X=-100.000 Y=-9.900 I=7.900\n            G1 X=-8.000 F=637\n            G1 X0 F=318\n            G3 X=7.900 Y=-2.000 J=7.900\n            G1 Y=2.000 F=637\n            G3 X0 Y=9.900 I=-7.900\n            G1 X=-92.000 F=318\n            G1 X=-100.000 F=637\n            G3 X=-107.900 Y=2.000 J=-7.900\n            G1 G40 Y0\n            G1 X=-4.100 F=637\n\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET\n\n;-----------\n"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_rough.j2",
+    "id": "v3-keyway-keyway-rough",
+    "operation": "keyway.rough",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 5.001,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "闭口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 5.001,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "闭口",
+          "U_ID": "[100]",
+          "U_RT": "T15",
+          "U_RTB": "D1",
+          "U_RTD": 12.0,
+          "U_RC": 5.0,
+          "U_ANG": 45.0,
+          "U_ALBR": 0.3,
+          "U_ALBHF": 0.1,
+          "rough_n": 2653,
+          "rough_vf": 531,
+          "rough_vf_corner": 266,
+          "semi_vf": 637,
+          "layer_count": 2,
+          "depths": [
+            5.0,
+            0.001
+          ],
+          "target_depths": [
+            5.0,
+            5.001
+          ],
+          "path_type": "closed_3pass",
+          "is_left_open": false,
+          "tool_num": "T15",
+          "tool_offset": "D1",
+          "spindle_speed": 2653,
+          "next_tool_num": "T16"
+        }
+      ],
+      "texts": [
+        "\n;----粗铣键槽子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T15\")\nL172(0)\nL171(\"T16\")\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=2653 M1=3\nM14=8 M10=150 H50=80\n\n        G94 G40 G0 X=-11.300 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第1层, 切深5.00)\n        G1 X=-4.300 Z=-5.000 F200\n\n\n        G1 G41 X=-107.700 F=531\n        G1 Y=-2.000 F=266\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=531\n        G1 X0 F=266\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=531\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=266\n        G1 X=-100.000 F=531\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        G1 G40 X=-4.300 Y0 Z2\n\n\n        G94 G40 G0 X=-11.301 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第2层, 切深0.00)\n        G1 X=-4.300 Z=-5.001 F200\n\n\n        G1 G41 X=-107.700 F=531\n        G1 Y=-2.000 F=266\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=531\n        G1 X0 F=266\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=531\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=266\n        G1 X=-100.000 F=531\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        ; 半精铣 (Z向到最终深度, 留0.10单边余量)\n        G1 Z=-5.001 F60\n            G1 X=-107.900 Y=-2.000 F=318\n            G3 X=-100.000 Y=-9.900 I=7.900\n            G1 X=-8.000 F=637\n            G1 X0 F=318\n            G3 X=7.900 Y=-2.000 J=7.900\n            G1 Y=2.000 F=637\n            G3 X0 Y=9.900 I=-7.900\n            G1 X=-92.000 F=318\n            G1 X=-100.000 F=637\n            G3 X=-107.900 Y=2.000 J=-7.900\n            G1 G40 Y0\n            G1 X=-4.100 F=637\n\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET\n\n;-----------\n"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_rough.j2",
+    "id": "v3-keyway-keyway-rough",
+    "operation": "keyway.rough",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 0.001,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "闭口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 0.001,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "闭口",
+          "U_ID": "[100]",
+          "U_RT": "T15",
+          "U_RTB": "D1",
+          "U_RTD": 12.0,
+          "U_RC": 5.0,
+          "U_ANG": 45.0,
+          "U_ALBR": 0.3,
+          "U_ALBHF": 0.1,
+          "rough_n": 2653,
+          "rough_vf": 531,
+          "rough_vf_corner": 266,
+          "semi_vf": 637,
+          "layer_count": 1,
+          "depths": [
+            0.001
+          ],
+          "target_depths": [
+            0.001
+          ],
+          "path_type": "closed_3pass",
+          "is_left_open": false,
+          "tool_num": "T15",
+          "tool_offset": "D1",
+          "spindle_speed": 2653,
+          "next_tool_num": "T16"
+        }
+      ],
+      "texts": [
+        "\n;----粗铣键槽子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T15\")\nL172(0)\nL171(\"T16\")\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=2653 M1=3\nM14=8 M10=150 H50=80\n\n        G94 G40 G0 X=-6.301 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第1层, 切深0.00)\n        G1 X=-4.300 Z=-0.001 F200\n\n\n        G1 G41 X=-107.700 F=531\n        G1 Y=-2.000 F=266\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=531\n        G1 X0 F=266\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=531\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=266\n        G1 X=-100.000 F=531\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        ; 半精铣 (Z向到最终深度, 留0.10单边余量)\n        G1 Z=-0.001 F60\n            G1 X=-107.900 Y=-2.000 F=318\n            G3 X=-100.000 Y=-9.900 I=7.900\n            G1 X=-8.000 F=637\n            G1 X0 F=318\n            G3 X=7.900 Y=-2.000 J=7.900\n            G1 Y=2.000 F=637\n            G3 X0 Y=9.900 I=-7.900\n            G1 X=-92.000 F=318\n            G1 X=-100.000 F=637\n            G3 X=-107.900 Y=2.000 J=-7.900\n            G1 G40 Y0\n            G1 X=-4.100 F=637\n\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET\n\n;-----------\n"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_rough.j2",
+    "id": "v3-keyway-keyway-rough",
+    "operation": "keyway.rough",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "闭口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 2.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": true
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "闭口",
+          "U_ID": "[100]",
+          "U_RT": "T15",
+          "U_RTB": "D1",
+          "U_RTD": 12.0,
+          "U_RC": 2.0,
+          "U_ANG": 45.0,
+          "U_ALBR": 0.3,
+          "U_ALBHF": 0.1,
+          "rough_n": 2653,
+          "rough_vf": 531,
+          "rough_vf_corner": 266,
+          "semi_vf": 637,
+          "layer_count": 7,
+          "depths": [
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            2.0,
+            1.1
+          ],
+          "target_depths": [
+            2.0,
+            4.0,
+            6.0,
+            8.0,
+            10.0,
+            12.0,
+            13.1
+          ],
+          "path_type": "closed_3pass",
+          "is_left_open": false,
+          "tool_num": "T15",
+          "tool_offset": "D1",
+          "spindle_speed": 2653,
+          "next_tool_num": "T16"
+        }
+      ],
+      "texts": [
+        "\n;----粗铣键槽子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T15\")\nL172(0)\nL171(\"T16\")\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=2653 M1=3\nM14=8 M10=150 H50=80\n\n        G94 G40 G0 X=-8.300 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第1层, 切深2.00)\n        G1 X=-4.300 Z=-2.000 F200\n\n\n        G1 G41 X=-107.700 F=531\n        G1 Y=-2.000 F=266\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=531\n        G1 X0 F=266\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=531\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=266\n        G1 X=-100.000 F=531\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        G1 G40 X=-4.300 Y0 Z2\n\n\n        G94 G40 G0 X=-10.300 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第2层, 切深2.00)\n        G1 X=-4.300 Z=-4.000 F200\n\n\n        G1 G41 X=-107.700 F=531\n        G1 Y=-2.000 F=266\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=531\n        G1 X0 F=266\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=531\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=266\n        G1 X=-100.000 F=531\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        G1 G40 X=-4.300 Y0 Z2\n\n\n        G94 G40 G0 X=-12.300 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第3层, 切深2.00)\n        G1 X=-4.300 Z=-6.000 F200\n\n\n        G1 G41 X=-107.700 F=531\n        G1 Y=-2.000 F=266\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=531\n        G1 X0 F=266\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=531\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=266\n        G1 X=-100.000 F=531\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        G1 G40 X=-4.300 Y0 Z2\n\n\n        G94 G40 G0 X=-14.300 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第4层, 切深2.00)\n        G1 X=-4.300 Z=-8.000 F200\n\n\n        G1 G41 X=-107.700 F=531\n        G1 Y=-2.000 F=266\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=531\n        G1 X0 F=266\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=531\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=266\n        G1 X=-100.000 F=531\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        G1 G40 X=-4.300 Y0 Z2\n\n\n        G94 G40 G0 X=-16.300 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第5层, 切深2.00)\n        G1 X=-4.300 Z=-10.000 F200\n\n\n        G1 G41 X=-107.700 F=531\n        G1 Y=-2.000 F=266\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=531\n        G1 X0 F=266\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=531\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=266\n        G1 X=-100.000 F=531\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        G1 G40 X=-4.300 Y0 Z2\n\n\n        G94 G40 G0 X=-18.300 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第6层, 切深2.00)\n        G1 X=-4.300 Z=-12.000 F200\n\n\n        G1 G41 X=-107.700 F=531\n        G1 Y=-2.000 F=266\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=531\n        G1 X0 F=266\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=531\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=266\n        G1 X=-100.000 F=531\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        G1 G40 X=-4.300 Y0 Z2\n\n\n        G94 G40 G0 X=-19.400 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第7层, 切深1.10)\n        G1 X=-4.300 Z=-13.100 F200\n\n\n        G1 G41 X=-107.700 F=531\n        G1 Y=-2.000 F=266\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=531\n        G1 X0 F=266\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=531\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=266\n        G1 X=-100.000 F=531\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        ; 半精铣 (Z向到最终深度, 留0.10单边余量)\n        G1 Z=-13.100 F60\n            G1 X=-107.900 Y=-2.000 F=318\n            G3 X=-100.000 Y=-9.900 I=7.900\n            G1 X=-8.000 F=637\n            G1 X0 F=318\n            G3 X=7.900 Y=-2.000 J=7.900\n            G1 Y=2.000 F=637\n            G3 X0 Y=9.900 I=-7.900\n            G1 X=-92.000 F=318\n            G1 X=-100.000 F=637\n            G3 X=-107.900 Y=2.000 J=-7.900\n            G1 G40 Y0\n            G1 X=-4.100 F=637\n\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET\n\n;-----------\n"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_rough.j2",
+    "id": "v3-keyway-keyway-rough",
+    "operation": "keyway.rough",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "闭口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": false
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "闭口",
+          "U_ID": "[100]",
+          "U_RT": "T15",
+          "U_RTB": "D1",
+          "U_RTD": 12.0,
+          "U_RC": 5.0,
+          "U_ANG": 45.0,
+          "U_ALBR": 0.3,
+          "U_ALBHF": 0.1,
+          "rough_n": 2653,
+          "rough_vf": 531,
+          "rough_vf_corner": 266,
+          "semi_vf": 637,
+          "layer_count": 3,
+          "depths": [
+            5.0,
+            5.0,
+            3.1
+          ],
+          "target_depths": [
+            5.0,
+            10.0,
+            13.1
+          ],
+          "path_type": "closed_3pass",
+          "is_left_open": false,
+          "tool_num": "T15",
+          "tool_offset": "D1",
+          "spindle_speed": 2653,
+          "next_tool_num": "T16"
+        }
+      ],
+      "texts": [
+        "\n;----粗铣键槽子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T15\")\nL172(0)\nL171(\"T16\")\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=2653 M1=3\nM14=8 M10=150 H50=80\n\n        G94 G40 G0 X=-11.300 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第1层, 切深5.00)\n        G1 X=-4.300 Z=-5.000 F200\n\n\n        G1 G41 X=-107.700 F=531\n        G1 Y=-2.000 F=266\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=531\n        G1 X0 F=266\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=531\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=266\n        G1 X=-100.000 F=531\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        G1 G40 X=-4.300 Y0 Z2\n\n\n        G94 G40 G0 X=-16.300 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第2层, 切深5.00)\n        G1 X=-4.300 Z=-10.000 F200\n\n\n        G1 G41 X=-107.700 F=531\n        G1 Y=-2.000 F=266\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=531\n        G1 X0 F=266\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=531\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=266\n        G1 X=-100.000 F=531\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        G1 G40 X=-4.300 Y0 Z2\n\n\n        G94 G40 G0 X=-19.400 Y0 C=DC(0.00)\n    G0 Z10\n    G1 Z2 F400\n\n        ; 45°斜向入刀 (第3层, 切深3.10)\n        G1 X=-4.300 Z=-13.100 F200\n\n\n        G1 G41 X=-107.700 F=531\n        G1 Y=-2.000 F=266\n        G3 X=-100.000 Y=-9.700 I=7.700\n        G1 X=-8.000 F=531\n        G1 X0 F=266\n        G3 X=7.700 Y=-2.000 J=7.700\n        G1 Y=2.000 F=531\n        G3 X0 Y=9.700 I=-7.700\n        G1 X=-92.000 F=266\n        G1 X=-100.000 F=531\n        G3 X=-107.700 Y=2.000 J=-7.700\n\n\n        ; 半精铣 (Z向到最终深度, 留0.10单边余量)\n        G1 Z=-13.100 F60\n            G1 X=-107.900 Y=-2.000 F=318\n            G3 X=-100.000 Y=-9.900 I=7.900\n            G1 X=-8.000 F=637\n            G1 X0 F=318\n            G3 X=7.900 Y=-2.000 J=7.900\n            G1 Y=2.000 F=637\n            G3 X0 Y=9.900 I=-7.900\n            G1 X=-92.000 F=318\n            G1 X=-100.000 F=637\n            G3 X=-107.900 Y=2.000 J=-7.900\n            G1 G40 Y0\n            G1 X=-4.100 F=637\n\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET\n\n;-----------\n"
+      ]
+    }
+  },
+  {
+    "name": "keyway/keyway_finish.j2",
+    "id": "v3-keyway-keyway-finish",
+    "operation": "keyway.finish",
+    "inputs": {
+      "geometry": {
+        "length_a": 100.0,
+        "width_b": 20.0,
+        "depth_c": 13.1,
+        "shaft_d": 60.0,
+        "position_z": 50.0,
+        "corner_radius_q": 8.0,
+        "form": "闭口",
+        "param_id": "[100]"
+      },
+      "rough_tool": {
+        "tool_num": "T15",
+        "tool_offset": "D1",
+        "diameter": 12.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.05
+      },
+      "finish_tool": {
+        "tool_num": "T16",
+        "tool_offset": "D1",
+        "diameter": 8.0,
+        "teeth": 4,
+        "cutting_speed": 100.0,
+        "feed_per_tooth": 0.04
+      },
+      "process": {
+        "max_depth_per_pass": 5.0,
+        "ramp_angle": 45.0,
+        "rough_margin": 0.3,
+        "semi_finish_margin": 0.1,
+        "semi_finish_feed": 0.0,
+        "corner_feed_factor": 0.5
+      },
+      "chamfer": {
+        "tool_num": "T20",
+        "tool_offset": "D1",
+        "depth": 0.5,
+        "spindle_speed": 4000,
+        "feed": 1200,
+        "tool_diameter": 8.0,
+        "plunge_depth": 2.0,
+        "chisel_edge_width": 0.0,
+        "protrusion": 40.0
+      },
+      "enable_chamfer": false
+    },
+    "expected": {
+      "contexts": [
+        {
+          "U_A": 100.0,
+          "U_B": 20.0,
+          "U_C": 13.1,
+          "U_D": 60.0,
+          "U_Z": 50.0,
+          "U_Q": 8.0,
+          "U_FX": "闭口",
+          "U_ID": "[100]",
+          "U_FT": "T16",
+          "U_FTB": "D1",
+          "U_FTD": 8.0,
+          "finish_n": 3979,
+          "finish_vf": 637,
+          "path_type": "closed_non_round",
+          "is_left_open": false,
+          "tool_num": "T16",
+          "tool_offset": "D1",
+          "spindle_speed": 3979,
+          "next_tool_num": ""
+        }
+      ],
+      "texts": [
+        "\n;----精铣键槽子程序----\nGX73\nGZ73 Y0\nL184(0,0,,,,0)\nL171(\"T16\")\nL172(0)\nGX73\nGZ73 Y0\nL184(0,90,,,,0)\nL140(0.00,4,0)\nSETMS(1)\nDIAMOF\nG17\nG90\nD1\n;''''基础坐标系偏移''''\nXMW_1=0 YMW_1=0 ZMW_1=I_R9[35]+I_R9[100] CMW_1=0\nG59 X=XMW_1 Y=YMW_1 Z=ZMW_1 C=CMW_1\n;''''旋转-定位键槽''''\nAROT Y90\nAROT Z180\nATRANS X50.000 Z30.000\n;''''起转-给水''''\nG97 S1=3979 M1=3\nM14=8 M10=150 H50=80\n    G94 G40 G0 X0 Y0 C=DC(0.00)\nG0 Z10\n\nG1 Z=-8.100 F3000\nG1 Z=-13.100 F100\n\n    G1 G41 Y=10.000 F=637\n    G1 X=-100.000\n    G3 X=-108.000 Y=2.000 J=-8.000\n    G1 Y=-2.000\n    G3 X=-100.000 Y=-10.000 I=8.000\n    G1 X0\n    G3 X=8.000 Y=-2.000 J=8.000\n    G1 Y=2.000\n    G3 X0 Y=10.000 I=-8.000\n    G1 G40 Y0 Z2\n\n\nG90 G0 Z=5\nG0 G40 Z=100\nSTOPRE\n;-----------\nROT\nTRANS\nDIAMON\nM14=9\nM13=9\nM10=151\nM1=5\nGX73\nGZ73 Y0\nM01\n;-----------\nRET\n\n;-----------\n"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "DIN509-E 0,2 x 0,1",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-E 0,2 x 0,1",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 0.2,
+          "Z_START": 21.535898384862243,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.8,
+          "ANG_1": -15,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (DIN509-E 0,2 x 0,1) ---\nG0 Z21.536\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.800 ANG=-15 RND=0.2 F0.2\nG1 Z30.000 RND=0.2\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "DIN509-E 0,2 x 0,1",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-E 0,2 x 0,1",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 0.2,
+          "Z_START": 38.46410161513776,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.8,
+          "ANG_1": -165,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (DIN509-E 0,2 x 0,1) ---\nG0 Z38.464\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.800 ANG=-165 RND=0.2 F0.2\nG1 Z30.000 RND=0.2\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "DIN509-E 0,4 x 0,2",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-E 0,4 x 0,2",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 0.4,
+          "Z_START": 20.535898384862243,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.6,
+          "ANG_1": -15,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (DIN509-E 0,4 x 0,2) ---\nG0 Z20.536\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.600 ANG=-15 RND=0.4 F0.2\nG1 Z30.000 RND=0.4\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "DIN509-E 0,4 x 0,2",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-E 0,4 x 0,2",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 0.4,
+          "Z_START": 39.46410161513776,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.6,
+          "ANG_1": -165,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (DIN509-E 0,4 x 0,2) ---\nG0 Z39.464\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.600 ANG=-165 RND=0.4 F0.2\nG1 Z30.000 RND=0.4\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "DIN509-E 0,6 x 0,2",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-E 0,6 x 0,2",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 0.6,
+          "Z_START": 20.535898384862243,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.6,
+          "ANG_1": -15,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (DIN509-E 0,6 x 0,2) ---\nG0 Z20.536\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.600 ANG=-15 RND=0.6 F0.2\nG1 Z30.000 RND=0.6\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "DIN509-E 0,6 x 0,2",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-E 0,6 x 0,2",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 0.6,
+          "Z_START": 39.46410161513776,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.6,
+          "ANG_1": -165,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (DIN509-E 0,6 x 0,2) ---\nG0 Z39.464\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.600 ANG=-165 RND=0.6 F0.2\nG1 Z30.000 RND=0.6\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "DIN509-E 1,0 x 0,2",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-E 1,0 x 0,2",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 1.0,
+          "Z_START": 20.035898384862243,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.6,
+          "ANG_1": -15,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (DIN509-E 1,0 x 0,2) ---\nG0 Z20.036\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.600 ANG=-15 RND=1.0 F0.2\nG1 Z30.000 RND=1.0\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "DIN509-E 1,0 x 0,2",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-E 1,0 x 0,2",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 1.0,
+          "Z_START": 39.96410161513776,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.6,
+          "ANG_1": -165,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (DIN509-E 1,0 x 0,2) ---\nG0 Z39.964\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.600 ANG=-165 RND=1.0 F0.2\nG1 Z30.000 RND=1.0\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "DIN509-E 1,6 x 0,3",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-E 1,6 x 0,3",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 1.6,
+          "Z_START": 18.535898384862243,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.4,
+          "ANG_1": -15,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (DIN509-E 1,6 x 0,3) ---\nG0 Z18.536\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.400 ANG=-15 RND=1.6 F0.2\nG1 Z30.000 RND=1.6\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "DIN509-E 1,6 x 0,3",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-E 1,6 x 0,3",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 1.6,
+          "Z_START": 41.46410161513776,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.4,
+          "ANG_1": -165,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (DIN509-E 1,6 x 0,3) ---\nG0 Z41.464\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.400 ANG=-165 RND=1.6 F0.2\nG1 Z30.000 RND=1.6\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "DIN509-E 2,5 x 0,4",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-E 2,5 x 0,4",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 2.5,
+          "Z_START": 17.535898384862243,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.2,
+          "ANG_1": -15,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (DIN509-E 2,5 x 0,4) ---\nG0 Z17.536\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.200 ANG=-15 RND=2.5 F0.2\nG1 Z30.000 RND=2.5\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "DIN509-E 2,5 x 0,4",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-E 2,5 x 0,4",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 2.5,
+          "Z_START": 42.46410161513776,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.2,
+          "ANG_1": -165,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (DIN509-E 2,5 x 0,4) ---\nG0 Z42.464\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.200 ANG=-165 RND=2.5 F0.2\nG1 Z30.000 RND=2.5\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "DIN509-E 4,0 x 0,5",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-E 4,0 x 0,5",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 4.0,
+          "Z_START": 15.535898384862245,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.0,
+          "ANG_1": -15,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (DIN509-E 4,0 x 0,5) ---\nG0 Z15.536\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.000 ANG=-15 RND=4.0 F0.2\nG1 Z30.000 RND=4.0\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "DIN509-E 4,0 x 0,5",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-E 4,0 x 0,5",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 4.0,
+          "Z_START": 44.46410161513776,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.0,
+          "ANG_1": -165,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (DIN509-E 4,0 x 0,5) ---\nG0 Z44.464\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.000 ANG=-165 RND=4.0 F0.2\nG1 Z30.000 RND=4.0\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "W2196-E 0,4 x 0,4",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 0,4 x 0,4",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 0.4,
+          "Z_START": 20.535898384862243,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.2,
+          "ANG_1": -15,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (W2196-E 0,4 x 0,4) ---\nG0 Z20.536\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.200 ANG=-15 RND=0.4 F0.2\nG1 Z30.000 RND=0.4\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "W2196-E 0,4 x 0,4",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 0,4 x 0,4",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 0.4,
+          "Z_START": 39.46410161513776,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.2,
+          "ANG_1": -165,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (W2196-E 0,4 x 0,4) ---\nG0 Z39.464\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.200 ANG=-165 RND=0.4 F0.2\nG1 Z30.000 RND=0.4\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "W2196-E 0,8 x 0,4",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 0,8 x 0,4",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 0.8,
+          "Z_START": 18.535898384862243,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.2,
+          "ANG_1": -15,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (W2196-E 0,8 x 0,4) ---\nG0 Z18.536\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.200 ANG=-15 RND=0.8 F0.2\nG1 Z30.000 RND=0.8\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "W2196-E 0,8 x 0,4",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 0,8 x 0,4",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 0.8,
+          "Z_START": 41.46410161513776,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.2,
+          "ANG_1": -165,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (W2196-E 0,8 x 0,4) ---\nG0 Z41.464\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.200 ANG=-165 RND=0.8 F0.2\nG1 Z30.000 RND=0.8\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "W2196-E 1,0 x 0,3",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 1,0 x 0,3",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 1.0,
+          "Z_START": 22.005045161090756,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.4,
+          "ANG_1": -20,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (W2196-E 1,0 x 0,3) ---\nG0 Z22.005\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.400 ANG=-20 RND=1.0 F0.2\nG1 Z30.000 RND=1.0\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "W2196-E 1,0 x 0,3",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 1,0 x 0,3",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 1.0,
+          "Z_START": 37.994954838909244,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.4,
+          "ANG_1": -160,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (W2196-E 1,0 x 0,3) ---\nG0 Z37.995\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.400 ANG=-160 RND=1.0 F0.2\nG1 Z30.000 RND=1.0\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "W2196-E 1,0 x 0,6",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 1,0 x 0,6",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 1.0,
+          "Z_START": 21.505045161090756,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 78.8,
+          "ANG_1": -20,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (W2196-E 1,0 x 0,6) ---\nG0 Z21.505\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X78.800 ANG=-20 RND=1.0 F0.2\nG1 Z30.000 RND=1.0\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "W2196-E 1,0 x 0,6",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 1,0 x 0,6",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 1.0,
+          "Z_START": 38.494954838909244,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 78.8,
+          "ANG_1": -160,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (W2196-E 1,0 x 0,6) ---\nG0 Z38.495\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X78.800 ANG=-160 RND=1.0 F0.2\nG1 Z30.000 RND=1.0\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "W2196-E 1,2 x 0,4",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 1,2 x 0,4",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 1.2,
+          "Z_START": 21.505045161090756,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.2,
+          "ANG_1": -20,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (W2196-E 1,2 x 0,4) ---\nG0 Z21.505\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.200 ANG=-20 RND=1.2 F0.2\nG1 Z30.000 RND=1.2\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "W2196-E 1,2 x 0,4",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 1,2 x 0,4",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 1.2,
+          "Z_START": 38.494954838909244,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 79.2,
+          "ANG_1": -160,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (W2196-E 1,2 x 0,4) ---\nG0 Z38.495\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.200 ANG=-160 RND=1.2 F0.2\nG1 Z30.000 RND=1.2\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "W2196-E 1,2 x 0,7",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 1,2 x 0,7",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 1.2,
+          "Z_START": 21.005045161090756,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 78.6,
+          "ANG_1": -20,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (W2196-E 1,2 x 0,7) ---\nG0 Z21.005\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X78.600 ANG=-20 RND=1.2 F0.2\nG1 Z30.000 RND=1.2\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "W2196-E 1,2 x 0,7",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 1,2 x 0,7",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 1.2,
+          "Z_START": 38.994954838909244,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 78.6,
+          "ANG_1": -160,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (W2196-E 1,2 x 0,7) ---\nG0 Z38.995\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X78.600 ANG=-160 RND=1.2 F0.2\nG1 Z30.000 RND=1.2\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "W2196-E 1,6 x 0,6",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 1,6 x 0,6",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 1.6,
+          "Z_START": 20.505045161090756,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 78.8,
+          "ANG_1": -20,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (W2196-E 1,6 x 0,6) ---\nG0 Z20.505\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X78.800 ANG=-20 RND=1.6 F0.2\nG1 Z30.000 RND=1.6\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "W2196-E 1,6 x 0,6",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 1,6 x 0,6",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 1.6,
+          "Z_START": 39.494954838909244,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 78.8,
+          "ANG_1": -160,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (W2196-E 1,6 x 0,6) ---\nG0 Z39.495\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X78.800 ANG=-160 RND=1.6 F0.2\nG1 Z30.000 RND=1.6\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "W2196-E 1,6 x 0,8",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 1,6 x 0,8",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 1.6,
+          "Z_START": 20.005045161090756,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 78.4,
+          "ANG_1": -20,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (W2196-E 1,6 x 0,8) ---\nG0 Z20.005\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X78.400 ANG=-20 RND=1.6 F0.2\nG1 Z30.000 RND=1.6\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "W2196-E 1,6 x 0,8",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 1,6 x 0,8",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 1.6,
+          "Z_START": 39.994954838909244,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 78.4,
+          "ANG_1": -160,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (W2196-E 1,6 x 0,8) ---\nG0 Z39.995\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X78.400 ANG=-160 RND=1.6 F0.2\nG1 Z30.000 RND=1.6\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "W2196-E 2,5 x 0,7",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 2,5 x 0,7",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 2.5,
+          "Z_START": 19.505045161090756,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 78.6,
+          "ANG_1": -20,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (W2196-E 2,5 x 0,7) ---\nG0 Z19.505\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X78.600 ANG=-20 RND=2.5 F0.2\nG1 Z30.000 RND=2.5\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "W2196-E 2,5 x 0,7",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 2,5 x 0,7",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 2.5,
+          "Z_START": 40.494954838909244,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 78.6,
+          "ANG_1": -160,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (W2196-E 2,5 x 0,7) ---\nG0 Z40.495\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X78.600 ANG=-160 RND=2.5 F0.2\nG1 Z30.000 RND=2.5\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "W2196-E 2,5 x 0,9",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 2,5 x 0,9",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 2.5,
+          "Z_START": 19.005045161090756,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 78.2,
+          "ANG_1": -20,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (W2196-E 2,5 x 0,9) ---\nG0 Z19.005\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X78.200 ANG=-20 RND=2.5 F0.2\nG1 Z30.000 RND=2.5\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "W2196-E 2,5 x 0,9",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 2,5 x 0,9",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 2.5,
+          "Z_START": 40.994954838909244,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 78.2,
+          "ANG_1": -160,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (W2196-E 2,5 x 0,9) ---\nG0 Z40.995\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X78.200 ANG=-160 RND=2.5 F0.2\nG1 Z30.000 RND=2.5\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "W2196-E 4,0 x 0,8",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 4,0 x 0,8",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 4.0,
+          "Z_START": 16.505045161090756,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 78.4,
+          "ANG_1": -20,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (W2196-E 4,0 x 0,8) ---\nG0 Z16.505\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X78.400 ANG=-20 RND=4.0 F0.2\nG1 Z30.000 RND=4.0\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "W2196-E 4,0 x 0,8",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 4,0 x 0,8",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 4.0,
+          "Z_START": 43.494954838909244,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 78.4,
+          "ANG_1": -160,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (W2196-E 4,0 x 0,8) ---\nG0 Z43.495\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X78.400 ANG=-160 RND=4.0 F0.2\nG1 Z30.000 RND=4.0\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Left",
+      "std_key": "W2196-E 5,0 x 0,9",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 5,0 x 0,9",
+          "groove_type": "ES",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 5.0,
+          "Z_START": 15.505045161090756,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 78.2,
+          "ANG_1": -20,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Left (W2196-E 5,0 x 0,9) ---\nG0 Z15.505\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X78.200 ANG=-20 RND=5.0 F0.2\nG1 Z30.000 RND=5.0\nG1 X83.500\nG1 X85.000 ANG=45\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "ES",
+      "side": "Right",
+      "std_key": "W2196-E 5,0 x 0,9",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "ES_d1": 80.0,
+      "ES_z": 30.0,
+      "ES_d2": 85.0,
+      "ES_c": 0.5,
+      "ES_c_ang": 45.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-E 5,0 x 0,9",
+          "groove_type": "ES",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 5.0,
+          "Z_START": 44.494954838909244,
+          "ES_Z": 30.0,
+          "ES_D2": 85.0,
+          "D1_CUT": 78.2,
+          "ANG_1": -160,
+          "D1_COMP_START": 84.0,
+          "D2_COMP_CUT": 83.5
+        }
+      ],
+      "texts": [
+        "; --- ES_Right (W2196-E 5,0 x 0,9) ---\nG0 Z44.495\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X78.200 ANG=-160 RND=5.0 F0.2\nG1 Z30.000 RND=5.0\nG1 X83.500\nG1 X85.000 ANG=135\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Left",
+      "std_key": "DIN509-F 0,2 x 0,1",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-F 0,2 x 0,1",
+          "groove_type": "FS",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 0.2,
+          "Z_START": 21.535898384862243,
+          "D1_CUT": 79.8,
+          "ANG_1": -15,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 30.130073681444202,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 98
+        }
+      ],
+      "texts": [
+        "; --- FS_Left (DIN509-F 0,2 x 0,1) ---\nG0 Z21.536\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.800 ANG=-15 RND=0.2 F0.2\nG1 Z30.130 RND=0.2\nG1 Z29.000 ANG=98\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Right",
+      "std_key": "DIN509-F 0,2 x 0,1",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-F 0,2 x 0,1",
+          "groove_type": "FS",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 0.2,
+          "Z_START": 38.46410161513776,
+          "D1_CUT": 79.8,
+          "ANG_1": -165,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 29.869926318555798,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 82
+        }
+      ],
+      "texts": [
+        "; --- FS_Right (DIN509-F 0,2 x 0,1) ---\nG0 Z38.464\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.800 ANG=-165 RND=0.2 F0.2\nG1 Z29.870 RND=0.2\nG1 Z31.000 ANG=82\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Left",
+      "std_key": "DIN509-F 0,4 x 0,2",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-F 0,4 x 0,2",
+          "groove_type": "FS",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 0.4,
+          "Z_START": 20.535898384862243,
+          "D1_CUT": 79.6,
+          "ANG_1": -15,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 30.160147362888402,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 98
+        }
+      ],
+      "texts": [
+        "; --- FS_Left (DIN509-F 0,4 x 0,2) ---\nG0 Z20.536\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.600 ANG=-15 RND=0.4 F0.2\nG1 Z30.160 RND=0.4\nG1 Z29.000 ANG=98\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Right",
+      "std_key": "DIN509-F 0,4 x 0,2",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-F 0,4 x 0,2",
+          "groove_type": "FS",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 0.4,
+          "Z_START": 39.46410161513776,
+          "D1_CUT": 79.6,
+          "ANG_1": -165,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 29.839852637111598,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 82
+        }
+      ],
+      "texts": [
+        "; --- FS_Right (DIN509-F 0,4 x 0,2) ---\nG0 Z39.464\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.600 ANG=-165 RND=0.4 F0.2\nG1 Z29.840 RND=0.4\nG1 Z31.000 ANG=82\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Left",
+      "std_key": "DIN509-F 0,6 x 0,2",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-F 0,6 x 0,2",
+          "groove_type": "FS",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 0.6,
+          "Z_START": 20.535898384862243,
+          "D1_CUT": 79.6,
+          "ANG_1": -15,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 30.190221044332606,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 98
+        }
+      ],
+      "texts": [
+        "; --- FS_Left (DIN509-F 0,6 x 0,2) ---\nG0 Z20.536\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.600 ANG=-15 RND=0.6 F0.2\nG1 Z30.190 RND=0.6\nG1 Z29.000 ANG=98\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Right",
+      "std_key": "DIN509-F 0,6 x 0,2",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-F 0,6 x 0,2",
+          "groove_type": "FS",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 0.6,
+          "Z_START": 39.46410161513776,
+          "D1_CUT": 79.6,
+          "ANG_1": -165,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 29.809778955667394,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 82
+        }
+      ],
+      "texts": [
+        "; --- FS_Right (DIN509-F 0,6 x 0,2) ---\nG0 Z39.464\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.600 ANG=-165 RND=0.6 F0.2\nG1 Z29.810 RND=0.6\nG1 Z31.000 ANG=82\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Left",
+      "std_key": "DIN509-F 1,0 x 0,2",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-F 1,0 x 0,2",
+          "groove_type": "FS",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 1.0,
+          "Z_START": 20.035898384862243,
+          "D1_CUT": 79.6,
+          "ANG_1": -15,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 30.25036840722101,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 98
+        }
+      ],
+      "texts": [
+        "; --- FS_Left (DIN509-F 1,0 x 0,2) ---\nG0 Z20.036\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.600 ANG=-15 RND=1.0 F0.2\nG1 Z30.250 RND=1.0\nG1 Z29.000 ANG=98\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Right",
+      "std_key": "DIN509-F 1,0 x 0,2",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-F 1,0 x 0,2",
+          "groove_type": "FS",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 1.0,
+          "Z_START": 39.96410161513776,
+          "D1_CUT": 79.6,
+          "ANG_1": -165,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 29.74963159277899,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 82
+        }
+      ],
+      "texts": [
+        "; --- FS_Right (DIN509-F 1,0 x 0,2) ---\nG0 Z39.964\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.600 ANG=-165 RND=1.0 F0.2\nG1 Z29.750 RND=1.0\nG1 Z31.000 ANG=82\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Left",
+      "std_key": "DIN509-F 1,6 x 0,3",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-F 1,6 x 0,3",
+          "groove_type": "FS",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 1.6,
+          "Z_START": 18.535898384862243,
+          "D1_CUT": 79.4,
+          "ANG_1": -15,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 30.440589451553617,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 98
+        }
+      ],
+      "texts": [
+        "; --- FS_Left (DIN509-F 1,6 x 0,3) ---\nG0 Z18.536\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.400 ANG=-15 RND=1.6 F0.2\nG1 Z30.441 RND=1.6\nG1 Z29.000 ANG=98\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Right",
+      "std_key": "DIN509-F 1,6 x 0,3",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-F 1,6 x 0,3",
+          "groove_type": "FS",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 1.6,
+          "Z_START": 41.46410161513776,
+          "D1_CUT": 79.4,
+          "ANG_1": -165,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 29.559410548446383,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 82
+        }
+      ],
+      "texts": [
+        "; --- FS_Right (DIN509-F 1,6 x 0,3) ---\nG0 Z41.464\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.400 ANG=-165 RND=1.6 F0.2\nG1 Z29.559 RND=1.6\nG1 Z31.000 ANG=82\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Left",
+      "std_key": "DIN509-F 2,5 x 0,4",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-F 2,5 x 0,4",
+          "groove_type": "FS",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 2.5,
+          "Z_START": 17.535898384862243,
+          "D1_CUT": 79.2,
+          "ANG_1": -15,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 30.675921018052524,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 98
+        }
+      ],
+      "texts": [
+        "; --- FS_Left (DIN509-F 2,5 x 0,4) ---\nG0 Z17.536\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.200 ANG=-15 RND=2.5 F0.2\nG1 Z30.676 RND=2.5\nG1 Z29.000 ANG=98\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Right",
+      "std_key": "DIN509-F 2,5 x 0,4",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-F 2,5 x 0,4",
+          "groove_type": "FS",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 2.5,
+          "Z_START": 42.46410161513776,
+          "D1_CUT": 79.2,
+          "ANG_1": -165,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 29.324078981947476,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 82
+        }
+      ],
+      "texts": [
+        "; --- FS_Right (DIN509-F 2,5 x 0,4) ---\nG0 Z42.464\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.200 ANG=-165 RND=2.5 F0.2\nG1 Z29.324 RND=2.5\nG1 Z31.000 ANG=82\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Left",
+      "std_key": "DIN509-F 4,0 x 0,5",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-F 4,0 x 0,5",
+          "groove_type": "FS",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 4.0,
+          "Z_START": 15.535898384862245,
+          "D1_CUT": 79.0,
+          "ANG_1": -15,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 30.901473628884037,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 98
+        }
+      ],
+      "texts": [
+        "; --- FS_Left (DIN509-F 4,0 x 0,5) ---\nG0 Z15.536\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.000 ANG=-15 RND=4.0 F0.2\nG1 Z30.901 RND=4.0\nG1 Z29.000 ANG=98\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Right",
+      "std_key": "DIN509-F 4,0 x 0,5",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "DIN509-F 4,0 x 0,5",
+          "groove_type": "FS",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 4.0,
+          "Z_START": 44.46410161513776,
+          "D1_CUT": 79.0,
+          "ANG_1": -165,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 29.098526371115963,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 82
+        }
+      ],
+      "texts": [
+        "; --- FS_Right (DIN509-F 4,0 x 0,5) ---\nG0 Z44.464\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.000 ANG=-165 RND=4.0 F0.2\nG1 Z29.099 RND=4.0\nG1 Z31.000 ANG=82\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Left",
+      "std_key": "W2196-F 0,8 x 0,4",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-F 0,8 x 0,4",
+          "groove_type": "FS",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 0.8,
+          "Z_START": 20.035898384862243,
+          "D1_CUT": 79.2,
+          "ANG_1": -15,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 30.320294725776808,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 98
+        }
+      ],
+      "texts": [
+        "; --- FS_Left (W2196-F 0,8 x 0,4) ---\nG0 Z20.036\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.200 ANG=-15 RND=0.8 F0.2\nG1 Z30.320 RND=0.8\nG1 Z29.000 ANG=98\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Right",
+      "std_key": "W2196-F 0,8 x 0,4",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-F 0,8 x 0,4",
+          "groove_type": "FS",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 0.8,
+          "Z_START": 39.96410161513776,
+          "D1_CUT": 79.2,
+          "ANG_1": -165,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 29.679705274223192,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 82
+        }
+      ],
+      "texts": [
+        "; --- FS_Right (W2196-F 0,8 x 0,4) ---\nG0 Z39.964\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.200 ANG=-165 RND=0.8 F0.2\nG1 Z29.680 RND=0.8\nG1 Z31.000 ANG=82\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Left",
+      "std_key": "W2196-F 1,0 x 0,3",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-F 1,0 x 0,3",
+          "groove_type": "FS",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 1.0,
+          "Z_START": 22.005045161090756,
+          "D1_CUT": 79.4,
+          "ANG_1": -20,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 30.534897156535052,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 102
+        }
+      ],
+      "texts": [
+        "; --- FS_Left (W2196-F 1,0 x 0,3) ---\nG0 Z22.005\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.400 ANG=-20 RND=1.0 F0.2\nG1 Z30.535 RND=1.0\nG1 Z29.000 ANG=102\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Right",
+      "std_key": "W2196-F 1,0 x 0,3",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-F 1,0 x 0,3",
+          "groove_type": "FS",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 1.0,
+          "Z_START": 37.994954838909244,
+          "D1_CUT": 79.4,
+          "ANG_1": -160,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 29.465102843464948,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 78
+        }
+      ],
+      "texts": [
+        "; --- FS_Right (W2196-F 1,0 x 0,3) ---\nG0 Z37.995\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.400 ANG=-160 RND=1.0 F0.2\nG1 Z29.465 RND=1.0\nG1 Z31.000 ANG=78\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Left",
+      "std_key": "W2196-F 1,2 x 0,4",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-F 1,2 x 0,4",
+          "groove_type": "FS",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 1.2,
+          "Z_START": 21.505045161090756,
+          "D1_CUT": 79.2,
+          "ANG_1": -20,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 30.58187658784206,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 102
+        }
+      ],
+      "texts": [
+        "; --- FS_Left (W2196-F 1,2 x 0,4) ---\nG0 Z21.505\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X79.200 ANG=-20 RND=1.2 F0.2\nG1 Z30.582 RND=1.2\nG1 Z29.000 ANG=102\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Right",
+      "std_key": "W2196-F 1,2 x 0,4",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-F 1,2 x 0,4",
+          "groove_type": "FS",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 1.2,
+          "Z_START": 38.494954838909244,
+          "D1_CUT": 79.2,
+          "ANG_1": -160,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 29.41812341215794,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 78
+        }
+      ],
+      "texts": [
+        "; --- FS_Right (W2196-F 1,2 x 0,4) ---\nG0 Z38.495\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X79.200 ANG=-160 RND=1.2 F0.2\nG1 Z29.418 RND=1.2\nG1 Z31.000 ANG=78\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Left",
+      "std_key": "W2196-F 1,6 x 0,6",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-F 1,6 x 0,6",
+          "groove_type": "FS",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 1.6,
+          "Z_START": 20.505045161090756,
+          "D1_CUT": 78.8,
+          "ANG_1": -20,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 30.675835450456084,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 102
+        }
+      ],
+      "texts": [
+        "; --- FS_Left (W2196-F 1,6 x 0,6) ---\nG0 Z20.505\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X78.800 ANG=-20 RND=1.6 F0.2\nG1 Z30.676 RND=1.6\nG1 Z29.000 ANG=102\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Right",
+      "std_key": "W2196-F 1,6 x 0,6",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-F 1,6 x 0,6",
+          "groove_type": "FS",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 1.6,
+          "Z_START": 39.494954838909244,
+          "D1_CUT": 78.8,
+          "ANG_1": -160,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 29.324164549543916,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 78
+        }
+      ],
+      "texts": [
+        "; --- FS_Right (W2196-F 1,6 x 0,6) ---\nG0 Z39.495\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X78.800 ANG=-160 RND=1.6 F0.2\nG1 Z29.324 RND=1.6\nG1 Z31.000 ANG=78\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Left",
+      "std_key": "W2196-F 1,6 x 0,8",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-F 1,6 x 0,8",
+          "groove_type": "FS",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 1.6,
+          "Z_START": 20.005045161090756,
+          "D1_CUT": 78.4,
+          "ANG_1": -20,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 30.68516059654593,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 105
+        }
+      ],
+      "texts": [
+        "; --- FS_Left (W2196-F 1,6 x 0,8) ---\nG0 Z20.005\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X78.400 ANG=-20 RND=1.6 F0.2\nG1 Z30.685 RND=1.6\nG1 Z29.000 ANG=105\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Right",
+      "std_key": "W2196-F 1,6 x 0,8",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-F 1,6 x 0,8",
+          "groove_type": "FS",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 1.6,
+          "Z_START": 39.994954838909244,
+          "D1_CUT": 78.4,
+          "ANG_1": -160,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 29.31483940345407,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 75
+        }
+      ],
+      "texts": [
+        "; --- FS_Right (W2196-F 1,6 x 0,8) ---\nG0 Z39.995\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X78.400 ANG=-160 RND=1.6 F0.2\nG1 Z29.315 RND=1.6\nG1 Z31.000 ANG=75\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Left",
+      "std_key": "W2196-F 2,5 x 0,7",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-F 2,5 x 0,7",
+          "groove_type": "FS",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 2.5,
+          "Z_START": 19.505045161090756,
+          "D1_CUT": 78.6,
+          "ANG_1": -20,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 30.88724289133763,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 102
+        }
+      ],
+      "texts": [
+        "; --- FS_Left (W2196-F 2,5 x 0,7) ---\nG0 Z19.505\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X78.600 ANG=-20 RND=2.5 F0.2\nG1 Z30.887 RND=2.5\nG1 Z29.000 ANG=102\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Right",
+      "std_key": "W2196-F 2,5 x 0,7",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-F 2,5 x 0,7",
+          "groove_type": "FS",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 2.5,
+          "Z_START": 40.494954838909244,
+          "D1_CUT": 78.6,
+          "ANG_1": -160,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 29.11275710866237,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 78
+        }
+      ],
+      "texts": [
+        "; --- FS_Right (W2196-F 2,5 x 0,7) ---\nG0 Z40.495\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X78.600 ANG=-160 RND=2.5 F0.2\nG1 Z29.113 RND=2.5\nG1 Z31.000 ANG=78\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Left",
+      "std_key": "W2196-F 4,0 x 0,8",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-F 4,0 x 0,8",
+          "groove_type": "FS",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 4.0,
+          "Z_START": 16.505045161090756,
+          "D1_CUT": 78.4,
+          "ANG_1": -20,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 31.239588626140204,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 102
+        }
+      ],
+      "texts": [
+        "; --- FS_Left (W2196-F 4,0 x 0,8) ---\nG0 Z16.505\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X78.400 ANG=-20 RND=4.0 F0.2\nG1 Z31.240 RND=4.0\nG1 Z29.000 ANG=102\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Right",
+      "std_key": "W2196-F 4,0 x 0,8",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-F 4,0 x 0,8",
+          "groove_type": "FS",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 4.0,
+          "Z_START": 43.494954838909244,
+          "D1_CUT": 78.4,
+          "ANG_1": -160,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 28.760411373859796,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 78
+        }
+      ],
+      "texts": [
+        "; --- FS_Right (W2196-F 4,0 x 0,8) ---\nG0 Z43.495\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X78.400 ANG=-160 RND=4.0 F0.2\nG1 Z28.760 RND=4.0\nG1 Z31.000 ANG=78\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Left",
+      "std_key": "W2196-F 5,0 x 0,9",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-F 5,0 x 0,9",
+          "groove_type": "FS",
+          "side": "Left",
+          "X_START": 104.0,
+          "R": 5.0,
+          "Z_START": 15.505045161090756,
+          "D1_CUT": 78.2,
+          "ANG_1": -20,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 31.574485782675257,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 102
+        }
+      ],
+      "texts": [
+        "; --- FS_Left (W2196-F 5,0 x 0,9) ---\nG0 Z15.505\nG0 X104.000\nM4=97\nG0 G41 X84.000\nG1 X78.200 ANG=-20 RND=5.0 F0.2\nG1 Z31.574 RND=5.0\nG1 Z29.000 ANG=102\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "undercut_template.j2",
+    "id": "v3-undercut-template",
+    "operation": "groove",
+    "inputs": {
+      "gtype": "FS",
+      "side": "Right",
+      "std_key": "W2196-F 5,0 x 0,9",
+      "raw_diameter": 100.0,
+      "safety_dis": 2.0,
+      "FS_d1": 80.0,
+      "FS_z": 30.0
+    },
+    "expected": {
+      "contexts": [
+        {
+          "STD_KEY": "W2196-F 5,0 x 0,9",
+          "groove_type": "FS",
+          "side": "Right",
+          "X_START": 104.0,
+          "R": 5.0,
+          "Z_START": 44.494954838909244,
+          "D1_CUT": 78.2,
+          "ANG_1": -160,
+          "D1_COMP_START": 84.0,
+          "Z_MID": 28.425514217324743,
+          "FS_Z_PLUS1": 31.0,
+          "FS_Z_MINUS1": 29.0,
+          "ANG_2": 78
+        }
+      ],
+      "texts": [
+        "; --- FS_Right (W2196-F 5,0 x 0,9) ---\nG0 Z44.495\nG0 X104.000\nM4=97\nG0 G42 X84.000\nG1 X78.200 ANG=-160 RND=5.0 F0.2\nG1 Z28.426 RND=5.0\nG1 Z31.000 ANG=78\nG0 G40 X104.000\n; --------------------------------------"
+      ]
+    }
+  },
+  {
+    "name": "circlip_groove_template.j2",
+    "id": "v3-circlip-groove-template",
+    "operation": "circlip",
+    "inputs": {
+      "X_RAW_D": "100",
+      "X_TIP_D": "90+5",
+      "X_DOWN_D": "90",
+      "WIDTH_CIRCLIP": "4",
+      "MAX_CUTDIPTH": "2",
+      "WIDTH_CUTER": "3",
+      "FEEDRATE": "0.3",
+      "z_positions": "10+2,20-1\n-2**2"
+    },
+    "expected": {
+      "contexts": [
+        {
+          "z_offsets": [
+            12.0,
+            19.0,
+            -4.0
+          ],
+          "X_RAW_D": 100.0,
+          "X_TIP_D": 95.0,
+          "X_DOWN_D": 90.0,
+          "WIDTH_CIRCLIP": 4.0,
+          "MAX_CUTDIPTH": 2.0,
+          "WIDTH_CUTER": 3.0,
+          "FEEDRATE": 0.3
+        }
+      ],
+      "texts": [
+        "; --- 卡簧槽 Z=+12.000 ---\nG0 Z12.000\nG0 X110.000\nM4=97\nR12=95.000\nR13=12.000\nR14=4.000\nR15=5.000/2\nR16=0.000\nR17=0.000\nR18=2.000\nR19=3.000\nR20=0.300\nR21=0.300\nDB_CYCLE93(R12,R13,R14,R15,R16,R17,R18,R19,R20,R21)\nG0 X110.000\nSTOPRE\n; --- 卡簧槽 Z=+19.000 ---\nG0 Z19.000\nG0 X110.000\nM4=97\nR12=95.000\nR13=19.000\nR14=4.000\nR15=5.000/2\nR16=0.000\nR17=0.000\nR18=2.000\nR19=3.000\nR20=0.300\nR21=0.300\nDB_CYCLE93(R12,R13,R14,R15,R16,R17,R18,R19,R20,R21)\nG0 X110.000\nSTOPRE\n; --- 卡簧槽 Z=-4.000 ---\nG0 Z-4.000\nG0 X110.000\nM4=97\nR12=95.000\nR13=-4.000\nR14=4.000\nR15=5.000/2\nR16=0.000\nR17=0.000\nR18=2.000\nR19=3.000\nR20=0.300\nR21=0.300\nDB_CYCLE93(R12,R13,R14,R15,R16,R17,R18,R19,R20,R21)\nG0 X110.000\nSTOPRE"
+      ]
+    }
+  },
+  {
+    "name": "circlip_groove_template.j2",
+    "id": "v3-circlip-groove-template",
+    "operation": "circlip",
+    "inputs": {
+      "X_RAW_D": "100",
+      "X_TIP_D": "90+5",
+      "X_DOWN_D": "90",
+      "WIDTH_CIRCLIP": "4",
+      "MAX_CUTDIPTH": "2",
+      "WIDTH_CUTER": "3",
+      "FEEDRATE": "0.3",
+      "z_positions": "2.6755,-1.2345,0"
+    },
+    "expected": {
+      "contexts": [
+        {
+          "z_offsets": [
+            2.675,
+            -1.234,
+            0.0
+          ],
+          "X_RAW_D": 100.0,
+          "X_TIP_D": 95.0,
+          "X_DOWN_D": 90.0,
+          "WIDTH_CIRCLIP": 4.0,
+          "MAX_CUTDIPTH": 2.0,
+          "WIDTH_CUTER": 3.0,
+          "FEEDRATE": 0.3
+        }
+      ],
+      "texts": [
+        "; --- 卡簧槽 Z=+2.675 ---\nG0 Z2.675\nG0 X110.000\nM4=97\nR12=95.000\nR13=2.675\nR14=4.000\nR15=5.000/2\nR16=0.000\nR17=0.000\nR18=2.000\nR19=3.000\nR20=0.300\nR21=0.300\nDB_CYCLE93(R12,R13,R14,R15,R16,R17,R18,R19,R20,R21)\nG0 X110.000\nSTOPRE\n; --- 卡簧槽 Z=-1.234 ---\nG0 Z-1.234\nG0 X110.000\nM4=97\nR12=95.000\nR13=-1.234\nR14=4.000\nR15=5.000/2\nR16=0.000\nR17=0.000\nR18=2.000\nR19=3.000\nR20=0.300\nR21=0.300\nDB_CYCLE93(R12,R13,R14,R15,R16,R17,R18,R19,R20,R21)\nG0 X110.000\nSTOPRE\n; --- 卡簧槽 Z=+0.000 ---\nG0 Z0.000\nG0 X110.000\nM4=97\nR12=95.000\nR13=0.000\nR14=4.000\nR15=5.000/2\nR16=0.000\nR17=0.000\nR18=2.000\nR19=3.000\nR20=0.300\nR21=0.300\nDB_CYCLE93(R12,R13,R14,R15,R16,R17,R18,R19,R20,R21)\nG0 X110.000\nSTOPRE"
+      ]
+    }
+  },
+  {
+    "name": "circlip_groove_template.j2",
+    "id": "v3-circlip-groove-template",
+    "operation": "circlip",
+    "inputs": {
+      "X_RAW_D": "100",
+      "X_TIP_D": "90+5",
+      "X_DOWN_D": "90",
+      "WIDTH_CIRCLIP": "4",
+      "MAX_CUTDIPTH": "2",
+      "WIDTH_CUTER": "3",
+      "FEEDRATE": "0.3",
+      "z_positions": "0x10,0o10,0b10,1_0.2_5"
+    },
+    "expected": {
+      "contexts": [
+        {
+          "z_offsets": [
+            16.0,
+            8.0,
+            2.0,
+            10.25
+          ],
+          "X_RAW_D": 100.0,
+          "X_TIP_D": 95.0,
+          "X_DOWN_D": 90.0,
+          "WIDTH_CIRCLIP": 4.0,
+          "MAX_CUTDIPTH": 2.0,
+          "WIDTH_CUTER": 3.0,
+          "FEEDRATE": 0.3
+        }
+      ],
+      "texts": [
+        "; --- 卡簧槽 Z=+16.000 ---\nG0 Z16.000\nG0 X110.000\nM4=97\nR12=95.000\nR13=16.000\nR14=4.000\nR15=5.000/2\nR16=0.000\nR17=0.000\nR18=2.000\nR19=3.000\nR20=0.300\nR21=0.300\nDB_CYCLE93(R12,R13,R14,R15,R16,R17,R18,R19,R20,R21)\nG0 X110.000\nSTOPRE\n; --- 卡簧槽 Z=+8.000 ---\nG0 Z8.000\nG0 X110.000\nM4=97\nR12=95.000\nR13=8.000\nR14=4.000\nR15=5.000/2\nR16=0.000\nR17=0.000\nR18=2.000\nR19=3.000\nR20=0.300\nR21=0.300\nDB_CYCLE93(R12,R13,R14,R15,R16,R17,R18,R19,R20,R21)\nG0 X110.000\nSTOPRE\n; --- 卡簧槽 Z=+2.000 ---\nG0 Z2.000\nG0 X110.000\nM4=97\nR12=95.000\nR13=2.000\nR14=4.000\nR15=5.000/2\nR16=0.000\nR17=0.000\nR18=2.000\nR19=3.000\nR20=0.300\nR21=0.300\nDB_CYCLE93(R12,R13,R14,R15,R16,R17,R18,R19,R20,R21)\nG0 X110.000\nSTOPRE\n; --- 卡簧槽 Z=+10.250 ---\nG0 Z10.250\nG0 X110.000\nM4=97\nR12=95.000\nR13=10.250\nR14=4.000\nR15=5.000/2\nR16=0.000\nR17=0.000\nR18=2.000\nR19=3.000\nR20=0.300\nR21=0.300\nDB_CYCLE93(R12,R13,R14,R15,R16,R17,R18,R19,R20,R21)\nG0 X110.000\nSTOPRE"
+      ]
+    }
+  }
+]

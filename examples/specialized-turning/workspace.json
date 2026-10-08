@@ -1,0 +1,124 @@
+{
+  "format": "nctool-workspace",
+  "version": 1,
+  "collections": {
+    "sync-turning-assets": {
+      "records": [
+        {
+          "asset": {
+            "format_version": 1,
+            "id": "example-session",
+            "input": {
+              "sides": {
+                "right": {
+                  "ap2_max": 8,
+                  "ap2_min": 0,
+                  "ap_1": 2,
+                  "rows": [
+                    {
+                      "ap_2": 3,
+                      "end_x": 50,
+                      "end_z": -10,
+                      "id": "step-1",
+                      "sta_x": 60,
+                      "sta_z": 0
+                    }
+                  ],
+                  "start_sync_num": 10
+                }
+              },
+              "sync_feed": 0.2,
+              "target": "right"
+            },
+            "title": "示例业务输入"
+          },
+          "group": "sessions",
+          "name": "example-session"
+        },
+        {
+          "asset": {
+            "format_version": 1,
+            "id": "example-sync",
+            "parameters": {
+              "clearance_x": 12,
+              "left_entry_angle": 25,
+              "left_entry_feed": 0.2,
+              "left_retract_feed": 40,
+              "retract_extra": 4,
+              "right_entry_feed": 400,
+              "right_retract_feed": 0.3
+            },
+            "plugin": "sync-turning",
+            "source": "复制 V3 兼容策略",
+            "strategy": "v3-paired",
+            "strategy_version": 1,
+            "title": "示例同步轨迹"
+          },
+          "group": "trajectories",
+          "name": "example-sync"
+        }
+      ],
+      "version": 1
+    },
+    "undercut-assets": {
+      "records": [
+        {
+          "asset": {
+            "format_version": 1,
+            "id": "example-session",
+            "input": {
+              "raw_diameter": 100.0,
+              "safety_dis": 2.0,
+              "sides": {
+                "left": {
+                  "rows": [
+                    {
+                      "d1": 80.0,
+                      "gtype": "FS",
+                      "id": "FS-1",
+                      "std_key": "DIN509-F 0,2 x 0,1",
+                      "z": 30.0
+                    }
+                  ]
+                },
+                "right": {
+                  "rows": [
+                    {
+                      "angle": 45.0,
+                      "c": 0.5,
+                      "d1": 80.0,
+                      "d2": 85.0,
+                      "gtype": "ES",
+                      "id": "ES-1",
+                      "std_key": "DIN509-E 0,2 x 0,1",
+                      "z": 30.0
+                    }
+                  ]
+                }
+              },
+              "target": "all"
+            },
+            "title": "示例业务输入"
+          },
+          "group": "sessions",
+          "name": "example-session"
+        }
+      ],
+      "version": 1
+    }
+  },
+  "manifest": [
+    {
+      "collection": "sync-turning-assets",
+      "provider": "sync-turning",
+      "version": "2.0.0",
+      "fingerprint": "fnv1a64:a1d748eb11548601"
+    },
+    {
+      "collection": "undercut-assets",
+      "provider": "undercut",
+      "version": "2.0.0",
+      "fingerprint": "fnv1a64:526b7c47ed26c636"
+    }
+  ]
+}

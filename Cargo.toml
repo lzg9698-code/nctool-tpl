@@ -1,7 +1,6 @@
 [workspace]
-members = [".", "assets", "sdk", "runtime", "plugins/template", "plugins/math", "plugins/nc", "plugins/process", "cli"]
+members = [".", "assets", "sdk", "runtime", "plugins/template", "plugins/parameters", "plugins/math", "plugins/nc", "plugins/sync-turning", "plugins/undercut", "plugins/process", "cli"]
 default-members = [".", "cli"]
-exclude = ["gui"]
 resolver = "2"
 
 [package]

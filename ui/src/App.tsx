@@ -5,10 +5,18 @@ import {
   documentSignature,
 } from "./lib/documentExecution";
 import { WorkspaceImport } from "./components/WorkspaceImport";
+import { useManagedDependencies } from "./lib/managedDependencies";
+import { ParameterSelection } from "./plugins/ParameterViews";
+import { managedFormSchema } from "./lib/managedParameters";
 import { SyntaxGuide } from "./components/SyntaxGuide";
 import { PluginPage } from "./components/PluginPage";
 import { PluginSettings } from "./components/PluginSettings";
 import { builtinViews } from "./plugins/registry";
+import {
+  generalDocuments,
+  loadTemplateCatalog,
+  specializedTemplate,
+} from "./lib/templateCatalog";
 import { HistoryPage, type HistoryComparison } from "./components/HistoryPage";
 import { useEffect, useRef, useState, Suspense, type ReactNode } from "react";
 import {
@@ -37,9 +45,16 @@ import {
   LoaderCircle,
   Square,
   PanelLeftClose,
+  PanelLeftOpen,
 } from "lucide-react";
 import { Editor, type EditorHandle } from "./components/Editor";
-import { Empty, PageTitle, Menu, JsonEditor } from "./components/WorkbenchUi";
+import {
+  Empty,
+  PageTitle,
+  Menu,
+  Modal,
+  JsonEditor,
+} from "./components/WorkbenchUi";
 import { Divider } from "./components/Divider";
 import { Form } from "./components/Form";
 import { SchemaEditor } from "./components/SchemaEditor";
@@ -82,7 +97,7 @@ const stateNames: Record<string, string> = {
   queued: "等待执行",
   running: "执行中",
   succeeded: "已完成",
-  failed: "未完成",
+  failed: "生成失败",
   cancelled: "已取消",
   interrupted: "已中断",
 };
@@ -100,10 +115,9 @@ function prepareDocument(
   doc.id = id;
   doc.title = asset.metadata?.title || id;
   doc.asset = asset;
-  doc.context = mergeDefaults(
-    defaultValue(normalizeSchema(asset)),
-    asset.defaults,
-  );
+  doc.context = asset.metadata?.parameters
+    ? clone(asset.defaults || {})
+    : mergeDefaults(defaultValue(normalizeSchema(asset)), asset.defaults);
   doc.fingerprint = fingerprint;
   doc.mode = "use";
   doc.outputName = asset.metadata?.output_name || id + ".txt";
@@ -127,6 +141,11 @@ export default function App() {
       null,
     ),
     [dialog, setDialog] = useState<Dialog | null>(null);
+  const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
+  const [catalogState, setCatalogState] = useState<
+    "loading" | "ready" | "error"
+  >("loading");
+  const [catalogError, setCatalogError] = useState("");
   const [comparison, setComparison] = useState<HistoryComparison | null>(null);
   const bundleInput = useRef<HTMLInputElement>(null);
   const [paneRatio, setPaneRatio] = useState({ use: 42, edit: 61 });
@@ -146,12 +165,23 @@ export default function App() {
     ),
     [paramMode, setParamMode] = useState<"form" | "json">("form"),
     [jsonError, setJsonError] = useState(""),
-    [resultTab, setResultTab] = useState<"result" | "diagnostics">("result");
+    [resultTab, setResultTab] = useState<
+      "result" | "diagnostics" | "parameters"
+    >("result");
   const code = useRef<EditorHandle>(null);
   const sourceLine = useRef<number | undefined>(undefined);
   const [jump, setJump] = useState<number | undefined>();
   const imported = useRef<HTMLInputElement>(null);
-  const doc = documents.find((d) => d.key === active);
+  const visibleDocuments = generalDocuments(documents);
+  const doc = visibleDocuments.find((d) => d.key === active);
+  useEffect(() => {
+    if (
+      active &&
+      documents.some((d) => d.key === active) &&
+      !generalDocuments(documents).some((d) => d.key === active)
+    )
+      setActive(generalDocuments(documents)[0]?.key || null);
+  }, [documents, active]);
   const documentChoices = documentActions(capabilities.actions);
   const selection = doc
     ? selectDocumentAction(
@@ -163,6 +193,7 @@ export default function App() {
   const generation = selection.entry;
   const latest =
     doc && execution[doc.key] ? runs[execution[doc.key].id] : undefined;
+  const managedDependencies = useManagedDependencies(latest);
   const running = Object.values(runs).filter((run) =>
     ["queued", "running"].includes(run.status),
   );
@@ -173,7 +204,8 @@ export default function App() {
   const stale = !!(
     doc &&
     latest &&
-    execution[doc.key]?.signature !== documentSignature(doc, generation?.id)
+    (managedDependencies.stale ||
+      execution[doc.key]?.signature !== documentSignature(doc, generation?.id))
   );
   function resizePane(value: number) {
     const mode = doc?.mode || "use";
@@ -196,12 +228,19 @@ export default function App() {
     notify(error.message || "操作失败", true);
   }
   async function catalog() {
+    setCatalogState("loading");
+    setCatalogError("");
     try {
-      const result = await action("template.catalog", {});
-      setItems(result.data.items);
-      if (result.diagnostics?.length)
+      const result = await loadTemplateCatalog();
+      setItems(result.items.filter((item) => !specializedTemplate(item.asset)));
+      setCatalogState("ready");
+      if (result.diagnostics?.length) {
+        setCatalogError("部分模板无法读取，请检查模板文件");
         notify("部分模板无法读取，请检查模板文件", true);
+      }
     } catch (error) {
+      setCatalogState("error");
+      setCatalogError((error as Error).message || "模板列表读取失败");
       fail(error);
     }
   }
@@ -233,6 +272,9 @@ export default function App() {
         if (cancelled) return;
         setWorkspace(w);
         try {
+          setSidebarCollapsed(
+            localStorage.getItem("nctool:sidebar:" + w.id) === "collapsed",
+          );
           const saved = JSON.parse(
             localStorage.getItem("nctool:layout:" + w.id) || "null",
           );
@@ -250,8 +292,13 @@ export default function App() {
         setInventory(i);
         const drafts = loadDrafts(w.id);
         setDocuments(drafts.documents);
-        setActive(drafts.active || drafts.documents[0]?.key || null);
-        setRecovered(drafts.documents.length > 0);
+        const visibleDrafts = generalDocuments(drafts.documents);
+        setActive(
+          visibleDrafts.find((d) => d.key === drafts.active)?.key ||
+            visibleDrafts[0]?.key ||
+            null,
+        );
+        setRecovered(visibleDrafts.length > 0);
         setExecution(
           Object.fromEntries(
             drafts.documents
@@ -283,6 +330,17 @@ export default function App() {
       cancelled = true;
     };
   }, []);
+  function toggleSidebar() {
+    const next = !sidebarCollapsed;
+    setSidebarCollapsed(next);
+    try {
+      if (workspace)
+        localStorage.setItem(
+          "nctool:sidebar:" + workspace.id,
+          next ? "collapsed" : "expanded",
+        );
+    } catch {}
+  }
   useEffect(() => {
     if (workspace) {
       const timeout = setTimeout(() => {
@@ -356,10 +414,13 @@ export default function App() {
     if (existing) {
       setActive(existing.key);
       setPage("workbench");
+
       return;
     }
     try {
       const result = await action("template.read", { name: item.id });
+      if (specializedTemplate(result.data.asset))
+        throw new Error("此格式仅在专用插件的高级设置中选择");
       const loaded = prepareDocument(
         item.id,
         result.data.asset,
@@ -373,6 +434,9 @@ export default function App() {
     } catch (error) {
       fail(error);
     }
+  }
+  function useTemplate() {
+    if (doc) editDoc({ mode: "use" });
   }
   function create() {
     const draft = newDocument();
@@ -388,7 +452,9 @@ export default function App() {
     const close = () => {
       setDocuments((docs) => docs.filter((d) => d.key !== key));
       if (active === key)
-        setActive(documents.find((d) => d.key !== key)?.key || null);
+        setActive(
+          generalDocuments(documents).find((d) => d.key !== key)?.key || null,
+        );
       setDialog(null);
     };
     if (closing && isDirty(closing))
@@ -639,6 +705,10 @@ export default function App() {
           };
       if (typeof asset.source !== "string")
         throw new Error("模板文件缺少 source 字段");
+      if (specializedTemplate(asset))
+        throw new Error(
+          "专用模板请通过工作区资产包导入，并在插件高级设置中选择；源码通过文件或 API 维护。",
+        );
       const draft = newDocument();
       draft.asset = asset;
       draft.title =
@@ -687,14 +757,21 @@ export default function App() {
   }
   async function generate() {
     if (!doc || submitting === doc.key) return;
-    if (jsonError) {
-      notify("请先修正 JSON 输入，原有参数不会代替当前输入执行", true);
+    if (jsonError || inputError) {
+      notify(
+        jsonError
+          ? "请先修正 JSON 输入，原有参数不会代替当前输入执行"
+          : inputError,
+        true,
+      );
       return;
     }
-    const validation = fieldErrors(
-      normalizeSchema(doc.asset),
-      mergeDefaults(doc.asset.defaults, doc.context),
-    );
+    const validation = generation?.id.endsWith(".managed")
+      ? {}
+      : fieldErrors(
+          normalizeSchema(doc.asset),
+          mergeDefaults(doc.asset.defaults, doc.context),
+        );
     setErrors(validation);
     if (Object.keys(validation).length) {
       notify("请补齐或修正标记的参数", true);
@@ -801,7 +878,6 @@ export default function App() {
         <label>
           预设名称
           <input
-            autoFocus
             placeholder="例如：标准尺寸"
             onChange={(e) => (name = e.target.value)}
           />
@@ -910,6 +986,12 @@ export default function App() {
           run.input.source ??
           restored.asset.source,
       };
+      if (specializedTemplate(restored.asset)) {
+        setPage("history");
+        setSelectedHistory(run);
+        notify("专用格式的历史输入保留在执行记录中，请从对应插件进入。");
+        return;
+      }
       restored.context = clone(run.input.context || {});
       restored.mode = "use";
       setDocuments((d) => [...d, restored]);
@@ -945,14 +1027,60 @@ export default function App() {
     latest?.status === "succeeded"
       ? latest.result?.data.text || latest.result?.artifacts?.[0]?.text || ""
       : "";
+  const busy =
+    submitting === doc?.key ||
+    !!(latest && ["queued", "running"].includes(latest.status));
+  let inputError = "";
+  if (doc?.jsonInput !== undefined) {
+    try {
+      parseData(doc.jsonInput);
+    } catch {
+      inputError = "请先修正参数 JSON，再生成文件";
+    }
+  }
+  if (doc) {
+    try {
+      encode(doc.context);
+    } catch {
+      inputError = "请先填写完整、有效的数值";
+    }
+  }
+  const exportReason =
+    inputError ||
+    (stale
+      ? "输入已修改，请重新生成后导出"
+      : latest?.status === "succeeded"
+        ? ""
+        : busy
+          ? "任务正在执行，完成后才能导出"
+          : latest
+            ? "本次任务没有可交付结果，请重新生成"
+            : "尚未生成文件，生成成功后才能导出");
+  const generateHint = busy
+    ? "任务正在执行，可在结果区取消"
+    : inputError || selection.error || "Ctrl+Enter 生成文件";
   return (
-    <div className="app-shell">
+    <div
+      className={"app-shell" + (sidebarCollapsed ? " sidebar-collapsed" : "")}
+    >
       <aside className="sidebar">
+        <button
+          className="icon-button sidebar-toggle"
+          onClick={toggleSidebar}
+          aria-label={sidebarCollapsed ? "展开侧栏" : "折叠侧栏"}
+          title={sidebarCollapsed ? "展开侧栏" : "折叠侧栏"}
+        >
+          {sidebarCollapsed ? (
+            <PanelLeftOpen size={18} />
+          ) : (
+            <PanelLeftClose size={18} />
+          )}
+        </button>
         <div className="brand">
           <span className="brand-mark">
             <Boxes size={22} />
           </span>
-          <div>
+          <div className="brand-name">
             NCtool<span>模板工作台</span>
           </div>
           <span className="version-label">2.2</span>
@@ -962,39 +1090,49 @@ export default function App() {
           {workspace?.profile === "nc" ? "模板与 NC 工作区" : "通用模板工作区"}
         </div>
         <div className="sidebar-section-title">工作空间</div>
-        <button
-          className={"nav-item " + (page === "workbench" ? "active" : "")}
-          onClick={() => setPage("workbench")}
-        >
-          <FolderOpen size={17} />
-          模板库<span>{items.length}</span>
-        </button>
-        <button
-          className={"nav-item " + (page === "history" ? "active" : "")}
-          onClick={() => {
-            setPage("history");
-            api("runs")
-              .then((r) => setRunList(r.runs))
-              .catch(fail);
-          }}
-        >
-          <History size={17} />
-          执行记录<span>{runList.length || ""}</span>
-        </button>
-        {capabilities.panels
-          .filter(
-            (p: Data) => p.view !== "template-editor" && p.id !== "presets",
-          )
-          .map((panel: Data) => (
-            <button
-              key={panel.id}
-              className={"nav-item " + (page === panel.id ? "active" : "")}
-              onClick={() => setPage(panel.id)}
-            >
-              <Boxes size={17} />
-              {panel.title}
-            </button>
-          ))}
+        <nav className="sidebar-nav" aria-label="工作空间导航">
+          <button
+            aria-label={"模板库 · " + items.length + " 个模板"}
+            title="模板库"
+            className={"nav-item " + (page === "workbench" ? "active" : "")}
+            onClick={() => setPage("workbench")}
+          >
+            <FolderOpen size={17} />
+            <span className="nav-label">模板库</span>
+            <span className="nav-count">{items.length}</span>
+          </button>
+          <button
+            aria-label="执行记录"
+            title="执行记录"
+            className={"nav-item " + (page === "history" ? "active" : "")}
+            onClick={() => {
+              setPage("history");
+              api("runs")
+                .then((r) => setRunList(r.runs))
+                .catch(fail);
+            }}
+          >
+            <History size={17} />
+            <span className="nav-label">执行记录</span>
+            <span className="nav-count">{runList.length || ""}</span>
+          </button>
+          {capabilities.panels
+            .filter(
+              (p: Data) => p.view !== "template-editor" && p.id !== "presets",
+            )
+            .map((panel: Data) => (
+              <button
+                key={panel.id}
+                aria-label={panel.title}
+                title={panel.title}
+                className={"nav-item " + (page === panel.id ? "active" : "")}
+                onClick={() => setPage(panel.id)}
+              >
+                <Boxes size={17} />
+                <span className="nav-label">{panel.title}</span>
+              </button>
+            ))}
+        </nav>
         <div className="sidebar-divider" />
         <div className="sidebar-section-title">
           我的模板
@@ -1006,6 +1144,14 @@ export default function App() {
             <Plus size={15} />
           </button>
         </div>
+        <button
+          className="nav-item collapsed-create"
+          aria-label="新建模板"
+          title="新建模板"
+          onClick={create}
+        >
+          <Plus size={18} />
+        </button>
         <div className="search-field">
           <Search size={14} />
           <input
@@ -1015,34 +1161,70 @@ export default function App() {
             onChange={(e) => setQuery(e.target.value)}
           />
           {query && (
-            <button className="icon-button" onClick={() => setQuery("")}>
+            <button
+              className="icon-button"
+              aria-label="清除搜索"
+              onClick={() => setQuery("")}
+            >
               <X size={12} />
             </button>
           )}
         </div>
         {tags.length > 0 && (
           <div className="tag-filter">
-            <button
-              className={!tag ? "selected" : ""}
-              onClick={() => setTag("")}
+            <select
+              aria-label="按标签筛选模板"
+              value={tag}
+              onChange={(e) => setTag(e.target.value)}
             >
-              全部
-            </button>
-            {tags.map((label) => (
-              <button
-                className={tag === label ? "selected" : ""}
-                key={label}
-                onClick={() => setTag(tag === label ? "" : label)}
-              >
-                {label}
-              </button>
-            ))}
+              <option value="">全部标签</option>
+              {tags.map((label) => (
+                <option key={label} value={label}>
+                  {label}
+                </option>
+              ))}
+            </select>
           </div>
         )}
+        <div className="filter-summary" role="status">
+          <span>
+            {catalogState === "loading"
+              ? "正在读取模板…"
+              : `显示 ${visible.length} / ${items.length} 个模板`}
+          </span>
+          {(query || tag) && (
+            <button
+              className="text-button"
+              onClick={() => {
+                setQuery("");
+                setTag("");
+              }}
+            >
+              清除筛选
+            </button>
+          )}
+        </div>
         <div className="template-list">
+          {catalogError && (
+            <div className="catalog-error" role="alert">
+              <AlertTriangle size={16} />
+              <p>{catalogError}</p>
+              <button className="text-button" onClick={() => void catalog()}>
+                重新读取
+              </button>
+            </div>
+          )}
+          {catalogState === "loading" && !items.length && (
+            <div className="sidebar-empty">
+              <LoaderCircle size={18} className="spin" /> 正在读取模板
+            </div>
+          )}
           {visible.map((item) => (
             <button
               key={item.id}
+              title={
+                item.title + (item.description ? "\n" + item.description : "")
+              }
               className={
                 "template-item " + (doc?.id === item.id ? "selected" : "")
               }
@@ -1055,64 +1237,76 @@ export default function App() {
               </span>
             </button>
           ))}
-          {!items.length && !loading && (
+          {!items.length && catalogState === "ready" && (
             <div className="sidebar-empty">
               模板库为空
               <br />
               <button onClick={create}>创建第一个模板</button>
             </div>
           )}
-          {items.length > 0 && !visible.length && (
+          {items.length > 0 && !visible.length && catalogState !== "error" && (
             <div className="sidebar-empty">没有匹配的模板</div>
           )}
         </div>
         <div className="sidebar-bottom">
           <button
             className="nav-item"
+            aria-label="导入模板"
+            title="导入模板"
             onClick={() => imported.current?.click()}
           >
             <FileInput size={17} />
-            导入模板
+            <span className="nav-label">导入模板</span>
           </button>
-          <button
-            className="nav-item"
-            onClick={async () => {
-              try {
-                const bundle = await api("bundle");
-                download(
-                  encode(bundle),
-                  "nctool-workspace.json",
-                  "application/json",
-                );
-                notify("已导出当前已启用插件提供的全部资产集合");
-              } catch (error) {
-                fail(error);
-              }
-            }}
+          <Menu
+            label="工作区资产"
+            text="工作区资产"
+            icon={<FolderOpen size={17} />}
           >
-            <Download size={17} />
-            导出工作区资产
-          </button>
+            <button
+              className="nav-item"
+              onClick={async () => {
+                try {
+                  const bundle = await api("bundle");
+                  download(
+                    encode(bundle),
+                    "nctool-workspace.json",
+                    "application/json",
+                  );
+                  notify("已导出当前已启用插件提供的全部资产集合");
+                } catch (error) {
+                  fail(error);
+                }
+              }}
+            >
+              <Download size={17} />
+              导出工作区资产
+            </button>
+            <button
+              className="nav-item"
+              onClick={() => bundleInput.current?.click()}
+            >
+              <FileInput size={17} />
+              导入工作区资产
+            </button>
+          </Menu>
           <button
-            className="nav-item"
-            onClick={() => bundleInput.current?.click()}
-          >
-            <FileInput size={17} />
-            导入工作区资产
-          </button>
-          <button
+            aria-label="模板语法"
+            title="模板语法"
             className={"nav-item " + (page === "syntax-guide" ? "active" : "")}
             onClick={() => setPage("syntax-guide")}
           >
             <BookOpen size={17} />
-            模板语法
+            <span className="nav-label">模板语法</span>
           </button>
           <button
+            aria-label="插件与设置"
+            title="插件与设置"
             className={"nav-item " + (page === "plugins" ? "active" : "")}
             onClick={() => setPage("plugins")}
           >
             <Settings2 size={17} />
-            插件与设置
+            <span className="nav-label">插件与设置</span>
           </button>
         </div>
       </aside>
@@ -1143,7 +1337,7 @@ export default function App() {
         ) : page === "workbench" ? (
           <>
             <div className="document-tabs">
-              {documents.map((document) => (
+              {visibleDocuments.map((document) => (
                 <div
                   key={document.key}
                   className={
@@ -1205,6 +1399,8 @@ export default function App() {
                   </button>
                   <button
                     className="button secondary"
+                    aria-label="导入模板"
+                    title="导入模板"
                     onClick={() => imported.current?.click()}
                   >
                     <FileInput size={16} />
@@ -1249,115 +1445,129 @@ export default function App() {
             ) : (
               <>
                 <header className="workbench-toolbar">
-                  <div className="document-title">
-                    <input
-                      aria-label="模板名称"
-                      value={doc.title}
-                      onChange={(e) => editDoc({ title: e.target.value })}
-                    />
-                    <span className="document-state">
-                      {isDirty(doc) ? "有未保存修改" : "已保存"}
-                      {doc.id ? "" : " · 新模板"}
-                    </span>
-                  </div>
-                  <div className="toolbar-actions">
-                    <div className="segmented">
-                      <button
-                        className={doc.mode === "use" ? "selected" : ""}
-                        onClick={() => editDoc({ mode: "use" })}
-                      >
-                        <ListChecks size={14} />
-                        使用模板
-                      </button>
-                      <button
-                        className={doc.mode === "edit" ? "selected" : ""}
-                        onClick={() => editDoc({ mode: "edit" })}
-                      >
-                        <Code2 size={14} />
-                        编辑模板
-                      </button>
-                    </div>
-                    <label className="generation-choice">
-                      生成方式
-                      <select
-                        aria-label="模板生成方式"
-                        value={generation?.id || doc.generationAction || ""}
-                        onChange={(event) =>
-                          editDoc({ generationAction: event.target.value })
-                        }
-                      >
-                        {!generation && (
-                          <option value={doc.generationAction || ""}>
-                            请选择可用方式
-                          </option>
+                  <div className="toolbar-row document-row">
+                    <div className="document-title">
+                      <input
+                        aria-label="模板名称"
+                        value={doc.title}
+                        title={doc.title}
+                        onChange={(e) => editDoc({ title: e.target.value })}
+                      />
+                      <span className="document-state">
+                        {isDirty(doc) ? (
+                          <span className="dirty-dot" />
+                        ) : (
+                          <Check size={12} />
                         )}
-                        {documentChoices.map((entry: Data) => (
-                          <option key={entry.id} value={entry.id}>
-                            {entry.ui_schema.document_input.title ||
-                              entry.title}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
-                    <button
-                      className="button secondary"
-                      onClick={() => void saveDocument()}
-                      disabled={saving}
-                    >
-                      {saving ? (
-                        <LoaderCircle size={15} className="spin" />
-                      ) : (
-                        <Save size={15} />
-                      )}
-                      保存
-                    </button>
-                    <button
-                      className="button primary"
-                      disabled={
-                        submitting === doc.key ||
-                        !!(
-                          latest &&
-                          ["queued", "running"].includes(latest.status)
-                        )
-                      }
-                      onClick={() => void generate()}
-                    >
-                      <Play size={15} />
-                      生成文件
-                    </button>
-                    <Menu>
-                      <button onClick={() => void copyTemplate()}>
-                        <Copy size={14} />
-                        复制模板
-                      </button>
+                        {isDirty(doc) ? "有未保存修改" : "已保存"}
+                        {doc.id ? "" : " · 新模板"}
+                      </span>
+                    </div>
+                    <div className="toolbar-actions">
                       <button
-                        onClick={() =>
-                          download(
-                            encode(
-                              {
-                                ...doc.asset,
-                                metadata: {
-                                  ...doc.asset.metadata,
-                                  title: doc.title,
-                                },
-                              },
-                              true,
-                            ),
-                            doc.title + ".template.json",
-                            "application/json",
-                          )
-                        }
+                        className="button secondary"
+                        onClick={() => void saveDocument()}
+                        disabled={saving}
                       >
-                        <Download size={14} />
-                        导出模板
+                        {saving ? (
+                          <LoaderCircle size={15} className="spin" />
+                        ) : (
+                          <Save size={15} />
+                        )}
+                        保存
                       </button>
-                      {doc.id && (
-                        <button className="danger" onClick={deleteTemplate}>
-                          <Trash2 size={14} />
-                          删除模板
+                      <Menu>
+                        <button onClick={() => void copyTemplate()}>
+                          <Copy size={14} />
+                          复制模板
                         </button>
-                      )}
-                    </Menu>
+                        <button
+                          onClick={() =>
+                            download(
+                              encode(
+                                {
+                                  ...doc.asset,
+                                  metadata: {
+                                    ...doc.asset.metadata,
+                                    title: doc.title,
+                                  },
+                                },
+                                true,
+                              ),
+                              doc.title + ".template.json",
+                              "application/json",
+                            )
+                          }
+                        >
+                          <Download size={14} />
+                          导出模板
+                        </button>
+                        {doc.id && (
+                          <button className="danger" onClick={deleteTemplate}>
+                            <Trash2 size={14} />
+                            删除模板
+                          </button>
+                        )}
+                      </Menu>
+                    </div>
+                  </div>
+                  <div className="toolbar-row mode-row">
+                    <div className="mode-controls">
+                      <div className="segmented">
+                        <button
+                          className={doc.mode === "use" ? "selected" : ""}
+                          onClick={() => useTemplate()}
+                        >
+                          <ListChecks size={14} />
+                          使用模板
+                        </button>
+                        <button
+                          className={doc.mode === "edit" ? "selected" : ""}
+                          onClick={() => editDoc({ mode: "edit" })}
+                        >
+                          <Code2 size={14} />
+                          编辑模板
+                        </button>
+                      </div>
+                      <label className="generation-choice">
+                        生成方式
+                        <select
+                          aria-label="模板生成方式"
+                          value={generation?.id || doc.generationAction || ""}
+                          onChange={(event) =>
+                            editDoc({ generationAction: event.target.value })
+                          }
+                        >
+                          {!generation && (
+                            <option value={doc.generationAction || ""}>
+                              请选择可用方式
+                            </option>
+                          )}
+                          {documentChoices.map((entry: Data) => (
+                            <option key={entry.id} value={entry.id}>
+                              {entry.ui_schema.document_input.title ||
+                                entry.title}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                    </div>
+                    {doc.mode === "edit" && (
+                      <div className="author-generate">
+                        <button
+                          className="button primary"
+                          disabled={busy}
+                          title={generateHint}
+                          onClick={() => void generate()}
+                        >
+                          <Play size={15} />
+                          生成文件
+                        </button>
+                        {busy && (
+                          <span className="action-hint">{generateHint}</span>
+                        )}
+                      </div>
+                    )}
                   </div>
                 </header>
                 {selection.error && (
@@ -1680,8 +1890,35 @@ export default function App() {
                         />
                       ) : (
                         <div className="pane-scroll">
+                          {doc.asset.metadata?.parameters && (
+                            <ParameterSelection
+                              nc={Boolean(doc.asset.metadata?.nc?.operation)}
+                              value={
+                                doc.parameterSelection ||
+                                doc.asset.metadata.parameters.selection ||
+                                {}
+                              }
+                              onChange={(parameterSelection) =>
+                                editDoc({ parameterSelection })
+                              }
+                              slots={[
+                                ...new Set(
+                                  Object.values(
+                                    doc.asset.metadata.parameters
+                                      .tool_bindings || {},
+                                  ).map(
+                                    (binding: Data) => binding.slot as string,
+                                  ),
+                                ),
+                              ]}
+                            />
+                          )}
                           <Form
-                            schema={normalizeSchema(doc.asset)}
+                            schema={managedFormSchema(
+                              normalizeSchema(doc.asset),
+                              doc.asset.metadata?.parameters?.tool_bindings,
+                              doc.parameterSelection,
+                            )}
                             value={mergeDefaults(
                               doc.asset.defaults,
                               doc.context,
@@ -1708,16 +1945,13 @@ export default function App() {
                         <div className="inline-error">{jsonError}</div>
                       )}
                       <div className="parameter-footer">
-                        <span>参数保留在当前任务中</span>
+                        <span className="action-hint" role="status">
+                          {generateHint}
+                        </span>
                         <button
                           className="button primary"
-                          disabled={
-                            submitting === doc.key ||
-                            !!(
-                              latest &&
-                              ["queued", "running"].includes(latest.status)
-                            )
-                          }
+                          disabled={busy}
+                          title={generateHint}
                           onClick={() => void generate()}
                         >
                           <Play size={14} />
@@ -1753,23 +1987,106 @@ export default function App() {
                             </span>
                           )}
                         </button>
+                        {latest?.result?.data.parameters && (
+                          <button
+                            className={
+                              resultTab === "parameters" ? "selected" : ""
+                            }
+                            onClick={() => setResultTab("parameters")}
+                          >
+                            参数与计算
+                          </button>
+                        )}
                       </div>
-                      {latest && (
-                        <span className={"run-status " + latest.status}>
-                          {["queued", "running"].includes(latest.status) && (
-                            <LoaderCircle size={12} className="spin" />
+                      <div className="run-controls">
+                        <span
+                          role="status"
+                          className={
+                            "run-status " +
+                            (latest?.status || "idle") +
+                            (latest?.status === "succeeded" &&
+                            (stale || inputError)
+                              ? " stale"
+                              : "")
+                          }
+                        >
+                          {busy ? (
+                            <LoaderCircle size={14} className="spin" />
+                          ) : (latest?.status === "succeeded" &&
+                              (stale || inputError)) ||
+                            latest?.status === "failed" ||
+                            latest?.status === "interrupted" ? (
+                            <AlertTriangle size={14} />
+                          ) : latest?.status === "succeeded" ? (
+                            <Check size={14} />
+                          ) : latest?.status === "cancelled" ? (
+                            <Square size={14} />
+                          ) : (
+                            <FileCode2 size={14} />
                           )}
-                          {stateNames[latest.status]}
+                          {submitting === doc.key
+                            ? "提交中"
+                            : latest?.status === "succeeded" &&
+                                (stale || inputError)
+                              ? "结果已过期"
+                              : latest
+                                ? stateNames[latest.status]
+                                : "待生成"}
                         </span>
-                      )}
+                        {latest &&
+                          ["queued", "running"].includes(latest.status) && (
+                            <button
+                              className="text-button"
+                              onClick={() =>
+                                api("runs/" + latest.id + "/cancel", {}).catch(
+                                  fail,
+                                )
+                              }
+                            >
+                              <Square size={13} />
+                              取消任务
+                            </button>
+                          )}
+                      </div>
                     </div>
-                    {stale && (
+                    {(stale || inputError) && (
                       <div className="stale-banner">
                         <AlertTriangle size={13} />
                         结果对应旧输入，请重新生成以应用当前修改。
                       </div>
                     )}
-                    {resultTab === "diagnostics" ? (
+                    {resultTab === "parameters" &&
+                    latest?.result?.data.parameters ? (
+                      <div className="pane-scroll">
+                        <pre>
+                          {encode(
+                            {
+                              有效输入: latest?.result?.data.parameters?.values,
+                              参数来源:
+                                latest?.result?.data.parameters?.origins,
+                              单位: Object.fromEntries(
+                                Object.entries(
+                                  latest?.result?.data.parameters
+                                    ?.definitions || {},
+                                ).map(([path, definition]: [string, Data]) => [
+                                  path,
+                                  definition.unit || "",
+                                ]),
+                              ),
+                              刀具与加工值: latest?.result?.data.cutting?.slots,
+                              自动派生值:
+                                latest?.result?.data.prepared?.contexts,
+                              派生字段:
+                                latest?.result?.data.prepared?.derived_fields,
+                              算法版本:
+                                latest?.result?.data.prepared
+                                  ?.algorithm_version,
+                            },
+                            true,
+                          )}
+                        </pre>
+                      </div>
+                    ) : resultTab === "diagnostics" ? (
                       <div className="pane-scroll">
                         {diagnostics.length ? (
                           diagnostics.map((d, i) => (
@@ -1805,30 +2122,25 @@ export default function App() {
                       <Empty
                         icon={<LoaderCircle size={28} className="spin" />}
                         title="正在生成文件"
-                        description="你可以继续处理其他模板，任务会保留在执行记录中。"
-                        action={
-                          <button
-                            className="button secondary"
-                            onClick={() =>
-                              api("runs/" + latest.id + "/cancel", {}).catch(
-                                fail,
-                              )
-                            }
-                          >
-                            <Square size={13} />
-                            取消任务
-                          </button>
-                        }
+                        description="你可以继续处理其他模板，或在结果区顶部取消任务。"
                       />
-                    ) : latest?.error ? (
+                    ) : latest &&
+                      ["failed", "cancelled", "interrupted"].includes(
+                        latest.status,
+                      ) ? (
                       <Empty
                         icon={<AlertTriangle size={30} />}
                         title={
                           latest.status === "cancelled"
                             ? "任务已取消"
-                            : "这次没有生成文件"
+                            : latest.status === "interrupted"
+                              ? "任务已中断"
+                              : "生成失败"
                         }
-                        description={latest.error.message}
+                        description={
+                          latest.error?.message ||
+                          "本次任务没有生成可交付文件，请重新生成。"
+                        }
                         action={
                           <button
                             className="button secondary"
@@ -1844,6 +2156,9 @@ export default function App() {
                         description="填写参数后点击「生成文件」，查看正文和检查信息。"
                       />
                     )}
+                    <div className="export-hint" role="status">
+                      {exportReason || "当前结果已生成，可复制或导出文件"}
+                    </div>
                     <div className="result-footer">
                       <label className="filename-field">
                         <span>文件名</span>
@@ -1858,7 +2173,8 @@ export default function App() {
                       <button
                         className="icon-button"
                         aria-label="复制结果"
-                        disabled={latest?.status !== "succeeded" || stale}
+                        disabled={!!exportReason}
+                        title={exportReason || "导出当前结果"}
                         onClick={() =>
                           navigator.clipboard
                             .writeText(String(text))
@@ -1870,14 +2186,36 @@ export default function App() {
                       </button>
                       <button
                         className="button primary"
-                        disabled={latest?.status !== "succeeded" || stale}
+                        disabled={!!exportReason}
+                        title={exportReason || "导出当前结果"}
                         onClick={() =>
-                          download(String(text), doc.outputName || "output.txt")
+                          download(
+                            String(
+                              latest?.result?.artifacts?.length &&
+                                latest.result.artifacts.length > 1
+                                ? latest.result.artifacts[0].text
+                                : text,
+                            ),
+                            doc.outputName || "output.txt",
+                          )
                         }
                       >
                         <Download size={14} />
                         导出文件
                       </button>
+                      {(latest?.result?.artifacts?.length || 0) > 1 &&
+                        latest!.result!.artifacts!.map((artifact, i) => (
+                          <button
+                            key={i}
+                            className="button secondary"
+                            disabled={!!exportReason}
+                            onClick={() =>
+                              download(artifact.text, artifact.name)
+                            }
+                          >
+                            导出 {artifact.name}
+                          </button>
+                        ))}
                     </div>
                   </section>
                 </div>
@@ -1928,6 +2266,7 @@ export default function App() {
             fallback={<div className="center-loading">正在加载插件工作台…</div>}
           >
             <ContributedView
+              key={(workspace?.id || "") + ":" + page}
               panel={capabilities.panels.find((p: Data) => p.id === page)}
               capabilities={capabilities}
               start={runAction}
@@ -1984,34 +2323,13 @@ export default function App() {
         fail={fail}
       />
       {dialog && (
-        <div
-          className="modal-backdrop"
-          onMouseDown={(e) => {
-            if (e.target === e.currentTarget) setDialog(null);
-          }}
+        <Modal
+          title={dialog.title}
+          buttons={dialog.buttons}
+          onClose={() => setDialog(null)}
         >
-          <div
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label={dialog.title}
-          >
-            <div className="modal-header">
-              <h2>{dialog.title}</h2>
-              <button
-                className="icon-button"
-                aria-label="关闭对话框"
-                onClick={() => setDialog(null)}
-              >
-                <X size={18} />
-              </button>
-            </div>
-            <div className="modal-body">{dialog.body}</div>
-            {dialog.buttons && (
-              <div className="modal-footer">{dialog.buttons}</div>
-            )}
-          </div>
-        </div>
+          {dialog.body}
+        </Modal>
       )}
     </div>
   );

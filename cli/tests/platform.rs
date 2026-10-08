@@ -913,6 +913,10 @@ fn workspace_bundle_rolls_back_completed_collections_when_a_later_provider_fails
             std::sync::Arc::new(
                 nctool_plugin_template::TemplatePlugin::new(&target.0.join("workspace")).unwrap(),
             ),
+            std::sync::Arc::new(
+                nctool_plugin_parameters::ParametersPlugin::new(&target.0.join("workspace"))
+                    .unwrap(),
+            ),
             std::sync::Arc::new(FailingCollection),
         ],
         Default::default(),

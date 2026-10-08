@@ -1,0 +1,4 @@
+interface:
+  display_name: "NCtool 验证"
+  short_description: "选择并运行 NCtool 验证，保存隔离验收、CI 与依赖审计证据"
+  default_prompt: "使用 $nctool-verify 验证当前 NCtool 改动，记录实际结果及未完成项。"

@@ -10,6 +10,28 @@ concurrency:
   group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 jobs:
+  dependency-audit:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+      - run: cargo install cargo-audit --version 0.22.2 --locked
+      - run: python scripts/audit_dependencies.py
+      - name: Upload dependency audit reports
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: dependency-audit
+          path: |
+            target/dependency-audit/*.json
+            target/dependency-audit/*.stderr.txt
+          if-no-files-found: warn
   platform:
     strategy:
       fail-fast: false

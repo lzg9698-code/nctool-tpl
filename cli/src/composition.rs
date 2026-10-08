@@ -29,17 +29,49 @@ impl App {
             config.profile = profile.into();
         }
         config::validate(&config)?;
-        let mut ids: BTreeSet<String> = ["template".to_string()].into_iter().collect();
+        let mut ids: BTreeSet<String> = ["template".to_string(), "parameters".to_string()]
+            .into_iter()
+            .collect();
         if config.profile == "nc" {
-            ids.extend(["math", "nc", "process"].into_iter().map(str::to_string));
+            ids.extend(
+                [
+                    "math",
+                    "nc",
+                    "nc-parameters",
+                    "nc-managed",
+                    "sync-turning",
+                    "undercut",
+                    "process",
+                    "process-parameters",
+                ]
+                .into_iter()
+                .map(str::to_string),
+            );
         }
         ids.extend(config.enabled.iter().cloned());
         for id in &config.disabled {
             ids.remove(id);
         }
+        // Default companions follow their builtin provider when it is disabled.
+        // Explicitly enabled companions still undergo normal dependency checks.
+        if !ids.contains("template") && !config.enabled.contains(&"parameters".into()) {
+            ids.remove("parameters");
+        }
+        if !ids.contains("nc") && !config.enabled.contains(&"nc-parameters".into()) {
+            ids.remove("nc-parameters");
+            ids.remove("nc-managed");
+            ids.remove("sync-turning");
+            ids.remove("undercut");
+            ids.remove("process-parameters");
+        }
         let mut plugins: Vec<Arc<dyn Plugin>> = Vec::new();
         if ids.contains("template") {
             plugins.push(Arc::new(nctool_plugin_template::TemplatePlugin::new(
+                workspace,
+            )?));
+        }
+        if ids.contains("parameters") {
+            plugins.push(Arc::new(nctool_plugin_parameters::ParametersPlugin::new(
                 workspace,
             )?));
         }
@@ -51,15 +83,48 @@ impl App {
             if ids.contains("nc") {
                 plugins.push(Arc::new(nctool_plugin_nc::NcPlugin::new(workspace)?));
             }
+            if ids.contains("nc-parameters") {
+                plugins.push(Arc::new(nctool_plugin_nc::NcFoundationPlugin::new(
+                    workspace,
+                )?));
+            }
+            if ids.contains("sync-turning") {
+                plugins.push(Arc::new(
+                    nctool_plugin_sync_turning::SyncTurningPlugin::new(workspace)?,
+                ));
+            }
+            if ids.contains("undercut") {
+                plugins.push(Arc::new(nctool_plugin_undercut::UndercutPlugin::new(
+                    workspace,
+                )?));
+            }
+            if ids.contains("nc-managed") {
+                plugins.push(Arc::new(nctool_plugin_nc::NcManagedPlugin::new(
+                    ids.contains("sync-turning"),
+                    ids.contains("undercut"),
+                )));
+            }
+            if ids.contains("process-parameters") {
+                plugins.push(Arc::new(nctool_plugin_process::ManagedProcessPlugin));
+            }
             if ids.contains("process") {
                 plugins.push(Arc::new(nctool_plugin_process::ProcessPlugin));
             }
         }
         #[cfg(not(feature = "nc-bundle"))]
-        if ids
-            .iter()
-            .any(|id| ["math", "nc", "process"].contains(&id.as_str()))
-        {
+        if ids.iter().any(|id| {
+            [
+                "math",
+                "nc",
+                "nc-parameters",
+                "nc-managed",
+                "sync-turning",
+                "undercut",
+                "process",
+                "process-parameters",
+            ]
+            .contains(&id.as_str())
+        }) {
             return Err(PluginError::new("bundle_unavailable","This is the template-only build. Install the full distribution or build with --features nc-bundle."));
         }
         plugins.extend(config::external_plugins(home, &config)?);
@@ -81,13 +146,39 @@ impl App {
         )
     }
     fn definitions(&self) -> PluginResult<Vec<(PluginDescriptor, Vec<ActionDescriptor>)>> {
-        let mut definitions = vec![(
-            nctool_plugin_template::TemplatePlugin::definition(),
-            nctool_plugin_template::TemplatePlugin::action_definitions(),
-        )];
+        let mut definitions = vec![
+            (
+                nctool_plugin_parameters::ParametersPlugin::definition(),
+                nctool_plugin_parameters::ParametersPlugin::action_definitions(),
+            ),
+            (
+                nctool_plugin_template::TemplatePlugin::definition(),
+                nctool_plugin_template::TemplatePlugin::action_definitions(),
+            ),
+        ];
         #[cfg(feature = "nc-bundle")]
         {
             definitions.extend([
+                (
+                    nctool_plugin_nc::NcFoundationPlugin::definition(),
+                    nctool_plugin_nc::NcFoundationPlugin::action_definitions(),
+                ),
+                (
+                    nctool_plugin_nc::NcManagedPlugin::definition(),
+                    nctool_plugin_nc::NcManagedPlugin::action_definitions(),
+                ),
+                (
+                    nctool_plugin_sync_turning::SyncTurningPlugin::definition(),
+                    nctool_plugin_sync_turning::SyncTurningPlugin::action_definitions(),
+                ),
+                (
+                    nctool_plugin_undercut::UndercutPlugin::definition(),
+                    nctool_plugin_undercut::UndercutPlugin::action_definitions(),
+                ),
+                (
+                    nctool_plugin_process::ManagedProcessPlugin::definition(),
+                    nctool_plugin_process::ManagedProcessPlugin::action_definitions(),
+                ),
                 (
                     nctool_plugin_math::MathPlugin::definition(),
                     nctool_plugin_math::MathPlugin::action_definitions(),
@@ -112,13 +203,38 @@ impl App {
     fn validate_config(&self, config: &Config) -> PluginResult<Value> {
         config::validate(config)?;
         let definitions = self.definitions()?;
-        let mut enabled: BTreeSet<String> = ["template".to_string()].into_iter().collect();
+        let mut enabled: BTreeSet<String> = ["template".to_string(), "parameters".to_string()]
+            .into_iter()
+            .collect();
         if config.profile == "nc" {
-            enabled.extend(["math", "nc", "process"].iter().map(|id| id.to_string()));
+            enabled.extend(
+                [
+                    "math",
+                    "nc",
+                    "nc-parameters",
+                    "nc-managed",
+                    "sync-turning",
+                    "undercut",
+                    "process",
+                    "process-parameters",
+                ]
+                .iter()
+                .map(|id| id.to_string()),
+            );
         }
         enabled.extend(config.enabled.iter().cloned());
         for id in &config.disabled {
             enabled.remove(id);
+        }
+        if !enabled.contains("template") && !config.enabled.contains(&"parameters".into()) {
+            enabled.remove("parameters");
+        }
+        if !enabled.contains("nc") && !config.enabled.contains(&"nc-parameters".into()) {
+            enabled.remove("nc-parameters");
+            enabled.remove("nc-managed");
+            enabled.remove("sync-turning");
+            enabled.remove("undercut");
+            enabled.remove("process-parameters");
         }
         for id in &enabled {
             if !definitions
@@ -133,7 +249,13 @@ impl App {
         }
         let mut selected = vec![];
         let mut actions = BTreeSet::new();
-        for (descriptor, descriptions) in definitions {
+        for (mut descriptor, descriptions) in definitions {
+            if descriptor.id == "nc-managed" {
+                descriptor.requires.retain(|r| {
+                    !(r.id.starts_with("sync-turning.") && !enabled.contains("sync-turning")
+                        || r.id.starts_with("undercut.") && !enabled.contains("undercut"))
+                });
+            }
             if !enabled.contains(&descriptor.id) {
                 continue;
             }
@@ -284,9 +406,20 @@ impl App {
         let (saved, _) = config::load(&self.home)?;
         let external = config::installed(&self.home)?;
         let mut plugins = Vec::new();
-        for id in ["template", "math", "nc", "process"] {
-            let available = id == "template" || cfg!(feature = "nc-bundle");
-            plugins.push(json!({"id":id,"builtin":true,"available":available,"descriptor":definitions.iter().find(|(d,_)|d.id==id).map(|(d,_)|d),"active":active.iter().any(|d|d.id==id),"enabled_next_start":!saved.disabled.contains(&id.into()) && (id=="template" || saved.enabled.contains(&id.into()) || saved.profile=="nc")}));
+        for id in [
+            "template",
+            "parameters",
+            "math",
+            "nc",
+            "nc-parameters",
+            "nc-managed",
+            "sync-turning",
+            "undercut",
+            "process",
+            "process-parameters",
+        ] {
+            let available = ["template", "parameters"].contains(&id) || cfg!(feature = "nc-bundle");
+            plugins.push(json!({"id":id,"builtin":true,"available":available,"descriptor":definitions.iter().find(|(d,_)|d.id==id).map(|(d,_)|d),"active":active.iter().any(|d|d.id==id),"enabled_next_start":!saved.disabled.contains(&id.into()) && (["template", "parameters"].contains(&id) || saved.enabled.contains(&id.into()) || saved.profile=="nc")}));
         }
         for (manifest, _) in external {
             let id = &manifest.descriptor.id;
@@ -403,7 +536,20 @@ impl App {
                 let id = body["id"]
                     .as_str()
                     .ok_or_else(|| PluginError::new("invalid_input", "缺少插件标识"))?;
-                if ["template", "math", "nc", "process"].contains(&id) {
+                if [
+                    "template",
+                    "parameters",
+                    "math",
+                    "nc",
+                    "nc-parameters",
+                    "nc-managed",
+                    "sync-turning",
+                    "undercut",
+                    "process",
+                    "process-parameters",
+                ]
+                .contains(&id)
+                {
                     return Err(PluginError::new("builtin_plugin", "内置能力只能停用"));
                 }
                 if self.runtime.descriptors().iter().any(|d| d.id == id) {

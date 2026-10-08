@@ -1,0 +1,2663 @@
+{
+  "format_version": 1,
+  "checked_at": "2026-10-07T15:35:03.984901+00:00",
+  "platform": "Windows x86_64",
+  "head": "f0fda2d4e888e70fa5b0726ec77fd7088b6e95d3",
+  "working_tree_dirty": true,
+  "binary_sha256": "17fda7b09041cc9357daa667ccdaa54f0e45f3ba4d41992375c909a55b4038e9",
+  "rust_source_sha256": "f01c3529779dd1a7c8e6e149abc2aeaf5e65c67a459be34a801a2cc8a6e718e9",
+  "ui_source_sha256": "1bddf7c526bcb88f49a5fc3540d2b6e6ca9512e0ca8bc1773629fb8c86a57bf9",
+  "source_files_verified_unchanged": 67,
+  "asset_sha256": {
+    "workspace.json": "b0225c164af0df0ac68c65870497404a24f2d45cfa790cc36d96edafd43b80e9",
+    "mapping.json": "8cc4f4d51f423384edd7ef9152d2f415c3838677f125ad020e1fc4dc375497ac",
+    "classification.json": "b130a4f04721393249697142a779de8811d51d2f5f351d2138a960a30c46559c",
+    "source-hashes.json": "b457723436e1f4a5665ed109a99cf4d1f6998dbf6abd4a596527690c5e0a6468",
+    "oracle.json": "3eb4a76664c74faf7d6f97f79959db311a9ffdf2c6db40c7c0da623979ec0791",
+    "direct-inputs.json": "070c0a1c3c8313e4b8eaf2697ba477c63013916d4679f8d412d463203508bfae"
+  },
+  "counts": {
+    "templates": 28,
+    "business_templates": 26,
+    "shared_fragments": 2,
+    "raw_oracle_cases": 100,
+    "cli_http_cases": 142,
+    "webui_cases": 126,
+    "rust_tests": 446,
+    "rust_doc_tests": 4,
+    "frontend_tests": 20,
+    "python_tool_tests": 14
+  },
+  "checks": {
+    "fmt": "passed",
+    "clippy": "passed",
+    "default_workspace_check_build": "passed",
+    "nc_workspace_build": "passed",
+    "architecture": "passed",
+    "existing_browser_suites": [
+      "browser_v2",
+      "browser_review_fixes"
+    ],
+    "source_baseline_verify": {
+      "files": 221,
+      "archive_sha256": "6648b61bbe9608cf899c05a64de3157bb62cc3ce51dec8d7fc431cbeffe248e4"
+    },
+    "dependency_audit": {
+      "status": "passed",
+      "checked_at": "2026-10-07T14:35:32.427409+00:00",
+      "lockfiles_unchanged": true,
+      "cargo_vulnerabilities": 0,
+      "npm_vulnerabilities": 0,
+      "retained_warning": "yoke-derive 0.8.3 is yanked"
+    }
+  },
+  "allowed_program_adaptations": [
+    "LF",
+    "line outer whitespace",
+    "final newline"
+  ],
+  "calculation_tolerance": {
+    "discrete": "exact",
+    "continuous_absolute": 1e-11,
+    "continuous_relative": 2e-13,
+    "formatted_output": "exact at output precision"
+  },
+  "templates": [
+    {
+      "id": "v3-circlip-groove-template",
+      "source": "circlip_groove_template.j2",
+      "source_sha256": "a44a464f62541adc9bbb8e776d51a82c5b3de03b344187ec571d028eb1163166",
+      "processor": "circlip",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "passed",
+        "cases": [
+          97,
+          98,
+          99
+        ]
+      },
+      "program": {
+        "status": "passed",
+        "cases": 3
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 3
+      }
+    },
+    {
+      "id": "v3-index-g420-1-0.mpf-a",
+      "source": "INDEX G420/1_0.MPF_A.j2",
+      "source_sha256": "ed90497bad692fa2811726cb806695aefd4331a5ea09f4f797ae96d44e3eeb1c",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-1-0.mpf-b",
+      "source": "INDEX G420/1_0.MPF_B.j2",
+      "source_sha256": "d2c57f5cc50111771619c702e5739ec7967e52b39ff6b4a893a4975a7cdc28be",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-2-0.mpf-a",
+      "source": "INDEX G420/2_0.MPF_A.j2",
+      "source_sha256": "45c0c9fd21312cd3689346d44275ffb48187de100bbbc04e22ace18014a5b86a",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-2-0.mpf-b",
+      "source": "INDEX G420/2_0.MPF_B.j2",
+      "source_sha256": "f310c83a91df908014555d9378d2bab211eb8519858dcf21009d26ec2695745a",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-3-0.mpf-a",
+      "source": "INDEX G420/3_0.MPF_A.j2",
+      "source_sha256": "f236cbd8306ac62d0ee450f53ddfc3fea2379e89d84b8d88eeed71a0335666dd",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-3-0.mpf-b",
+      "source": "INDEX G420/3_0.MPF_B.j2",
+      "source_sha256": "c00251a6bf4a49eb779f6eb6bc5e59030031defa39caea90ab05c1efbab6ea55",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-dg-cal-ir9.spf",
+      "source": "INDEX G420/DG_CAL_IR9.SPF.j2",
+      "source_sha256": "d96fe4d70a2fe6091ba082964b5c2a0feb747f771cbfd9f29df7eb8776634a53",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-uz-dj-x",
+      "source": "INDEX G420/UZ_DJ_X.j2",
+      "source_sha256": "b4165f6281b4a71e3de03e210be175b88e8cf0b906728d6fda8161877aea13d7",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-uz-fkm-temp1",
+      "source": "INDEX G420/UZ_FKM_temp1.j2",
+      "source_sha256": "32eb2e9d426b0d6a5cb42b0453e0f4fbc39da24f833f81b060d7eaeb866b60f1",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-uz-fkm-temp2",
+      "source": "INDEX G420/UZ_FKM_temp2.j2",
+      "source_sha256": "fdfc0063a9ef129195845e50df9529a816c38241d42d855a0fcc12aef0ac8e44",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-uz-fkm-temp3",
+      "source": "INDEX G420/UZ_FKM_temp3.j2",
+      "source_sha256": "8829ba4398803e6038c53812956b7a47f329dab1b0785e623ca0de3dde4cb902",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-uz-fkm-temp4",
+      "source": "INDEX G420/UZ_FKM_temp4.j2",
+      "source_sha256": "d84fa6765466276fb94aee6d968adacbaf06c6a3b965467d7f120ae82dd63f54",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-uz-rkm-temp1",
+      "source": "INDEX G420/UZ_RKM_temp1.j2",
+      "source_sha256": "a0bac5d2692f2f41aa18c65197b48b3e93e2aad54dc345e5c0baa01b4a82fc4e",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-uz-rkm-temp2",
+      "source": "INDEX G420/UZ_RKM_temp2.j2",
+      "source_sha256": "3c4168696dd6def87600c50700dcafe55371050f5748a5bd56644e1cabf3e9c1",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-uz-rkm-temp3",
+      "source": "INDEX G420/UZ_RKM_temp3.j2",
+      "source_sha256": "6d8203490939ebe0524754fedf759ac043aca69c86c91cbee6db666eb5c6ac91",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-uz-rkm-temp4",
+      "source": "INDEX G420/UZ_RKM_temp4.j2",
+      "source_sha256": "b6f5a31e1ce52160c7a7f8ac26148fb19ac1eed4afc805fae2dcf64977e42db4",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-uz-rkm-temp5",
+      "source": "INDEX G420/UZ_RKM_temp5.j2",
+      "source_sha256": "56b7d5b341166c28aea2777375cc9906bee2ef30314da5eb2c07fe1e12cf3b5d",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-uz-rkm-temp6",
+      "source": "INDEX G420/UZ_RKM_temp6.j2",
+      "source_sha256": "ab46b6008594b47f179e00faa93e417744cf4692aa7b0f034fe94ee6067b9027",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-index-g420-uz-rkm-temp7",
+      "source": "INDEX G420/UZ_RKM_temp7.j2",
+      "source_sha256": "1fc07dfbd47a8252fe0256fbafb548bb1b349a0f9f94a2399e5593373aab7f30",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "not_applicable_no_python_calculator",
+        "cases": []
+      },
+      "program": {
+        "status": "passed",
+        "cases": 1
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 1
+      }
+    },
+    {
+      "id": "v3-keyway-keyway-footer",
+      "source": "keyway/_keyway_footer.j2",
+      "source_sha256": "aca757e45f306bd5952d871631a393f741f241a9ff12776f86df57324eb136d7",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted_through_dependencies",
+      "dependency_templates": [
+        "v3-keyway-keyway-finish",
+        "v3-keyway-keyway-rough"
+      ],
+      "calculation": {
+        "status": "through_dependencies",
+        "cases": [
+          0,
+          1,
+          3,
+          4,
+          6,
+          7,
+          9,
+          10,
+          12,
+          13,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28
+        ]
+      },
+      "program": {
+        "status": "passed",
+        "cases": 16
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 16
+      }
+    },
+    {
+      "id": "v3-keyway-keyway-header",
+      "source": "keyway/_keyway_header.j2",
+      "source_sha256": "c5cdd23509a5f574d29851be2c4397eb760348b0f5d6f858e32a772ada9b1c5e",
+      "processor": "direct",
+      "algorithm_version": 1,
+      "status": "accepted_through_dependencies",
+      "dependency_templates": [
+        "v3-keyway-keyway-chamfer",
+        "v3-keyway-keyway-finish",
+        "v3-keyway-keyway-rough"
+      ],
+      "calculation": {
+        "status": "through_dependencies",
+        "cases": [
+          0,
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          10,
+          11,
+          12,
+          13,
+          14,
+          23,
+          24,
+          25,
+          26,
+          27,
+          28
+        ]
+      },
+      "program": {
+        "status": "passed",
+        "cases": 21
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 21
+      }
+    },
+    {
+      "id": "v3-keyway-keyway-chamfer",
+      "source": "keyway/keyway_chamfer.j2",
+      "source_sha256": "d6fe599c0bcb8f50f62d37d0b94a74d2eb72a900b0a544c4856202558f57ab1b",
+      "processor": "keyway.chamfer",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "passed",
+        "cases": [
+          2,
+          5,
+          8,
+          11,
+          14
+        ]
+      },
+      "program": {
+        "status": "passed",
+        "cases": 5
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 5
+      }
+    },
+    {
+      "id": "v3-keyway-keyway-finish",
+      "source": "keyway/keyway_finish.j2",
+      "source_sha256": "df7413dbf473a8a33369272dc6f63321355d7e572fa3d2dcc59dc1d7c3c5b0d2",
+      "processor": "keyway.finish",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "passed",
+        "cases": [
+          1,
+          4,
+          7,
+          10,
+          13,
+          28
+        ]
+      },
+      "program": {
+        "status": "passed",
+        "cases": 6
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 6
+      }
+    },
+    {
+      "id": "v3-keyway-keyway-rough",
+      "source": "keyway/keyway_rough.j2",
+      "source_sha256": "a3442efa229e32bdc0535e41b5691886fc9b74c93b94310d8fa2cc4ae7f919ea",
+      "processor": "keyway.rough",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "passed",
+        "cases": [
+          0,
+          3,
+          6,
+          9,
+          12,
+          23,
+          24,
+          25,
+          26,
+          27
+        ]
+      },
+      "program": {
+        "status": "passed",
+        "cases": 10
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 10
+      }
+    },
+    {
+      "id": "v3-sync-turning-left-template",
+      "source": "sync_turning_left_template.j2",
+      "source_sha256": "78a3d0020d7790adf87d004bdd3dabdd4e0b427cf0e6232301eb9e3318bfdb5a",
+      "processor": "sync.left",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "passed",
+        "cases": [
+          15,
+          16,
+          17,
+          18
+        ]
+      },
+      "program": {
+        "status": "passed",
+        "cases": 4
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 4
+      }
+    },
+    {
+      "id": "v3-sync-turning-right-template",
+      "source": "sync_turning_right_template.j2",
+      "source_sha256": "1da12f1ef5d8a77560fcf14276aa7da74989ff848146752e4979193d4e1a94cd",
+      "processor": "sync.right",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "passed",
+        "cases": [
+          19,
+          20,
+          21,
+          22
+        ]
+      },
+      "program": {
+        "status": "passed",
+        "cases": 4
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 4
+      }
+    },
+    {
+      "id": "v3-undercut-template",
+      "source": "undercut_template.j2",
+      "source_sha256": "f2f8ddc00d7c394eff097bd0bada8cd1bd191331848987053aad121f74efd3c8",
+      "processor": "groove",
+      "algorithm_version": 1,
+      "status": "accepted",
+      "dependency_templates": [],
+      "calculation": {
+        "status": "passed",
+        "cases": [
+          29,
+          30,
+          31,
+          32,
+          33,
+          34,
+          35,
+          36,
+          37,
+          38,
+          39,
+          40,
+          41,
+          42,
+          43,
+          44,
+          45,
+          46,
+          47,
+          48,
+          49,
+          50,
+          51,
+          52,
+          53,
+          54,
+          55,
+          56,
+          57,
+          58,
+          59,
+          60,
+          61,
+          62,
+          63,
+          64,
+          65,
+          66,
+          67,
+          68,
+          69,
+          70,
+          71,
+          72,
+          73,
+          74,
+          75,
+          76,
+          77,
+          78,
+          79,
+          80,
+          81,
+          82,
+          83,
+          84,
+          85,
+          86,
+          87,
+          88,
+          89,
+          90,
+          91,
+          92,
+          93,
+          94,
+          95,
+          96
+        ]
+      },
+      "program": {
+        "status": "passed",
+        "cases": 68
+      },
+      "raw_input_end_to_end": {
+        "cli": "passed",
+        "http": "passed",
+        "webui": "passed",
+        "webui_cases": 68
+      }
+    }
+  ],
+  "cli_http_evidence": [
+    {
+      "case": 0,
+      "template": "v3-keyway-keyway-rough",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 1,
+      "template": "v3-keyway-keyway-finish",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 2,
+      "template": "v3-keyway-keyway-chamfer",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 3,
+      "template": "v3-keyway-keyway-rough",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 4,
+      "template": "v3-keyway-keyway-finish",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 5,
+      "template": "v3-keyway-keyway-chamfer",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 6,
+      "template": "v3-keyway-keyway-rough",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 7,
+      "template": "v3-keyway-keyway-finish",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 8,
+      "template": "v3-keyway-keyway-chamfer",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 9,
+      "template": "v3-keyway-keyway-rough",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 10,
+      "template": "v3-keyway-keyway-finish",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 11,
+      "template": "v3-keyway-keyway-chamfer",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 12,
+      "template": "v3-keyway-keyway-rough",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 13,
+      "template": "v3-keyway-keyway-finish",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 14,
+      "template": "v3-keyway-keyway-chamfer",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 15,
+      "template": "v3-sync-turning-left-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 16,
+      "template": "v3-sync-turning-left-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 17,
+      "template": "v3-sync-turning-left-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 18,
+      "template": "v3-sync-turning-left-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 19,
+      "template": "v3-sync-turning-right-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 20,
+      "template": "v3-sync-turning-right-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 21,
+      "template": "v3-sync-turning-right-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 22,
+      "template": "v3-sync-turning-right-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 23,
+      "template": "v3-keyway-keyway-rough",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 24,
+      "template": "v3-keyway-keyway-rough",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 25,
+      "template": "v3-keyway-keyway-rough",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 26,
+      "template": "v3-keyway-keyway-rough",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 27,
+      "template": "v3-keyway-keyway-rough",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 28,
+      "template": "v3-keyway-keyway-finish",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 29,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 30,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 31,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 32,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 33,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 34,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 35,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 36,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 37,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 38,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 39,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 40,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 41,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 42,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 43,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 44,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 45,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 46,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 47,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 48,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 49,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 50,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 51,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 52,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 53,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 54,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 55,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 56,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 57,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 58,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 59,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 60,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 61,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 62,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 63,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 64,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 65,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 66,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 67,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 68,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 69,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 70,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 71,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 72,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 73,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 74,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 75,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 76,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 77,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 78,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 79,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 80,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 81,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 82,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 83,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 84,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 85,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 86,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 87,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 88,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 89,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 90,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 91,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 92,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 93,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 94,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 95,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 96,
+      "template": "v3-undercut-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 97,
+      "template": "v3-circlip-groove-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 98,
+      "template": "v3-circlip-groove-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "case": 99,
+      "template": "v3-circlip-groove-template",
+      "calculation": true,
+      "program": true,
+      "cli": true,
+      "http": true
+    },
+    {
+      "test": "sync_batch",
+      "operation": "sync.left",
+      "cli": true,
+      "http": true,
+      "program": true
+    },
+    {
+      "test": "sync_batch",
+      "operation": "sync.right",
+      "cli": true,
+      "http": true,
+      "program": true
+    },
+    {
+      "template": "v3-index-g420-1-0.mpf-a",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": true
+    },
+    {
+      "template": "v3-index-g420-1-0.mpf-b",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": true
+    },
+    {
+      "template": "v3-index-g420-2-0.mpf-a",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": true
+    },
+    {
+      "template": "v3-index-g420-2-0.mpf-b",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": true
+    },
+    {
+      "template": "v3-index-g420-3-0.mpf-a",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": true
+    },
+    {
+      "template": "v3-index-g420-3-0.mpf-b",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": true
+    },
+    {
+      "template": "v3-index-g420-dg-cal-ir9.spf",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": false
+    },
+    {
+      "template": "v3-index-g420-uz-dj-x",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": false
+    },
+    {
+      "template": "v3-index-g420-uz-fkm-temp1",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": false
+    },
+    {
+      "template": "v3-index-g420-uz-fkm-temp2",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": false
+    },
+    {
+      "template": "v3-index-g420-uz-fkm-temp3",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": false
+    },
+    {
+      "template": "v3-index-g420-uz-fkm-temp4",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": false
+    },
+    {
+      "template": "v3-index-g420-uz-rkm-temp1",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": false
+    },
+    {
+      "template": "v3-index-g420-uz-rkm-temp2",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": false
+    },
+    {
+      "template": "v3-index-g420-uz-rkm-temp3",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": false
+    },
+    {
+      "template": "v3-index-g420-uz-rkm-temp4",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": false
+    },
+    {
+      "template": "v3-index-g420-uz-rkm-temp5",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": false
+    },
+    {
+      "template": "v3-index-g420-uz-rkm-temp6",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": false
+    },
+    {
+      "template": "v3-index-g420-uz-rkm-temp7",
+      "program": true,
+      "cli": true,
+      "http": true,
+      "composition": false
+    },
+    {
+      "test": "atomic_failure",
+      "http": true
+    },
+    {
+      "invalid_case": 0,
+      "template": "v3-keyway-keyway-rough",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 1,
+      "template": "v3-keyway-keyway-rough",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 2,
+      "template": "v3-keyway-keyway-rough",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 3,
+      "template": "v3-keyway-keyway-rough",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 4,
+      "template": "v3-keyway-keyway-rough",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 5,
+      "template": "v3-sync-turning-right-template",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 6,
+      "template": "v3-sync-turning-right-template",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 7,
+      "template": "v3-sync-turning-right-template",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 8,
+      "template": "v3-undercut-template",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 9,
+      "template": "v3-circlip-groove-template",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 10,
+      "template": "v3-circlip-groove-template",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 11,
+      "template": "v3-circlip-groove-template",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 12,
+      "template": "v3-circlip-groove-template",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 13,
+      "template": "v3-circlip-groove-template",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 14,
+      "template": "v3-circlip-groove-template",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 15,
+      "template": "v3-circlip-groove-template",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 16,
+      "template": "v3-circlip-groove-template",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 17,
+      "template": "v3-circlip-groove-template",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 18,
+      "template": "v3-circlip-groove-template",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    },
+    {
+      "invalid_case": 19,
+      "template": "v3-circlip-groove-template",
+      "python_rejected": true,
+      "cli_rejected": true,
+      "http_rejected": true
+    }
+  ],
+  "webui_evidence": [
+    {
+      "case": 0,
+      "template": "v3-keyway-keyway-rough",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 1,
+      "template": "v3-keyway-keyway-finish",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 2,
+      "template": "v3-keyway-keyway-chamfer",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 3,
+      "template": "v3-keyway-keyway-rough",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 4,
+      "template": "v3-keyway-keyway-finish",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 5,
+      "template": "v3-keyway-keyway-chamfer",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 6,
+      "template": "v3-keyway-keyway-rough",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 7,
+      "template": "v3-keyway-keyway-finish",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 8,
+      "template": "v3-keyway-keyway-chamfer",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 9,
+      "template": "v3-keyway-keyway-rough",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 10,
+      "template": "v3-keyway-keyway-finish",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 11,
+      "template": "v3-keyway-keyway-chamfer",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 12,
+      "template": "v3-keyway-keyway-rough",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 13,
+      "template": "v3-keyway-keyway-finish",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 14,
+      "template": "v3-keyway-keyway-chamfer",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 15,
+      "template": "v3-sync-turning-left-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 16,
+      "template": "v3-sync-turning-left-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 17,
+      "template": "v3-sync-turning-left-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 18,
+      "template": "v3-sync-turning-left-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 19,
+      "template": "v3-sync-turning-right-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 20,
+      "template": "v3-sync-turning-right-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 21,
+      "template": "v3-sync-turning-right-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 22,
+      "template": "v3-sync-turning-right-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 23,
+      "template": "v3-keyway-keyway-rough",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 24,
+      "template": "v3-keyway-keyway-rough",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 25,
+      "template": "v3-keyway-keyway-rough",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 26,
+      "template": "v3-keyway-keyway-rough",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 27,
+      "template": "v3-keyway-keyway-rough",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 28,
+      "template": "v3-keyway-keyway-finish",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 29,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 30,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 31,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 32,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 33,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 34,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 35,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 36,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 37,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 38,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 39,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 40,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 41,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 42,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 43,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 44,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 45,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 46,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 47,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 48,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 49,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 50,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 51,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 52,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 53,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 54,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 55,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 56,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 57,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 58,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 59,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 60,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 61,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 62,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 63,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 64,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 65,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 66,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 67,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 68,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 69,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 70,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 71,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 72,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 73,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 74,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 75,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 76,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 77,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 78,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 79,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 80,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 81,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 82,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 83,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 84,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 85,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 86,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 87,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 88,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 89,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 90,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 91,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 92,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 93,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 94,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 95,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 96,
+      "template": "v3-undercut-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 97,
+      "template": "v3-circlip-groove-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 98,
+      "template": "v3-circlip-groove-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "case": 99,
+      "template": "v3-circlip-groove-template",
+      "raw_input": true,
+      "program": true
+    },
+    {
+      "template": "v3-index-g420-dg-cal-ir9.spf",
+      "raw_input": true
+    },
+    {
+      "template": "v3-index-g420-uz-dj-x",
+      "raw_input": true
+    },
+    {
+      "template": "v3-index-g420-uz-fkm-temp1",
+      "raw_input": true
+    },
+    {
+      "template": "v3-index-g420-uz-fkm-temp2",
+      "raw_input": true
+    },
+    {
+      "template": "v3-index-g420-uz-fkm-temp3",
+      "raw_input": true
+    },
+    {
+      "template": "v3-index-g420-uz-fkm-temp4",
+      "raw_input": true
+    },
+    {
+      "template": "v3-index-g420-uz-rkm-temp1",
+      "raw_input": true
+    },
+    {
+      "template": "v3-index-g420-uz-rkm-temp2",
+      "raw_input": true
+    },
+    {
+      "template": "v3-index-g420-uz-rkm-temp3",
+      "raw_input": true
+    },
+    {
+      "template": "v3-index-g420-uz-rkm-temp4",
+      "raw_input": true
+    },
+    {
+      "template": "v3-index-g420-uz-rkm-temp5",
+      "raw_input": true
+    },
+    {
+      "template": "v3-index-g420-uz-rkm-temp6",
+      "raw_input": true
+    },
+    {
+      "template": "v3-index-g420-uz-rkm-temp7",
+      "raw_input": true
+    },
+    {
+      "template": "v3-index-g420-1-0.mpf-a",
+      "composition": true
+    },
+    {
+      "template": "v3-index-g420-1-0.mpf-b",
+      "composition": true
+    },
+    {
+      "template": "v3-index-g420-2-0.mpf-a",
+      "composition": true
+    },
+    {
+      "template": "v3-index-g420-2-0.mpf-b",
+      "composition": true
+    },
+    {
+      "template": "v3-index-g420-3-0.mpf-a",
+      "composition": true
+    },
+    {
+      "template": "v3-index-g420-3-0.mpf-b",
+      "composition": true
+    },
+    {
+      "test": "atomic_failure"
+    },
+    {
+      "test": "empty_process_draft_recovery"
+    },
+    {
+      "test": "empty_asset_draft_blocks_save"
+    },
+    {
+      "test": "draft_conflict_recovery"
+    },
+    {
+      "test": "visual_managed_process"
+    },
+    {
+      "test": "empty_cutting_draft_blocks_generation"
+    },
+    {
+      "test": "selected_profile_confirmation_and_stale_asset"
+    }
+  ],
+  "limitations": [
+    "No machine or controller acceptance",
+    "Missing V3 tool facts are explicit, not inferred",
+    "User contour operation must be explicitly selected for handwritten historical main-program slots",
+    "No Linux/macOS CI or Rust 1.89 MSRV run for this dirty working tree",
+    "No commit, push, release, or source V3 mutation"
+  ]
+}

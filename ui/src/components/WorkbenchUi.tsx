@@ -7,6 +7,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { Editor } from "./Editor";
+import { useManagedDependencies } from "../lib/managedDependencies";
 import {
   encode,
   parseData,
@@ -74,17 +75,128 @@ export function PageTitle({
     </header>
   );
 }
-export function Menu({ children }: { children: ReactNode }) {
+export function Modal({
+  title,
+  children,
+  buttons,
+  onClose,
+}: {
+  title: string;
+  children: ReactNode;
+  buttons?: ReactNode;
+  onClose: () => void;
+}) {
+  const ref = useRef<HTMLDialogElement>(null);
+  useEffect(() => {
+    const dialog = ref.current!;
+    const trigger = document.activeElement as HTMLElement | null;
+    dialog.showModal();
+    (
+      dialog.querySelector<HTMLElement>(
+        "input, select, textarea, .modal-footer button",
+      ) || dialog.querySelector<HTMLElement>("button")
+    )?.focus();
+    return () => {
+      dialog.close();
+      if (trigger?.isConnected) trigger.focus();
+    };
+  }, []);
   return (
-    <details
-      className="menu"
+    <dialog
+      ref={ref}
+      className="modal"
+      aria-label={title}
+      onKeyDown={(event) => {
+        if (event.key !== "Tab") return;
+        const controls = [
+          ...event.currentTarget.querySelectorAll<HTMLElement>(
+            'button:not(:disabled), input:not(:disabled), select:not(:disabled), textarea:not(:disabled), a[href], [tabindex]:not([tabindex="-1"])',
+          ),
+        ].filter((element) => element.getClientRects().length > 0);
+        const first = controls[0],
+          last = controls[controls.length - 1];
+        if (event.shiftKey && document.activeElement === first) {
+          event.preventDefault();
+          last?.focus();
+        } else if (!event.shiftKey && document.activeElement === last) {
+          event.preventDefault();
+          first?.focus();
+        }
+      }}
+      onCancel={(event) => {
+        event.preventDefault();
+        onClose();
+      }}
       onClick={(event) => {
-        if ((event.target as HTMLElement).closest("button"))
-          event.currentTarget.open = false;
+        if (event.target !== event.currentTarget) return;
+        const bounds = event.currentTarget.getBoundingClientRect();
+        if (
+          event.clientX < bounds.left ||
+          event.clientX > bounds.right ||
+          event.clientY < bounds.top ||
+          event.clientY > bounds.bottom
+        )
+          onClose();
       }}
     >
-      <summary aria-label="更多模板操作">
-        <MoreHorizontal size={18} />
+      <div className="modal-header">
+        <h2>{title}</h2>
+        <button
+          className="icon-button"
+          aria-label="关闭对话框"
+          onClick={onClose}
+        >
+          <X size={18} />
+        </button>
+      </div>
+      <div className="modal-body">{children}</div>
+      {buttons && <div className="modal-footer">{buttons}</div>}
+    </dialog>
+  );
+}
+export function Menu({
+  children,
+  label = "更多模板操作",
+  icon,
+  text,
+}: {
+  children: ReactNode;
+  label?: string;
+  icon?: ReactNode;
+  text?: string;
+}) {
+  const ref = useRef<HTMLDetailsElement>(null);
+  const [open, setOpen] = useState(false);
+  useEffect(() => {
+    const close = (event: PointerEvent) => {
+      if (ref.current?.open && !ref.current.contains(event.target as Node))
+        ref.current.open = false;
+    };
+    document.addEventListener("pointerdown", close);
+    return () => document.removeEventListener("pointerdown", close);
+  }, []);
+  return (
+    <details
+      ref={ref}
+      className={"menu" + (text ? " menu-labeled" : "")}
+      onToggle={(event) => setOpen(event.currentTarget.open)}
+      onKeyDown={(event) => {
+        if (event.key === "Escape" && event.currentTarget.open) {
+          event.preventDefault();
+          event.currentTarget.open = false;
+          event.currentTarget.querySelector("summary")?.focus();
+        }
+      }}
+      onClick={(event) => {
+        if ((event.target as HTMLElement).closest("button")) {
+          event.currentTarget.open = false;
+          event.currentTarget.querySelector("summary")?.focus();
+        }
+      }}
+    >
+      <summary aria-label={label} title={label} aria-expanded={open}>
+        {icon || <MoreHorizontal size={18} />}
+        {text && <span className="nav-label">{text}</span>}
       </summary>
       <div className="menu-items">{children}</div>
     </details>
@@ -179,6 +291,8 @@ export function RunDetail({
   stale?: boolean;
   replayCheck?: ReplayCheck;
 }) {
+  const dependency = useManagedDependencies(run, !restore && !rerun);
+  stale = stale || dependency.stale;
   const text =
     run.status === "succeeded"
       ? run.result?.data.text || run.result?.artifacts?.[0]?.text || ""
@@ -245,7 +359,7 @@ export function RunDetail({
             disabled={stale}
             onClick={() =>
               download(
-                String(text),
+                String(run.result?.artifacts?.[0]?.text || text),
                 run.result?.artifacts?.[0]?.name || "output.txt",
               )
             }
@@ -255,6 +369,8 @@ export function RunDetail({
           </button>
         )}
       </div>
+      {run.status === "succeeded" && (run.result?.artifacts?.length || 0) > 1 && <div className="toolbar">{run.result!.artifacts!.map((artifact, i) => <button key={i} className="button secondary" disabled={stale} onClick={() => download(artifact.text, artifact.name)}>导出 {artifact.name}</button>)}</div>}
+      {run.status === "succeeded" && run.result?.data.prepared && <details className="advanced"><summary>参数来源、工艺派生值与计算诊断</summary><pre>{encode({ values: run.result.data.parameters?.values, origins: run.result.data.parameters?.origins, units: Object.fromEntries(Object.entries(run.result.data.parameters?.definitions || {}).map(([path, definition]: [string, Data]) => [path, definition.unit || ""])), cutting: run.result.data.cutting?.slots, derived: run.result.data.prepared.contexts, algorithm_version: run.result.data.prepared.algorithm_version }, true)}</pre></details>}
       {text ? (
         <div className="history-code">
           <Editor

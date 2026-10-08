@@ -1,4 +1,6 @@
-# NCtool 2.0 架构
+# NCtool 架构与依赖边界
+
+适用于当前 2.2 CLI/WebUI 与 2.0 核心组件。操作入口见[文档总览](README.md)，字段与路由见[系统设计](SYSTEM_DESIGN.md)，当前限制见[项目状态](PROJECT_STATUS.md)。
 
 默认产品是通用 Jinja 模板平台；NC 与多工序是可选能力。借鉴 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.md) 和 [Cordis](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cordis-primer.md) 的服务上下文、依赖声明、作用域注册与可撤销生命周期设计，在 Rust workspace 中实现。
 
@@ -22,6 +24,7 @@ flowchart TB
 - 多工序插件不依赖 NC crate；调用版本化服务。
 - CLI 的 `composition` 是唯一装配入口，可选 `nc-bundle` feature 引入内置领域插件；CLI 参数和 HTTP/WebUI 只处理通用动作数据。
 - 默认构建不含 math/NC/process 依赖；完整发行包包含这些可选实现，默认配置仍是 `template`。
+- 默认 `parameters` 插件只处理通用定义、JSON Schema、共享预置和来源；几何与工艺计算由可选 `nc-parameters` 提供。`process-parameters` 只消费 `nc.managed.freeze`、`nc.generate.managed`、`nc.managed.check`、`nc.output.finalize` v1，不依赖 NC crate。
 - 所有业务调用使用显式服务或动作，观测扩展使用 `ActionStarted` / `ActionFinished` 事件。事件不更改正文或吞掉执行错误。
 
 ## 渲染数据流
@@ -31,6 +34,8 @@ flowchart TB
 NC 生成：领域规格与机床 → 模板引用检查 → 领域校验 → 参数派生和默认值 → 通用渲染服务（显式 math/NC 扩展）→ NC 后处理 → 文本/行号游标/诊断。
 
 多工序：继承公共参数 → 工序覆盖 → 调用所选 NC 服务 → 游标连续传递 → 汇总诊断 → 全部成功后一次交付。
+
+受管路径先冻结参数、刀具、标准、模板、机床和选择确认状态，再由 Rust NC 工艺处理器从原始输入产生完整上下文；命名文件拼接后统一后处理。历史重执行用原冻结输入，资源变化使当前旧结果失效。完整契约见[参数管理指南](PARAMETER_MANAGEMENT.md)。
 
 过滤器属于新建的单次渲染环境，不修改全局 Environment。重名扩展、重名过滤器和覆盖 Jinja 内置过滤器都报错。
 
@@ -44,7 +49,9 @@ NC 生成：领域规格与机床 → 模板引用检查 → 领域校验 → �
 
 ## 旧版边界
 
-原 `nctool-core` 已拆分并退出 workspace，旧业务模板与嵌入资产已移除。GUI 保留历史代码；其依赖与接口不属于 2.0 构建支持范围。历史架构快照不是当前接口规范。
+原 `nctool-core` 已拆分并退出 workspace，旧业务模板与嵌入资产已移除。旧 Tauri 桌面 GUI 源码、依赖清单与启动入口已移除；当前 CLI/WebUI 不依赖 Tauri。历史架构快照不是当前接口规范。
+
+旧架构、GUI 和迁移资料见[历史归档](archive/README.md)。
 
 ## 2.2 WebUI 工作台
 
@@ -67,3 +74,5 @@ Workbench 在任务创建时记录宿主/插件版本和服务绑定；只读重
 `scripts/source_baseline.py` 为包含未提交改动的完整源码工作树生成恢复归档、Git 状态/补丁及逐文件校验清单，不修改索引。该本地快照与正式 Git 提交分别追踪；忽略的运行资产需独立备份。
 
 标签发布依赖复用的完整 CI；验证完成后才按明确的 Rust target 构建发行二进制和校验文件。配置的三平台检查需取得实际运行证据，真实控制器验收另行完成。
+
+本地构建与快照步骤见[贡献指南](CONTRIBUTING.md)，标签及发行资产规范见[发布说明](RELEASE.md)。

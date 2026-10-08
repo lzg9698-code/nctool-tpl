@@ -1,274 +1,139 @@
 # 模板编写指南
 
-> 适用版本：nctool-tpl ≥ 0.4.0
-> 模板基于 [Jinja2](https://jinja.palletsprojects.com/)（用 [minijinja](https://github.com/mitsuhiko/minijinja) 引擎）。
-> 本指南聚焦**面向 NC/G-code 的实战写法**与本项目独有的约定，**通用 Jinja 语法**请参考上游文档。
+适用于 NCtool 2.2 工作台及 2.0 模板插件。模板由 MiniJinja 解析与渲染，通用能力和 NC 扩展分别启用。页面操作见 [WebUI 使用指南](WEBUI_USER_GUIDE.md)，完整动作字段见[系统设计](SYSTEM_DESIGN.md)与运行时 `nctool actions`。
 
-## 1. 第一个模板
+## 普通模板的最小示例
 
-`templates/turning/demo_gcode.j2` 是一个完整示例，可直接 `cargo run --example demo` 跑通。
+在仓库根目录运行现有[文本渲染示例](../examples/v2/render.json)：
+
+```bash
+cargo run -p nctool-cli -- run template.render --input examples/v2/render.json
+```
+
+请求中的 `source` 是 Jinja 源码，`context` 是模板数据；输出在 `data.text`，可用 `--out hello.txt` 原子写出正文。若要在 Rust 中直接使用引擎，运行 `cargo run --example demo`，源码见[引擎示例](../examples/demo.rs)。
+
+普通渲染不经过 NC 参数派生、机床注入或 G 代码后处理。对象、数组、字符串、数值、布尔和 null 均可作为通用上下文值。
+
+## 保存为 JSON 资产
+
+工作区内模板保存为 `templates/<id>.json`；ID 是一个合法路径段，引用时使用 ID，不加 `.json`。显示名称通过 `metadata.title` 修改，不改变 ID。
+
+以下是模板资产内容，和动作请求中的包装字段不同：
+
+```json
+{
+  "source": "Hello {{ user.name }}!{% for item in items %}\n- {{ item }}{% endfor %}",
+  "tags": ["example", "report"],
+  "schema": {
+    "type": "object",
+    "properties": {
+      "user": {
+        "type": "object",
+        "properties": {"name": {"type": "string", "title": "姓名"}},
+        "required": ["name"]
+      },
+      "items": {"type": "array", "items": {"type": "string"}}
+    },
+    "required": ["user"]
+  },
+  "defaults": {"items": []},
+  "metadata": {"title": "问候报告"}
+}
+```
+
+通过 WebUI 保存，或把 `{ "name":"hello", "asset":上面的资产对象, "expected":null }` 写成完整 JSON 请求文件，运行 `nctool run template.save --input <请求文件>`。新建时 `expected` 为 null/缺省；编辑现有资产先用 `template.read` 读取 `{name}`，保存时携带返回的 `fingerprint`。指纹是不透明字符串，不能自己拼接或用 null 强制覆盖。
+
+保存后的渲染请求可以使用：
+
+```json
+{"template":"hello","context":{"user":{"name":"Ada"},"items":["templates","plugins"]}}
+```
+
+参数预设是独立 JSON 资产，通过 WebUI 保存和加载，或用 `preset.*` 动作管理。它不会替代模板定义。
+
+## 参数定义与默认值
+
+Schema 定义类型、必填字段、范围、枚举、嵌套对象和数组；工作台据此生成表单，后端也执行校验。“检查变量”只识别源码使用的变量及位置，识别后仍需明确选择参数类型。
+
+普通 `template.render` 中，请求 `schema/defaults` 优先于根资产定义，显式 `context` 覆盖同名默认值，默认值按顶层合并。例如默认 `user` 对象不会与请求中的 `user` 递归补齐。Jinja 的 `default` 是模板内的另一层兜底。
+
+JSON 入口保留支持范围内的整数；小数/指数使用有限 f64，不提供任意精度十进制运算。非零数下溢及超范围整数会失败，数值精度边界见[插件协议](PLUGIN_PROTOCOL.md#执行数值与领域校验补充2026-10-03)。
+
+## Jinja 语法与模板引用
 
 ```jinja
-O{{ prog | nc_pad(4) }} ({{ part_name | default('') }})
-G90 G54 G17
-M3 S{{ spindle_speed | nc_strip }}
-{% for hole in holes %}
-G0 X{{ hole.x | nc_fixed(3) }} Y{{ hole.y | nc_fixed(3) }}
-G1 Z{{ hole.depth | nc_fixed(3) }} F{{ feed | default(0.15) | nc_fixed(3) }}
-G0 Z5.0
+{% if user is defined %}{{ user.name | default('匿名') }}{% endif %}
+{% for item in items %}{{ loop.index }}. {{ item }}
 {% endfor %}
-M5
-M30
 ```
 
-最小要求：
+工作台“语法提示”提供条件、循环、过滤器、宏、include/extends/import 和空白处理示例。使用项目实际支持的 MiniJinja 语法，模板有语法错误时先修复，再保存或生成。
 
-```jinja
-{{ x }}                         {# 引用变量 #}
-{{ x | nc_fixed(3) }}           {# 应用过滤器 #}
-{% for item in items %}...{% endfor %}    {# 控制流 #}
-{# 这是模板注释 #}
-```
+引用已保存模板用 `{% include 'shared_header' %}` 等语法，名称是稳定 ID。临时请求也可提供 `templates` 对象，键为引用名、值为源码。静态引用会参与分析和删除保护；动态引用由实际渲染解析，不能仅凭变量分析通过判断执行成功。
 
-变量名是**裸标识符**，下划线开头（如 `_internal`）**不**会自动私有化；想"内部用"的变量用 `{% set %}` 声明。
+`template.inspect` 的 `include_snapshot:true` 返回冻结的源码集合与根资产元数据；随后传 `snapshot` 和 `context` 渲染，不再读取资产。`snapshot` 不能与 `source/template/templates` 混用。空白选项 `trim_blocks`、`lstrip_blocks` 需显式指定，生成前检查结果换行。
 
-## 2. 必选 vs 可选：模板里看不出来，看 `inspect`
+## NC 模板与扩展
 
-模板本身**不声明**参数是否必选。nctool 用启发式判定（见 `core/src/registry.rs` 与 README「可选 / 必选判定规则」）：
-
-- **可选**：`x | default(v)`、`x | d(v)`、`x is defined`、`x is undefined` 的**直接裸变量操作数**
-- **必选**：其他引用（如 `{{ x }}`、`{{ x / 2 }}`、`(a+b) | default(1)`、`a.b is defined`）
-
-判定粒度是**变量级**：同一变量既有可选引用又有必选引用 → 标为**必选**。
-
-判定策略是**宁多勿漏**（把可疑的标为必选）—— 这样上层校验会放行、严格模式渲染却失败、产出**不完整 G-code** 的情况被堵住。
-
-查看模板的参数表：
+先构建 `nc-bundle` 并启用 `nc` 组合，运行现有 [NC 示例](../examples/v2/nc.json)：
 
 ```bash
-nctool inspect drill_cycle
-# 输出:
-#   必选参数（5）:
-#     x  行 1 列 24
-#     ...
-#   可选参数（0）:
+cargo run -p nctool-cli --features nc-bundle -- --profile nc run nc.generate --input examples/v2/nc.json
 ```
 
-## 3. NC 数值格式化过滤器（**最常用**）
+NC 请求使用 `params`，不是普通渲染的 `context`；机床通过 `machine` 或 `machine_id` 二选一指定。NC 自动注册数学与 NC 扩展、注入 `machine`，校验有效参数后进行格式化和后处理。
 
-G-code 对数值格式敏感，库内置四个专用过滤器。
+| NC 过滤器 | 用途 |
+| --- | --- |
+| `nc_fixed(3)` | 固定小数位输出 |
+| `nc_signed(3)` | 带符号的固定小数位输出 |
+| `nc_strip` | 去除数值尾部多余零 |
+| `nc_pad(4)` | 整数补零，例如程序号 |
 
-| 过滤器 | 用法 | 输入 | 输出 | 用途 |
-| --- | --- | --- | --- | --- |
-| `nc_fixed(N)` | `{{ x \| nc_fixed(3) }}` | `21.0` | `21.000` | 固定小数位的坐标值 |
-| `nc_signed(N)` | `{{ x \| nc_signed(3) }}` | `21.0` | `+21.000` | **增量坐标/旋转量**（需显式正号） |
-| `nc_strip` | `{{ x \| nc_strip }}` | `21.0` | `21` | 去尾零，避免 `X21.0`（部分控制器不接） |
-| `nc_pad(N)` | `{{ n \| nc_pad(4) }}` | `1` | `0001` | 程序号/行号前导零 |
+通用 `template.render` 若需要这些过滤器，必须在已启用提供方的前提下显式传 `extensions:["math","nc"]`；这只注册扩展，不自动取得 NC 校验或机床上下文。程序号和刀具号应定义为整数，不靠格式化截断错误数值。
 
-所有 NC 过滤器对 **NaN/Inf 报错**（防止非法数值写入 G-code）。该防线仅覆盖本库注册的过滤器；裸 `{{ x }}` 输出或 minijinja 内建操作（如 `round`、算术）产生的 NaN/Inf 不经此校验——先用 `nctool validate` 拦。
+保存 NC 资产时，在 `metadata.nc` 中声明领域规格和默认生成设置；工作台会据此匹配 NC 生成方式。示例：
 
-边界与坑：
-
-- `nc_pad(宽度)` 上限 **1024**；`nc_fixed`/`nc_signed` 小数位上限 **32**。超出即报错（避免巨量分配导致 abort）
-- `nc_pad` 输入必须是整数或整值的 `Number`（`5.0` 行，`5.5` 不行）—— 否则报错
-- **`nc_fixed` / `nc_signed`：声明的小数位不足以表示该值时报错**（见 §3.2）
-
-### 3.1 `nc_signed` 只用于有符号语义的值
-
-`nc_signed` 与 `nc_fixed` 的唯一差别是**正数与零也输出 `+`**：
-
-```jinja
-{{ 21.0  | nc_signed(3) }}   {# → +21.000 #}
-{{ -4.5  | nc_signed(3) }}   {# → -4.500 #}
-{{ 0.0   | nc_signed(3) }}   {# → +0.000 #}
+```json
+{
+  "source": "O{{ program | nc_pad(4) }}\nG1 X{{ x | nc_fixed(3) }}\nM30",
+  "schema": {
+    "type":"object",
+    "properties":{"program":{"type":"integer","minimum":1},"x":{"type":"number"}},
+    "required":["program","x"]
+  },
+  "defaults": {"program":1},
+  "metadata": {
+    "execution": {"action":"nc.generate"},
+    "nc": {
+      "specs": [
+        {"name":"program","kind":"integer","min":1},
+        {"name":"x","kind":"number","min":-100,"max":100,"unit":"mm"}
+      ],
+      "options": {"line_numbers":true},
+      "render_options": {"trim_blocks":true,"lstrip_blocks":true}
+    }
+  }
+}
 ```
 
-**只在以下场景用它**：
+`metadata.execution.action` 表达工作台的执行意图；直接调用动作时仍应显式传递所需输入。`metadata.nc.options` 和 `machine_id` 是工作台绑定设置，不是所有直接 NC 请求的自动默认项。领域空白默认值来自 `render_options`，请求显式布尔值优先。
 
-- **增量坐标**（`G91` 段）——部分控制器要求显式正号，省略号会被误判为绝对值
-- **旋转量**（如 `AROT` 的角度）——同上
-- 工艺文档里习惯带符号的注释
+NC specs 支持类型、范围、整数、枚举、条件必选、派生和机床动态上界。其 `required` 是文档性声明；要求 JSON 字段必填应设置 Schema 的 `required`，实际模板引用和兜底也影响缺参校验。Schema 与 specs 同时校验，单位字段不做单位换算。
 
-**不要**用它格式化直径、长度、进给、转速这类本无符号语义的值
-——`X+50.000` 虽然多数控制器能接受，但会让程序可读性变差，
-且与图纸标注习惯不符。
+默认值优先级为用户参数、显式或根资产 defaults、specs defaults、模板内联 default；派生值覆盖同名输入。NC 参数支持数值、i64 整数、字符串、布尔和递归列表，不支持通用对象/null。NC 渲染保持严格字段策略，`lenient` 不跳过领域校验。
 
-> 冷知识：`nc_signed(-0.0)` 输出 `+0.000` 而非 `-0.000`。
-> 控制器对负零的处理不一致，且 `-0.000` 在图纸上没有意义，因此做了归一。
+## 多工序与交付前检查
 
-### 3.2 精度不足即报错（`ERR-NUM-PRECISION`）
-
-`nc_fixed(N)` / `nc_signed(N)` 若在「真值非零」的情况下舍入出**全零串**，渲染会直接失败：
-
-```jinja
-{{ 1e-4  | nc_fixed(3) }}   {# ✗ 报错：真值非零，输出却是 "0.000" #}
-{{ 0.0005 | nc_fixed(3) }}  {# ✓ "0.001"（舍入向上，不算丢值） #}
-{{ 0.0   | nc_fixed(3) }}   {# ✓ "0.000"（真值就是零） #}
-```
-
-**为什么报错而不是输出 `0.000`**：坐标静默变成 `0` 在机床上是**撞刀**。本项目的红线是
-「宁可渲染失败，也不要静默产出错误 G-code」—— 这里报错是**期望行为**，不是缺陷。
-
-**写模板时的两点注意**：
-
-1. **小数位按物理量纲选，不要图省事写 0**。转速、进给用量值即可；坐标、半径、深度
-   至少保留工艺公差需要的小数位（`U_RC=0.04` 经 `nc_fixed(1)` 就会掉值）。
-2. **边界点是 tie 点**：`0.5 | nc_fixed(0)` **会报错** —— 银行家舍入对 `0.5` 取偶得 `"0"`。
-   这是**有意行为**（舍入后确实得到零串），不是回归，已由单测钉住。
-
-> 判据是「舍入后的**输出串**是否全为零」，不是量级阈值 `|v| < 0.5×10^(-N)`。
-> 二者在 `N=0/6/7` 的 tie 点结论相反，后者会放过本应报错的输入（详见
-> `docs/err-num-precision-design.md` §3.1.0）。
-
-## 4. 数学过滤器
-
-全部基于 `f64` 标准库，零额外依赖：
-
-**弧度制**（与 Rust 标准库一致）：
-`sin` `cos` `tan` `asin` `acos` `atan` `sqrt` `exp` `ln` `log10` `pow` `floor` `ceil`
-
-**角度制**（工艺图纸用，**推荐**）：
-`sin_d` `cos_d` `tan_d` `asin_d` `acos_d` `atan_d`　（`_d` = degrees）
-
-**有限性校验**：所有数学过滤器对结果做 `is_finite()` 检查；`sqrt(-1)`、`ln(0)` 立即报错，避免非法坐标静默写入 G-code。
-
-### ⚠️ 角度制 vs 弧度制（**最容易撞刀的地方**）
-
-图纸上的角度是**度**，而裸 `sin`/`cos`/`tan` 按**弧度**算。两者结果差异巨大：
-
-| 写法 | 结果 | |
-| --- | --- | --- |
-| `{{ 30 \| sin_d }}` | `0.5` | ✅ 正确 |
-| `{{ 30 \| sin }}` | `-0.988` | ❌ 把 30° 当 30 弧度 |
-| `{{ (30 * pi / 180) \| sin }}` | `0.5` | ✅ 手工换算，等价但啰嗦 |
-
-**最危险的是静默出错**：`sin(30)` 不报错，只是算出一个错误数字，
-而这个数字会直接变成 G-code 里的坐标——**撞刀**。
-
-因此：
-
-- **新模板一律用 `_d` 后缀**：`{{ angle | sin_d }}`
-- 裸 `sin`/`cos`/`tan` 只在确认输入本就是弧度时使用
-- **用 `nctool lint <模板>` 自动检查**：它会扫出裸的 `sin`/`cos`/`tan`/`asin`/
-  `acos`/`atan` 并建议 `_d` 变体（带行列定位）；有发现时退出码 1，可接入 CI。
-- 从 Python/Jinja2 迁移模板时**特别小心**：源项目常把
-  `math.sin(math.radians(x))` 暴露为 `sin`，也就是**那个 `sin` 是度制**，
-  而本库的 `sin` 是弧度制——**同名不同义**，必须逐处改成 `sin_d`
-
-```jinja
-{# ✅ 推荐：意图明确 #}
-G1 X{{ (r * (angle | sin_d)) | nc_fixed(4) }}
-
-{# ✅ 也可以：显式换算 #}
-G1 X{{ (r * ((angle * pi / 180) | sin)) | nc_fixed(4) }}
-
-{# ❌ 危险：把度直接喂给弧度制过滤器 #}
-G1 X{{ (r * (angle | sin)) | nc_fixed(4) }}
-```
-
-> 反三角同样成对：`asin_d(0.5)` → `30`（度），`asin(0.5)` → `0.5236`（弧度）。
-> 需要"从比值求角度再写进 G-code"时用 `_d` 版本。
-
-### 4.1 字典查表：用下标不用 `.get()`（约定 R6）
-
-minijinja 的 map **只有下标访问，没有任何方法**——`.get()` / `.keys()` /
-`.items()` / `.values()` 全部不可用（Python Jinja2 里正常，在这里会报
-`unknown method: map has no method named get`）。
-
-`dict.get(k, d)` 的等价写法是 `m[k] | default(d)`：
-
-```jinja
-{% set tip_depth_map = {'B4': 8.51, 'DM24': 29.61} %}
-
-{# ❌ Python Jinja2 写法，minijinja 报错 #}
-{% set d = tip_depth_map.get(tip_model, 29.61) %}
-
-{# ✅ 等价写法：下标缺失返回 undefined，再由 default 兜底 #}
-{% set d = tip_depth_map[tip_model | default('DM24')] | default(29.61) %}
-```
-
-> 注意第二层 `| default(...)` **不能省**：Strict 模式下裸 `m[缺失键]` 会直接报错。
-> 需要遍历键时没有 `keys()`，可改用列表字面量（`{% for k in ['B4','DM24'] %}`）
-> 或把数据整理成 `[{name: ..., value: ...}]` 的列表形式。
-
-## 5. 引用机床配置
-
-通过 `{{ machine.<key> }}` 引用：
-
-```jinja
-{{ machine.coolant_on }}   {# → M8（默认）/ M7（开雾冷等）#}
-{{ machine.spindle_off }}  {# → M5 #}
-{{ machine.line_number_digits | int }}  {# 整数键需要显式 int #}
-```
-
-完整配置键清单与各键用途见 [MACHINE_CONFIG_GUIDE.md](MACHINE_CONFIG_GUIDE.md)。
-
-## 6. 多模板：`include` / `extends` / `from import`
-
-```jinja
-{# 模板 A: header.j2 #}
-O{{ prog | nc_pad(4) }}
-G90 G54
-
-{# 模板 B: main.j2 #}
-{% include "header.j2" %}
-G1 X{{ x }} F{{ feed }}
-M30
-```
-
-`include` 解析时会**穿透到子模板校验**——子模板的必选参数也必须由调用方提供，且**环引用会被防护**（A include B、B include A → 报错）。
-
-子模板通过 `add_template`（内存）或 `set_path_loader`（文件目录）注册。`include "header.j2"` 按名查找：先查内存注册表，再查 path loader 目录。
-
-## 7. 校验 / 渲染两层校验
-
-- **`nctool validate <template>`**：渲染前校验必选参数齐全、类型匹配、数值在 `[min, max]` 区间内、值有限。输出结构化报告。
-- **`nctool render <template>`**：先校验再渲染，校验失败阻断生成。
-- **`--lenient`**：除 NaN/Inf 外，校验错误降级为提示，仍生成 G-code（用于"宽容场景"，如柔性模板）。
+现有[多工序示例](../examples/v2/process.json)通过 `process.generate` 执行，公共参数被工序参数覆盖，行号跨工序续编；任一失败时整个正文不交付：
 
 ```bash
-nctool validate drill_cycle --param x=1 --param y=2 \
-    --param r_plane=3 --param depth=-5 --param feed=100
-# 校验通过：无问题
-
-nctool validate drill_cycle   # 缺必选
-# 错误 [x] 必选参数缺失（...）
-# 退出码 1
+cargo run -p nctool-cli --features nc-bundle -- --profile nc run process.generate --input examples/v2/process.json
 ```
 
-## 8. 调试技巧
+- 检查变量、Schema、默认值与 specs 的含义是否一致，覆盖缺参、错误类型和边界值。
+- 检查静态/动态模板引用、空白、扩展条件和生成方式，保存后重读确认。
+- 在选定机床上核对参数与输出选项，检查所有警告及最终正文。
+- 按[工艺核对清单](PROCESS_CHECKLIST.md)完成实际 NC 资产复核；软件示例不作为加工程序。
 
-- **变量看值**：`{{ x | debug }}` 不存在，但可以 `{{ "X=" ~ x }}` 在 G-code 里夹带可见标记
-- **看参数表**：`nctool inspect <template>` 列出必选/可选参数 + 行列定位
-- **看校验报告**：`nctool validate ...` 输出每条错误的「参数名 + 行 + 列」
-- **看渲染过程**：把模板先 `nctool render --format json` 拿到 `data.report.issues`，定位是校验/渲染哪一层的问题
-- **模板存为文件**：`nctool templates new <name>` 在 `templates/` 下生成骨架
-
-## 9. 反模式
-
-| 反模式 | 后果 | 正解 |
-| --- | --- | --- |
-| `{{ x / 2 \| default(0) }}` | 算 `x/2` 时 `x` 必选；`default` 兜不住 | `{{ (x \| default(0)) / 2 }}` |
-| `{{ a.b \| default(1) }}` | `a` 必选（`a.b` 先求值） | 拆成两步：`{% if a is defined %}{{ a.b }}{% endif %}` |
-| `{{ x \| default(1) }}` 给 `Number` 用，又想传字符串 | 类型不匹配报错 | 模板里 `{{ x \| default(1) | int }}` 强转 |
-| 模板里手写 `N0010 N0020 ...` | 双重编号 | 用 `--line-numbers` 让后处理统一生成 |
-| 在 `program_header` 之后又写一个 `M30` | 程序有两个结束 | 把 M30 放在 `program_footer` 模板里，**链式**：`program_header` → 工序 → `program_footer` |
-| `{{ prog }}` 期望 `O0001` 但 `prog=1.7` | 输出 `O1.7`（非法） | 用 `nc_pad` + `ParamKind::Integer` 限定 |
-
-## 10. 模板调试清单
-
-发布或投入前，建议过一遍：
-
-- [ ] `nctool inspect <template>` 列出的必选参数是否都符合工艺预期
-- [ ] `nctool validate` 缺所有必选参数时，能定位到正确的「行+列」
-- [ ] 边界值校验：进给率 = 0、深度 > 0、刀具号 = 0 等
-- [ ] 中文字符串注释不依赖 ASCII 清洗（默认关闭即可正常显示）
-- [ ] 多行输出用 `strip_blank_lines` 清理空行
-- [ ] 程序号/行号交给后处理（`--line-numbers`），不手写
-
-## 11. 相关文档
-
-- [README.md](../README.md) — 顶层 API 概览 + 判定规则详细表
-- [docs/ARCHITECTURE.md](ARCHITECTURE.md) — 解析 / 提取 / 渲染 / 后处理管线
-- [docs/MACHINE_CONFIG_GUIDE.md](MACHINE_CONFIG_GUIDE.md) — 引用机床配置
-- [templates/turning/demo_gcode.j2](../templates/turning/demo_gcode.j2) — 完整示例
+旧版模板指南见[历史归档](archive/legacy/TEMPLATE_WRITING_GUIDE.md)。

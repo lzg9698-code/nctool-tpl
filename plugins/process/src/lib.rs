@@ -1,5 +1,7 @@
 //! Sequential operations consume the versioned NC service, never its concrete Rust types.
 use nctool_plugin_sdk::*;
+mod managed;
+pub use managed::ManagedProcessPlugin;
 pub struct ProcessPlugin;
 impl Plugin for ProcessPlugin {
     fn descriptor(&self) -> PluginDescriptor {

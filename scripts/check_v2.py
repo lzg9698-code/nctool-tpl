@@ -18,9 +18,15 @@ def main():
     metadata=json.loads(run('cargo','metadata','--no-deps','--format-version','1','--locked'))
     packages={package['name']:package for package in metadata['packages']}
     assert 'nctool-gui' not in packages and 'nctool-core' not in packages
+    assert not (ROOT / 'gui').exists(), 'Legacy desktop GUI must not be present'
+    assert not (ROOT / '启动GUI.bat').exists(), 'Legacy desktop launcher must not be present'
+    workspace_tree = run('cargo', 'tree', '--workspace', '--all-features', '--edges', 'normal', '--locked')
+    assert 'tauri' not in workspace_tree and 'nctool-gui' not in workspace_tree, workspace_tree
     tree = run('cargo', 'tree', '-p', 'nctool-cli', '--no-default-features', '--edges', 'normal', '--locked')
     assert not re.search(r'nctool-plugin-(nc|process|math)\b', tree), tree
     assert 'tauri' not in tree
+    nc_tree = run('cargo', 'tree', '-p', 'nctool-cli', '--features', 'nc-bundle', '--edges', 'normal', '--locked')
+    assert 'tauri' not in nc_tree and 'nctool-gui' not in nc_tree, nc_tree
     assert {d['name'] for d in packages['nctool-tpl']['dependencies'] if d['kind'] is None} == {'minijinja'}
     renderer = (ROOT / 'src/renderer.rs').read_text(encoding='utf-8')
     assert 'with_v3_whitespace' not in renderer
@@ -39,7 +45,7 @@ def main():
     assert not any(name.startswith(('cli/', 'core/', 'plugins/', 'gui/', 'templates/', 'docs/', 'ui/', 'runtime/')) for name in package.splitlines())
     manifest = json.loads((ROOT / 'examples/plugins/python-report/plugin.json').read_text(encoding='utf-8'))
     assert manifest['descriptor']['requires'] == [{'id': 'template.render', 'version': 1}]
-    print('PASS: pure template dependency tree, scoped engine, GUI exclusion, process service boundary, Python example, generated WebUI and package contents')
+    print('PASS: pure template dependency tree, scoped engine, desktop GUI removal, Tauri-free workspace and NC bundle, process service boundary, Python example, generated WebUI and package contents')
 
 
 if __name__ == '__main__':

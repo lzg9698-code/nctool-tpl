@@ -1,0 +1,4 @@
+interface:
+  display_name: "NCtool 文档与发布"
+  short_description: "同步 NCtool 文档和历史归档，核对版本、示例与实际发布验证"
+  default_prompt: "使用 $nctool-docs-release 整理 NCtool 文档或准备发布，核对实现与验证证据。"

@@ -13,6 +13,41 @@ const MAX_NC_FIXED_DECIMALS: usize = 32;
 /// `nc_pad` 宽度上限：防止模板笔误/恶意输入触发巨量分配。
 const MAX_NC_PAD_WIDTH: usize = 1024;
 
+/// Explicit migration-only formatting contract: Python binary-float rounding,
+/// including signed zero and subprecision geometry residuals. Existing NC
+/// filters keep their stricter loss-of-precision behavior.
+pub(crate) fn filter_v3_fixed(value: f64, decimals: usize) -> Result<String, minijinja::Error> {
+    if !value.is_finite() || decimals > MAX_NC_FIXED_DECIMALS {
+        return Err(minijinja::Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            "v3_fixed: 无效数值或精度",
+        ));
+    }
+    Ok(format!("{value:.decimals$}"))
+}
+pub(crate) fn filter_v3_signed(value: f64, decimals: usize) -> Result<String, minijinja::Error> {
+    if !value.is_finite() || decimals > MAX_NC_FIXED_DECIMALS {
+        return Err(minijinja::Error::new(
+            minijinja::ErrorKind::InvalidOperation,
+            "v3_signed: 无效数值或精度",
+        ));
+    }
+    Ok(format!("{value:+.decimals$}"))
+}
+
+/// Legacy fixed precision followed by rstrip("0").rstrip(".").
+pub(crate) fn filter_nc_trim_fixed(
+    value: f64,
+    decimals: usize,
+) -> Result<String, minijinja::Error> {
+    let text = filter_nc_fixed(value, decimals)?;
+    Ok(if decimals == 0 {
+        text
+    } else {
+        text.trim_end_matches('0').trim_end_matches('.').to_owned()
+    })
+}
+
 /// 固定小数位：`{{ x | nc_fixed(3) }}` → `21.000`。
 ///
 /// 用于需要固定精度的坐标值（如 `X21.000 Y15.500`）。非有限数（NaN/Inf）报错。

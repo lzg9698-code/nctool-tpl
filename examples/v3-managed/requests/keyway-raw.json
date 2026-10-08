@@ -1,0 +1,51 @@
+{
+  "template": "v3-keyway-keyway-rough",
+  "operation_inputs": {
+    "geometry": {
+      "length_a": 100.0,
+      "width_b": 20.0,
+      "depth_c": 13.1,
+      "shaft_d": 60.0,
+      "position_z": 50.0,
+      "corner_radius_q": 8.0,
+      "form": "闭口",
+      "param_id": "[100]"
+    },
+    "rough_tool": {
+      "tool_num": "T15",
+      "tool_offset": "D1",
+      "diameter": 12.0,
+      "teeth": 4,
+      "cutting_speed": 100.0,
+      "feed_per_tooth": 0.05
+    },
+    "finish_tool": {
+      "tool_num": "T16",
+      "tool_offset": "D1",
+      "diameter": 8.0,
+      "teeth": 4,
+      "cutting_speed": 100.0,
+      "feed_per_tooth": 0.04
+    },
+    "process": {
+      "max_depth_per_pass": 5.0,
+      "ramp_angle": 45.0,
+      "rough_margin": 0.3,
+      "semi_finish_margin": 0.1,
+      "semi_finish_feed": 0.0,
+      "corner_feed_factor": 0.5
+    },
+    "chamfer": {
+      "tool_num": "T20",
+      "tool_offset": "D1",
+      "depth": 0.5,
+      "spindle_speed": 4000,
+      "feed": 1200,
+      "tool_diameter": 8.0,
+      "plunge_depth": 2.0,
+      "chisel_edge_width": 0.0,
+      "protrusion": 40.0
+    },
+    "enable_chamfer": true
+  }
+}

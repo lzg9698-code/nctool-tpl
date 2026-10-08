@@ -1,4 +1,5 @@
 import { encode, mergeDefaults, type Data, type Document } from "./data";
+import { managedRawInput, validatedSelection } from "./managedParameters";
 
 export function documentActions(actions: Data[]): Data[] {
   return actions.filter((entry) => entry.ui_schema?.document_input?.bindings);
@@ -48,6 +49,8 @@ export function documentInput(doc: Document, entry: Data): Data {
     effective_context: mergeDefaults(doc.asset.defaults, doc.context),
     schema: doc.asset.schema || { type: "object" },
     defaults: doc.asset.defaults || {},
+    parameter_selection: doc.parameterSelection || doc.asset.metadata?.parameters?.selection,
+    parameter_preset_id: (doc.parameterSelection || doc.asset.metadata?.parameters?.selection)?.preset_id || doc.asset.metadata?.parameters?.preset_id,
   };
   const pairs: [string, Data][] = [];
   for (const [target, binding] of Object.entries(
@@ -66,6 +69,10 @@ export function documentInput(doc: Document, entry: Data): Data {
     if (value !== undefined) pairs.push([target, value]);
   }
   const input = Object.fromEntries(pairs);
+  if (input.parameter_selection) validatedSelection(input.parameter_selection);
+  if (entry.id === "nc.generate.managed" && input.operation_inputs) {
+    input.operation_inputs = managedRawInput(input.operation_inputs, doc.asset.metadata?.parameters?.tool_bindings, input.parameter_selection);
+  }
   encode(input); // Incomplete numeric drafts must not become previous valid values.
   return input;
 }
@@ -78,6 +85,7 @@ export function documentSignature(doc: Document, action?: string): string {
       defaults: doc.asset.defaults,
       metadata: doc.asset.metadata,
       context: doc.context,
+      parameter_selection: doc.parameterSelection,
       action,
     });
   } catch {

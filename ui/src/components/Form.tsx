@@ -90,6 +90,7 @@ function Field({
   errors: Record<string, string>;
   disabled: boolean;
 }) {
+  disabled = disabled || schema.readOnly === true;
   const type = typeOf(schema);
   const label = schema.title || name;
   const error = errors[path];

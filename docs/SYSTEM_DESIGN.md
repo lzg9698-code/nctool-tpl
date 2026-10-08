@@ -1,6 +1,14 @@
-# NCtool 2.0 系统设计
+# 系统设计与配置
 
-当前实现规范。历史 1.x 的配置、模型和路由不再作为 2.0 契约。
+当前 2.2 CLI/WebUI 与 2.0 插件的实现规范。历史 1.x 的配置、模型和路由不再作为当前契约。组件边界见[架构](ARCHITECTURE.md)，外部服务与 SDK 见[插件协议](PLUGIN_PROTOCOL.md)。
+
+## 目录与启动
+
+CLI 全局参数为 `--home`、`--workspace`、`--profile template|nc`。工作区默认当前目录；显式 `--home` 优先，否则依次检查 `NCTOOL_HOME`、Windows 的 `%LOCALAPPDATA%/nctool`、`$XDG_CONFIG_HOME/nctool`、`$HOME/.config/nctool`。最后 HOME 不存在时以当前目录下 `.config/nctool` 兜底。
+
+home 包含 `config.json` 和已安装的 `plugins/`，工作区包含资产和 `.nctool/runs/`。浏览器草稿按工作区标识隔离，不属于已保存资产。WebUI 默认 `127.0.0.1:8788`，可用 `ui --host <回环 IP> --port <端口>` 修改。
+
+默认构建仅包含 template；启用内置 nc 组合前需 `--features nc-bundle` 构建或使用完整发行二进制。构建步骤见[贡献指南](CONTRIBUTING.md)。
 
 ## 配置组合
 
@@ -50,11 +58,13 @@ JSON 输入经过数值下溢扫描与实际解析器确认：非零十进制值
 
 `template.inspect`：递归收集静态模板引用及变量的必选/可选、文件名和行列位置。动态引用无法静态穷举，最终由渲染器解析。`include_snapshot:true` 同时返回模板集合和主模板资产元数据的不可变快照；`template.render` 可仅传入该 `snapshot` 和 context，完全不重读资产。NC 校验、规格解析和渲染使用同一份快照，避免编辑发生在校验与渲染之间时改变程序内容。
 
-`nc.generate`：支持 `source/template/templates`、`params`、领域 `specs`、`machine` 或 `machine_id`、`options`。不使用普通模板 context 作为领域参数。NC 规格保留原有范围、整数、白名单、条件必选、查表派生和机床动态上界算法；任何领域错误都会失败。模板 lenient 不绕过领域校验。
+`nc.generate`：支持 `source/template/templates` 或不可混用的 `snapshot`、`params`、领域 `specs`、通用 `schema/defaults`、`machine` 或 `machine_id`、`options`。不使用普通模板 context 作为领域参数。NC 规格保留范围、整数、白名单、条件必选、查表派生和机床动态上界算法；Schema 与 specs 同时校验有效参数，任何领域错误都会失败。NC 渲染保持严格字段策略，请求 lenient 不放宽未定义字段或领域校验。
 
 `process.generate`：支持 name、公共 params/machine/options、非空 ops。工序覆盖公共参数与选项；每段从上一段真实末行号续编，不能自行重置。任何工序失败时返回聚合诊断，成功工序正文不交付。先在内存构造最终结果，再由 CLI `--out` 原子写出。
 
 动作实例与 JSON Schema 以 `nctool actions` / `/api/v2/capabilities` 为运行时真值。
+
+CLI `actions` 返回动作数组，每项含 plugin 及展开的动作描述；`run` 成功时直接输出 ActionResult，包含 data/artifacts/diagnostics，生成正文在 `data.text`。HTTP 则使用下述 ok/data 外层包装，两者不能混用响应解析方式。
 
 ## HTTP 与运行约束
 
@@ -81,6 +91,7 @@ HTTP 使用 Axum/Tokio，仅回环地址；普通请求体上限 1 MiB，资产�
 - `POST /api/v2/runs`，体 `{action,input,title?}`：创建异步任务，返回 ID。
 - `GET /api/v2/runs`：最近 100 条轻量索引；完整记录仍保留在磁盘。
 - `GET /api/v2/runs/<id>`：实际输入、状态、结果、错误与插件版本。
+- `GET /api/v2/runs/<id>/replay-check`：只读比较历史与当前环境，返回 `{status,differences}`。
 - `POST /api/v2/runs/<id>/cancel` / `remove`：取消任务或删除已结束记录。
 
 任务保存在工作区 `.nctool/runs/`，单条记录上限 64 MiB，最多并发 8 个任务。生成成功后才记录可交付产物；取消、失败和服务中断不提供当前产物。通用模板记录完整源集合快照；第三方/领域任务保留动作输入和插件版本，其额外领域快照由提供方接口决定。
@@ -105,3 +116,11 @@ WebUI 使用模式只显示参数表单与结果，编辑模式显示源码和�
 NC 视图通过已保存模板的 schema 生成参数控件；metadata.nc.specs 优先作为领域规格，无领域规格时可从通用 schema 提取数值类型和范围。临时源码使用独立参数，不沿用先前所选模板的规格。机床配置和工序草稿按工作区恢复，未完成数值不转成合法旧值。
 
 NC 资产可声明 `metadata.nc.render_options:{trim_blocks,lstrip_blocks}` 作为该领域的空白选项默认值；请求中显式布尔值优先。有效选项进入 replay_input。普通 template.render 不读取领域选项，仍由调用方显式指定。此能力支持用户选择的 V3 模板转换，不恢复发行包的旧业务模板。
+
+## 历史重执行环境
+
+新任务记录 `environment:{format_version:1,host_version,plugins,services}`；plugins 保存已启用插件的声明版本和协议版本，services 保存版本化服务绑定。记录不包含插件配置、程序内容或操作系统环境。
+
+replay-check 的 status 为 `matching`（已记录版本与绑定一致）、`changed`（宿主/插件/服务差异）或 `unknown`（缺少信息或格式不可比较），differences 为说明字符串数组。matching 不保证产物相同。
+
+rerun 无需请求体字段，响应 data 为 `{id}`；创建任务时后端重新比较环境，在新记录写入 `replay:{source_run_id,check}`，不改写原记录与产物。旧记录仍可读取和重执行，继续执行当前 Schema、能力与领域校验。完整记录契约见[插件协议](PLUGIN_PROTOCOL.md#历史重执行环境宿主-api-扩展)。

@@ -1,11 +1,11 @@
 blank_issues_enabled: false
 contact_links:
   - name: 📖 文档
-    url: https://github.com/lzg9698-code/nctool-tpl/tree/master/docs
-    about: 使用/开发文档（ROADMAP / 架构 / 工艺核对 / 机床配置 / 模板编写）
+    url: https://github.com/lzg9698-code/nctool-tpl/blob/master/docs/README.md
+    about: 当前工作台的使用、模板编写、开发、发布与历史资料入口
   - name: ❓ 提问 / 讨论
     url: https://github.com/lzg9698-code/nctool-tpl/discussions
     about: 用法、配置、模板写法等不适合作为 issue 的问题
   - name: ⚠️ 工艺安全问题
     url: https://github.com/lzg9698-code/nctool-tpl/blob/master/docs/PROCESS_CHECKLIST.md
-    about: 内置模板与机床预设未经真实工艺评审，投产前必须逐行核对
+    about: 当前示例不构成工艺验收，实际 NC 资产与目标机床须独立核对

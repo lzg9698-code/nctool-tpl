@@ -1,4 +1,14 @@
+import {
+  loadTemplateCatalog,
+  specializedTemplate,
+} from "../lib/templateCatalog";
 import { useEffect, useState } from "react";
+import { ParameterSelection } from "./ParameterViews";
+import {
+  managedRawInput,
+  managedFormSchema,
+  validatedSelection,
+} from "../lib/managedParameters";
 import {
   Play,
   Plus,
@@ -67,17 +77,10 @@ const generationOptions: Schema = {
   },
 };
 async function resources() {
-  const catalog = await action("template.catalog", {});
-  const templates = await Promise.all(
-    catalog.data.items.map(async (item: Data) => {
-      const read = await action("template.read", { name: item.id });
-      return {
-        ...item,
-        asset: read.data.asset,
-        schema: read.data.asset.schema,
-      } as Template;
-    }),
-  );
+  const catalog = await loadTemplateCatalog();
+  if (catalog.diagnostics.length)
+    throw new Error("部分模板读取失败，请检查模板文件后重新读取");
+  const templates = catalog.items as Template[];
   const machines = (await action("machine.list", {})).data.names as string[];
   return { templates, machines };
 }
@@ -232,11 +235,25 @@ export function NcGenerate(props: ViewProps) {
         options: draft.options,
         ...(draft.machine_id ? { machine_id: draft.machine_id } : {}),
       };
-      if (selected?.schema && !selected.asset.metadata?.nc?.specs)
+      const managed = Boolean(selected?.asset.metadata?.nc?.operation);
+      if (managed) {
+        input.parameter_selection = validatedSelection(
+          draft.parameter_selection ||
+            selected?.asset.metadata?.parameters?.selection ||
+            {},
+        );
+        input.operation_inputs = managedRawInput(
+          draft.params,
+          selected?.asset.metadata?.parameters?.tool_bindings,
+          input.parameter_selection,
+        );
+        delete input.params;
+      }
+      if (!managed && selected?.schema && !selected.asset.metadata?.nc?.specs)
         input.specs = specsFromSchema(selected.schema);
       const signature = encodeDraft(draft);
       const id = await props.start(
-        "nc.generate",
+        managed ? "nc.generate.managed" : "nc.generate",
         input,
         selected?.title || "NC 临时程序",
       );
@@ -295,11 +312,18 @@ export function NcGenerate(props: ViewProps) {
                   }}
                 >
                   <option value="">选择模板</option>
-                  {templates.map((template) => (
-                    <option key={template.id} value={template.id}>
-                      {template.title}
+                  {specializedTemplate(selected?.asset) && (
+                    <option value={draft.template}>
+                      专用插件格式（保留旧选择）
                     </option>
-                  ))}
+                  )}
+                  {templates
+                    .filter((t) => !specializedTemplate(t.asset))
+                    .map((template) => (
+                      <option key={template.id} value={template.id}>
+                        {template.title}
+                      </option>
+                    ))}
                 </select>
               </label>
             ) : (
@@ -317,8 +341,32 @@ export function NcGenerate(props: ViewProps) {
               onChange={(machine_id) => patch({ machine_id })}
             />
             <h3>加工参数</h3>
+            {selected?.asset.metadata?.parameters && (
+              <ParameterSelection
+                nc={Boolean(selected.asset.metadata.nc?.operation)}
+                value={
+                  draft.parameter_selection ||
+                  selected.asset.metadata.parameters.selection ||
+                  {}
+                }
+                onChange={(parameter_selection) =>
+                  patch({ parameter_selection })
+                }
+                slots={[
+                  ...new Set(
+                    Object.values(
+                      selected.asset.metadata.parameters.tool_bindings || {},
+                    ).map((binding: Data) => binding.slot as string),
+                  ),
+                ]}
+              />
+            )}
             <Form
-              schema={selected?.schema || { type: "object" }}
+              schema={managedFormSchema(
+                selected?.schema || { type: "object" },
+                selected?.asset.metadata?.parameters?.tool_bindings,
+                draft.parameter_selection,
+              )}
               value={draft.params}
               onChange={(params) => patch({ params })}
             />
@@ -561,6 +609,7 @@ export function Machines(props: ViewProps) {
   );
 }
 interface Operation {
+  parameterSelection?: Data;
   key: string;
   template: string;
   source: string;
@@ -610,6 +659,12 @@ export function ProcessEditor(props: ViewProps) {
   async function generate() {
     try {
       if (!draft.ops.length) throw new Error("请至少添加一道工序");
+      const managed = draft.ops.some(
+        (op: Operation) =>
+          op.mode === "template" &&
+          templates.find((t) => t.id === op.template)?.asset.metadata?.nc
+            ?.operation,
+      );
       const ops = draft.ops.map((op: Operation, index: number) => {
         if (op.mode === "template" && !op.template)
           throw new Error(`第 ${index + 1} 道工序尚未选择模板`);
@@ -623,19 +678,34 @@ export function ProcessEditor(props: ViewProps) {
           ...(op.mode === "template"
             ? { template: op.template }
             : { source: op.source }),
-          params: op.params,
+          ...(managed
+            ? {
+                operation_inputs: managedRawInput(
+                  op.params,
+                  template?.asset.metadata?.parameters?.tool_bindings,
+                  op.parameterSelection,
+                ),
+                parameter_selection: validatedSelection(
+                  op.parameterSelection || {},
+                ),
+              }
+            : { params: op.params }),
           ...(op.machine_id ? { machine_id: op.machine_id } : {}),
-          ...(template?.schema && !template.asset.metadata?.nc?.specs
+          ...(template?.schema &&
+          !template.asset.metadata?.nc?.specs &&
+          !template.asset.metadata?.nc?.operation
             ? { specs: specsFromSchema(template.schema) }
             : {}),
         };
       });
       const signature = encodeDraft(draft);
       const id = await props.start(
-        "process.generate",
+        managed ? "process.generate.managed" : "process.generate",
         {
           name: draft.name || "program",
-          params: draft.params,
+          ...(managed
+            ? { operation_inputs: draft.params }
+            : { params: draft.params }),
           options: draft.options,
           ops,
           ...(draft.machine_id ? { machine_id: draft.machine_id } : {}),
@@ -809,15 +879,25 @@ export function ProcessEditor(props: ViewProps) {
                           edit(index, {
                             template: e.target.value,
                             params: clone(template?.asset.defaults || {}),
+                            parameterSelection: {},
                           });
                         }}
                       >
                         <option value="">选择模板</option>
-                        {templates.map((t) => (
-                          <option key={t.id} value={t.id}>
-                            {t.title}
+                        {specializedTemplate(
+                          templates.find((t) => t.id === op.template)?.asset,
+                        ) && (
+                          <option value={op.template}>
+                            专用插件格式（保留旧选择）
                           </option>
-                        ))}
+                        )}
+                        {templates
+                          .filter((t) => !specializedTemplate(t.asset))
+                          .map((t) => (
+                            <option key={t.id} value={t.id}>
+                              {t.title}
+                            </option>
+                          ))}
                       </select>
                     </label>
                   ) : (
@@ -837,12 +917,34 @@ export function ProcessEditor(props: ViewProps) {
                     value={op.machine_id}
                     onChange={(machine_id) => edit(index, { machine_id })}
                   />
+                  {op.mode === "template" &&
+                    templates.find((t) => t.id === op.template)?.asset.metadata
+                      ?.nc?.operation && (
+                      <ParameterSelection
+                        nc
+                        slots={[
+                          ...new Set<string>(
+                            Object.values(
+                              templates.find((t) => t.id === op.template)?.asset
+                                .metadata?.parameters?.tool_bindings || {},
+                            ).map((b: Data) => b.slot),
+                          ),
+                        ]}
+                        value={op.parameterSelection}
+                        onChange={(parameterSelection) =>
+                          edit(index, { parameterSelection })
+                        }
+                      />
+                    )}
                   <Form
-                    schema={
+                    schema={managedFormSchema(
                       (op.mode === "template"
                         ? templates.find((t) => t.id === op.template)?.schema
-                        : undefined) || { type: "object" }
-                    }
+                        : undefined) || { type: "object" },
+                      templates.find((t) => t.id === op.template)?.asset
+                        .metadata?.parameters?.tool_bindings,
+                      op.parameterSelection,
+                    )}
                     value={op.params}
                     onChange={(params) => edit(index, { params })}
                   />

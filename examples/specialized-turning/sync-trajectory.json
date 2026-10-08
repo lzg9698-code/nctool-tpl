@@ -1,0 +1,18 @@
+{
+  "format_version": 1,
+  "id": "example-sync",
+  "title": "示例同步轨迹",
+  "plugin": "sync-turning",
+  "strategy": "v3-paired",
+  "strategy_version": 1,
+  "source": "复制 V3 兼容策略",
+  "parameters": {
+    "clearance_x": 12,
+    "retract_extra": 4,
+    "left_entry_angle": 25,
+    "left_entry_feed": 0.2,
+    "left_retract_feed": 40,
+    "right_entry_feed": 400,
+    "right_retract_feed": 0.3
+  }
+}

@@ -1,229 +1,91 @@
 # 机床配置指南
 
-> 适用版本：nctool-cli ≥ 0.2.1 / nctool-core ≥ 0.2.1
-> 模板通过 `{{ machine.<key> }}` 引用配置项；本指南说明**键清单、预设、自定义、加载顺序、关键约束**。
+适用于 NCtool 2.2 工作台的 2.0 NC 插件。机床是工作区 `machines/<id>.json` 内的 JSON 资产，与宿主 `home/config.json` 分开。插件组合与目录见[系统设计](SYSTEM_DESIGN.md)。
 
-## 1. 机床配置是什么
+## 启用 NC 能力
 
-`MachineConfig` 是一组「G/M 码编程约定」的命名集合，模板里用 `{{ machine.coolant_on }}`、`{{ machine.program_prefix }}` 之类引用，切换机床配置即可让同一份模板适配不同控制器。
-
-每个 `MachineConfig` 由两类信息构成：
-
-- **标识字段**（`id` / `vendor` / `model`）：用于 CLI/UI 展示、配置文件分组
-- **配置键值对**（`config: BTreeMap<String, String>`）：实际被模板引用的约定
-
-配置键是**字符串→字符串**的简单键值对。值为整数时仍按字符串存储，模板引用时通过 `| int` 显式转换（如 `{{ machine.line_number_digits | int }}`）。
-
-## 2. 内建预设
-
-nctool 内置 3 套预设，由 `core/src/machine.rs` 的 `MachinePreset` 给出，覆盖通用/铣车复合/车铣复合三类常见场景。
-
-| 标识 | 厂商 | 型号 | 适用场景 |
-| --- | --- | --- | --- |
-| `generic` | Generic | CNC | 通用 FANUC 风格，作为缺省与新机床的参照基线 |
-| `wfl_m65` | WFL | M65 | 铣车复合（Mill-Turn），主轴/副轴多通道控制 |
-| `index_ms40` | INDEX | MS40 | 车铣复合（Turn-Mill），适合棒料/主轴同步 |
-
-查看完整配置：
+源码启动使用：
 
 ```bash
-nctool machine show wfl_m65
-nctool machine list              # 列出全部预设
+cargo run -p nctool-cli --features nc-bundle -- --profile nc ui
 ```
 
-**预设不可修改**。需要个性化时，要么在 `nctool.toml` 里新建自定义机床，要么改自定义机床的键值。
+完整发行二进制可使用 `nctool --profile nc ui`。没有编译 NC 的纯模板二进制不能仅靠切换 profile 获得该能力。当前发行包没有旧版内置机床方案。
 
-## 3. 配置键完整清单
+## 机床资产结构
 
-源定义在 `core/src/machine.rs::KNOWN_CONFIG_KEYS`。下面是**完整列表**（按用途分组）。
-
-### 3.1 程序与行号
-
-| 键 | 类型 | 内置默认 | 用途 |
-| --- | --- | --- | --- |
-| `program_prefix` | String | `O` | 程序号前缀（FANUC 风格 `O` / Mazak 风格 `P` 等） |
-| `program_digits` | Integer | `4` | 程序号位数（`{{ prog \| nc_pad(machine.program_digits \| int) }}`） |
-| `line_number_prefix` | String | `N` | 行号前缀 |
-| `line_number_digits` | Integer | `4` | 行号位数（**已夹紧到 32 位上限**，详见 §6） |
-
-### 3.2 坐标系与单位
-
-| 键 | 类型 | 内置默认 | 用途 |
-| --- | --- | --- | --- |
-| `coordinate_system` | String | `G54` | 工件坐标系（G54–G59） |
-| `units` | Choice(`metric`, `imperial`) | `metric` | 单位制（→ G21/G20） |
-| `feed_mode` | Choice(`G94`, `G95`) | `G94` | 进给模式（每分/每转） |
-
-### 3.3 运动指令
-
-| 键 | 类型 | 内置默认 | 用途 |
-| --- | --- | --- | --- |
-| `rapid` | String | `G0` | 快速移动 G 码 |
-| `linear` | String | `G1` | 线性插补 G 码 |
-| `clockwise_arc` | String | `G2` | 顺时针圆弧 |
-| `ccw_arc` | String | `G3` | 逆时针圆弧 |
-
-### 3.4 主轴与冷却
-
-| 键 | 类型 | 内置默认 | 用途 |
-| --- | --- | --- | --- |
-| `spindle_on` | String | `M3` | 主轴正转 |
-| `spindle_off` | String | `M5` | 主轴停止 |
-| `coolant_on` | String | `M8` | 冷却开 |
-| `coolant_off` | String | `M9` | 冷却关 |
-
-### 3.5 程序与换刀
-
-| 键 | 类型 | 内置默认 | 用途 |
-| --- | --- | --- | --- |
-| `program_end` | String | `M30` | 程序结束（M30/M99 等） |
-| `tool_change` | String | `M6` | 换刀 M 码 |
-
-### 3.6 元信息（文档/自检用，模板可引用）
-
-| 键 | 类型 | 内置默认 | 用途 |
-| --- | --- | --- | --- |
-| `max_spindle_rpm` | Integer | `6000` | 主轴最高转速（供文档/用户自检） |
-| `machine_type` | String | `generic` | 机床类型标识（`generic` / `mill_turn_multitask` 等） |
-| `axes` | String | `""` | 轴配置描述（如 `"X Z C"`） |
-
-## 4. 自定义机床
-
-通过 `nctool.toml` 注册：
-
-```toml
-# 在项目或全局 nctool.toml 中
-default_machine = "hero_x9"   # 可选：覆盖内置默认
-
-[machine.hero_x9]              # 自定义机床的 id
-id = "hero_x9"
-vendor = "HERO"
-model = "X9"
-
-[machine.hero_x9.config]
-program_prefix = "O"
-program_digits = "4"
-line_number_digits = "5"       # 5 位行号
-linear = "G1"
-rapid = "G0"
-coordinate_system = "G54.1"    # 扩展坐标系
-spindle_on = "M3"
-coolant_on = "M8"
-# 任何 KNOWN_CONFIG_KEYS 之外的键会被 `validate_config_keys` 告警
+```json
+{
+  "id":"demo_machine",
+  "vendor":"Example",
+  "model":"Virtual",
+  "config": {
+    "line_number_prefix":"N",
+    "line_number_digits":"4",
+    "program_prefix":"O",
+    "max_spindle_rpm":"3000"
+  }
+}
 ```
 
-> **重要**：自定义机床需提供模板引用的**全部** `machine.xxx` 键。模板对
-> `{{ machine.coordinate_system }}` 等键是裸引用（无 `default` 兜底），
-> 配置缺失该键时，严格模式渲染会直接失败（`未定义变量`）——这是防御行为，
-> 宁可明确报错也不静默生成错误的 G/M 码。建议以 `generic` 预设（`nctool
-> machine show generic`）为基线复制后按需覆盖，避免遗漏。
+这里是虚拟示例，不对应真实设备。`id` 必须与资产文件名/动作 `name` 一致，且是单个合法路径段。顶层只接受 `id/vendor/model/config`；`config` 是字符串键值表，数值约定也应写成字符串。不是旧版 TOML 或机床预设格式。
 
-引用方式：CLI 用 `--machine hero_x9`，Web UI 在机床下拉里选。
+在 WebUI“机床配置”中新建，填写名称、厂商、型号及配置；常用字段通过表单编辑，其他约定可在配置 JSON 中编辑。保存冲突时重新读取并核对差异，不覆盖其他编辑者的版本。
 
-### 4.1 用 CLI 管理自定义机床（推荐）
+## 动作读写与选择
 
-手写 `nctool.toml` 容易漏键，而**漏一个被模板引用的键**在严格模式下会让渲染
-直接失败。`machine add/edit/rm` 把这套校验前置到写入之前：
+| 动作 | 输入与行为 |
+| --- | --- |
+| `machine.list` | `{}`，列出已保存名称 |
+| `machine.read` | `{name}`，返回 `machine` 与不透明 `fingerprint` |
+| `machine.save` | `{name,machine,expected}`，新建 expected 为 null/缺省，修改带读取时的指纹 |
+| `machine.remove` | `{name,expected}`，需要指纹 |
+| `nc.generate` | 通过内联 `machine` 或已保存 `machine_id` 选择机床，不能同时指定 |
 
-```bash
-nctool machine add hero_x9                     # 以 generic 为基线预填 19 键
-nctool machine add hero_x9 --from wfl_m65      # 换基线（20 键，含 axes）
-nctool machine add hero_x9 --vendor ACME --model X9 --set max_spindle_rpm=4200
+先用 `nctool --profile nc actions` 查看当前 Schema。将完整请求保存为 JSON 文件，用 `nctool --profile nc run machine.save --input <请求文件>` 等命令调用。
 
-nctool machine edit hero_x9 --set units=imperial   # 改一个键
-nctool machine edit hero_x9 --unset machine_type   # 删一个键
+未指定机床时，NC 动作使用 `id=generic`、`vendor=Example`、`model=Virtual` 和空配置，后处理使用默认值；它不是已保存的机床资产，也不代表任何真实控制器。工序优先采用自己的机床设置，否则继承公共设置。
 
-nctool machine rm hero_x9 --yes                # 删除（破坏性，须显式 --yes）
-nctool machine test hero_x9 --template drill_cycle --param x=10 --param y=10
-```
+## 模板如何读取机床
 
-四条命令共同的保证（写入经 `core::asset` 的统一内核）：
+NC 渲染注入 `machine.id/vendor/model` 和 `config` 内的键值。模板使用 `{{ machine.max_spindle_rpm }}`，而不是 `machine.config.max_spindle_rpm`。元信息覆盖 config 中同名键；配置值是字符串，需要数值运算时显式转换。
 
-| 保证 | 说明 |
-|---|---|
-| **四重校验先于写盘** | Choice 越界 / 整数不可解析 / **缺被模板引用的键** → 阻断（退出码 1）且**不落盘**；扩展键与超大 `line_number_digits` 仅告警 |
-| **只改目标段** | `nctool.toml` 的其余段、注释、行尾风格**逐字节不变**（含 `EXAMPLE_CONFIG` 的示例头注释） |
-| **乐观锁** | `--expect-hash fnv1a64:<16hex>` 可在文件被外部改动时中止（退出码 6），不静默覆盖 |
-| **内置机床不可改** | `generic` / `wfl_m65` / `index_ms40` 是只读基线，需定制请 `machine add <新id> --from <内置id>` |
+普通 `template.render` 不自动注入机床。NC 严格渲染会对未提供的机床成员报错；模板使用显式 default 或 is defined 时可表达可选配置，但不能因此省略设备必需的约定。
 
-`machine test` 与 `render --machine` 走**同一条管线**，输出逐字节一致；它只是
-试渲染，**不能替代真实空运行与工艺评审**。
+## 当前内置行为使用的配置键
 
-**初始化示例配置**（不覆盖已有文件）：
+| 键 | 行为 |
+| --- | --- |
+| `line_number_prefix` | 新增行号前缀，缺省为 `N`；显式值须非空白且不含控制字符 |
+| `line_number_digits` | 行号补零宽度，缺省/解析失败为 4，有效宽度夹紧到 1–32 |
+| `program_prefix` | 后处理识别程序号行的前缀，缺省为 `O`；显式值须非空白且不含控制字符 |
+| `max_spindle_rpm` | 可供 specs 的 `max_from:"machine.max_spindle_rpm"` 读取动态上界 |
 
-```bash
-nctool config init             # 在当前目录生成 nctool.toml
-nctool config show             # 展示生效配置（来源路径 + 合并结果 + 警告）
-```
+`config` 不采用旧版固定键名单；其他键由模板和 specs 约定。不会因为键保存成功就证明控制器支持其含义。动态上界缺失或非法时会警告并回退静态 `max`，需检查诊断。
 
-> **Web UI 是只读的**：`nctool ui` 的「机床配置…」按钮展示当前机床的键值、
-> 每个键的类型/默认值/候选与含义，并给出可直接复制到终端执行的命令 ——
-> 写入通道只有 CLI（见 Web UI 弹窗内的同款说明）。
+## 生成选项
 
-## 5. 配置加载顺序
+这些选项位于 NC 请求的 `options`，不是机床 config；由[后处理实现](../plugins/nc/src/postprocess.rs)定义：
 
-生效配置按**就近覆盖**原则合并，优先级（高→低）：
+| 字段 | 默认值与含义 |
+| --- | --- |
+| `format` | `gcode`；文本输出应使用 `template.render` |
+| `line_numbers` | false，是否新增行号 |
+| `line_number_step` | 10；0 按 1 处理 |
+| `line_number_start` | 0，首个新增编号为起始值加步进 |
+| `max_line_number` | 9999，超过上限/溢出后停止新增编号并产生警告 |
+| `add_header_comment` | false，添加模板名头注释 |
+| `strip_blank_lines` | false，移除空行 |
+| `ascii_only` | false，非 ASCII 字符替换为 `?` |
 
-1. CLI/UI 显式指定：`--machine hero_x9` / Web UI 机床下拉
-2. `nctool.toml` 的 `default_machine`
-3. **项目配置**：从当前目录**向上递归**查找 `nctool.toml`
-4. **全局配置**：
-   - Windows：`%APPDATA%\nctool\config.toml`
-   - Unix：`$XDG_CONFIG_HOME/nctool/config.toml`（无则 `$HOME/.config/nctool/config.toml`）
-5. **内建预设默认值**（即上表「内置默认」列）
+程序号行与已有对应前缀行号的行不重复编号。多工序游标由宿主负责，工序不能通过 `line_number_start` 重置。Gcode 后处理会去除每行首尾空白，不能用普通文本结果代替最终 NC 输出核对。
 
-> 注意：项目配置与全局配置**合并**，不是覆盖。同一键项目优先；自定义机床集合取并集。
+保存模板的 `metadata.nc.options/machine_id` 可供文档工作台绑定；直接 NC 动作应在请求中指定 `options` 和机床。模板中的程序号位宽由 `nc_pad` 参数控制，不从机床配置自动推断。
 
-模板目录（`template_dir`）以同样规则覆盖。
+## 迁移与核对
 
-## 6. 关键约束与已知坑
+工作区导出在 NC 集合启用时包含机床资产；导入预检查拒绝同名冲突，不覆盖已有配置。直接修改 JSON 后应通过当前动作验证实际生成行为。
 
-### 6.1 `line_number_digits` 被夹紧到 ≤ 32
+按[工艺核对清单](PROCESS_CHECKLIST.md)记录目标控制器、单位、坐标约定、行号与程序号规则。删除机床前检查使用该 ID 的模板元数据和工序草稿；当前机床删除动作不提供完整引用保护。
 
-该值用于格式化**每一行**的 G-code 前缀（`N` + 数字 + 空格）。若缺失上界，一个天文数字配置就会让**每行**去分配超大缓冲——而 Rust 的分配失败是**进程 abort、不可捕获**。因此实现上 clamp 到 `[1, 32]`（见 `core/src/pipeline.rs::MAX_LINE_NUMBER_DIGITS`）。
-
-- `line_number_digits = "4"` → 每行前缀 6 字节
-- `line_number_digits = "32"` → 每行前缀 34 字节
-- `line_number_digits = "1000000000"` → **被夹紧到 32**，不会让进程崩溃
-
-实测（ROADMAP E4.2）：10000 行 + 配 10 亿位宽 → 输出 231 KB / 1.81 ms，夹紧生效。用例见 `core/tests/large_program.rs`。
-
-### 6.2 未知配置键 → 告警，不阻断
-
-模板里拼错键名（如 `{{ machine.feed_modd }}`）不会编译报错——键缺失时回退 `default` 或 `UndefinedVariable`。如果**配置侧**给拼错的键也补了一个值（`feed_modd = "G94"`），两边的错误会互相掩盖、看起来"正常"。
-
-`validate_config_keys` 在 `nctool machine show` 与配置加载时扫描，对**不在 `KNOWN_CONFIG_KEYS` 里的键**给出告警。**自定义机床可以合法携带未知键**（新机床的扩展约定），告警仅提示、不阻断，由人判断。
-
-### 6.3 `Choice` 键值必须合法
-
-`units` 仅接受 `metric` / `imperial`；`feed_mode` 仅接受 `G94` / `G95`。`nctool config show` 会把非法值列在「配置警告」里。
-
-### 6.4 行号由后处理统一生成
-
-行号是**逐行递增**的（`N0010 / N0020 / N0030...`）。已是 `N` 前缀的行、`O` 前缀的程序号行不会重复编号。`max_line_number` 触顶后停止递增但仍输出原行内容。
-
-这是 `core/src/pipeline.rs::postprocess` 的契约——**不要把行号手动写进模板**，否则会出现双重编号。
-
-### 6.5 非零步进：CLI 的 `--line-number-step`
-
-CLI 的 `render` / `generate` 支持 `--line-number-step`（默认 10）。`step=0` 会被当作 1（否则行号原地不动，产出重复的 `N0000`）。
-
-## 7. 验证清单
-
-添加或修改机床配置后，建议跑：
-
-```bash
-nctool config show              # 看生效配置 + 来源路径 + 警告
-nctool machine show hero_x9     # 看自定义机床的最终键值
-nctool render drill_cycle --machine hero_x9 --param x=1 --param y=2 \
-    --param r_plane=3 --param depth=-5 --param feed=100   # 实际渲染一次
-```
-
-`config show` 输出的「配置警告」段非空 → 说明有键拼错或值非法，必须处理。
-
-## 8. 相关文档
-
-- [docs/ARCHITECTURE.md](ARCHITECTURE.md) — 核心模块职责与数据流
-- [docs/ROADMAP.md](ROADMAP.md) — 开发路线与验收状态
-- [core/src/machine.rs](../core/src/machine.rs) — `KNOWN_CONFIG_KEYS` 与校验逻辑的权威定义
-- [templates/turning/demo_gcode.j2](../templates/turning/demo_gcode.j2) — 可直接运行的示例模板
+旧版机床指南见[历史归档](archive/legacy/MACHINE_CONFIG_GUIDE.md)。

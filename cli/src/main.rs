@@ -38,6 +38,9 @@ enum Commands {
         input: PathBuf,
         #[arg(long)]
         out: Option<PathBuf>,
+        /// Atomically deliver all artifacts into a new directory.
+        #[arg(long, conflicts_with = "out")]
+        out_dir: Option<PathBuf>,
     },
     /// Manage installed plugins; configuration changes apply at next start.
     Plugins {
@@ -61,7 +64,19 @@ fn run(cli: Cli) -> PluginResult<()> {
                 json!({"installed":config::install(&home,source)?,"enabled":false,"applies":"next_start"})
             }
             PluginCommand::Enable { id } => {
-                if !["template", "math", "nc", "process"].contains(&id.as_str())
+                if ![
+                    "template",
+                    "parameters",
+                    "math",
+                    "nc",
+                    "nc-parameters",
+                    "nc-managed",
+                    "sync-turning",
+                    "undercut",
+                    "process",
+                    "process-parameters",
+                ]
+                .contains(&id.as_str())
                     && !config::installed(&home)?
                         .iter()
                         .any(|(m, _)| &m.descriptor.id == id)
@@ -81,7 +96,7 @@ fn run(cli: Cli) -> PluginResult<()> {
             }
             PluginCommand::List => {
                 let (c, _) = config::load(&home)?;
-                json!({"config":c,"installed":config::installed(&home)?.into_iter().map(|(m,_)|m.descriptor).collect::<Vec<_>>(),"builtins":["template"],"nc_bundle_available":cfg!(feature="nc-bundle")})
+                json!({"config":c,"installed":config::installed(&home)?.into_iter().map(|(m,_)|m.descriptor).collect::<Vec<_>>(),"builtins":["template","parameters"],"nc_bundle_available":cfg!(feature="nc-bundle")})
             }
         };
         println!("{}", serde_json::to_string_pretty(&value)?);
@@ -93,7 +108,12 @@ fn run(cli: Cli) -> PluginResult<()> {
             "{}",
             serde_json::to_string_pretty(&app.runtime.capabilities())?
         ),
-        Commands::Run { action, input, out } => {
+        Commands::Run {
+            action,
+            input,
+            out,
+            out_dir,
+        } => {
             use std::io::Read;
             let mut bytes = Vec::new();
             if input.to_str() == Some("-") {
@@ -109,7 +129,16 @@ fn run(cli: Cli) -> PluginResult<()> {
                 return Err(PluginError::new("input_limit", "input exceeds 1 MiB"));
             }
             let result = app.runtime.invoke(&action, parse_json(&bytes)?)?;
+            if let Some(directory) = out_dir {
+                deliver_artifacts(&directory, &result.artifacts)?;
+            }
             if let Some(out) = out {
+                if result.artifacts.len() > 1 {
+                    return Err(PluginError::new(
+                        "multiple_artifacts",
+                        "多文件结果请使用 --out-dir",
+                    ));
+                }
                 let text = result.data["text"]
                     .as_str()
                     .ok_or_else(|| PluginError::new("no_text", "action returned no text output"))?;
@@ -124,6 +153,69 @@ fn run(cli: Cli) -> PluginResult<()> {
         Commands::Plugins { .. } => unreachable!(),
     }
     Ok(())
+}
+fn deliver_artifacts(directory: &std::path::Path, artifacts: &[Artifact]) -> PluginResult<()> {
+    if artifacts.is_empty() {
+        return Err(PluginError::new(
+            "no_artifacts",
+            "action returned no artifacts",
+        ));
+    }
+    if directory.exists() {
+        return Err(PluginError::new(
+            "conflict",
+            "output directory already exists",
+        ));
+    }
+    let mut names = std::collections::BTreeSet::new();
+    for artifact in artifacts {
+        if artifact.name.is_empty()
+            || artifact.name == "."
+            || artifact.name == ".."
+            || artifact.name.contains(['/', '\\', ':'])
+            || artifact.name.chars().any(char::is_control)
+            || !names.insert(&artifact.name)
+        {
+            return Err(PluginError::new(
+                "invalid_artifact",
+                "artifact names must be unique file names",
+            ));
+        }
+    }
+    let parent = directory
+        .parent()
+        .filter(|p| !p.as_os_str().is_empty())
+        .unwrap_or(std::path::Path::new("."));
+    std::fs::create_dir_all(parent)?;
+    let staging = parent.join(format!(
+        ".nctool-output-{}-{}",
+        std::process::id(),
+        std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_nanos()
+    ));
+    std::fs::create_dir(&staging)?;
+    let result = (|| {
+        for artifact in artifacts {
+            nctool_runtime::config::write_output(
+                &staging.join(&artifact.name),
+                artifact.text.as_bytes(),
+            )?;
+        }
+        if directory.exists() {
+            return Err(PluginError::new(
+                "conflict",
+                "output directory appeared during delivery",
+            ));
+        }
+        std::fs::rename(&staging, directory)?;
+        Ok(())
+    })();
+    if result.is_err() {
+        let _ = std::fs::remove_dir_all(&staging);
+    }
+    result
 }
 fn main() -> ExitCode {
     match run(Cli::parse()) {

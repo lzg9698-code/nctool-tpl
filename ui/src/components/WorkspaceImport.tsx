@@ -1,5 +1,5 @@
+import { Modal } from "./WorkbenchUi";
 import { useState, type RefObject } from "react";
-import { X } from "lucide-react";
 import { api } from "../lib/api";
 import { parseData, type Data } from "../lib/data";
 
@@ -41,45 +41,14 @@ export function WorkspaceImport({
         }}
       />
       {importBundle && (
-        <div className="modal-backdrop">
-          <div
-            className="modal"
-            role="dialog"
-            aria-modal="true"
-            aria-label="导入资产集合"
-          >
-            <div className="modal-header">
-              <h2>确认导入资产集合</h2>
-              <button
-                className="icon-button"
-                onClick={() => {
-                  setImportBundle(null);
-                  setBundlePreview(null);
-                }}
-              >
-                <X size={18} />
-              </button>
-            </div>
-            <div className="modal-body">
-              <p>
-                保留所有资产标识、源码、配置和引用关系。已有标识冲突会阻止导入，不覆盖当前工作区。
-              </p>
-              {bundlePreview?.reports.map((report: Data) => (
-                <div key={report.collection}>
-                  <h3>
-                    {report.collection} · {String(report.report.count)} 项
-                  </h3>
-                  <ul>
-                    {report.report.mapping?.map((mapping: Data) => (
-                      <li key={mapping.group + mapping.from}>
-                        {mapping.group}: {mapping.from} → {mapping.to}
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              ))}
-            </div>
-            <div className="modal-footer">
+        <Modal
+          title="导入资产集合"
+          onClose={() => {
+            setImportBundle(null);
+            setBundlePreview(null);
+          }}
+          buttons={
+            <>
               <button
                 className="button secondary"
                 onClick={() => setImportBundle(null)}
@@ -102,9 +71,27 @@ export function WorkspaceImport({
               >
                 确认导入
               </button>
+            </>
+          }
+        >
+          <p>
+            保留所有资产标识、源码、配置和引用关系。已有标识冲突会阻止导入，不覆盖当前工作区。
+          </p>
+          {bundlePreview?.reports.map((report: Data) => (
+            <div key={report.collection}>
+              <h3>
+                {report.collection} · {String(report.report.count)} 项
+              </h3>
+              <ul>
+                {report.report.mapping?.map((mapping: Data) => (
+                  <li key={mapping.group + mapping.from}>
+                    {mapping.group}: {mapping.from} → {mapping.to}
+                  </li>
+                ))}
+              </ul>
             </div>
-          </div>
-        </div>
+          ))}
+        </Modal>
       )}
     </>
   );

@@ -12,6 +12,99 @@
 
 ## [未发布]
 
+### 2026-10-08：阶段审查与收尾
+
+- 共享资产删除要求字符串指纹，非法类型返回输入错误，过期指纹保留冲突保护。
+- 受管服务与专用车削重执行校验冻结快照、NC 上下文和轨迹预设结构，拒绝畸形输入，避免进程 panic；原历史内容保持不可变。
+- 修复 CLI 无法重新启用 `nc-managed`、`sync-turning`、`undercut` 内置插件的问题，补充回归测试。
+- 根目录运行资产 `parameters/`、`templates/` 纳入忽略规则；可导入示例继续独立维护。验收支持独立报告目录，保留历史报告。
+- 完成 Windows 全量本地验证与阶段记录，详见[收尾记录](docs/archive/records/PHASE_CLOSEOUT_2026-10-08.md)。产品、组件及协议版本各自维护。
+
+### 2026-10-08：专用车削工作台与模板展示
+
+- 同步粗车与越程槽高级设置支持新建、编辑完整 Jinja/NC 模板源码、语法校验、指纹保存与另存副本；实际生成消费自定义源码，旧任务保留冻结模板。专用模板仍从通用入口隐藏，模板附加运动不计入预设轨迹图。
+
+- 同步粗车 ap2 支持计算后自动回填，计算/生成自动补齐留空值；保留手填值，无有效推荐时阻止生成。
+
+- 同步粗车与越程槽统一左右侧标签、表格、状态反馈和高级设置；按窗口宽度布局输入/结果与双通道程序，支持键盘切换。
+- 单侧预览独立保留，生成成功、预览、失败与过期状态明确；有效结果才允许复制、导出和加入组合。
+- 专用模板按工艺元数据从通用模板入口隐藏，插件高级设置仍可选择；旧编辑草稿保留，资产、算法与后端 API 不变。
+- 增加模板分类、展示隔离和响应式验收，并更新专用插件及受管参数浏览器回归入口。
+
+### 独立参数管理与受管工艺生成
+
+- 新增通用参数定义、共享预置、来源、冻结解析和冲突保护；新增刀具类型、具体刀具、材料、加工预置与标准资产页面。
+- 新增 parameter.resolve、nc.parameters.resolve、nc.operation.prepare 及三个 managed 生成服务，各使用 v1 契约，保留原生成路径。
+- Rust 完成键槽、左右同步车、ES/FS 越程槽与卡簧槽原始输入计算；组合使用当前任务片段、推进双通道同步号、分配 MPF/SPF，全部成功后交付。
+- 提供 V3 全部 28 份模板的可导入包、逐模板计算映射、Python/Rust 对照与 WebUI 验收工具；运行时不依赖 Python/V3。
+- CLI --out-dir 原子交付完整文件目录，多文件 --out 拒绝写入；新增参数选择确认、恢复推荐、草稿与过期结果检查。
+
+### 2026-10-07：移除旧桌面 GUI
+
+#### Removed
+
+- 旧 Tauri 桌面 GUI 全部源码、前端依赖清单、图标、权限、打包配置及桌面启动脚本。
+- GUI 专属 workspace 排除项、忽略规则、Dependabot 更新配置、`--include-legacy-gui` 审计选项及七条 Tauri 安全告警忽略规则。
+
+#### Changed
+
+- 当前文档与开发规则改用 CLI/WebUI 入口；保留历史 GUI 资料、迁移补丁和指纹记录，明确已删除的历史路径。
+- 架构检查增加旧桌面源码和入口不存在、workspace 与 NC 组合无 Tauri 依赖的门槛；当前产品版本、业务代码和锁文件保持不变。
+
+### 2026-10-07：Codex 开发规则与依赖审计
+
+#### Added
+
+- 项目 `AGENTS.md` 与审查、验证、文档/发布准备三个专用 Skills，约定 GitHub、隔离浏览器及 Context7 的使用与证据边界。
+- 只读 Cargo/npm 依赖审计入口与报告，错误不误判为通过；CI 增加审计及报告上传，发布复用验证包含该门槛。
+- Dependabot 覆盖当前 `ui`、Cargo 与 Actions；贡献指南与 PR 模板增加审计入口。
+
+### 2026-10-07：项目文档整理
+
+#### Added
+
+- 文档总览与当前 WebUI 使用指南，按使用、开发、状态发布和历史资料导航。
+- 集中历史归档与原路径索引，保留旧设计、迁移基线、阶段审查和验证记录。
+
+#### Changed
+
+- 模板、机床、工艺核对、UI 验收、状态、路线图及发布文档对齐当前 2.x 实现；历史测试结论与当前能力分别记录。
+- Issue/PR 模板使用当前动作、JSON 输入与插件配置，不再引导使用旧 CLI、TOML 或内置机床方案。
+
+### 2.x 实现记录（未发布，按阶段归纳）
+
+本节依据源码与 [2026-10-01 至 10-04 阶段记录](docs/archive/records/IMPLEMENTATION_HISTORY_2026-10-04.md)补记，不推断正式发布日期。CLI/WebUI 为 2.2.0，核心组件为 2.0.0；实际发布状态另行记录。
+
+#### 2.0：通用模板平台与可选领域插件
+
+- **BREAKING**：原 core 拆分为资产、SDK、运行时及领域插件；旧 CLI、`/api` 路由、工序文件和业务模板不自动迁移，旧 GUI 退出 workspace。发行包不包含旧业务模板与内置机床方案。
+- 独立 MiniJinja 引擎保持通用渲染，数学/NC 扩展按需注册；引入通用 JSON 资产、指纹冲突保护与模板快照。
+- 增加版本化服务、依赖生命周期、事件及可选提供方；本地外部插件通过双向 JSON-RPC 调用宿主服务。
+- CLI/HTTP 统一动作，NC 执行参数校验、派生及后处理，多工序按实际末行号续编并整体交付；增加 Python 报告示例。
+
+#### 2.1：模板工作台
+
+- 独立 React/TypeScript WebUI、使用/编辑双模式、模板库多文档与 CodeMirror 编辑器。
+- 可视化参数定义、嵌套对象/数组表单、数值字面量保留、工作区草稿、保存冲突比较与模板/预设操作。
+- 后台任务、取消、执行历史与结果过期状态；通用模板执行保存源码集合快照。
+
+#### 2.2 与后续收口
+
+- NC、机床及顺序工序专用视图按插件贡献载入；外部插件保留 Schema 表单。
+- 本地插件检查/安装、配置表单、依赖预检查与下一次启动状态；输出逐行比较、历史重执行及工作区集合导入导出。
+- 增加模板语法速查与试跑；模板库通过文档动作绑定选择 NC 生成，保留源码草稿与领域规格。
+- 2026-10-03 关闭 R01–R10：非有限 NC 数值、机床入口校验、缺失领域能力、Schema/specs/defaults、动态引用、严格机床字段、原始 JSON 草稿、可选引用快照、整数范围和结果过期。证据见[审查关闭记录](docs/archive/records/CODE_REVIEW_2026-10-02.md)。
+- 2026-10-04 增加完整源码恢复基线；标签发布依赖完整 CI，发行二进制按明确 target 构建并附 SHA-256。
+- 历史页和工作区导入按职责拆分；新任务记录宿主/插件版本及服务绑定，新增只读 replay-check，重执行保存来源和实际环境比较。旧记录兼容保留，不承诺完整环境复现。
+
+
+### 旧版 0.x / 1.0 未发布记录（原文保留）
+
+以下记录属于 2.0 升级前的实现、候选或历史批次，不代表当前支持的命令、资产格式或发行状态。当前能力见 [项目状态](docs/PROJECT_STATUS.md)，原设计与迁移资料见[历史归档](docs/archive/README.md)。
+
+以下引用为历史文件，当前仓库未保留：`docs/ARCHITECTURE_REVIEW.md`、`docs/CODE_REVIEW_2026-09-18.md`、`docs/CODE_REVIEW_2026-09-19.md`、`docs/CODE_REVIEW_2026-09-23.md`、`docs/TEMPLATE_INTEGRATION_PLAN.md`、`docs/err-num-precision-design.md`、`docs/err-num-underflow-design.md`、`docs/review/SUMMARY-2026-09-27.md`。仅保留原记录，不补造证据。
+
+
 ### 2026-09-30：仓库工具链与发布配置收口
 
 #### Changed
@@ -41,7 +134,7 @@
 #### Added
 
 - 导入 NCTool V3 导出模板 28 份；源文件哈希与归档 manifest 对照，模板清单状态均为
-  `unreviewed`。完整路径与 SHA-256 见 `docs/TEMPLATE_ZIP_IMPORT_REPORT.md`。
+  `unreviewed`。完整路径与 SHA-256 见 `docs/archive/legacy/TEMPLATE_ZIP_IMPORT_REPORT.md`。
 - 桌面 GUI 增加模板管理、机床配置管理、配置诊断和预设编辑页面； Web UI 增加模板/机床资产
   管理、预设导入导出/重命名和编辑器静态检查。
 
@@ -50,7 +143,7 @@
 - **BREAKING（1.0 前公共 API 收紧）**：`nctool-core::derive::derived_names` 与
   `TemplateEntry::invalidate_analysis` 不再是公共 API；`TemplateEntry::source_text` 改为私有，
   读取改用 `source_text()`，替换源码改用 `with_source_text()`。后者自动使缓存分析失效。迁移说明见
-  `docs/RELEASE.md` §4.5。
+  `docs/archive/legacy/RELEASE.md` §4.5。
 - Tauri 命令只负责参数适配；模板、机床、预设、lint、校验、渲染和配置视图都调用共享
   `nctool_cli::server::route`。删除启动时配置快照，避免桌面端用旧配置。
 - 提交到 `/api/lint` 的 `source` 可覆盖磁盘源码，用于检查尚未保存的编辑器缓冲区。
@@ -301,8 +394,8 @@
   或某个 runner 的默认环境都可能把它带进来，一旦带进来没有任何东西会报错。
   现加前置守卫：`CI` 存在时直接 panic；本地刷新路径不受影响。
 
-- **覆盖率相关表述全面对齐**（`README.md`、`docs/CONTRIBUTING.md`、`docs/RELEASE.md`、
-  `docs/ROADMAP.md`、`docs/PROJECT_STATUS.md`）：此前文档与 CI 对「覆盖率是否阻断」
+- **覆盖率相关表述全面对齐**（`README.md`、`docs/CONTRIBUTING.md`、`docs/archive/legacy/RELEASE.md`、
+  `docs/archive/legacy/ROADMAP.md`、`docs/PROJECT_STATUS.md`）：此前文档与 CI 对「覆盖率是否阻断」
   自相矛盾 —— `CONTRIBUTING.md:28` 写「非阻断」而**同一文件** `:74` 写「阻断」，
   `README.md:589`、`RELEASE.md:37` 也写「非阻断」，而 `ci.yml` 早已移除
   `continue-on-error`。按文档行事的人会把红的 coverage 当噪音合并，等于从语义上把
@@ -687,7 +780,7 @@
 
 - 修正 `core/tests/integration.rs` 的过期注释（"6 内置模板 × 3 = 18 组"实为
   7 × 3 = 21）与 `golden_files_are_lf_only` 的文件计数（42 → 45）。
-- 同步 `README.md` / `docs/PROJECT_STATUS.md` / `docs/ROADMAP.md` 的 golden 数量。
+- 同步 `README.md` / `docs/PROJECT_STATUS.md` / `docs/archive/legacy/ROADMAP.md` 的 golden 数量。
 
 #### 测试
 
@@ -748,7 +841,7 @@
 
 ### 零件级批量生成 `nctool part generate`（Backlog F4 #2 落地）
 
-> 输入是 E5 真实零件走查（`docs/REAL_PART_WALKTHROUGH.md` §5）暴露的三处局限。
+> 输入是 E5 真实零件走查（`docs/archive/legacy/REAL_PART_WALKTHROUGH.md` §5）暴露的三处局限。
 > 该走查用 5 个内置模板手工串简化法兰盘，结论是「能拼出来，但手工串不可持续」：
 > 行号每段重来、错误修一个报一个、公共参数每段重传。
 > 本次把「串多道工序」这件事故化为一个命令。
@@ -807,8 +900,8 @@
 - **解除 Web UI 批量弹窗的服务模式守卫**（`ui/src/32_script_ui.part.html`）：
   原先 server 模式下点「批量生成」直接 toast「服务模式暂不支持」，现在发真实请求。
 - `README.md` 退出码表：删去「7 = `part generate`」这条现已无触发路径的说明。
-- `docs/ROADMAP.md`（D4 消项、F4 排期、新增 §F4.1）、`docs/PROJECT_STATUS.md`
-  （存量记账、Backlog 表、D4 债务）、`docs/REAL_PART_WALKTHROUGH.md`（新增 §6.1 收口）
+- `docs/archive/legacy/ROADMAP.md`（D4 消项、F4 排期、新增 §F4.1）、`docs/PROJECT_STATUS.md`
+  （存量记账、Backlog 表、D4 债务）、`docs/archive/legacy/REAL_PART_WALKTHROUGH.md`（新增 §6.1 收口）
   同步更新。
 
 #### 一处刻意的语义分歧：CLI 与 HTTP 的失败呈现不同
@@ -989,8 +1082,8 @@ CI 转绿后从 run 的 `rust-coverage-lcov` 产物里取到 lcov，用项目自
 - **CI 的 `msrv` job 同步**（`.github/workflows/ci.yml`）：toolchain `@1.82` → `@1.85`，
   job 名与步骤名一并更新；并在注释里写清"为什么是 1.85"与
   **"抬 MSRV 前先看本 job 的红绿，别只看本机 stable"**，避免后人以为是随手抬的。
-- **对外表述全面对齐**：`README.md`、`docs/CONTRIBUTING.md`、`docs/RELEASE.md`、
-  `docs/ROADMAP.md`、`docs/TEMPLATE_INTEGRATION_PLAN.md` 的 1.82 表述全部改为 1.85。
+- **对外表述全面对齐**：`README.md`、`docs/CONTRIBUTING.md`、`docs/archive/legacy/RELEASE.md`、
+  `docs/archive/legacy/ROADMAP.md`、`docs/TEMPLATE_INTEGRATION_PLAN.md` 的 1.82 表述全部改为 1.85。
 
 #### 说明
 
@@ -1699,7 +1792,7 @@ FORM_B 在实测中 `<` 恒为假（f64 真值与十进制字面量在 tie 上�
 - **全仓扫描对拍**：既有的零件 JSON 夹具（`cli/tests/cli.rs`、`cli_e2e.rs`）、
   前端契约与示例（`ui/src/31_script_api.part.html`、`32_script_ui.part.html`
   的 `BATCH_EXAMPLE`）都只用已知字段，无一处需改。
-- 文档订正：`docs/REAL_PART_WALKTHROUGH.md` §5.3 的 JSON 样例顶层还写着
+- 文档订正：`docs/archive/legacy/REAL_PART_WALKTHROUGH.md` §5.3 的 JSON 样例顶层还写着
   `part_name`（§6.1 已说明它已被规整进 `params`）—— 收紧后照抄该样例会直接报错，
   已改为正确形状并加注。
 - 全套门禁绿：测试 **1069 passed / 0 failed**（+6）、生产口径覆盖率
@@ -1783,7 +1876,7 @@ FORM_B 在实测中 `<` 恒为假（f64 真值与十进制字面量在 tie 上�
 
 ### 批次二十八：发版可重复性（U-22 / U-24 / U-23 / U-25 / U-16）
 
-**无运行时行为改动**。全部落点在 `docs/RELEASE.md` 新增的「发版清单（Runbook）」
+**无运行时行为改动**。全部落点在 `docs/archive/legacy/RELEASE.md` 新增的「发版清单（Runbook）」
 （§2.5）与「破坏性变更归档」（§4.5）。
 
 | 项 | 处置 |
@@ -1837,7 +1930,7 @@ FORM_B 在实测中 `<` 恒为假（f64 真值与十进制字面量在 tie 上�
   未使用的私有项直接编译失败；全仓 grep `#[allow(dead_code)]` / `#[allow(unused…)]`
   **零命中**，说明没有被豁免的已知死代码。公共 API 里"无生产调用点"的
   （`derived_names` / `invalidate_analysis`）不是死代码而是可见性问题，
-  已归入 §批次二十八 / `docs/RELEASE.md` §4.5 B-1。
+  已归入 §批次二十八 / `docs/archive/legacy/RELEASE.md` §4.5 B-1。
 
 结论记入 `docs/CODE_REVIEW_2026-09-18.md` 的"仍开放"段落（原位标注，不新开文件）。
 
@@ -2106,7 +2199,7 @@ FORM_B 在实测中 `<` 恒为假（f64 真值与十进制字面量在 tie 上�
   现改用 `extract_params`，并在输出末尾提示引用了哪些片段、行列号指向片段文件自身
 - **`templates` 目录结构**：按类型分子目录（`general/` `milling/` `turning/` `grooving/`
   `machines/<id>/`），`demo_gcode.j2` 移至 `turning/`
-- **文档同步**：`docs/TEMPLATE_WRITING_GUIDE.md` 过滤器章节重写（新增 §3.1 `nc_signed`
+- **文档同步**：`docs/archive/legacy/TEMPLATE_WRITING_GUIDE.md` 过滤器章节重写（新增 §3.1 `nc_signed`
   使用边界、§4「角度制 vs 弧度制」、§4.1「字典查表用下标不用 `.get()`」）；
   README / 模板写作指南 / 机床配置指南中的示例模板路径同步为新结构
 
@@ -2143,7 +2236,7 @@ FORM_B 在实测中 `<` 恒为假（f64 真值与十进制字面量在 tie 上�
 - `extract_params` 4 项（穿透 include、剔除系统变量、未找到报错、环引用不栈溢出）
 - 列表参数解析 2 项（数组→列表、嵌套数组的错误定位）
 - **Web UI v2 落地实现**（`ui/index.html` + `cli/ui/index.html`，两份字节一致）：按
-  [docs/UI_DESIGN_PROPOSAL.html](docs/UI_DESIGN_PROPOSAL.html) 重构界面 ——
+  [docs/archive/legacy/UI_DESIGN_PROPOSAL.html](docs/archive/legacy/UI_DESIGN_PROPOSAL.html) 重构界面 ——
   结果区动作条（复制 / 下载并入结果区，紧邻其作用对象）、机床 chip 移入结果区头部并带
   「已按 &lt;id&gt; 重新生成」反馈、参数区必填进度与分组、**字段级就地校验**、
   可选参数折叠、模板卡挂载命名预设 chips、侧栏「最近使用」、长程序**工序索引**（≥40 行，
@@ -2153,7 +2246,7 @@ FORM_B 在实测中 `<` 恒为假（f64 真值与十进制字面量在 tie 上�
   `--text-faint` 提亮以达正文对比度 ≥ 4.5:1、字号/间距/圆角/动效统一
 - **`output/ui-v2-acceptance.py`**：无头 Chrome 验收套件（67 项断言），覆盖全链路、
   就地校验、输出选项、工序索引、机床切换、主题、最近使用、命令面板、抽屉、分段视图
-- **`docs/UI_ACCEPTANCE_CHECKLIST.md` §10**：v2 走查记录（演示模式 67/67、服务模式 14/14、
+- **`docs/archive/legacy/UI_ACCEPTANCE_CHECKLIST.md` §10**：v2 走查记录（演示模式 67/67、服务模式 14/14、
   D-04 逐字节一致 2/2）与新增验收项 N-01…N-12
 
 ### Changed（Web UI v2）
@@ -2185,7 +2278,7 @@ FORM_B 在实测中 `<` 恒为假（f64 真值与十进制字面量在 tie 上�
   文档同步 / 工艺安全核对项）
 - **文档自检脚本**：`scripts/check_docs_links.py` —— 校验 Markdown 相对链接与 heading 锚点
   是否存在（README、`docs/` 全部文档已通过检查）
-- **Web UI 设计方案 v2**（设计交付物，未改动任何代码）：`docs/UI_DESIGN_PROPOSAL.html` ——
+- **Web UI 设计方案 v2**（设计交付物，未改动任何代码）：`docs/archive/legacy/UI_DESIGN_PROPOSAL.html` ——
   基于现有 `ui/index.html` 通读的 9 项现状诊断、信息架构（模态降级为侧抽屉、机床 chip 移至结果区
   头部、下载/复制并入结果区动作条）、设计系统（亮色对等主题与对比度修正、字号/间距/动效令牌）、
   四档响应式断点、组件规格、状态矩阵与键盘映射、可访问性目标、37 项既有验收的保留映射
@@ -2454,7 +2547,7 @@ FORM_B 在实测中 `<` 恒为假（f64 真值与十进制字面量在 tie 上�
 
 ### 验收
 
-- **Web UI 人工验收 37/37 通过**（`docs/UI_ACCEPTANCE_CHECKLIST.md`，E1.2 + D4.3）：
+- **Web UI 人工验收 37/37 通过**（`docs/archive/legacy/UI_ACCEPTANCE_CHECKLIST.md`，E1.2 + D4.3）：
   §1 全链路 8/8、§2 移动端 11/11（375px iframe 模拟视口）、§3 校验定位 5/5、
   §4 前后端逐字节一致 5/5、§5 机床切换 4/4（含自定义机床 hero_x9）、§6 主题 2/2、
   §7 已知 UX 2/2。清单按实测修订 4 处与实现不符的描述（D-01-01 参数口径、
@@ -2463,9 +2556,9 @@ FORM_B 在实测中 `<` 恒为假（f64 真值与十进制字面量在 tie 上�
 
 ### 文档
 
-- `docs/MACHINE_CONFIG_GUIDE.md`：明确自定义机床须提供模板引用的全部 `machine.xxx`
+- `docs/archive/legacy/MACHINE_CONFIG_GUIDE.md`：明确自定义机床须提供模板引用的全部 `machine.xxx`
   键（缺失键严格模式渲染失败，属防御行为），并建议以 generic 为基线复制
-- `docs/PROCESS_CHECKLIST.md`：新增 §6 facing 工艺核对（含 golden 输出逐行说明），
+- `docs/archive/legacy/PROCESS_CHECKLIST.md`：新增 §6 facing 工艺核对（含 golden 输出逐行说明），
   原 §7/§8/§9 顺延
 
 ---
@@ -2667,11 +2760,11 @@ MachineConfig 键名 schema、API 冻结清单明确。
 - **F1.4 文档同步**：`README.md` 补 `generate` / `ui` 子命令示例 + **退出码矩阵表**
   （0–7 全档 + 典型触发）；补管线后处理性能基线与万行实测；
   `core/README.md` 补 ASCII 清洗、修正过时的测试计数 63+8 → 84+11+3
-- **F2.1《机床配置指南》**：`docs/MACHINE_CONFIG_GUIDE.md`——`MachineConfig` 模型、
+- **F2.1《机床配置指南》**：`docs/archive/legacy/MACHINE_CONFIG_GUIDE.md`——`MachineConfig` 模型、
   3 套内建预设（`generic` / `wfl_m65` / `index_ms40`）、`KNOWN_CONFIG_KEYS` 完整清单
   （6 组分类）、`nctool.toml` 自定义、加载顺序、关键约束（`line_number_digits`
   夹紧到 32 的内存安全理由、`Choice` 键合法性、未知键告警等）
-- **F2.2《模板编写指南》**：`docs/TEMPLATE_WRITING_GUIDE.md`——必选/可选启发式、
+- **F2.2《模板编写指南》**：`docs/archive/legacy/TEMPLATE_WRITING_GUIDE.md`——必选/可选启发式、
   NC/数学过滤器、机床配置引用、多模板 include/extends、validate/render 校验分层、
   调试技巧、反模式表（`(x/2) | default` 兜不住、`a.b | default` 同理、模板里手写
   `N0010` 双重编号等）、发布前 checklist
@@ -2679,7 +2772,7 @@ MachineConfig 键名 schema、API 冻结清单明确。
   （版本/组件/OS/复现命令/模板源码/期望/实际/logs）、`feature_request.yml` 五段
   （动机/提案/替代/影响面/兼容）、`config.yml` 关闭空 issue + 文档/讨论/工艺安全
   三组 contact_links（工艺问题导向 `PROCESS_CHECKLIST` 而非泛用 issue）
-- **F3.2 迭代节奏约定**：`docs/RELEASE.md`——版本号策略（0.x 可破坏 / 1.0+ 严格 semver）、
+- **F3.2 迭代节奏约定**：`docs/archive/legacy/RELEASE.md`——版本号策略（0.x 可破坏 / 1.0+ 严格 semver）、
   发布节奏（按需，CI/audit 必须 0 告警）、提交流程（commit 自包含、message 含动机）、
   兼容性窗口（弃用保留 1 minor）、决策与争议（轻量共识 / 7 天讨论期）、
   Backlog 加权打分法（影响×3 + 投入产出×2 + 风险×2 + 依赖×1）
@@ -2721,10 +2814,10 @@ MachineConfig 键名 schema、API 冻结清单明确。
 
 ### Changed（阶段 A5 — 文档与基线）
 
-- 新增 [docs/PROCESS_CHECKLIST.md](docs/PROCESS_CHECKLIST.md)：工艺核对清单
+- 新增 [docs/archive/legacy/PROCESS_CHECKLIST.md](docs/archive/legacy/PROCESS_CHECKLIST.md)：工艺核对清单
   （逐行核对结论 + F1–F5 发现项 + 外部评审待办）
 - README 顶部新增定位与风险声明（未经工艺验证，投产前必须自行核对）
-- `docs/ROADMAP.md` / `docs/DEV_PLAN_CLI_UI.md` 数据校准
+- `docs/archive/legacy/ROADMAP.md` / `docs/archive/legacy/DEV_PLAN_CLI_UI.md` 数据校准
 
 ---
 

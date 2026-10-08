@@ -12,6 +12,7 @@ serde_json="1"
 serde={version="1",features=["derive"]}
 serde_yaml="0.9"
 nctool-assets={path="../../assets",version="2.0.0"}
+nctool-plugin-parameters={path="../parameters",version="2.0.0"}
 minijinja={version="~2.24.0",features=["unstable_machinery","loop_controls","debug"]}
 
 [dev-dependencies]

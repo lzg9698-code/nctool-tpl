@@ -1,8 +1,10 @@
 # 插件 SDK / 外部协议 v1
 
+适用于当前 2.0 SDK、运行时及 2.2 宿主。协议/服务版本 1 与组件 SemVer 分开维护。配置与 HTTP 外层响应见[系统设计](SYSTEM_DESIGN.md)，安装操作见[WebUI 指南](WEBUI_USER_GUIDE.md#插件与设置)。
+
 ## 描述文件
 
-一个外部插件目录含 `plugin.json`、入口程序及其依赖文件。完整示例见 `examples/plugins/python-report`。必需结构：
+一个外部插件目录含 `plugin.json`、入口程序及其依赖文件。完整示例见 [Python 报告插件](../examples/plugins/python-report)。必需结构：
 
 ```json
 {
@@ -72,7 +74,7 @@ Limits：timeout 10–3,600,000 ms；消息 1 KiB–16 MiB；并发 1–64。包
 
 `RenderExtension` 对一个新的 Renderer 注册过滤器；`EventListener` 订阅 ActionStarted/ActionFinished。注册归属插件，停止时释放；启动失败必须在 shutdown 清理自己的外部资源。外部插件首版仅提供动作与服务，复杂视图用 Schema 表单；不执行第三方前端脚本。
 
-Python 适配器位于 `sdk/python/nctool_plugin.py`，使用独立输入循环、Future 响应分发和动作线程池，能在等待宿主回调时继续接收消息。
+Python 适配器位于 [sdk/python/nctool_plugin.py](../sdk/python/nctool_plugin.py)，使用独立输入循环、Future 响应分发和动作线程池，能在等待宿主回调时继续接收消息。
 
 ## 模板快照契约
 

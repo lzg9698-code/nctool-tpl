@@ -13,8 +13,8 @@ body:
         - [ ] 已用**最新版**（`nctool --version`）复现
         - [ ] 已在本仓库搜索过同类 issue
         - [ ] 若问题与**生成的 G-code 是否正确**有关，请先读
-              [docs/PROCESS_CHECKLIST.md](../../docs/PROCESS_CHECKLIST.md)——
-              内置模板与机床预设未经真实工艺评审，**投产前必须由熟悉目标机床的
+              [工艺核对清单](https://github.com/lzg9698-code/nctool-tpl/blob/master/docs/PROCESS_CHECKLIST.md)——
+              当前示例与用户 NC 资产不能以软件测试代替真实工艺评审，**投产前必须由熟悉目标机床的
               工艺人员逐行核对**。本 issue 只用于工具本身的缺陷。
 
   - type: input
@@ -22,7 +22,7 @@ body:
     attributes:
       label: nctool 版本
       description: 运行 `nctool --version` 的输出
-      placeholder: "nctool 0.2.1"
+      placeholder: "nctool 2.2.0"
     validations:
       required: true
 
@@ -35,8 +35,8 @@ body:
         - 参数校验（该报错没报 / 误报）
         - CLI 命令/退出码
         - Web UI（`nctool ui`）
-        - 机床配置（nctool.toml / machine 预设）
-        - 模板加载（include / 路径 / 注册表）
+        - 机床配置（machines JSON 资产）
+        - 模板引用与资产（include / 稳定 ID / 指纹）
         - 其他
     validations:
       required: true
@@ -53,11 +53,11 @@ body:
     id: repro
     attributes:
       label: 复现命令
-      description: 可直接复制粘贴运行的完整命令（含 `--param` 或 `--params-file`）
+      description: 可复制运行的完整命令（含 profile、动作 ID 和输入 JSON）；请一并提供最小输入
       render: bash
       placeholder: |
-        nctool render drill_cycle --param x=21 --param y=15 \
-            --param r_plane=5 --param depth=-10 --param feed=100
+        nctool --profile nc run nc.generate --input input.json
+        # input.json 包含 source/template、params、machine/machine_id 和 options
     validations:
       required: true
 
@@ -82,7 +82,7 @@ body:
     id: actual
     attributes:
       label: 实际输出
-      description: 请完整粘贴，含错误行与退出码（`echo $?` / `echo %ERRORLEVEL%`）
+      description: 请完整粘贴，含错误行与退出码（PowerShell 使用 `$LASTEXITCODE`）
       render: text
     validations:
       required: true
@@ -91,7 +91,7 @@ body:
     id: logs
     attributes:
       label: 附加日志 / 校验报告
-      description: 若有 `nctool validate` 的报告、`--format json` 的响应或浏览器控制台输出，请附上
+      description: 若有动作的 diagnostics、HTTP 错误响应或浏览器控制台输出，请附上
       render: text
     validations:
       required: false

@@ -1,5 +1,19 @@
 version: 2
 updates:
+  - package-ecosystem: npm
+    directory: "/ui"
+    schedule:
+      interval: weekly
+      day: monday
+      time: "09:30"
+      timezone: Asia/Shanghai
+    open-pull-requests-limit: 5
+    groups:
+      workbench-minor-patch:
+        update-types:
+          - minor
+          - patch
+
   - package-ecosystem: github-actions
     directory: "/"
     schedule:
@@ -27,35 +41,3 @@ updates:
         update-types:
           - minor
           - patch
-
-  - package-ecosystem: npm
-    directory: "/gui/frontend"
-    schedule:
-      interval: weekly
-      day: monday
-      time: "09:00"
-      timezone: Asia/Shanghai
-    open-pull-requests-limit: 5
-    groups:
-      frontend-minor-patch:
-        update-types:
-          - minor
-          - patch
-      react-major:
-        patterns:
-          - "react"
-          - "react-dom"
-          - "@types/react"
-          - "@types/react-dom"
-        update-types:
-          - major
-      vite-major:
-        patterns:
-          - "vite"
-          - "@vitejs/plugin-react"
-        update-types:
-          - major
-    ignore:
-      - dependency-name: "@types/node"
-        update-types:
-          - version-update:semver-major

@@ -1,9 +1,16 @@
 //! Optional NC service: domain validation and postprocessing consume generic rendering.
 pub mod derive;
+mod managed;
+pub mod operation;
+pub use managed::NcFoundationPlugin;
+mod dispatcher;
+pub use dispatcher::NcManagedPlugin;
+pub mod business;
 mod filters;
 pub mod lint;
 pub mod model;
 mod output_validation;
+pub mod trajectory;
 use output_validation::non_finite_nc;
 pub mod postprocess;
 pub mod validate;
@@ -18,6 +25,9 @@ pub fn configure(renderer: &mut Renderer) -> Result<(), nctool_tpl::TplError> {
     renderer.add_filter("nc_signed", filters::filter_nc_signed)?;
     renderer.add_filter("nc_strip", filters::filter_nc_strip)?;
     renderer.add_filter("nc_pad", filters::filter_nc_pad)?;
+    renderer.add_filter("nc_trim_fixed", filters::filter_nc_trim_fixed)?;
+    renderer.add_filter("v3_fixed", filters::filter_v3_fixed)?;
+    renderer.add_filter("v3_signed", filters::filter_v3_signed)?;
     Ok(())
 }
 pub struct NcPlugin {

@@ -38,6 +38,7 @@ export interface Document {
   tab: "source" | "schema" | "settings";
   outputName: string;
   generationAction?: string;
+  parameterSelection?: Data;
   jsonInput?: string;
   lastRunId?: string;
   lastRunSignature?: string;

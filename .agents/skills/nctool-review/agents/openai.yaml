@@ -1,0 +1,4 @@
+interface:
+  display_name: "NCtool 审查"
+  short_description: "审查 NCtool 改动与 PR，核对插件、资产、输入和工作台回归"
+  default_prompt: "使用 $nctool-review 审查当前 NCtool 改动，给出有证据的缺陷与验证范围。"

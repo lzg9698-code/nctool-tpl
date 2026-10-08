@@ -1,6 +1,16 @@
-# 2.0 开发与验收
+# 开发与验收
 
-修改前确认 `git status`，不要丢弃用户未提交改动。此次升级前的工作树快照位于本机忽略目录 `.nctool-backups/2026-10-01-v2`，并非发行资产。
+适用于 2.2 CLI/WebUI 与 2.0 核心组件。修改前确认 `git status`，不要丢弃用户未提交改动。历史升级快照与验证记录见[归档索引](archive/README.md)，它们不是当前验收或发行资产。
+
+## 工具链与本地开发
+
+使用 Codex 桌面开发时先阅读仓库 [AGENTS.md](../AGENTS.md)；专用 Skills、GitHub/浏览器/Context7 使用方法及依赖审计见 [Codex 开发指南](CODEX_DEVELOPMENT.md)。
+
+Rust 1.89+，前端使用 Node.js 22.12+ 和 npm。Python 插件与验证脚本需要 Python 3；源码快照工具需要 Python 3.9+。Windows 可将下列 `python3` 改为可用的 `python`，不要依赖不可用的 WindowsApps 命令别名。
+
+先在仓库根目录执行 `npm ci --prefix ui` 和 `node scripts/build_ui.mjs`，再运行 `cargo run -p nctool-cli -- ui`。默认 WebUI 地址为 `http://127.0.0.1:8788`。NC 组合使用 `cargo run -p nctool-cli --features nc-bundle -- --profile nc ui`。
+
+前端开发可执行 `npm run --prefix ui dev`；Vite 将 `/api` 转发到 `127.0.0.1:8788`，同时运行 Rust 宿主。前端源码变更后重新生成嵌入资源并编译宿主，才能在发行式 WebUI 中看到更新。
 
 ## 构建与测试
 
@@ -17,9 +27,11 @@ cargo test --workspace --all-features --doc --locked
 cargo +1.89.0 check --workspace --all-features --locked
 ```
 
+已有生产构建时可用 `node scripts/build_ui.mjs --check` 只检查嵌入资源一致性。按改动选择检查：纯文档改动核对导航、链接、接口和采用的命令示例；业务/前端改动运行相关测试及发布所需完整检查，不用旧测试数量代替当前结果。
+
 外部协议测试需要 Python 3，会使用可用的 python3/python 命令。真实进程测试覆盖握手、逆向服务调用、精度检查、错误输出、消息限制、崩溃、堵塞 stdin、超时、取消与下一次调用恢复。
 
-`python3 scripts/check_v2.py` 验证纯模板依赖树、GUI 排除、引擎领域注册隔离、Python 示例适配器一致性、UI 生成物与 JavaScript 语法、基础包内容。
+`python3 scripts/check_v2.py` 验证纯模板依赖树、旧桌面源码及入口移除、workspace 与 NC 组合无 Tauri 依赖、引擎领域注册隔离、Python 示例适配器一致性、UI 生成物与 JavaScript 语法、基础包内容。
 
 ## 修改边界
 
@@ -29,7 +41,7 @@ cargo +1.89.0 check --workspace --all-features --locked
 - WebUI 源码是 `ui/src` 的 React/TypeScript/CSS。首次执行 `npm ci --prefix ui`；`node scripts/build_ui.mjs` 构建 `ui/dist` 并生成 `cli/ui` 的静态资源及 Rust 嵌入表。不要直接编辑生成文件。
 - 新动作提供 JSON Schema、可运行示例和插件贡献的页面描述。
 - 资产必须经 JsonStore/WriteKernel；不跳过指纹或静默替换文件。
-- GUI 为冻结的旧版代码，不纳入 2.0 功能改动。
+- 旧 Tauri 桌面 GUI 已移除；界面开发使用当前 WebUI，旧 GUI 资料仅作历史参考。
 
 ## 浏览器验收
 
@@ -47,6 +59,8 @@ NC 组合：用专用表单新建机床、选择加工模板、编辑参数与�
 
 自动浏览器验收：先构建 `cargo build -p nctool-cli --features nc-bundle`，安装 Playwright 1.62.1 和 Chromium，再执行 `node scripts/browser_v2.cjs`。可用 `NCTOOL_PLAYWRIGHT` 指定独立安装目录，`NCTOOL_CHROMIUM` 指定浏览器路径。脚本使用临时 home/workspace，覆盖两种组合与 Python 插件，不修改用户配置。
 
+手工逐项走查见[WebUI 验收清单](UI_ACCEPTANCE_CHECKLIST.md)，每次记录平台、源码版本和实际执行结果。
+
 
 ## 审查缺陷回归
 
@@ -61,8 +75,8 @@ NC 组合：用专用表单新建机床、选择加工模板、编辑参数与�
 使用 Python 3.9 或更新版本，为完整工作树建立本地恢复快照：
 
 ```bash
-python3 scripts/source_baseline.py capture .nctool-backups/2026-10-04-architecture-next
-python3 scripts/source_baseline.py verify .nctool-backups/2026-10-04-architecture-next
+python3 scripts/source_baseline.py capture .nctool-backups/my-source-baseline
+python3 scripts/source_baseline.py verify .nctool-backups/my-source-baseline
 ```
 
 目录必须尚不存在；仓库内的目标必须被 Git 忽略。快照包括现存已跟踪文件和未忽略的新增文件，保存 HEAD、暂存/未暂存二进制补丁、删除状态和逐文件 SHA-256。归档与清单使用同一份读取字节，生成期间检测到源码或 Git 状态变化时拒绝签收，不生成完成清单。工具不修改索引，不执行提交，也不包含忽略的运行资产、依赖、密钥配置或历史备份；这些数据需独立备份。符号链接和子模块等非普通文件拒绝归档，需要单独处理。`verify` 检查归档及补丁完整性，不表示当前工作树仍与该快照相同。
@@ -70,3 +84,5 @@ python3 scripts/source_baseline.py verify .nctool-backups/2026-10-04-architectur
 恢复时先在新的空目录解压 `sources.tar.gz`，核对 `manifest.json`；补丁和 `status.txt` 用于重建 Git 暂存状态与删除记录。不要直接覆盖正在使用的工作区。
 
 标签发布现在必须先通过复用的完整 CI：三平台 Rust/前端/架构检查、Linux 两组 Chromium 验收及 MSRV 检查。任何验证作业失败，二进制构建和发布不会执行。发行包按明确的 Rust target 编译，并附带每个二进制的 SHA-256 文件。工作流配置与本机通过不能替代 GitHub Actions 的实际三平台结果，也不替代真实控制器验收。
+
+标签、资产名称、签收和 crates.io 边界见[发布说明](RELEASE.md)。当前限制与待验证项见[项目状态](PROJECT_STATUS.md)。
