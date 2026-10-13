@@ -291,10 +291,212 @@ fn configuration_changes_apply_only_after_restart() {
     app.dispatch("POST", "/api/v2/plugins/template/disable", json!({}))
         .unwrap();
     assert!(!app.runtime.capabilities().is_empty());
+    let inventory = app.inventory().unwrap();
+    for id in ["template", "parameters"] {
+        let plugin = inventory["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|plugin| plugin["id"] == id)
+            .unwrap();
+        assert_eq!(plugin["active"], true);
+        assert_eq!(plugin["enabled_next_start"], false);
+    }
+    let saved = app.dispatch("GET", "/api/v2/config", json!({})).unwrap();
+    let preview = app
+        .dispatch(
+            "POST",
+            "/api/v2/config/validate",
+            json!({"config":saved["config"]}),
+        )
+        .unwrap();
+    assert!(preview["plugins"].as_array().unwrap().is_empty());
     let restarted = App::boot(&app.home, &temp.0.join("workspace"), None).unwrap();
     assert!(restarted.runtime.capabilities().is_empty());
-    assert_eq!(app.inventory().unwrap()["restart_required"], true);
+    assert_eq!(inventory["restart_required"], true);
 }
+
+#[test]
+fn configuration_explicit_companions_keep_dependency_checks() {
+    let mut cases = vec![("template", "parameters", "template")];
+    if cfg!(feature = "nc-bundle") {
+        cases.push(("nc", "nc-parameters", "nc"));
+    }
+    for (profile, companion, provider) in cases {
+        let temp = Temp::new();
+        let app = temp.app("template");
+        let before = app.dispatch("GET", "/api/v2/config", json!({})).unwrap();
+        let mut config = before["config"].clone();
+        config["profile"] = json!(profile);
+        config["enabled"] = json!([companion]);
+        config["disabled"] = json!([provider]);
+        for path in ["/api/v2/config/validate", "/api/v2/config"] {
+            assert_eq!(
+                app.dispatch("POST", path, json!({"config":config}))
+                    .unwrap_err()
+                    .code,
+                "service_missing",
+                "{companion}: {path}"
+            );
+        }
+        assert_eq!(
+            app.dispatch("GET", "/api/v2/config", json!({})).unwrap(),
+            before
+        );
+        // Also check an invalid configuration saved outside the API: inventory
+        // must show the explicit selection, and boot must reject the dependency.
+        nctool_runtime::config::save(&app.home, &serde_json::from_value(config).unwrap(), None)
+            .unwrap();
+        let inventory = app.inventory().unwrap();
+        let plugins = inventory["plugins"].as_array().unwrap();
+        assert_eq!(
+            plugins.iter().find(|p| p["id"] == companion).unwrap()["enabled_next_start"],
+            true
+        );
+        assert_eq!(
+            plugins.iter().find(|p| p["id"] == provider).unwrap()["enabled_next_start"],
+            false
+        );
+        let error = App::boot(&app.home, &temp.0.join("workspace"), None)
+            .err()
+            .unwrap();
+        assert_eq!(error.code, "service_missing");
+    }
+}
+
+#[cfg(feature = "nc-bundle")]
+#[test]
+fn configuration_disabling_nc_removes_default_companions_but_checks_process() {
+    let temp = Temp::new();
+    let app = temp.app("nc");
+    let mut config = app.dispatch("GET", "/api/v2/config", json!({})).unwrap()["config"].clone();
+    config["profile"] = json!("nc");
+    config["disabled"] = json!(["nc"]);
+    assert_eq!(
+        app.dispatch("POST", "/api/v2/config/validate", json!({"config":config}))
+            .unwrap_err()
+            .code,
+        "service_missing"
+    );
+    // Disabling wins over explicit enabling, while process retains its own
+    // dependency check rather than being silently removed with the companions.
+    config["enabled"] = json!(["nc"]);
+    config["disabled"] = json!(["nc", "process"]);
+    let preview = app
+        .dispatch("POST", "/api/v2/config/validate", json!({"config":config}))
+        .unwrap();
+    let planned: std::collections::BTreeSet<_> = preview["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        planned,
+        ["math", "parameters", "template"].into_iter().collect()
+    );
+    app.dispatch("POST", "/api/v2/config", json!({"config":config}))
+        .unwrap();
+    let inventory = app.inventory().unwrap();
+    for plugin in inventory["plugins"].as_array().unwrap() {
+        assert_eq!(plugin["active"], true);
+        assert_eq!(
+            plugin["enabled_next_start"],
+            planned.contains(plugin["id"].as_str().unwrap())
+        );
+    }
+    let restarted = App::boot(&app.home, &temp.0.join("workspace"), None).unwrap();
+    let active: std::collections::BTreeSet<_> = restarted
+        .runtime
+        .descriptors()
+        .into_iter()
+        .map(|p| p.id)
+        .collect();
+    assert_eq!(active, planned.into_iter().map(str::to_string).collect());
+    assert!(restarted
+        .runtime
+        .capabilities()
+        .iter()
+        .all(|c| { !c.action.id.starts_with("nc.") && !c.action.id.starts_with("process.") }));
+}
+
+#[cfg(feature = "nc-bundle")]
+#[test]
+fn configuration_profile_override_does_not_change_saved_next_start_selection() {
+    let temp = Temp::new();
+    let app = temp.app("nc");
+    let inventory = app.inventory().unwrap();
+    assert_eq!(inventory["profile"], "nc");
+    assert_eq!(inventory["restart_required"], false);
+    let nc = inventory["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "nc")
+        .unwrap();
+    assert_eq!(nc["active"], true);
+    assert_eq!(nc["enabled_next_start"], false);
+
+    let mut config = app.dispatch("GET", "/api/v2/config", json!({})).unwrap()["config"].clone();
+    config["profile"] = json!("nc");
+    app.dispatch("POST", "/api/v2/config", json!({"config":config}))
+        .unwrap();
+    let overridden = temp.app("template");
+    let inventory = overridden.inventory().unwrap();
+    assert_eq!(inventory["profile"], "template");
+    assert_eq!(inventory["restart_required"], false);
+    for plugin in inventory["plugins"].as_array().unwrap() {
+        assert_eq!(plugin["enabled_next_start"], true);
+        assert_eq!(
+            plugin["active"],
+            ["template", "parameters"].contains(&plugin["id"].as_str().unwrap())
+        );
+    }
+    let restarted = App::boot(&app.home, &temp.0.join("workspace"), None).unwrap();
+    assert_eq!(restarted.profile, "nc");
+    assert_eq!(
+        restarted
+            .runtime
+            .invoke("nc.generate", json!({"source":"G0 X1"}))
+            .unwrap()
+            .data["text"],
+        "G0 X1\n"
+    );
+}
+
+#[cfg(not(feature = "nc-bundle"))]
+#[test]
+fn configuration_nc_profile_requires_the_nc_bundle() {
+    let temp = Temp::new();
+    let app = temp.app("template");
+    let mut config = app.dispatch("GET", "/api/v2/config", json!({})).unwrap()["config"].clone();
+    config["profile"] = json!("nc");
+    assert_eq!(
+        app.dispatch("POST", "/api/v2/config/validate", json!({"config":config}))
+            .unwrap_err()
+            .code,
+        "plugin_missing"
+    );
+    nctool_runtime::config::save(&app.home, &serde_json::from_value(config).unwrap(), None)
+        .unwrap();
+    let inventory = app.inventory().unwrap();
+    let nc = inventory["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|p| p["id"] == "nc")
+        .unwrap();
+    assert_eq!(nc["available"], false);
+    assert_eq!(nc["enabled_next_start"], true);
+    assert_eq!(
+        App::boot(&app.home, &temp.0.join("workspace"), None)
+            .err()
+            .unwrap()
+            .code,
+        "bundle_unavailable"
+    );
+}
+
 #[cfg(feature = "nc-bundle")]
 #[test]
 fn nc_process_validation_derivation_and_numbering() {
@@ -1255,6 +1457,154 @@ fn review_r01_r02_r05_r06_failures_never_deliver_artifacts_in_any_execution_surf
         .invoke("nc.generate", result.data["replay_input"].clone())
         .is_ok());
 }
+#[cfg(feature = "nc-bundle")]
+#[test]
+fn nc_finalize_matches_generation_output_and_diagnostics() {
+    let temp = Temp::new();
+    let app = temp.app("nc");
+    let text = " O1001\r\n\r\n G1 X10 (中文)\r\nN0030 G0 Z2\r\nM30";
+    let machine = json!({"id":"m","vendor":"Test","model":"Virtual","config":{"line_number_prefix":"L","line_number_digits":"3"}});
+    for options in [
+        json!({}),
+        json!({"line_numbers":true,"line_number_start":100,"line_number_step":10,"max_line_number":110,"strip_blank_lines":true,"ascii_only":true,"add_header_comment":true}),
+        json!({"line_numbers":true,"line_number_start":4294967295u32}),
+        json!({"line_numbers":true,"line_number_step":0}),
+    ] {
+        let generated = app.runtime.invoke("nc.generate", json!({
+            "source":"{{ program }}","params":{"program":text},"machine":machine,"options":options
+        })).unwrap();
+        let finalized = app
+            .runtime
+            .invoke(
+                "nc.output.finalize",
+                json!({
+                    "name":"combined.nc","text":text,"machine":machine,"options":options
+                }),
+            )
+            .unwrap();
+        assert_eq!(finalized.data["text"], generated.data["text"]);
+        assert_eq!(
+            finalized.data["end_line_number"],
+            generated.data["end_line_number"]
+        );
+        assert_eq!(finalized.diagnostics, generated.diagnostics);
+        assert_eq!(finalized.artifacts.len(), 1);
+        assert_eq!(finalized.artifacts[0].name, "combined.nc");
+        assert_eq!(finalized.artifacts[0].text, finalized.data["text"]);
+        assert_eq!(finalized.artifacts[0].media_type, "text/plain");
+    }
+}
+
+#[cfg(feature = "nc-bundle")]
+#[test]
+fn nc_finalize_does_not_load_unrelated_template_assets() {
+    let temp = Temp::new();
+    let app = temp.app("nc");
+    std::fs::write(temp.0.join("workspace/templates/broken.json"), "{}").unwrap();
+    let result = app
+        .runtime
+        .invoke(
+            "nc.output.finalize",
+            json!({
+                "name":"literal.nc","text":"( {{ literal }} {% invalid %} )\nG1 X1",
+                "machine":{"id":"m","vendor":"Test","model":"Virtual","config":{}}
+            }),
+        )
+        .unwrap();
+    assert_eq!(
+        result.data["text"],
+        "( {{ literal }} {% invalid %} )\nG1 X1\n"
+    );
+}
+
+#[cfg(feature = "nc-bundle")]
+#[test]
+fn nc_finalize_rejects_invalid_output_inputs_and_cancellation() {
+    let temp = Temp::new();
+    let app = temp.app("nc");
+    let valid = json!({"name":"combined.nc","text":"G1 X1","machine":{"id":"m","vendor":"Test","model":"Virtual","config":{}}});
+    for (field, value, code) in [
+        ("name", json!("../output.nc"), "managed_validation"),
+        ("name", json!(true), "invalid_input"),
+        ("text", json!(12), "invalid_input"),
+        ("machine", json!(null), "invalid_input"),
+        ("name", json!(null), "invalid_input"),
+        ("text", json!(null), "invalid_input"),
+        (
+            "machine",
+            json!({"id":"m","vendor":"Test","model":"Virtual","config":{"program_prefix":"\nG0"}}),
+            "invalid_machine",
+        ),
+        ("options", json!({"format":"text"}), "invalid_input"),
+        ("options", json!({"unknown":true}), "invalid_json"),
+        ("text", json!("G1 XinfY0"), "nc_non_finite"),
+        ("text", json!("G1 Xnan"), "nc_non_finite"),
+    ] {
+        let mut input = valid.clone();
+        input[field] = value;
+        assert_eq!(
+            app.runtime
+                .invoke("nc.output.finalize", input)
+                .unwrap_err()
+                .code,
+            code
+        );
+    }
+    let mut numbered = valid.clone();
+    numbered["machine"]["config"] = json!({"line_number_prefix":"XinfY"});
+    numbered["options"] = json!({"line_numbers":true});
+    assert_eq!(
+        app.runtime
+            .invoke("nc.output.finalize", numbered)
+            .unwrap_err()
+            .code,
+        "nc_non_finite"
+    );
+    let cancellation = Cancellation::default();
+    cancellation.cancel();
+    assert_eq!(
+        app.runtime
+            .invoke_cancellable_request(
+                "finalize-cancel",
+                "nc.output.finalize",
+                valid,
+                cancellation
+            )
+            .unwrap_err()
+            .code,
+        "cancelled"
+    );
+}
+
+#[cfg(feature = "nc-bundle")]
+#[test]
+fn nc_finalize_history_replays_with_its_own_action_input() {
+    let temp = Temp::new();
+    let app = temp.app("nc");
+    let id = app
+        .workbench
+        .start(
+            "nc.output.finalize",
+            json!({
+                "name":"combined.nc","text":"G1 X1\nM30",
+                "machine":{"id":"m","vendor":"Test","model":"Virtual","config":{}},
+                "options":{"line_numbers":true}
+            }),
+            "Combined output",
+        )
+        .unwrap();
+    let original = await_review_run(&app, &id);
+    assert_eq!(original["status"], "succeeded");
+    let replay_id = app.workbench.rerun(&id).unwrap();
+    let replay = await_review_run(&app, &replay_id);
+    assert_eq!(replay["status"], "succeeded");
+    assert_eq!(original["result"], replay["result"]);
+    assert_eq!(
+        serde_json::to_value(app.workbench.get(&id).unwrap()).unwrap(),
+        original
+    );
+}
+
 #[cfg(feature = "nc-bundle")]
 #[test]
 fn review_r02_disk_and_history_machine_configs_share_content_validation() {

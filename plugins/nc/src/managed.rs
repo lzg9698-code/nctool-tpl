@@ -355,22 +355,14 @@ impl NcFoundationPlugin {
         );
         actions.push(ActionDescriptor::new("nc.parameters.resolve","预览刀具加工参数",json!({"type":"object","properties":{"selection":{"type":"object"},"snapshot":{"type":"object"},"max_spindle_rpm":{"type":"number"}},"additionalProperties":false})));
         actions.push(ActionDescriptor::new("nc.parameters.match","筛选加工预置",json!({"type":"object","required":["tool_id","material_id","operation"],"properties":{"tool_id":{"type":"string"},"material_id":{"type":"string"},"operation":{"type":"string"}},"additionalProperties":false})));
-        actions.push(ActionDescriptor::new("nc.operation.prepare","从原始参数准备工艺",json!({"type":"object","required":["operation","inputs"],"properties":{"operation":{"type":"object"},"inputs":{"type":"object"},"standard":{"type":"object"}},"additionalProperties":false})));
         actions.push(ActionDescriptor::new("nc.foundation.check","核对生成资源依赖",json!({"type":"object","required":["managed_snapshot"],"properties":{"managed_snapshot":{"type":"object"}},"additionalProperties":false})));
         actions.push(ActionDescriptor::new("nc.output.finalize","处理组合文件输出",json!({"type":"object","required":["text","name","machine"],"properties":{"text":{"type":"string"},"name":{"type":"string"},"machine":{"type":"object"},"options":{"type":"object"}},"additionalProperties":false})));
         let schema = json!({"type":"object","properties":{"source":{"type":"string"},"template":{"type":"string"},"templates":{"type":"object"},"snapshot":{"type":"object"},"managed_snapshot":{"type":"object"},"operation":{"type":"object"},"operation_inputs":{"type":"object"},"params":{"type":"object"},"bindings":{"type":"object"},"schema":{"type":["object","boolean"]},"defaults":{"type":"object"},"specs":{"type":"array"},"parameter_selection":{"type":"object"},"machine":{"type":"object"},"machine_id":{"type":"string"},"options":{"type":"object"},"output_name":{"type":"string"},"trim_blocks":{"type":"boolean"},"lstrip_blocks":{"type":"boolean"}},"anyOf":[{"required":["source"]},{"required":["template"]},{"required":["snapshot"]},{"required":["managed_snapshot"]}],"additionalProperties":false});
         actions.push(ActionDescriptor::new(
             "nc.foundation.freeze",
             "冻结受管 NC 输入",
-            schema.clone(),
+            schema,
         ));
-        let mut generate =
-            ActionDescriptor::new("nc.generate.managed", "从原始参数生成 NC", schema);
-        generate.ui_schema = Some(
-            json!({"document_input":{"title":"受管 NC 程序","description":"解析共享参数并在后端完成工艺计算。","bindings":{"source":"source","template":"id","operation_inputs":"context","schema":"schema","defaults":"defaults","operation":"metadata.nc.operation","bindings":"metadata.parameters.bindings","parameter_selection":"parameter_selection","options":"metadata.nc.options","machine_id":"metadata.nc.machine_id","trim_blocks":"metadata.nc.render_options.trim_blocks","lstrip_blocks":"metadata.nc.render_options.lstrip_blocks"}}}),
-        );
-        actions.push(generate);
-        actions.retain(|a| a.id != "nc.operation.prepare" && a.id != "nc.generate.managed");
         actions.push(ActionDescriptor::new("nc.managed.resolve", "解析冻结工艺输入", json!({"type":"object","required":["managed_snapshot"],"properties":{"managed_snapshot":{"type":"object"}},"additionalProperties":false})));
         actions.push(ActionDescriptor::new("nc.managed.render", "渲染已准备工艺", json!({"type":"object","required":["managed_snapshot","resolved","prepared"],"properties":{"managed_snapshot":{"type":"object"},"resolved":{"type":"object"},"prepared":{"type":"object"}},"additionalProperties":false})));
         actions
@@ -805,15 +797,34 @@ impl Plugin for NcFoundationPlugin {
     fn invoke(&self, action: &str, input: Value, ctx: &Context) -> PluginResult<ActionResult> {
         match action {
             "nc.output.finalize" => {
-                let name = input["name"].as_str().unwrap();
+                let name = input["name"]
+                    .as_str()
+                    .ok_or_else(|| invalid("输出名称必须是字符串"))?;
                 if name.is_empty() || name.contains(['/', '\\']) || name == ".." {
                     return Err(invalid("输出名称无效"));
                 }
-                let mut result=ctx.call("nc.generate",1,json!({"source":"{{ program }}","params":{"program":input["text"]},"schema":{"type":"object","properties":{"program":{"type":"string"}},"required":["program"]},"machine":input["machine"],"options":input.get("options").cloned().unwrap_or(json!({}))}))?;
+                let text = input["text"]
+                    .as_str()
+                    .ok_or_else(|| invalid("输出文本必须是字符串"))?;
+                let machine = crate::validate_machine_content(
+                    input
+                        .get("machine")
+                        .ok_or_else(|| invalid("缺少机床输入"))?,
+                )?;
+                let options = crate::generation_options(&input)?;
+                let mut result =
+                    crate::finalize_output(text, "__inline__", &options, &machine, ctx)?;
+                result.data["replay_input"] = json!({
+                    "name":name,"text":text,"machine":machine,"options":options
+                });
+                let finalized = result.data["text"]
+                    .as_str()
+                    .ok_or_else(|| invalid("最终处理未返回文本"))?
+                    .to_owned();
                 result.artifacts = vec![Artifact {
                     name: name.into(),
                     media_type: "text/plain".into(),
-                    text: result.data["text"].as_str().unwrap().into(),
+                    text: finalized,
                 }];
                 Ok(result)
             }

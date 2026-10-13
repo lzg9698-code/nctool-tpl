@@ -200,23 +200,8 @@ impl NcPlugin {
         let text = rendered.data["text"].as_str().ok_or_else(|| {
             PluginError::new("invalid_output", "template.render must return text")
         })?;
-        let options: GenerationOptions =
-            serde_json::from_value(input.get("options").cloned().unwrap_or_else(|| json!({})))?;
-        if options.format != OutputFormat::Gcode {
-            return Err(PluginError::new(
-                "invalid_input",
-                "use template.render for text output",
-            ));
-        }
-        let outcome = postprocess::postprocess(text, template, &options, &machine);
-        if non_finite_nc(&outcome.text) {
-            return Err(PluginError::new(
-                "nc_non_finite",
-                "rendered NC contains non-finite numeric output",
-            ));
-        }
-        let mut result = ActionResult::text("program.nc", "text/plain", outcome.text);
-        result.data["end_line_number"] = json!(outcome.end_line_number);
+        let options = generation_options(&input)?;
+        let mut result = finalize_output(text, template, &options, &machine, ctx)?;
         result.data["replay_input"] = json!({"snapshot":snapshot,"params":input.get("params").cloned().unwrap_or_else(||json!({})),"specs":specs,"machine":machine,"options":options});
         for key in [
             "lenient",
@@ -237,13 +222,7 @@ impl NcPlugin {
                 result.data["replay_input"][key] = value;
             }
         }
-        result.diagnostics = diagnostics;
-        result.diagnostics.extend(
-            outcome
-                .warnings
-                .into_iter()
-                .map(|w| Diagnostic::warning("line_number", w)),
-        );
+        result.diagnostics.splice(0..0, diagnostics);
         if let Some(source) = inspection.data.get("source").and_then(Value::as_str) {
             for finding in lint::lint(source, template)? {
                 result.diagnostics.push(Diagnostic {
@@ -257,6 +236,44 @@ impl NcPlugin {
         Ok(result)
     }
 }
+fn generation_options(input: &Value) -> PluginResult<GenerationOptions> {
+    let options: GenerationOptions =
+        serde_json::from_value(input.get("options").cloned().unwrap_or_else(|| json!({})))?;
+    if options.format != OutputFormat::Gcode {
+        return Err(PluginError::new(
+            "invalid_input",
+            "use template.render for text output",
+        ));
+    }
+    Ok(options)
+}
+
+fn finalize_output(
+    text: &str,
+    template: &str,
+    options: &GenerationOptions,
+    machine: &MachineConfig,
+    ctx: &Context,
+) -> PluginResult<ActionResult> {
+    ctx.cancellation.check()?;
+    let outcome = postprocess::postprocess(text, template, options, machine);
+    if non_finite_nc(&outcome.text) {
+        return Err(PluginError::new(
+            "nc_non_finite",
+            "rendered NC contains non-finite numeric output",
+        ));
+    }
+    ctx.cancellation.check()?;
+    let mut result = ActionResult::text("program.nc", "text/plain", outcome.text);
+    result.data["end_line_number"] = json!(outcome.end_line_number);
+    result.diagnostics = outcome
+        .warnings
+        .into_iter()
+        .map(|w| Diagnostic::warning("line_number", w))
+        .collect();
+    Ok(result)
+}
+
 fn validate_machine(name: &str, asset: &Value) -> PluginResult<MachineConfig> {
     let machine: MachineConfig = serde_json::from_value(asset.clone())?;
     if machine.id != name {

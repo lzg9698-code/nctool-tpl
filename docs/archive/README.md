@@ -42,5 +42,7 @@
 | 本轮独立参数与工艺迁移 | [实际验证记录](records/MANAGED_PARAMETERS_2026-10-07.md) | 2026-10-07 Windows；28 份模板、Rust 工艺计算、CLI/HTTP/WebUI 验收 |
 | 同步粗车与越程槽专用插件 | [实施与验证记录](records/SPECIALIZED_TURNING_2026-10-08.md) | 2026-10-08 Windows；业务页面、Rust 计算、轨迹预设与兼容回归 |
 | HEAD f0fda2d 之后的阶段改动 | [阶段收尾与本地提交](records/PHASE_CLOSEOUT_2026-10-08.md) | 2026-10-08 Windows；四处修复、完整本地门槛、运行资产隔离与提交范围 |
+| 项目精简第一轮 | [实施与验证记录](records/2026-10-13-simplification-iteration.md) | 2026-10-13 Windows；产品主线、共享依赖核对、插件政策、构建隔离和轴类契约 |
+| NC 最终处理链收敛 | [实施与验证记录](records/2026-10-13-nc-finalize-iteration.md) | 2026-10-13 Windows；共享最终处理、模板读取隔离与新任务重放格式修复 |
 
 当前状态页已与历史记录分开。历史日志、浏览器截图和 `.nctool-backups/` 快照为当时本地产物，不保证随仓库提供；记录不等于本轮已重新执行，源码快照不等于提交或发布。缺失历史文件会明确标注，不能以当前文件或新造记录替代。
