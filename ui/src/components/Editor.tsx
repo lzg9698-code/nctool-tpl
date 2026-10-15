@@ -5,11 +5,47 @@ import {
   StateEffect,
   StateField,
   Annotation,
+  Transaction,
 } from "@codemirror/state";
 import { basicSetup } from "codemirror";
-import { StreamLanguage } from "@codemirror/language";
+import {
+  StreamLanguage,
+  HighlightStyle,
+  defaultHighlightStyle,
+  syntaxHighlighting,
+} from "@codemirror/language";
 import { jinja2 } from "@codemirror/legacy-modes/mode/jinja2";
 import { json } from "@codemirror/lang-json";
+// Reuse CodeMirror's token mapping with semantic classes instead of its fixed
+// light palette. CSS variables update in place when documentElement's theme
+// changes, so switching themes never replaces the document or selection.
+const syntaxClasses = [
+  "syntax-meta",
+  "syntax-link",
+  "syntax-heading",
+  "syntax-emphasis",
+  "syntax-strong",
+  "syntax-strikethrough",
+  "syntax-keyword",
+  "syntax-atom",
+  "syntax-number",
+  "syntax-string",
+  "syntax-escape",
+  "syntax-variable",
+  "syntax-variable",
+  "syntax-type",
+  "syntax-type",
+  "syntax-variable",
+  "syntax-variable",
+  "syntax-comment",
+  "syntax-invalid",
+];
+const editorHighlightStyle = HighlightStyle.define(
+  defaultHighlightStyle.specs.map(({ tag }, index) => ({
+    tag,
+    class: syntaxClasses[index] ?? "syntax-meta",
+  })),
+);
 const externalValue = Annotation.define<boolean>();
 const highlight = StateEffect.define<number | null>();
 const highlightField = StateField.define<DecorationSet>({
@@ -88,6 +124,7 @@ export const Editor = forwardRef<
         doc: value,
         extensions: [
           basicSetup,
+          syntaxHighlighting(editorHighlightStyle),
           highlightField,
           ...(language === "json"
             ? [json()]
@@ -111,22 +148,76 @@ export const Editor = forwardRef<
               change.current?.(update.state.doc.toString());
           }),
           EditorView.theme({
-            "&": { height: "100%", fontSize: "13px" },
+            "&": {
+              height: "100%",
+              fontSize: "13px",
+              color: "var(--editor-text)",
+              backgroundColor: "var(--editor-background)",
+            },
             ".cm-scroller": {
               overflow: "auto",
+              lineHeight: "1.7",
               fontFamily:
                 '"Cascadia Code", "SFMono-Regular", Consolas, monospace',
             },
-            ".cm-content": { padding: "14px 0" },
-            ".cm-line": { padding: "0 16px" },
+            ".cm-content": {
+              padding: "12px 0",
+              caretColor: "var(--editor-text)",
+            },
+            ".cm-line": { padding: "0 14px" },
             ".cm-gutters": {
-              backgroundColor: "#fafbfc",
-              color: "#99a3af",
-              borderRight: "1px solid #eef0f3",
+              backgroundColor: "var(--editor-gutter)",
+              color: "var(--editor-gutter-text)",
+              borderRight: "1px solid var(--line)",
             },
             "&.cm-focused": { outline: "none" },
-            ".cm-activeLine": { backgroundColor: "#f4f7fa" },
-            ".cm-activeLineGutter": { backgroundColor: "#eef3f8" },
+            ".cm-activeLine": {
+              backgroundColor: "var(--editor-active-line)",
+            },
+            ".cm-activeLineGutter": {
+              backgroundColor: "var(--editor-active-gutter)",
+              color: "var(--editor-text)",
+            },
+            ".cm-cursor, .cm-dropCursor": {
+              borderLeftColor: "var(--editor-text)",
+            },
+            "&.cm-focused > .cm-scroller > .cm-selectionLayer .cm-selectionBackground, .cm-selectionBackground":
+              { backgroundColor: "var(--editor-selection)" },
+            ".cm-content ::selection": {
+              backgroundColor: "var(--editor-selection)",
+            },
+            "&.cm-focused .cm-matchingBracket, .cm-matchingBracket": {
+              backgroundColor: "var(--editor-match)",
+              color: "var(--editor-text)",
+            },
+            ".cm-searchMatch": {
+              backgroundColor: "var(--editor-search)",
+              outline: "1px solid var(--warning-line)",
+            },
+            ".cm-searchMatch.cm-searchMatch-selected": {
+              backgroundColor: "var(--editor-match)",
+            },
+            ".cm-panels, .cm-tooltip": {
+              backgroundColor: "var(--surface-muted)",
+              color: "var(--text)",
+              borderColor: "var(--line)",
+            },
+            ".cm-panels-top": { borderBottom: "1px solid var(--line)" },
+            ".cm-panels-bottom": { borderTop: "1px solid var(--line)" },
+            ".cm-tooltip-autocomplete > ul > li[aria-selected]": {
+              backgroundColor: "var(--brand-light)",
+              color: "var(--text)",
+            },
+            ".cm-button, .cm-textfield": {
+              background: "var(--surface)",
+              color: "var(--text)",
+              border: "1px solid var(--line)",
+            },
+            ".cm-foldPlaceholder": {
+              backgroundColor: "var(--surface-muted)",
+              color: "var(--muted)",
+              borderColor: "var(--line)",
+            },
           }),
         ],
       }),
@@ -142,7 +233,9 @@ export const Editor = forwardRef<
     if (editor && editor.state.doc.toString() !== value)
       editor.dispatch({
         changes: { from: 0, to: editor.state.doc.length, insert: value },
-        annotations: externalValue.of(true),
+        // Controlled values are synchronization, not user edits. In particular,
+        // undo must never restore a previous document through the new callback.
+        annotations: [externalValue.of(true), Transaction.addToHistory.of(false)],
       });
   }, [value]);
   useEffect(() => {

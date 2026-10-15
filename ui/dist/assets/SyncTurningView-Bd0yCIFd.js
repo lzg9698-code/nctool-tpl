@@ -1,1 +1,0 @@
-import{j as n}from"./react-dgengZBm.js";import{T as i}from"./TurningWorkbench-DZJDDU5D.js";import"./index-CzIKHKMR.js";import"./editor-J9SU0uel.js";import"./arrow-up-AMU-xo-S.js";function u(r){return n.jsx(i,{...r,kind:"sync-turning"})}export{u as SyncTurningView};

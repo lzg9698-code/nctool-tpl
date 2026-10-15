@@ -1,30 +1,172 @@
 import { describe, expect, it } from "vitest";
-import { managedRawInput, managedFormSchema, validatedSelection } from "./managedParameters";
-import { documentInput, documentSignature } from "./documentExecution";
-import { encode, newDocument } from "./data";
-describe("managed original inputs", () => {
-  it("blocks empty and invalid machining JSON drafts instead of using previous values", () => {
-    expect(() => validatedSelection({slots:{rough:{overrides:{rpm:1000},overrides_draft:""}}})).toThrow("JSON 草稿");
-    expect(() => validatedSelection({slots:{rough:{inputs_draft:"{"}}})).toThrow("JSON 草稿");
-    expect(validatedSelection({slots:{rough:{overrides:{rpm:1000},overrides_draft:undefined}}}).slots.rough.overrides.rpm).toBe(1000);
+import { encode, newDocument, parseData, type Run } from "./data";
+import {
+  applyOverrides,
+  managedFields,
+  managedRequest,
+  originLabel,
+  pointerEscape,
+  pointerTokens,
+  pointerValue,
+  removePointer,
+} from "./managedParameters";
+import { restoreDocument } from "./documentExecution";
+
+describe("shared parameter pointers", () => {
+  it("escapes and unescapes RFC 6901 tokens", () => {
+    expect(pointerEscape("a/b")).toBe("a~1b");
+    expect(pointerEscape("a~b")).toBe("a~0b");
+    expect(pointerTokens("/a~1b~0c")).toEqual(["a/b~c"]);
   });
-  it("omits selected tool facts while preserving dimensions and untouched slots", () => {
-    const value = { geometry: { depth: 13.1 }, rough_tool: { diameter: 0, cutting_speed: 100 }, finish_tool: { diameter: 8 } };
-    const bindings = { "/rough_tool/diameter": { slot: "rough" }, "/finish_tool/diameter": { slot: "finish" } };
-    expect(JSON.parse(encode(managedRawInput(value, bindings, { slots: { rough: { tool_id: "T1" } } })))).toEqual({ geometry: { depth: 13.1 }, rough_tool: { cutting_speed: 100 }, finish_tool: { diameter: 8 } });
-    expect(value.rough_tool.diameter).toBe(0);
-    const schema = { type: "object", properties: { rough_tool: { type: "object", properties: { diameter: { type: "number" } } } } };
-    expect(managedFormSchema(schema, bindings, { slots: { rough: { tool_id: "T1" } } }).properties.rough_tool.properties.diameter.readOnly).toBe(true);
-    expect(schema.properties.rough_tool.properties.diameter).not.toHaveProperty("readOnly");
+  it("reads nested and array pointers", () => {
+    const values = parseData('{"report":{"width":30},"rows":[{"depth":1},{"depth":2}]}');
+    expect(encode(pointerValue(values, "/report/width"))).toBe("30");
+    expect(encode(pointerValue(values, "/rows/1/depth"))).toBe("2");
+    expect(pointerValue(values, "/report/missing")).toBeUndefined();
+    expect(pointerValue(values, "/rows/9/depth")).toBeUndefined();
   });
-  it("includes transient selection and confirmation in execution dependencies", () => {
-    const doc = newDocument(); doc.context = { raw: 10 };
-    const entry = { id: "nc.generate.managed", ui_schema: { document_input: { bindings: { operation_inputs: "context", parameter_selection: "parameter_selection" } } } };
-    const original = documentSignature(doc, entry.id);
-    doc.parameterSelection = { slots: { rough: { tool_id: "T1", confirmed_for: "a" } } };
-    expect(documentInput(doc, entry).parameter_selection).toEqual(doc.parameterSelection);
-    expect(documentSignature(doc, entry.id)).not.toBe(original);
-    const signature = documentSignature(doc, entry.id); doc.parameterSelection.slots.rough.confirmed_for = "b";
-    expect(documentSignature(doc, entry.id)).not.toBe(signature);
+  it("removes a leaf and prunes emptied parents", () => {
+    expect(removePointer({ report: { width: 30 } }, "/report/width")).toEqual({});
+    expect(
+      removePointer({ report: { width: 30, height: 5 } }, "/report/width"),
+    ).toEqual({ report: { height: 5 } });
+    expect(removePointer({ keep: 1 }, "/gone/deep")).toEqual({ keep: 1 });
+    // Array indices are rejected: removing one would shift the rest.
+    expect(removePointer({ rows: [{ a: 1 }, { a: 2 }] }, "/rows/0")).toEqual({
+      rows: [{ a: 1 }, { a: 2 }],
+    });
+  });
+  it("labels every origin the backend can report", () => {
+    expect(originLabel("definition")).toBe("共享定义默认值");
+    expect(originLabel("spec_default")).toBe("规格默认值");
+    expect(originLabel("template_default")).toBe("模板默认值");
+    expect(originLabel("manual")).toBe("本次填写");
+    expect(originLabel("preset:compact")).toBe("共享预置：compact");
+  });
+});
+
+describe("override layering", () => {
+  // Values are compared as JSON text: the form carries LosslessNumber tokens.
+  const json = (value: unknown) => encode(value);
+  it("records only the leaves the user changed", () => {
+    const shown = parseData('{"report":{"width":25,"title":"A"},"count":3}');
+    const edited = parseData('{"report":{"width":30,"title":"A"},"count":3}');
+    // The inherited width and title must not become manual overrides.
+    expect(json(applyOverrides(shown, edited, {}))).toBe(
+      '{"report":{"width":30}}',
+    );
+  });
+  it("keeps a value the user deliberately set to the inherited one", () => {
+    const shown = parseData('{"width":25}');
+    const edited = parseData('{"width":25}');
+    expect(applyOverrides(shown, edited, {})).toEqual({});
+  });
+  it("keeps existing overrides while adding a new edit", () => {
+    const shown = parseData('{"width":25,"depth":4}');
+    const edited = parseData('{"width":30,"depth":4}');
+    expect(json(applyOverrides(shown, edited, { depth: 9 }))).toBe(
+      '{"depth":9,"width":30}',
+    );
+  });
+  it("clears an override when the field is emptied", () => {
+    const shown = parseData('{"report":{"width":30}}');
+    const edited = parseData('{"report":{}}');
+    expect(json(applyOverrides(shown, edited, { report: { width: 30 } }))).toBe(
+      '{"report":{}}',
+    );
+  });
+  it("treats a replaced object or array as a single change", () => {
+    expect(
+      json(
+        applyOverrides(
+          { report: { width: 1, title: "A" } },
+          { report: { title: "B" } },
+          {},
+        ),
+      ),
+    ).toBe('{"report":{"title":"B"}}');
+    expect(json(applyOverrides({ rows: [1, 2] }, { rows: [1] }, {}))).toBe(
+      '{"rows":[1]}',
+    );
+  });
+});
+
+describe("managed request construction", () => {
+  it("sends the same layers the backend resolves", () => {
+    const doc = newDocument();
+    doc.asset = {
+      source: "{{ report.width }}",
+      defaults: { report: { width: 25 } },
+      schema: { type: "object" },
+      metadata: { parameters: { bindings: { "/report/width": "report-width" } } },
+    };
+    doc.context = { report: { width: 30 } };
+    const request = managedRequest(doc);
+    expect(request.bindings).toEqual({ "/report/width": "report-width" });
+    expect(encode(request.defaults)).toBe('{"report":{"width":25}}');
+    expect(encode(request.values)).toBe('{"report":{"width":30}}');
+    expect(request).not.toHaveProperty("preset_id");
+  });
+  it("keeps an explicit decline and omits an absent choice", () => {
+    const doc = newDocument();
+    doc.asset = { source: "", metadata: { parameters: { preset_id: "rough" } } };
+    doc.parameterSelection = { preset_id: null };
+    expect(managedRequest(doc).preset_id).toBeNull();
+    doc.parameterSelection = { preset_id: "finish" };
+    expect(managedRequest(doc).preset_id).toBe("finish");
+    doc.parameterSelection = undefined;
+    expect(managedRequest(doc)).not.toHaveProperty("preset_id");
+  });
+  it("lists only schema-backed fields", () => {
+    expect(
+      managedFields({ schema: { type: "object", properties: { a: {}, b: {} } } }),
+    ).toEqual(["a", "b"]);
+    expect(managedFields({ schema: true })).toEqual([]);
+    expect(managedFields(undefined)).toEqual([]);
+  });
+});
+
+describe("history restoration keeps the frozen preset choice", () => {
+  const managed = {
+    id: "template.render.managed",
+    ui_schema: {
+      document_input: {
+        bindings: { source: "source", template: "id", context: "context" },
+      },
+    },
+  };
+  function history(presetId: unknown): Run {
+    return {
+      id: "r1",
+      title: "History",
+      action: "template.render.managed",
+      input: {},
+      status: "succeeded",
+      started_at: 0,
+      result: {
+        data: {
+          replay_input: {
+            snapshot: { template: "t", templates: { t: "src" }, asset: {} },
+            parameter_request: { bindings: {}, values: { width: 30 } },
+            preset_id: presetId,
+          },
+        },
+        artifacts: [],
+        diagnostics: [],
+      },
+    };
+  }
+  it("restores a declined preset as an explicit decline", () => {
+    expect(restoreDocument(history(null), [managed]).parameterSelection).toEqual(
+      { preset_id: null },
+    );
+  });
+  it("restores a chosen preset and an absent one distinctly", () => {
+    expect(
+      restoreDocument(history("finish"), [managed]).parameterSelection,
+    ).toEqual({ preset_id: "finish" });
+    expect(
+      restoreDocument(history(undefined), [managed]).parameterSelection,
+    ).toEqual({});
   });
 });
