@@ -42,10 +42,25 @@ enum Commands {
         #[arg(long, conflicts_with = "out")]
         out_dir: Option<PathBuf>,
     },
+    /// Inspect or explicitly migrate saved legacy configuration without booting the app.
+    Config {
+        #[command(subcommand)]
+        command: ConfigCommand,
+    },
     /// Manage installed plugins; configuration changes apply at next start.
     Plugins {
         #[command(subcommand)]
         command: PluginCommand,
+    },
+}
+#[derive(Subcommand)]
+enum ConfigCommand {
+    /// Read-only legacy configuration report and proposed configuration/composition.
+    Check,
+    /// Apply migration after checking the exact fingerprint, preserving a backup.
+    Migrate {
+        #[arg(long)]
+        expected: String,
     },
 }
 #[derive(Subcommand)]
@@ -57,6 +72,22 @@ enum PluginCommand {
     Uninstall { id: String },
 }
 fn run(cli: Cli) -> PluginResult<()> {
+    if let Commands::Config { command } = &cli.command {
+        let home = cli.home.as_deref().ok_or_else(|| {
+            PluginError::new(
+                "explicit_home_required",
+                "配置检查/迁移必须显式指定 --home <目录>，不会自动读取或写入真实默认 home。",
+            )
+        })?;
+        let value = match command {
+            ConfigCommand::Check => App::migration_check_at(home)?,
+            ConfigCommand::Migrate { expected } => {
+                App::migration_apply_at(home, serde_json::from_str(expected)?)?
+            }
+        };
+        println!("{}", serde_json::to_string_pretty(&value)?);
+        return Ok(());
+    }
     let home = cli.home.unwrap_or_else(default_home);
     if let Commands::Plugins { command } = &cli.command {
         let value = match command {
@@ -64,19 +95,15 @@ fn run(cli: Cli) -> PluginResult<()> {
                 json!({"installed":config::install(&home,source)?,"enabled":false,"applies":"next_start"})
             }
             PluginCommand::Enable { id } => {
-                if ![
-                    "template",
-                    "parameters",
-                    "math",
-                    "nc",
-                    "nc-parameters",
-                    "nc-managed",
-                    "sync-turning",
-                    "undercut",
-                    "process",
-                    "process-parameters",
-                ]
-                .contains(&id.as_str())
+                config::ensure_plugin_allowed(id)?;
+                #[cfg(not(feature = "math"))]
+                if id == "math" {
+                    return Err(PluginError::new(
+                        "feature_unavailable",
+                        "此构建未包含 math；请使用 --features math 构建。",
+                    ));
+                }
+                if !config::BUILTIN_PLUGIN_IDS.contains(&id.as_str())
                     && !config::installed(&home)?
                         .iter()
                         .any(|(m, _)| &m.descriptor.id == id)
@@ -96,7 +123,7 @@ fn run(cli: Cli) -> PluginResult<()> {
             }
             PluginCommand::List => {
                 let (c, _) = config::load(&home)?;
-                json!({"config":c,"installed":config::installed(&home)?.into_iter().map(|(m,_)|m.descriptor).collect::<Vec<_>>(),"builtins":["template","parameters"],"nc_bundle_available":cfg!(feature="nc-bundle")})
+                json!({"config":c,"installed":config::installed(&home)?.into_iter().map(|(m,_)|m.descriptor).collect::<Vec<_>>(),"builtins":config::BUILTIN_PLUGIN_IDS,"math_available":cfg!(feature="math"),"retired_reserved_ids":config::RETIRED_PLUGIN_IDS})
             }
         };
         println!("{}", serde_json::to_string_pretty(&value)?);
@@ -150,7 +177,7 @@ fn run(cli: Cli) -> PluginResult<()> {
         Commands::Ui { host, port } => {
             tokio::runtime::Runtime::new()?.block_on(nctool_cli::server::serve(app, host, port))?
         }
-        Commands::Plugins { .. } => unreachable!(),
+        Commands::Plugins { .. } | Commands::Config { .. } => unreachable!(),
     }
     Ok(())
 }
@@ -198,10 +225,25 @@ fn deliver_artifacts(directory: &std::path::Path, artifacts: &[Artifact]) -> Plu
     std::fs::create_dir(&staging)?;
     let result = (|| {
         for artifact in artifacts {
-            nctool_runtime::config::write_output(
-                &staging.join(&artifact.name),
-                artifact.text.as_bytes(),
-            )?;
+            use std::io::Write;
+            // Let the target filesystem detect aliases as well as exact duplicates.
+            // Staging is private and is only published after every file succeeds.
+            let mut file = std::fs::OpenOptions::new()
+                .write(true)
+                .create_new(true)
+                .open(staging.join(&artifact.name))
+                .map_err(|error| {
+                    if error.kind() == std::io::ErrorKind::AlreadyExists {
+                        PluginError::new(
+                            "invalid_artifact",
+                            "artifact names resolve to the same file",
+                        )
+                    } else {
+                        error.into()
+                    }
+                })?;
+            file.write_all(artifact.text.as_bytes())?;
+            file.sync_all()?;
         }
         if directory.exists() {
             return Err(PluginError::new(
@@ -223,6 +265,88 @@ fn main() -> ExitCode {
         Err(error) => {
             eprintln!("{}", json!({"ok":false,"error":error}));
             ExitCode::FAILURE
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct OutputRoot(PathBuf);
+    impl OutputRoot {
+        fn new() -> Self {
+            let path = std::env::temp_dir().join(format!(
+                "nctool-delivery-{}-{}",
+                std::process::id(),
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap()
+                    .as_nanos()
+            ));
+            std::fs::create_dir(&path).unwrap();
+            Self(path)
+        }
+    }
+    impl Drop for OutputRoot {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_dir_all(&self.0);
+        }
+    }
+    fn artifact(name: &str, text: &str) -> Artifact {
+        Artifact {
+            name: name.into(),
+            media_type: "text/plain".into(),
+            text: text.into(),
+        }
+    }
+    #[test]
+    fn delivery_publishes_all_files_without_overwriting_existing_output() {
+        let root = OutputRoot::new();
+        let output = root.0.join("output");
+        let artifacts = [
+            artifact("first.txt", "FIRST"),
+            artifact("second.txt", "SECOND"),
+        ];
+        deliver_artifacts(&output, &artifacts).unwrap();
+        assert_eq!(
+            std::fs::read_to_string(output.join("first.txt")).unwrap(),
+            "FIRST"
+        );
+        assert_eq!(
+            std::fs::read_to_string(output.join("second.txt")).unwrap(),
+            "SECOND"
+        );
+        assert_eq!(
+            deliver_artifacts(&output, &artifacts).unwrap_err().code,
+            "conflict"
+        );
+        assert_eq!(std::fs::read_dir(&root.0).unwrap().count(), 1);
+    }
+    #[test]
+    fn invalid_delivery_leaves_no_partial_output() {
+        for names in [["same.txt", "same.txt"], ["valid.txt", "../escape.txt"]] {
+            let root = OutputRoot::new();
+            assert!(deliver_artifacts(
+                &root.0.join("output"),
+                &[artifact(names[0], "FIRST"), artifact(names[1], "SECOND")]
+            )
+            .is_err());
+            assert_eq!(std::fs::read_dir(&root.0).unwrap().count(), 0);
+        }
+    }
+    #[cfg(windows)]
+    #[test]
+    fn filesystem_aliases_reject_the_entire_delivery() {
+        for names in [["A.txt", "a.txt"], ["a.txt", "a.txt."], ["a.txt", "a.txt "]] {
+            let root = OutputRoot::new();
+            let error = deliver_artifacts(
+                &root.0.join("output"),
+                &[artifact(names[0], "FIRST"), artifact(names[1], "SECOND")],
+            )
+            .unwrap_err();
+            assert_eq!(error.code, "invalid_artifact");
+            assert_eq!(std::fs::read_dir(&root.0).unwrap().count(), 0);
         }
     }
 }

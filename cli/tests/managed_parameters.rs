@@ -86,77 +86,6 @@ fn shared_asset_removal_requires_a_string_fingerprint_and_preserves_conflicts() 
     );
 }
 
-#[cfg(feature = "nc-bundle")]
-#[test]
-fn managed_render_rejects_malformed_service_inputs_without_panicking() {
-    let f = Fixture::new("nc");
-    let frozen = f
-        .invoke(
-            "nc.managed.freeze",
-            json!({"source":"{{ X }}","operation_inputs":{"X":1}}),
-        )
-        .data;
-    let resolved = f
-        .invoke("nc.managed.resolve", json!({"managed_snapshot":frozen}))
-        .data;
-    for snapshot in [json!({}), json!({"format_version":1,"input":{}})] {
-        assert!(f
-            .app
-            .runtime
-            .invoke("nc.managed.resolve", json!({"managed_snapshot":snapshot}))
-            .is_err());
-        assert!(f
-            .app
-            .runtime
-            .invoke(
-                "nc.managed.render",
-                json!({"managed_snapshot":snapshot,"resolved":{},"prepared":{}})
-            )
-            .is_err());
-    }
-    for prepared in [
-        json!({}),
-        json!({"contexts":{}}),
-        json!({"contexts":[]}),
-        json!({"contexts":[null]}),
-        json!({"contexts":[{"X":null}]}),
-    ] {
-        assert!(f
-            .app
-            .runtime
-            .invoke(
-                "nc.managed.render",
-                json!({"managed_snapshot":frozen,"resolved":resolved,"prepared":prepared})
-            )
-            .is_err());
-    }
-    let prepared = json!({"contexts":[{"X":1}],"warnings":[]});
-    for invalid in [
-        json!({}),
-        json!({"operation":{"id":"direct","version":1},"inputs":{},"cutting":{},"cutting_request":{},"parameters":{"definitions":[]}}),
-    ] {
-        assert!(f
-            .app
-            .runtime
-            .invoke(
-                "nc.managed.render",
-                json!({"managed_snapshot":frozen,"resolved":invalid,"prepared":prepared})
-            )
-            .is_err());
-    }
-    assert_eq!(
-        f.invoke(
-            "nc.managed.render",
-            json!({"managed_snapshot":frozen,"resolved":resolved,"prepared":prepared})
-        )
-        .data["text"]
-            .as_str()
-            .unwrap()
-            .trim(),
-        "1"
-    );
-}
-
 #[test]
 fn shared_parameters_intersect_schemas_and_preserve_null_and_snapshots() {
     let f = Fixture::new("template");
@@ -250,277 +179,235 @@ fn shared_parameters_intersect_schemas_and_preserve_null_and_snapshots() {
         "unit_conflict"
     );
 }
-#[cfg(feature = "nc-bundle")]
-fn migrated() -> Fixture {
-    let f = Fixture::new("nc");
-    let bundle: Value =
-        serde_json::from_str(include_str!("../../examples/v3-managed/workspace.json")).unwrap();
-    f.app
-        .dispatch("POST", "/api/v2/bundle/import", json!({"bundle":bundle}))
-        .unwrap();
-    f
-}
-#[cfg(feature = "nc-bundle")]
+
 #[test]
-fn managed_generation_rejects_derived_inputs_and_replays_frozen_assets() {
-    let f = migrated();
-    let oracle: Value =
-        serde_json::from_str(include_str!("../../examples/v3-managed/oracle.json")).unwrap();
-    let c = &oracle[0];
-    let req = json!({"template":c["id"],"operation_inputs":c["inputs"],"trim_blocks":true,"lstrip_blocks":true});
-    let out = f.invoke("nc.generate.managed", req.clone());
+fn explicit_null_declines_the_saved_shared_preset_without_losing_asset_inheritance() {
+    let f = Fixture::new("template");
+    f.definition("depth", json!({"default":1}));
+    f.invoke("parameter.save",json!({"group":"presets","name":"rough","asset":{"format_version":1,"id":"rough","values":{"depth":4}}}));
+    f.invoke("template.save",json!({"name":"preset-guard","asset":{"source":"{{ depth }}","metadata":{"parameters":{"bindings":{"/depth":{"id":"depth"}},"preset_id":"rough"}}}}));
+    let bindings = json!({"/depth":{"id":"depth"}});
+
+    // Absent: the saved asset preset still applies.
+    let inherited = f.invoke(
+        "template.render.managed",
+        json!({"template":"preset-guard","bindings":bindings}),
+    );
+    assert_eq!(inherited.data["text"], "4");
+
+    // Explicit null declines it, falling back to the definition default.
+    let declined = f.invoke(
+        "template.render.managed",
+        json!({"template":"preset-guard","bindings":bindings,"preset_id":Value::Null}),
+    );
+    assert_eq!(declined.data["text"], "1");
     assert_eq!(
-        out.data["prepared"]["contexts"][0]["target_depths"],
-        json!([5., 10., 13.1])
+        declined.data["parameters"]["origins"]["/depth"],
+        "definition"
     );
-    let mut spoof = req.clone();
-    spoof["operation_inputs"]["target_depths"] = json!([1]);
-    assert!(f.app.runtime.invoke("nc.generate.managed", spoof).is_err());
-    let mut bypass = req.clone();
-    bypass["operation"] = json!({"id":"direct","version":1});
-    assert!(f.app.runtime.invoke("nc.generate.managed", bypass).is_err());
-    let asset = f.invoke("template.read", json!({"name":c["id"]})).data;
-    let mut limited = req.clone();
-    limited["machine"] = json!({"id":"limited","vendor":"Example","model":"Virtual","config":{"max_spindle_rpm":"2000"}});
-    assert!(f
-        .app
-        .runtime
-        .invoke("nc.generate.managed", limited)
-        .is_err());
-    let mut draft = req.clone();
-    draft["source"] = json!(format!(
-        "{}\n;本次源码草稿",
-        asset["asset"]["source"].as_str().unwrap()
-    ));
-    let drafted = f.invoke("nc.generate.managed", draft);
+    // The frozen request preserves the explicit decline.
+    assert!(declined.data["replay_input"]["parameter_request"]["preset_id"].is_null());
     assert_eq!(
-        f.invoke("nc.managed.check", drafted.data["replay_input"].clone())
-            .data["current"],
-        true
-    );
-    let mut changed = asset["asset"].clone();
-    changed["source"] = json!("NEW SOURCE");
-    f.invoke(
-        "template.save",
-        json!({"name":c["id"],"asset":changed,"expected":asset["fingerprint"]}),
-    );
-    assert_eq!(
-        f.invoke("nc.managed.check", out.data["replay_input"].clone())
-            .data["current"],
-        false
-    );
-    assert_eq!(
-        f.invoke("nc.generate.managed", out.data["replay_input"].clone())
-            .artifacts,
-        out.artifacts
-    );
-    let main = "v3-index-g420-1-0.mpf-a";
-    assert!(f
-        .app
-        .runtime
-        .invoke(
-            "nc.generate.managed",
-            json!({"template":main,"operation_inputs":{}})
-        )
-        .is_err());
-}
-#[cfg(feature = "nc-bundle")]
-#[test]
-fn slot_adjustments_recalculate_feed_require_confirmation_and_refuse_limits() {
-    let f = migrated();
-    for (group, id, asset) in [
-        ("tool_types", "mill", json!({"operation":"milling"})),
-        (
-            "tools",
-            "T1",
-            json!({"type_id":"mill","attributes":{"diameter":10,"teeth":4,"tool_num":"T1","tool_offset":"D1"}}),
-        ),
-        ("materials", "steel", json!({"title":"Steel"})),
-        (
-            "profiles",
-            "fixed",
-            json!({"tool_id":"T1","material_id":"steel","operation":"milling","mode":"fixed","feed_mode":"per_minute","values":{"rpm":1000,"feed":200}}),
-        ),
-        (
-            "profiles",
-            "calc",
-            json!({"type_id":"mill","material_id":"steel","operation":"milling","mode":"calculate","feed_mode":"per_minute","values":{"cutting_speed":100,"feed_per_tooth":0.05}}),
-        ),
-    ] {
-        let mut asset = asset;
-        asset["id"] = json!(id);
-        asset["format_version"] = json!(1);
         f.invoke(
-            "nc.parameter.save",
-            json!({"group":group,"name":id,"asset":asset}),
-        );
-    }
-    let mut req = json!({"selection":{"slots":{"rough":{"tool_id":"T1","material_id":"steel","operation":"milling","profile_id":"fixed","overrides":{"rpm":2000}}}}});
-    let r = f.invoke("nc.parameters.resolve", req.clone());
-    assert_eq!(r.data["slots"]["rough"]["values"]["feed"], 400.);
-    assert_eq!(r.data["needs_confirmation"], true);
-    req["selection"]["slots"]["rough"]["confirmed_for"] =
-        r.data["slots"]["rough"]["confirmed_for"].clone();
+            "template.render.managed",
+            declined.data["replay_input"].clone()
+        )
+        .data["text"],
+        "1"
+    );
+
+    // A chosen preset still wins over the inherited one.
+    f.invoke("parameter.save",json!({"group":"presets","name":"finish","asset":{"format_version":1,"id":"finish","values":{"depth":7}}}));
+    let chosen = f.invoke(
+        "template.render.managed",
+        json!({"template":"preset-guard","bindings":bindings,"preset_id":"finish"}),
+    );
+    assert_eq!(chosen.data["text"], "7");
+
+    // Resolve accepts the same decline, and snapshot + preset stay mutually exclusive.
     assert_eq!(
-        f.invoke("nc.parameters.resolve", req.clone()).data["needs_confirmation"],
-        false
+        f.invoke(
+            "parameter.resolve",
+            json!({"bindings":bindings,"preset_id":Value::Null})
+        )
+        .data["values"]["depth"],
+        1
     );
-    req["selection"]["slots"]["rough"]["overrides"]["rpm"] = json!(2100);
     assert_eq!(
-        f.invoke("nc.parameters.resolve", req.clone()).data["needs_confirmation"],
-        true
+        f.app
+            .runtime
+            .invoke(
+                "parameter.resolve",
+                json!({"bindings":bindings,"preset_id":"rough","snapshot":f.invoke("parameter.snapshot",json!({})).data}),
+            )
+            .unwrap_err()
+            .code,
+        "invalid_input"
     );
-    req["max_spindle_rpm"] = json!(2000);
-    assert!(f.app.runtime.invoke("nc.parameters.resolve", req).is_err());
-    let matches = f.invoke(
-        "nc.parameters.match",
-        json!({"tool_id":"T1","material_id":"steel","operation":"milling"}),
-    );
-    assert_eq!(matches.data["items"][0]["name"], "fixed");
-    let snapshot = f.invoke("nc.parameter.collection.export", json!({})).data;
-    let calculated=f.invoke("nc.parameters.resolve",json!({"snapshot":snapshot,"selection":{"slots":{"rough":{"tool_id":"T1","material_id":"steel","operation":"milling","profile_id":"calc"}}}}));
-    assert_eq!(calculated.data["slots"]["rough"]["values"]["rpm"], 3183.);
-    assert_eq!(calculated.data["slots"]["rough"]["values"]["feed"], 636.6);
-    let cases: Value =
-        serde_json::from_str(include_str!("../../examples/v3-managed/oracle.json")).unwrap();
-    let case = &cases[0];
-    let mut raw = case["inputs"].clone();
-    for field in ["tool_num", "tool_offset", "diameter", "teeth"] {
-        raw["rough_tool"].as_object_mut().unwrap().remove(field);
-    }
-    let selected = json!({"template":case["id"],"operation_inputs":raw,"parameter_selection":{"slots":{"rough":{"tool_id":"T1","material_id":"steel","operation":"milling","profile_id":"fixed"}}}});
-    let mut incompatible = selected.clone();
-    incompatible["parameter_selection"]["slots"]["rough"] = json!({"tool_id":"T1","material_id":"steel","operation":"milling","manual":true,"mode":"fixed","feed_mode":"per_revolution","inputs":{"rpm":1000,"feed":0.2}});
-    assert!(f
-        .app
-        .runtime
-        .invoke("nc.generate.managed", incompatible)
-        .is_err());
-    assert_eq!(
-        f.invoke("nc.generate.managed", selected.clone()).data["prepared"]["contexts"][0]
-            ["rough_vf"],
-        200.
-    );
-    let mut spoofed = selected.clone();
-    spoofed["operation_inputs"]["rough_tool"]["teeth"] = json!(5);
-    assert!(f
-        .app
-        .runtime
-        .invoke("nc.generate.managed", spoofed)
-        .is_err());
-    let tool = f
-        .invoke("nc.parameter.read", json!({"group":"tools","name":"T1"}))
-        .data;
-    let mut no_teeth = tool["asset"].clone();
-    no_teeth["attributes"]
-        .as_object_mut()
-        .unwrap()
-        .remove("teeth");
-    f.invoke(
-        "nc.parameter.save",
-        json!({"group":"tools","name":"T1","asset":no_teeth,"expected":tool["fingerprint"]}),
-    );
-    assert!(f
-        .app
-        .runtime
-        .invoke("nc.generate.managed", selected)
-        .is_ok());
-    for (operation, rpm, feed) in [("drilling", 3183., 954.9), ("turning", 637., 191.1)] {
-        f.invoke("nc.parameter.save",json!({"group":"tool_types","name":operation,"asset":{"format_version":1,"id":operation,"operation":operation}}));
-        f.invoke("nc.parameter.save",json!({"group":"tools","name":operation,"asset":{"format_version":1,"id":operation,"type_id":operation,"attributes":{"diameter":10}}}));
-        let selection = json!({"slots":{"cut":{"tool_id":operation,"material_id":"steel","operation":operation,"manual":true,"mode":"calculate","feed_mode":"per_minute","inputs":{"cutting_speed":100,"feed_per_revolution":0.3,"work_diameter":50}}}});
-        let resolved = f.invoke("nc.parameters.resolve", json!({"selection":selection}));
-        assert_eq!(resolved.data["slots"]["cut"]["values"]["rpm"], rpm);
-        assert_eq!(resolved.data["slots"]["cut"]["values"]["feed"], feed);
-        let mut per_rev = selection;
-        per_rev["slots"]["cut"]["feed_mode"] = json!("per_revolution");
-        assert_eq!(
-            f.invoke("nc.parameters.resolve", json!({"selection":per_rev}))
-                .data["slots"]["cut"]["values"]["feed"],
-            0.3
-        );
-    }
-}
-#[cfg(feature = "nc-bundle")]
-#[test]
-fn named_outputs_are_continuously_numbered_and_late_failure_delivers_nothing() {
-    let f = Fixture::new("nc");
-    let req = json!({"options":{"line_numbers":true},"ops":[{"id":"a","source":"G0 X1"},{"id":"b","source":"G1 X2"}],"outputs":[{"name":"main.MPF","segments":[{"op":"a"},{"op":"b"}]},{"name":"one.SPF","segments":[{"op":"a"}]}]});
-    let r = f.invoke("process.generate.managed", req.clone());
-    assert_eq!(r.artifacts[0].text, "N0010 G0 X1\nN0020 G1 X2\n");
-    assert_eq!(r.artifacts[1].text, "N0010 G0 X1\n");
-    assert_eq!(
-        f.invoke("process.generate.managed", r.data["replay_input"].clone())
-            .artifacts,
-        r.artifacts
-    );
-    let mut fail = req;
-    fail["ops"][1]["source"] = json!("G1 X{{ missing }}");
-    assert!(f
-        .app
-        .runtime
-        .invoke("process.generate.managed", fail)
-        .is_err());
-    let malformed =
-        json!({"process_snapshot":{"format_version":1,"input":{"ops":[null]},"frozen_ops":[null]}});
-    assert!(f
-        .app
-        .runtime
-        .invoke("process.generate.managed", malformed)
-        .is_err());
-    let mixed = json!({"ops":[{"id":"a","source":"G0 X1"},{"id":"b","source":"G1 X2","machine":{"id":"different","vendor":"Example","model":"Virtual","config":{}}}],"outputs":[{"name":"mixed.SPF","segments":[{"op":"a"},{"op":"b"}]}]});
-    assert!(f
-        .app
-        .runtime
-        .invoke("process.generate.managed", mixed)
-        .is_err());
 }
 
-#[cfg(feature = "nc-bundle")]
 #[test]
-fn cli_delivers_all_files_atomically_and_preserves_existing_outputs() {
-    let f = Fixture::new("nc");
-    let input = f.root.join("input.json");
-    let request = json!({"ops":[{"id":"a","source":"G0 X1"},{"id":"b","source":"G1 X2"}],"outputs":[{"name":"main.MPF","segments":[{"op":"a"}]},{"name":"sub.SPF","segments":[{"op":"b"}]}]});
-    std::fs::write(&input, serde_json::to_vec(&request).unwrap()).unwrap();
-    let run = |flag: &str, path: &std::path::Path| {
-        std::process::Command::new(env!("CARGO_BIN_EXE_nctool"))
-            .arg("--home")
-            .arg(f.root.join("home"))
-            .arg("--workspace")
-            .arg(f.root.join("workspace"))
-            .args([
-                "--profile",
-                "nc",
-                "run",
-                "process.generate.managed",
-                "--input",
-            ])
-            .arg(&input)
-            .arg(flag)
-            .arg(path)
-            .output()
-            .unwrap()
-    };
-    let output = f.root.join("all-files");
-    assert!(run("--out-dir", &output).status.success());
-    assert_eq!(
-        std::fs::read_to_string(output.join("main.MPF")).unwrap(),
-        "G0 X1\n"
+fn dependency_check_detects_a_previously_missing_optional_reference() {
+    let f = Fixture::new("template");
+    // The optional reference does not resolve yet, so the first result renders AZ.
+    let first = f.invoke(
+        "template.render.managed",
+        json!({"source":"A{% include \"optional\" ignore missing %}Z"}),
+    );
+    assert_eq!(first.data["text"], "AZ");
+    let replay = first.data["replay_input"].clone();
+    assert!(replay["snapshot"]["templates"]["optional"].is_null());
+
+    // Creating the referenced template changes what this template actually renders.
+    f.invoke(
+        "template.save",
+        json!({"name":"optional","asset":{"source":"NEW"}}),
     );
     assert_eq!(
-        std::fs::read_to_string(output.join("sub.SPF")).unwrap(),
-        "G1 X2\n"
+        f.invoke(
+            "template.render.managed",
+            json!({"source":"A{% include \"optional\" ignore missing %}Z"})
+        )
+        .data["text"],
+        "ANEWZ"
     );
-    assert!(!run("--out-dir", &output).status.success());
-    let single = f.root.join("single.nc");
-    std::fs::write(&single, "keep me").unwrap();
-    assert!(!run("--out", &single).status.success());
-    assert_eq!(std::fs::read_to_string(&single).unwrap(), "keep me");
-    let mut fail = request;
-    fail["ops"][1]["source"] = json!("G1 X{{ missing }}");
-    std::fs::write(&input, serde_json::to_vec(&fail).unwrap()).unwrap();
-    let rejected = f.root.join("rejected");
-    assert!(!run("--out-dir", &rejected).status.success());
-    assert!(!rejected.exists());
+
+    // The frozen result must now be reported as stale, with the resolved dependency named.
+    let check = f.invoke(
+        "parameter.dependencies.check",
+        json!({"snapshot":replay["parameter_snapshot"],"template_snapshot":replay["snapshot"]}),
+    );
+    assert_eq!(check.data["current"], false);
+    assert_eq!(check.data["changes"], json!(["templates/optional"]));
+
+    // The frozen replay itself still reproduces the original AZ: history is never rewritten.
+    assert_eq!(
+        f.invoke("template.render.managed", replay.clone()).data["text"],
+        "AZ"
+    );
+}
+
+#[test]
+fn dependency_check_ignores_new_templates_the_frozen_sources_never_reference() {
+    let f = Fixture::new("template");
+    let first = f.invoke(
+        "template.render.managed",
+        json!({"source":"A{% include \"optional\" ignore missing %}Z"}),
+    );
+    let replay = first.data["replay_input"].clone();
+    // An unrelated addition is not a dependency of this result.
+    f.invoke(
+        "template.save",
+        json!({"name":"unrelated","asset":{"source":"OTHER"}}),
+    );
+    assert_eq!(
+        f.invoke(
+            "parameter.dependencies.check",
+            json!({"snapshot":replay["parameter_snapshot"],"template_snapshot":replay["snapshot"]})
+        )
+        .data,
+        json!({"current":true,"changes":[]})
+    );
+
+    // A reference that was frozen but unresolved still cannot be walked into, because the
+    // frozen collection has no source for it. Resolving it is reported by its own name.
+    f.invoke(
+        "template.save",
+        json!({"name":"optional","asset":{"source":"NEW"}}),
+    );
+    assert_eq!(
+        f.invoke(
+            "parameter.dependencies.check",
+            json!({"snapshot":replay["parameter_snapshot"],"template_snapshot":replay["snapshot"]})
+        )
+        .data["changes"],
+        json!(["templates/optional"])
+    );
+}
+
+#[test]
+fn dependency_check_follows_the_frozen_reference_walk_transitively() {
+    let f = Fixture::new("template");
+    // The optional reference is frozen with a real source, so its own nested reference
+    // is part of this result's dependency set.
+    f.invoke(
+        "template.save",
+        json!({"name":"optional","asset":{"source":"{% include \"nested\" ignore missing %}"}}),
+    );
+    let first = f.invoke(
+        "template.render.managed",
+        json!({"source":"A{% include \"optional\" ignore missing %}Z"}),
+    );
+    let replay = first.data["replay_input"].clone();
+    assert_eq!(
+        f.invoke(
+            "parameter.dependencies.check",
+            json!({"snapshot":replay["parameter_snapshot"],"template_snapshot":replay["snapshot"]})
+        )
+        .data,
+        json!({"current":true,"changes":[]})
+    );
+
+    // Resolving the nested reference behind it is detected one level deeper.
+    f.invoke(
+        "template.save",
+        json!({"name":"nested","asset":{"source":"DEEP"}}),
+    );
+    assert_eq!(
+        f.invoke(
+            "parameter.dependencies.check",
+            json!({"snapshot":replay["parameter_snapshot"],"template_snapshot":replay["snapshot"]})
+        )
+        .data,
+        json!({"current":false,"changes":["templates/nested"]})
+    );
+}
+
+#[test]
+fn dependency_check_still_detects_removed_and_edited_reachable_dependencies() {
+    let f = Fixture::new("template");
+    f.invoke(
+        "template.save",
+        json!({"name":"shared","asset":{"source":"NEW"}}),
+    );
+    let saved = f.invoke("template.read", json!({"name":"shared"})).data["fingerprint"].clone();
+    let first = f.invoke(
+        "template.render.managed",
+        json!({"source":"X{% include \"shared\" ignore missing %}"}),
+    );
+    assert_eq!(first.data["text"], "XNEW");
+    let replay = first.data["replay_input"].clone();
+    let unchanged =
+        json!({"snapshot":replay["parameter_snapshot"],"template_snapshot":replay["snapshot"]});
+    assert_eq!(
+        f.invoke("parameter.dependencies.check", unchanged.clone())
+            .data,
+        json!({"current":true,"changes":[]})
+    );
+
+    // Editing a reachable dependency invalidates the frozen result.
+    f.invoke(
+        "template.save",
+        json!({"name":"shared","asset":{"source":"CHANGED"},"expected":saved}),
+    );
+    assert_eq!(
+        f.invoke("parameter.dependencies.check", unchanged.clone())
+            .data,
+        json!({"current":false,"changes":["templates/shared"]})
+    );
+
+    // Removing it is detected too, and the frozen replay still produces the original text.
+    let edited = f.invoke("template.read", json!({"name":"shared"})).data["fingerprint"].clone();
+    f.invoke(
+        "template.remove",
+        json!({"name":"shared","expected":edited}),
+    );
+    assert_eq!(
+        f.invoke("parameter.dependencies.check", unchanged).data,
+        json!({"current":false,"changes":["templates/shared"]})
+    );
+    assert_eq!(
+        f.invoke("template.render.managed", replay).data["text"],
+        "XNEW"
+    );
 }

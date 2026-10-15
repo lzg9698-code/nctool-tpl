@@ -47,6 +47,7 @@ impl TemplatePlugin {
             .to_owned();
         let mut root_asset = None;
         let mut sources = BTreeMap::new();
+        let mut metadata = BTreeMap::new();
         let mut loaded_bytes = 0;
         for name in self.templates.list().map_err(asset_error)? {
             let (asset, _) = self.templates.read(&name).map_err(asset_error)?;
@@ -61,6 +62,7 @@ impl TemplatePlugin {
                 ));
             }
             sources.insert(name.clone(), source.into());
+            metadata.insert(name.clone(), asset["metadata"].clone());
             if name == root_name {
                 root_asset = Some(asset);
             }
@@ -83,10 +85,16 @@ impl TemplatePlugin {
         if let Some(source) = input.get("source").and_then(Value::as_str) {
             sources.insert(name.clone(), source.into());
         }
+        // Overriding a saved source never clears its compatibility intent.
+        for name in sources.keys() {
+            metadata.entry(name.clone()).or_insert(Value::Null);
+        }
         let snapshot = TemplateSnapshot {
+            format_version: 2,
             template: name,
             templates: sources,
             asset: root_asset,
+            metadata: Some(metadata),
         };
         check_snapshot(&snapshot)?;
         Ok(snapshot)
@@ -131,11 +139,12 @@ impl TemplatePlugin {
         Ok(result)
     }
     fn render(&self, input: Value, ctx: &Context) -> PluginResult<ActionResult> {
-        let TemplateSnapshot {
-            template: name,
-            templates: sources,
-            asset,
-        } = self.sources(&input)?;
+        let snapshot = self.sources(&input)?;
+        let name = snapshot.template.clone();
+        let asset = snapshot.asset.clone();
+        if let Some(asset) = &asset {
+            ensure_generic_template(asset)?;
+        }
         let mut renderer = Renderer::new();
         if input
             .get("lenient")
@@ -163,9 +172,32 @@ impl TemplatePlugin {
             })
             .unwrap_or_default();
         ctx.extend(&mut renderer, &extensions)?;
-        for (name, source) in sources {
-            renderer.add_template(name, source)?;
-        }
+        // Check only names actually loaded by Jinja, including dynamic references.
+        // A shared slot preserves the plugin error through MiniJinja's error wrapping.
+        let load_error = std::sync::Arc::new(Mutex::new(None));
+        let captured_error = load_error.clone();
+        renderer.set_loader(move |name| {
+            let Some(source) = snapshot.templates.get(name) else {
+                return Ok(None);
+            };
+            let check = if name == snapshot.template {
+                Ok(()) // root asset is checked above; version 2 metadata is checked below
+            } else if snapshot.format_version == 1 {
+                Err(PluginError::new("snapshot_compatibility", "旧模板快照缺少依赖元数据，禁止依赖重放；请从当前资产重新检查并建立快照。原历史产物仍可查看。"))
+            } else {
+                Ok(())
+            }.and_then(|()| match &snapshot.metadata {
+                Some(metadata) => ensure_generic_template(&json!({"metadata":metadata[name]})),
+                None => Ok(()),
+            });
+            if let Err(error) = check {
+                let message = error.message.clone();
+                *captured_error.lock().unwrap() = Some(error);
+                return Err(nctool_tpl::EngineError::new(
+                    nctool_tpl::EngineErrorKind::InvalidOperation, message));
+            }
+            Ok(Some(source.clone()))
+        });
         let mut context = input.get("context").cloned().unwrap_or_else(|| json!({}));
         if let Some(defaults) = input
             .get("defaults")
@@ -186,7 +218,11 @@ impl TemplatePlugin {
             validate_schema(schema, &context, "validation")?;
         }
         ctx.cancellation.check()?;
-        let text = renderer.render_template(&name, &nctool_tpl::Value::from_serialize(context))?;
+        let rendered = renderer.render_template(&name, &nctool_tpl::Value::from_serialize(context));
+        if let Some(error) = load_error.lock().unwrap().take() {
+            return Err(error);
+        }
+        let text = rendered?;
         ctx.cancellation.check()?;
         Ok(ActionResult::text(
             &format!("{name}.txt"),
@@ -195,7 +231,41 @@ impl TemplatePlugin {
         ))
     }
 }
+/// Compatibility intent is checked independently of the active capability inventory.
+/// Arbitrary third-party metadata does not imply a retired NC template.
+pub fn ensure_generic_template(asset: &Value) -> PluginResult<()> {
+    let metadata = &asset["metadata"];
+    let retired = metadata.get("nc").is_some()
+        || metadata["execution"]["action"]
+            .as_str()
+            .is_some_and(|action| {
+                ["nc.", "machine.", "process.", "sync-turning.", "undercut."]
+                    .iter()
+                    .any(|prefix| action.starts_with(prefix))
+            });
+    if retired {
+        return Err(PluginError::new("retired_template", "模板保留旧加工执行意图（metadata.nc 或退役 execution.action）；允许保存、查看和编辑，禁止普通/受管渲染静默降级。请显式移除加工意图并核对含义，或使用独立加工产品。"));
+    }
+    Ok(())
+}
 fn check_snapshot(snapshot: &TemplateSnapshot) -> PluginResult<()> {
+    match snapshot.format_version {
+        1 if snapshot.metadata.is_none() => {}
+        2 if snapshot.metadata.as_ref().is_some_and(|metadata| {
+            metadata.len() == snapshot.templates.len()
+                && snapshot
+                    .templates
+                    .keys()
+                    .all(|name| metadata.contains_key(name))
+        }) => {}
+        1 | 2 => {
+            return Err(PluginError::new(
+                "snapshot_invalid",
+                "模板快照元数据与格式或源码集合不匹配",
+            ))
+        }
+        _ => return Err(PluginError::new("snapshot_version", "不支持的模板快照版本")),
+    }
     if !snapshot.templates.contains_key(&snapshot.template) {
         return Err(PluginError::new("template_not_found", &snapshot.template));
     }
@@ -222,7 +292,7 @@ fn render_schema() -> Value {
     json!({"type":"object","properties":{
         "source":{"type":"string","maxLength":1048576},"template":{"type":"string"},
         "include_snapshot":{"type":"boolean"},
-        "snapshot":{"type":"object","required":["template","templates"],"properties":{"template":{"type":"string"},"templates":{"type":"object","additionalProperties":{"type":"string"}},"asset":{"type":["object","null"]}},"additionalProperties":false},
+        "snapshot":{"type":"object","required":["template","templates"],"properties":{"template":{"type":"string"},"templates":{"type":"object","additionalProperties":{"type":"string"}},"asset":{"type":["object","null"]},"format_version":{"type":"integer","enum":[1,2]},"metadata":{"type":"object"}},"additionalProperties":false},
         "context":{"type":"object"},"templates":{"type":"object","additionalProperties":{"type":"string"}},
         "lenient":{"type":"boolean"},"extensions":{"type":"array","items":{"type":"string"}},
         "schema":{"type":["object","boolean"]},"defaults":{"type":"object"},"trim_blocks":{"type":"boolean"},"lstrip_blocks":{"type":"boolean"}
@@ -448,7 +518,7 @@ impl TemplatePlugin {
     pub fn action_definitions() -> Vec<ActionDescriptor> {
         let mut render = ActionDescriptor::new("template.render", "渲染文本", render_schema());
         render.ui_schema = Some(
-            json!({"document_input":{"title":"普通文本","default":true,"description":"通用 Jinja 渲染，不注入领域上下文。","bindings":{"source":"source","template":"id","context":"context","schema":"schema","defaults":"defaults"}}}),
+            json!({"document_input":{"title":"普通文本","default":true,"description":"通用 Jinja 渲染，不注入领域上下文。","bindings":{"source":"source","template":"id","context":"context","schema":"schema","defaults":"defaults","extensions":"extensions"}}}),
         );
         render.example = json!({"source":"Hello {{ user.name }}!{% for item in items %}\n- {{ item }}{% endfor %}","context":{"user":{"name":"Ada"},"items":["templates","plugins"]}});
         let inspect = ActionDescriptor::new("template.inspect", "检查变量", render_schema());

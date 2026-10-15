@@ -197,6 +197,18 @@ impl Renderer {
             .map_err(|err| from_minijinja_error(err, &name, Some(&source)))
     }
 
+    /// Set a lazy loader for named templates, including dynamic Jinja references.
+    ///
+    /// Return `Ok(None)` only for missing templates. Other errors abort loading even
+    /// for `ignore missing` or candidate includes. Already registered templates take
+    /// precedence, so callers enforcing load policy must use this loader exclusively.
+    pub fn set_loader<F>(&mut self, loader: F)
+    where
+        F: Fn(&str) -> Result<Option<String>, minijinja::Error> + Send + Sync + 'static,
+    {
+        self.env.set_loader(loader);
+    }
+
     /// 从文件系统目录动态加载模板。
     ///
     /// 目录下的文件按**文件名（含扩展名）**作为模板名引用，例如

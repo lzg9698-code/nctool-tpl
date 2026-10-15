@@ -337,10 +337,19 @@ pub fn parse_json(bytes: &[u8]) -> PluginResult<Value> {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct TemplateSnapshot {
+    /// Snapshot format, independent of the JSON-RPC and service versions.
+    #[serde(default = "legacy_template_snapshot_version")]
+    pub format_version: u32,
     pub template: String,
     pub templates: std::collections::BTreeMap<String, String>,
     #[serde(default)]
     pub asset: Option<Value>,
+    /// Version 2 freezes metadata for every source, including null for inline sources.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<std::collections::BTreeMap<String, Value>>,
+}
+fn legacy_template_snapshot_version() -> u32 {
+    1
 }
 
 /// Optional storage contributions keep collection export/import out of the host's domain logic.

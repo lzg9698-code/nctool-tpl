@@ -2,7 +2,7 @@
 use nctool_assets::{GroupGuard, JsonStore, WriteError};
 use nctool_plugin_sdk::*;
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     path::{Path, PathBuf},
 };
 
@@ -391,7 +391,8 @@ pub fn resolve(input: &Value, snapshot: &Value) -> PluginResult<Value> {
             }
         }
     }
-    if let Some(id) = input["preset_id"].as_str() {
+    // An explicit null declines the preset; an absent field inherits the request default.
+    if let Some(id) = input.get("preset_id").and_then(Value::as_str) {
         let preset = record(snapshot, "presets", id)?;
         validate_parameter("presets", id, preset)?;
         for (pointer, definition) in definitions.as_object().unwrap() {
@@ -487,14 +488,15 @@ impl ParametersPlugin {
             json!({"type":"object","additionalProperties":false}),
         ));
         actions.push(ActionDescriptor::new("parameter.dependencies.check","核对参数依赖",json!({"type":"object","required":["snapshot"],"properties":{"snapshot":{"type":"object"},"template_snapshot":{"type":"object"}},"additionalProperties":false})));
-        actions.push(ActionDescriptor::new("parameter.resolve","解析参数",json!({"type":"object","properties":{"bindings":{"type":"object"},"defaults":{"type":"object"},"values":{"type":"object"},"schema":{"type":["object","boolean"]},"preset_id":{"type":"string"},"snapshot":{"type":"object"}},"additionalProperties":false})));
+        // An explicit null declines the asset preset; only an absent field falls back to it.
+        actions.push(ActionDescriptor::new("parameter.resolve","解析参数",json!({"type":"object","properties":{"bindings":{"type":"object"},"fallback_defaults":{"type":"object"},"defaults":{"type":"object"},"values":{"type":"object"},"schema":{"type":["object","boolean"]},"preset_id":{"type":["string","null"]},"snapshot":{"type":"object"}},"additionalProperties":false})));
         let mut render = ActionDescriptor::new(
             "template.render.managed",
             "共享参数渲染",
-            json!({"type":"object","properties":{"source":{"type":"string"},"template":{"type":"string"},"templates":{"type":"object"},"snapshot":{"type":"object"},"context":{"type":"object"},"schema":{"type":["object","boolean"]},"defaults":{"type":"object"},"bindings":{"type":"object"},"preset_id":{"type":"string"},"parameter_snapshot":{"type":"object"},"parameter_request":{"type":"object"},"trim_blocks":{"type":"boolean"},"lstrip_blocks":{"type":"boolean"}},"anyOf":[{"required":["source"]},{"required":["template"]},{"required":["snapshot"]}],"additionalProperties":false}),
+            json!({"type":"object","properties":{"source":{"type":"string"},"template":{"type":"string"},"templates":{"type":"object"},"snapshot":{"type":"object"},"context":{"type":"object"},"schema":{"type":["object","boolean"]},"defaults":{"type":"object"},"bindings":{"type":"object"},"preset_id":{"type":["string","null"]},"parameter_snapshot":{"type":"object"},"parameter_request":{"type":"object"},"extensions":{"type":"array","items":{"type":"string"}},"trim_blocks":{"type":"boolean"},"lstrip_blocks":{"type":"boolean"}},"anyOf":[{"required":["source"]},{"required":["template"]},{"required":["snapshot"]}],"additionalProperties":false}),
         );
         render.ui_schema = Some(
-            json!({"document_input":{"title":"共享参数模板","match_metadata":"parameters","bindings":{"source":"source","template":"id","context":"context","schema":"schema","defaults":"defaults","bindings":"metadata.parameters.bindings","preset_id":"parameter_preset_id"}}}),
+            json!({"document_input":{"title":"共享参数模板","match_metadata":"parameters","bindings":{"source":"source","template":"id","context":"context","schema":"schema","defaults":"defaults","bindings":"metadata.parameters.bindings","preset_id":"parameter_preset_id","extensions":"extensions"}}}),
         );
         actions.push(render);
         actions
@@ -517,6 +519,9 @@ impl Plugin for ParametersPlugin {
                 let name = templates["template"]
                     .as_str()
                     .ok_or_else(|| PluginError::new("snapshot_invalid", "缺少模板快照入口"))?;
+                let frozen = templates["templates"]
+                    .as_object()
+                    .ok_or_else(|| PluginError::new("snapshot_invalid", "缺少模板快照来源"))?;
                 let current = ctx
                     .call(
                         "template.inspect",
@@ -525,11 +530,25 @@ impl Plugin for ParametersPlugin {
                     )?
                     .data["snapshot"]
                     .clone();
-                for (key, value) in templates["templates"]
-                    .as_object()
-                    .ok_or_else(|| PluginError::new("snapshot_invalid", "缺少模板快照来源"))?
-                {
-                    if key != name && current["templates"].get(key) != Some(value) {
+                // Which templates this result depends on is decided by the frozen collection,
+                // not by the storage inventory. Inspecting the frozen snapshot walks
+                // include/import/from/extends, so an optional reference that was unresolvable
+                // when the result was produced stays in the comparison set and its later
+                // resolution is detected. Names the frozen sources never reference are not
+                // dependencies, so new unrelated assets never report the result as stale.
+                let reachable: BTreeSet<String> = ctx
+                    .call("template.inspect", 1, json!({"snapshot":templates}))?
+                    .data["references"]
+                    .as_array()
+                    .ok_or_else(|| PluginError::new("snapshot_invalid", "缺少模板快照引用"))?
+                    .iter()
+                    .filter_map(Value::as_str)
+                    .map(str::to_owned)
+                    .collect();
+                for key in reachable {
+                    // The root source stays excluded: an inline root is a caller draft and a
+                    // saved root keeps its own asset comparison under template_metadata.
+                    if key != name && current["templates"].get(key.as_str()) != frozen.get(&key) {
                         changes.push(format!("templates/{key}"));
                     }
                 }
@@ -542,7 +561,9 @@ impl Plugin for ParametersPlugin {
             ));
         }
         if action == "parameter.resolve" {
-            if input.get("snapshot").is_some() && input.get("preset_id").is_some() {
+            if input.get("snapshot").is_some()
+                && input.get("preset_id").is_some_and(Value::is_string)
+            {
                 return Err(PluginError::new("invalid_input", "快照与预置选择互斥"));
             }
             let snapshot = match input.get("snapshot") {
@@ -552,7 +573,9 @@ impl Plugin for ParametersPlugin {
             return resolve(&input, &snapshot).map(ActionResult::data);
         }
         if action == "template.render.managed" {
-            if input.get("parameter_snapshot").is_some() && input.get("preset_id").is_some() {
+            if input.get("parameter_snapshot").is_some()
+                && input.get("preset_id").is_some_and(Value::is_string)
+            {
                 return Err(PluginError::new("invalid_input", "快照与预置选择互斥"));
             }
             let mut inspect = json!({"include_snapshot":true});
@@ -569,12 +592,11 @@ impl Plugin for ParametersPlugin {
             };
             let mut request = json!({"bindings":effective_bindings(&asset["metadata"]["parameters"]["bindings"],input.get("bindings"))?,"values":input.get("context").cloned().unwrap_or_else(||json!({})),"defaults":input.get("defaults").cloned().or_else(||asset.get("defaults").cloned()).unwrap_or_else(||json!({}))});
             for key in ["schema", "preset_id"] {
-                if let Some(v) = input.get(key).or_else(|| {
-                    if key == "schema" {
-                        asset.get(key)
-                    } else {
-                        asset["metadata"]["parameters"].get(key)
-                    }
+                // or_else runs only when the field is absent, so an explicit preset_id
+                // (including an explicit null declining it) overrides the saved asset choice.
+                if let Some(v) = input.get(key).or_else(|| match key {
+                    "schema" => asset.get(key),
+                    _ => asset["metadata"]["parameters"].get(key),
                 }) {
                     request[key] = v.clone();
                 }
@@ -611,6 +633,11 @@ impl Plugin for ParametersPlugin {
                 )?;
             }
             let mut rendered_input = json!({"snapshot":snapshot,"context":resolved["values"],"schema":true,"defaults":{}});
+            // The explicit extension list travels with immutable replay input.
+            rendered_input["extensions"] = input
+                .get("extensions")
+                .cloned()
+                .unwrap_or_else(|| json!([]));
             for key in ["trim_blocks", "lstrip_blocks"] {
                 if let Some(v) = input.get(key) {
                     rendered_input[key] = v.clone();
