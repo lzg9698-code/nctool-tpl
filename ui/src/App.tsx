@@ -7,6 +7,15 @@ import {
 import { WorkspaceImport } from "./components/WorkspaceImport";
 import { useManagedDependencies } from "./lib/managedDependencies";
 import { ParameterSelection } from "./plugins/ParameterViews";
+import { SharedParameterInputs } from "./components/SharedParameterInputs";
+import {
+  sharedParameterDocument,
+  initialDocumentContext,
+  resetDocumentParameters,
+  documentForGeneration,
+  templatePresetParameters,
+  loadTemplatePresetParameters,
+} from "./lib/appDocumentParameters";
 import { managedFormSchema } from "./lib/managedParameters";
 import { SyntaxGuide } from "./components/SyntaxGuide";
 import { PluginPage } from "./components/PluginPage";
@@ -66,7 +75,6 @@ import {
   newDocument,
   isDirty,
   documentValue,
-  defaultValue,
   mergeDefaults,
   download,
   diagnosticsFrom,
@@ -110,14 +118,13 @@ function prepareDocument(
   id: string,
   asset: Asset,
   fingerprint: string,
+  actionId?: string,
 ): Document {
   const doc = newDocument();
   doc.id = id;
   doc.title = asset.metadata?.title || id;
   doc.asset = asset;
-  doc.context = asset.metadata?.parameters
-    ? clone(asset.defaults || {})
-    : mergeDefaults(defaultValue(normalizeSchema(asset)), asset.defaults);
+  doc.context = initialDocumentContext(asset, actionId);
   doc.fingerprint = fingerprint;
   doc.mode = "use";
   doc.outputName = asset.metadata?.output_name || id + ".txt";
@@ -175,6 +182,9 @@ export default function App() {
   const visibleDocuments = generalDocuments(documents);
   const doc = visibleDocuments.find((d) => d.key === active);
   useEffect(() => {
+    setJsonError("");
+  }, [active]);
+  useEffect(() => {
     if (
       active &&
       documents.some((d) => d.key === active) &&
@@ -191,6 +201,15 @@ export default function App() {
       )
     : {};
   const generation = selection.entry;
+  const sharedParameters =
+    !!doc && sharedParameterDocument(doc.asset, generation?.id);
+  function actionForAsset(asset: Asset) {
+    return selectDocumentAction(
+      { ...newDocument(), asset },
+      capabilities.actions,
+      capabilities.document_actions,
+    ).entry?.id;
+  }
   const latest =
     doc && execution[doc.key] ? runs[execution[doc.key].id] : undefined;
   const managedDependencies = useManagedDependencies(latest);
@@ -381,7 +400,7 @@ export default function App() {
     }
     window.addEventListener("keydown", keys);
     return () => window.removeEventListener("keydown", keys);
-  }, [doc, saving, capabilities]);
+  }, [doc, saving, capabilities, jsonError, submitting]);
   useEffect(() => {
     const pending = Object.values(runs).filter((r) =>
       ["queued", "running"].includes(r.status),
@@ -425,6 +444,7 @@ export default function App() {
         item.id,
         result.data.asset,
         result.data.fingerprint,
+        actionForAsset(result.data.asset),
       );
       setDocuments((docs) => [...docs, loaded]);
       setActive(loaded.key);
@@ -575,6 +595,7 @@ export default function App() {
                           doc.id,
                           response.data.asset,
                           response.data.fingerprint,
+                          actionForAsset(response.data.asset),
                         ),
                         key: savingKey,
                         mode: doc.mode,
@@ -630,6 +651,7 @@ export default function App() {
           id,
           result.data.asset,
           result.data.fingerprint,
+          actionForAsset(result.data.asset),
         );
         copied.mode = "edit";
         setDocuments((d) => [...d, copied]);
@@ -713,10 +735,7 @@ export default function App() {
       draft.asset = asset;
       draft.title =
         asset.metadata?.title || file.name.replace(/\.(json|j2|jinja2)$/, "");
-      draft.context = mergeDefaults(
-        defaultValue(normalizeSchema(asset)),
-        asset.defaults,
-      );
+      draft.context = initialDocumentContext(asset, actionForAsset(asset));
       setDocuments((d) => [...d, draft]);
       setActive(draft.key);
       setPage("workbench");
@@ -770,7 +789,7 @@ export default function App() {
       ? {}
       : fieldErrors(
           normalizeSchema(doc.asset),
-          mergeDefaults(doc.asset.defaults, doc.context),
+          mergeDefaults(doc.asset.defaults, documentForGeneration(doc).context),
         );
     setErrors(validation);
     if (Object.keys(validation).length) {
@@ -784,7 +803,7 @@ export default function App() {
     setSubmitting(doc.key);
     try {
       if (!generation) throw new Error(selection.error || "请选择生成方式");
-      const input = documentInput(doc, generation);
+      const input = documentInput(documentForGeneration(doc), generation);
       const response = await api("runs", {
         action: generation.id,
         input,
@@ -902,7 +921,7 @@ export default function App() {
                     title: name,
                     template: doc.id,
                     document_title: doc.title,
-                    context: doc.context,
+                    ...templatePresetParameters(documentForGeneration(doc)),
                   },
                 });
                 setDialog(null);
@@ -941,10 +960,8 @@ export default function App() {
                 <button
                   key={entry.id}
                   onClick={() => {
-                    editDoc({
-                      context: clone(entry.context),
-                      jsonInput: undefined,
-                    });
+                    editDoc(loadTemplatePresetParameters(entry));
+                    setJsonError("");
                     setDialog(null);
                   }}
                 >
@@ -1031,18 +1048,14 @@ export default function App() {
     submitting === doc?.key ||
     !!(latest && ["queued", "running"].includes(latest.status));
   let inputError = "";
-  if (doc?.jsonInput !== undefined) {
-    try {
-      parseData(doc.jsonInput);
-    } catch {
-      inputError = "请先修正参数 JSON，再生成文件";
-    }
-  }
   if (doc) {
     try {
-      encode(doc.context);
+      documentForGeneration(doc);
     } catch {
-      inputError = "请先填写完整、有效的数值";
+      inputError =
+        doc.jsonInput !== undefined
+          ? "请先修正参数 JSON，再生成文件"
+          : "请先填写完整、有效的数值";
     }
   }
   const exportReason =
@@ -1810,17 +1823,19 @@ export default function App() {
                               />
                               <button
                                 className="button secondary full-width"
-                                onClick={() =>
-                                  editDoc({
-                                    context: mergeDefaults(
-                                      defaultValue(normalizeSchema(doc.asset)),
-                                      doc.asset.defaults,
+                                onClick={() => {
+                                  editDoc(
+                                    resetDocumentParameters(
+                                      doc,
+                                      generation?.id,
                                     ),
-                                    jsonInput: undefined,
-                                  })
-                                }
+                                  );
+                                  setJsonError("");
+                                }}
                               >
-                                将默认参数用于本次试运行
+                                {sharedParameters
+                                  ? "清除本次覆盖并试用继承参数"
+                                  : "将默认参数用于本次试运行"}
                               </button>
                             </>
                           )}
@@ -1861,22 +1876,32 @@ export default function App() {
                           <Save size={13} />
                           保存预设
                         </button>
-                        <button
-                          className="text-button"
-                          onClick={() =>
-                            editDoc({
-                              context: mergeDefaults(
-                                defaultValue(normalizeSchema(doc.asset)),
-                                doc.asset.defaults,
-                              ),
-                              jsonInput: undefined,
-                            })
-                          }
-                        >
-                          恢复默认值
-                        </button>
+                        {!sharedParameters && (
+                          <button
+                            className="text-button"
+                            onClick={() => {
+                              editDoc(
+                                resetDocumentParameters(doc, generation?.id),
+                              );
+                              setJsonError("");
+                            }}
+                          >
+                            恢复默认值
+                          </button>
+                        )}
                       </div>
-                      {paramMode === "json" ? (
+                      {sharedParameters ? (
+                        <SharedParameterInputs
+                          key={doc.key}
+                          doc={doc}
+                          mode={paramMode}
+                          onChange={(patch) => editDoc(patch)}
+                          errors={errors}
+                          disabled={busy}
+                          jsonError={jsonError}
+                          onJsonError={setJsonError}
+                        />
+                      ) : paramMode === "json" ? (
                         <JsonEditor
                           draft={doc.jsonInput}
                           onRawChange={(jsonInput) => editDoc({ jsonInput })}
@@ -1941,7 +1966,7 @@ export default function App() {
                           )}
                         </div>
                       )}
-                      {jsonError && (
+                      {!sharedParameters && jsonError && (
                         <div className="inline-error">{jsonError}</div>
                       )}
                       <div className="parameter-footer">
@@ -2224,6 +2249,7 @@ export default function App() {
           </>
         ) : page === "history" ? (
           <HistoryPage
+            actions={capabilities.actions}
             runList={runList}
             selectedHistory={selectedHistory}
             comparison={comparison}

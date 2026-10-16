@@ -1,6 +1,7 @@
 import { isLosslessNumber } from "lossless-json";
 import { action } from "./api";
 import { DraftNumber, clone, encode, type Data } from "./data";
+import { cloneDraft } from "./drafts";
 
 export interface ParameterPreview {
   values: Data;
@@ -54,6 +55,11 @@ function isPlainObject(value: Data): boolean {
     return false;
   return !isLosslessNumber(value) && !(value instanceof DraftNumber);
 }
+/// Whether a value needs a structured placeholder instead of inline display.
+/// Numeric tokens are objects at runtime but display as plain numbers.
+export function isStructured(value: Data): boolean {
+  return isPlainObject(value) || (Array.isArray(value) && value.length > 0);
+}
 function same(a: Data, b: Data): boolean {
   if (a === b) return true;
   if (a === undefined || b === undefined) return false;
@@ -67,12 +73,13 @@ function assign(into: Data, path: string[], value: Data) {
   if (!path.length) return;
   let cursor = into;
   for (const key of path.slice(0, -1)) {
-    if (!isPlainObject(cursor[key])) cursor[key] = {};
+    if (!Object.hasOwn(cursor, key) || !isPlainObject(cursor[key]))
+      Object.defineProperty(cursor, key, { value: {}, enumerable: true, configurable: true, writable: true });
     cursor = cursor[key];
   }
   const last = path[path.length - 1];
   if (value === undefined) delete cursor[last];
-  else cursor[last] = value;
+  else Object.defineProperty(cursor, last, { value, enumerable: true, configurable: true, writable: true });
 }
 function walk(previous: Data, next: Data, path: string[], into: Data) {
   if (isPlainObject(previous) && isPlainObject(next)) {
@@ -124,7 +131,9 @@ function removeAt(value: Data, tokens: string[]): Data {
     if (child === undefined) delete object[head];
     else object[head] = child;
     // Prune the parent once it holds nothing the user still needs.
-    return !Object.keys(object[head] ?? {}).length ? prune(object, head) : object;
+    return !Object.keys(object[head] ?? {}).length
+      ? prune(object, head)
+      : object;
   }
   if (head in object) delete object[head];
   return object;
@@ -165,20 +174,103 @@ export function managedRequest(doc: {
 }): Data {
   const request: Data = {
     bindings: doc.asset.metadata?.parameters?.bindings || {},
-    values: clone(doc.context || {}),
-    defaults: clone(doc.asset.defaults || {}),
+    values: cloneDraft(doc.context || {}),
+    defaults: cloneDraft(doc.asset.defaults || {}),
   };
-  if (doc.asset.schema !== undefined) request.schema = clone(doc.asset.schema);
-  // An explicit choice (including null) wins; absent inherits the asset's preset.
-  if (doc.parameterSelection && "preset_id" in doc.parameterSelection)
-    request.preset_id = doc.parameterSelection.preset_id;
+  if (doc.asset.schema !== undefined) request.schema = cloneDraft(doc.asset.schema);
+  // The resolve endpoint has no template asset to inherit from, so include the
+  // same saved choice that generation reads. Keep an explicit null intact.
+  const selection = doc.parameterSelection ?? doc.asset.metadata?.parameters?.selection;
+  if (selection && Object.hasOwn(selection, "preset_id"))
+    request.preset_id = selection.preset_id;
+  else if (Object.hasOwn(doc.asset.metadata?.parameters || {}, "preset_id"))
+    request.preset_id = doc.asset.metadata!.parameters.preset_id;
   return request;
 }
+/// Draft-safe backend merge: objects merge recursively, arrays and numeric tokens
+/// are atomic. Incomplete numbers remain editable until request serialization.
+export function mergeParameterLayers(base: Data, overrides: Data): Data {
+  if (!isPlainObject(overrides)) return cloneDraft(overrides);
+  const result = isPlainObject(base) ? cloneDraft(base) : {};
+  for (const [key, value] of Object.entries(overrides))
+    Object.defineProperty(result, key, {
+      value: isPlainObject(value) ? mergeParameterLayers(result[key], value) : cloneDraft(value),
+      enumerable: true, configurable: true, writable: true,
+    });
+  return result;
+}
+
+/// A restore/edit below an array always targets the complete array. Deleting an
+/// index would create a hole or shift the binding to a different element.
+export function overridePointer(values: Data, pointer: string): string {
+  const tokens = pointerTokens(pointer);
+  let cursor = values;
+  const walked: string[] = [];
+  for (const token of tokens) {
+    if (Array.isArray(cursor)) return "/" + walked.map(pointerEscape).join("/");
+    walked.push(token);
+    cursor = cursor?.[token];
+  }
+  return pointer;
+}
+
+/// Record the path the user touched, including an explicit equal value. Never
+/// diff effective values: equality does not mean the user chose inheritance.
+export function setParameterOverride(overrides: Data, effective: Data, pointer: string, value: Data): Data {
+  const target = overridePointer(effective, pointer);
+  const result = cloneDraft(overrides || {});
+  if (target !== pointer) {
+    const changed = cloneDraft(effective);
+    const tokens = pointerTokens(pointer);
+    let cursor = changed;
+    for (const token of tokens.slice(0, -1)) cursor = cursor[token];
+    const last = tokens.at(-1)!;
+    // Clearing a field within an array object is safe; clearing an array item
+    // restores the whole array rather than leaving undefined/hole entries.
+    if (value === undefined && Array.isArray(cursor)) return removePointer(result, target);
+    if (value === undefined) delete cursor[last];
+    else Object.defineProperty(cursor, last, { value: cloneDraft(value), enumerable: true, configurable: true, writable: true });
+    assign(result, pointerTokens(target), pointerValue(changed, target));
+  } else if (value === undefined) return removePointer(result, target);
+  else assign(result, pointerTokens(target), cloneDraft(value));
+  return result;
+}
+
 /// Schema-backed fields render from the schema; the rest come from the context.
-export function managedFields(asset?: {
-  schema?: Data;
-}): string[] {
+export function managedFields(asset?: { schema?: Data }): string[] {
   const schema = asset?.schema;
   if (!schema || typeof schema !== "object") return [];
-  return Object.keys((schema as { properties?: Record<string, Data> }).properties || {});
+  return Object.keys(
+    (schema as { properties?: Record<string, Data> }).properties || {},
+  );
+}
+
+export function validatedSelection(selection: Data): Data {
+  for (const choice of Object.values(selection?.slots || {}) as Data[]) {
+    if (choice.inputs_draft !== undefined || choice.overrides_draft !== undefined)
+      throw new Error("请先修复刀具加工输入或人工调整的 JSON 草稿");
+  }
+  return selection;
+}
+
+export function managedRawInput(value: Data, bindings: Data, selection: Data): Data {
+  const result = clone(value);
+  for (const [path, binding] of Object.entries(bindings || {}) as [string, Data][]) {
+    if (!selection?.slots?.[binding.slot]?.tool_id) continue;
+    const keys = path.slice(1).split("/").map(k => k.replace(/~1/g, "/").replace(/~0/g, "~"));
+    let cursor = result;
+    for (const key of keys.slice(0, -1)) cursor = cursor?.[key];
+    if (cursor && typeof cursor === "object") delete cursor[keys.at(-1)!];
+  }
+  return result;
+}
+export function managedFormSchema(schema: Data, bindings: Data, selection: Data): Data {
+  const result = clone(schema);
+  for (const [path, binding] of Object.entries(bindings || {}) as [string, Data][]) {
+    if (!selection?.slots?.[binding.slot]?.tool_id) continue;
+    let cursor = result;
+    for (const key of path.slice(1).split("/")) cursor = cursor?.properties?.[key.replace(/~1/g, "/").replace(/~0/g, "~")];
+    if (cursor) cursor.readOnly = true;
+  }
+  return result;
 }

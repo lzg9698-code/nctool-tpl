@@ -1,0 +1,1 @@
+import{j as t}from"./react-BMK6nnAR.js";import{T as o}from"./TurningWorkbench-B4wtb5BS.js";import"./index-CRqC81gm.js";import"./editor-BgqgjBea.js";import"./arrow-up-CT2hgQgC.js";function u(r){return t.jsx(o,{...r,kind:"undercut"})}export{u as UndercutView};

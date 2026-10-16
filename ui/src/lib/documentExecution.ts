@@ -112,11 +112,12 @@ export function documentInput(doc: Document, entry: Data): Data {
       doc.parameterSelection || doc.asset.metadata?.parameters?.selection,
     // Keep an explicit decline: `?? undefined` or `|| undefined` would drop it
     // and let the backend fall back to the preset saved on the template.
-    parameter_preset_id:
-      doc.parameterSelection !== undefined
-        ? doc.parameterSelection.preset_id
-        : (doc.asset.metadata?.parameters?.selection?.preset_id ??
-          doc.asset.metadata?.parameters?.preset_id),
+    parameter_preset_id: (() => {
+      const selection = doc.parameterSelection ?? doc.asset.metadata?.parameters?.selection;
+      return selection && Object.hasOwn(selection, "preset_id")
+        ? selection.preset_id
+        : doc.asset.metadata?.parameters?.preset_id;
+    })(),
   };
   const pairs: [string, Data][] = [];
   for (const [target, binding] of Object.entries(

@@ -1,0 +1,8 @@
+.shared-parameter-inputs { display: grid; gap: 12px; min-width: 0; }
+.shared-parameter-controls { border: 0; margin: 0; padding: 0; min-width: 0; display: grid; gap: 8px; }
+.shared-parameter-controls label { display: grid; gap: 6px; }
+.shared-parameter-origins { border-top: 1px solid var(--border, #d8dce2); padding-top: 12px; }
+.shared-parameter-origins ul { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 10px; }
+.shared-parameter-origins li { display: grid; gap: 4px; overflow-wrap: anywhere; }
+.shared-parameter-origins code { font-size: 0.85em; }
+.shared-parameter-origins .text-button { justify-self: start; }

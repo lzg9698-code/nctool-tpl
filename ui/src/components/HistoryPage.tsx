@@ -10,6 +10,7 @@ export interface HistoryComparison {
   after: Run;
 }
 interface Props {
+  actions: Data[];
   runList: Data[];
   selectedHistory: Run | null;
   comparison: HistoryComparison | null;
@@ -38,6 +39,7 @@ function dateText(value: Data) {
   });
 }
 export function HistoryPage({
+  actions,
   runList,
   selectedHistory,
   comparison,
@@ -111,6 +113,8 @@ export function HistoryPage({
           </button>
           <RunDetail
             run={selectedHistory}
+            rerunReason={actions.some((entry) => entry.id === selectedHistory.action) ? undefined : "当前没有可用提供方，请启用对应插件后重启。"}
+            restoreReason={actions.some((entry) => entry.id === selectedHistory.action) ? undefined : "当前没有可用提供方，请启用对应插件后重启。"}
             replayCheck={
               replayCheck && replayCheck.id === selectedId
                 ? replayCheck.check

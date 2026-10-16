@@ -1,11 +1,18 @@
 import { FolderOpen, Play, RotateCcw, Save } from "lucide-react";
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import { Form } from "../../components/Form";
 import { Empty, JsonEditor } from "../../components/WorkbenchUi";
-import { clone, defaultValue, mergeDefaults, type Data } from "../../lib/data";
+import {
+  defaultValue,
+  encode,
+  mergeDefaults,
+  numberText,
+  type Data,
+} from "../../lib/data";
 import {
   applyOverrides,
   isManual,
+  isStructured,
   managedFields,
   managedRequest,
   originLabel,
@@ -41,7 +48,7 @@ export function ParametersPane({
     busy,
     generateHint,
   } = controller;
-  const [preview, setPreview] = useState<ParameterPreview | null>(null);
+  const [resolved, setResolved] = useState<{ key: string; preview: ParameterPreview } | null>(null);
   const [previewError, setPreviewError] = useState("");
   const managed = generation?.id === "template.render.managed";
   // The same request generation will send, so the preview matches the output.
@@ -56,9 +63,11 @@ export function ParametersPane({
         : null,
     [doc?.asset, doc?.context, doc?.parameterSelection],
   );
+  const requestKey = doc ? encode([doc.key, request]) : "";
+  const preview = resolved?.key === requestKey ? resolved.preview : null;
   useEffect(() => {
     if (!doc || !managed || paramMode !== "form") {
-      setPreview(null);
+      setResolved(null);
       setPreviewError("");
       return;
     }
@@ -67,11 +76,11 @@ export function ParametersPane({
       try {
         const next = await previewParameters(request!);
         if (!alive) return;
-        setPreview(next);
+        setResolved({ key: requestKey, preview: next });
         setPreviewError("");
       } catch (error) {
         if (!alive) return;
-        setPreview(null);
+        setResolved(null);
         setPreviewError((error as Error).message || "参数预览失败");
       }
     }, 250);
@@ -80,27 +89,16 @@ export function ParametersPane({
       clearTimeout(timer);
     };
   }, [doc?.key, managed, paramMode, request]);
+  const effective = doc
+    ? preview?.values ?? mergeDefaults(doc.asset.defaults, doc.context)
+    : undefined;
   if (!doc) return null;
   const current = doc;
   // Show the effective values, not the sparse override layer, so an inherited
   // value never looks like an empty field the user has to fill in.
-  const effective = preview
-    ? preview.values
-    : mergeDefaults(doc.asset.defaults, doc.context);
   // Remember what the form showed, so an edit can be reduced to its real delta
   // instead of freezing every inherited value into a manual override.
-  const shown = useRef<{ key: string; value: Data } | null>(null);
-  const baseline =
-    shown.current?.key === doc.key && shown.current.value !== undefined
-      ? shown.current.value
-      : effective;
-  if (shown.current?.key !== doc.key || shown.current.value === undefined)
-    shown.current = { key: doc.key, value: clone(effective) };
-  // Refresh the baseline whenever the effective values change from elsewhere
-  // (a new preset, a cleared override), so the next edit diffs against them.
-  useEffect(() => {
-    if (shown.current?.key === doc.key) shown.current.value = clone(effective);
-  }, [effective]);
+  const baseline = effective;
   function clearOverride(pointer: string) {
     editDoc({
       context: removePointer(current.context, pointer),
@@ -161,7 +159,8 @@ export function ParametersPane({
       </div>
       {managed && paramMode === "json" && (
         <p className="parameter-hint">
-          这里的 JSON 只写本次要覆盖的值；共享定义、模板默认值和共享预置会补齐其余字段。
+          这里的 JSON
+          只写本次要覆盖的值；共享定义、模板默认值和共享预置会补齐其余字段。
         </p>
       )}
       {paramMode === "json" ? (
@@ -269,9 +268,11 @@ function OriginSummary({
               <span className="origin-value">
                 {value === undefined
                   ? "未填写"
-                  : typeof value === "object" && value !== null
-                    ? "（结构化值）"
-                    : String(value)}
+                  : value === null
+                    ? "空值"
+                    : isStructured(value)
+                      ? "（结构化值）"
+                      : numberText(value)}
                 {definition?.unit ? " " + definition.unit : ""}
               </span>
               {isManual(origin) && (

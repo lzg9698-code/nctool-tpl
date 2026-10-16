@@ -170,12 +170,12 @@ describe("generic document execution and retired intent", () => {
   });
 });
 describe("history recovery", () => {
-  it("lets an explicit empty selection clear an asset default preset", () => {
+  it("inherits an asset default when the selection has no preset choice", () => {
     const doc = newDocument();
     doc.asset.metadata = { parameters: { preset_id: "default-preset" } };
     expect(documentInput(doc, managed).preset_id).toBe("default-preset");
     doc.parameterSelection = {};
-    expect(documentInput(doc, managed)).not.toHaveProperty("preset_id");
+    expect(documentInput(doc, managed).preset_id).toBe("default-preset");
   });
   it("forwards an explicit preset decline instead of dropping it", () => {
     const doc = newDocument();

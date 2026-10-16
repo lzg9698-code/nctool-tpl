@@ -107,14 +107,15 @@ export function PluginSettings({
             <strong>已安装的能力</strong>
           </div>
           {config &&
-            inventory.plugins.map((plugin: Data) => {
+            inventory.plugins.filter((plugin: Data) => !plugin.retired).map((plugin: Data) => {
               const id = plugin.id;
               const enabled =
                 !config.disabled.includes(id) &&
                 (id === "template" ||
                   config.enabled.includes(id) ||
+                  (id === "parameters" && !config.disabled.includes("template")) ||
                   (config.profile === "nc" &&
-                    ["math", "nc", "process"].includes(id)));
+                    ["math", "nc", "nc-parameters", "nc-managed", "sync-turning", "undercut", "process", "process-parameters"].includes(id)));
               return (
                 <div className="plugin-config-card" key={id}>
                   <div className="plugin-card">
@@ -126,6 +127,7 @@ export function PluginSettings({
                         {(
                           {
                             template: "通用模板",
+                            parameters: "共享参数",
                             math: "数学扩展",
                             nc: "NC 生成",
                             process: "多工序",

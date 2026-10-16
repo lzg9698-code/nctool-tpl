@@ -29,41 +29,7 @@ impl App {
             config.profile = profile.into();
         }
         config::validate(&config)?;
-        let mut ids: BTreeSet<String> = ["template".to_string(), "parameters".to_string()]
-            .into_iter()
-            .collect();
-        if config.profile == "nc" {
-            ids.extend(
-                [
-                    "math",
-                    "nc",
-                    "nc-parameters",
-                    "nc-managed",
-                    "sync-turning",
-                    "undercut",
-                    "process",
-                    "process-parameters",
-                ]
-                .into_iter()
-                .map(str::to_string),
-            );
-        }
-        ids.extend(config.enabled.iter().cloned());
-        for id in &config.disabled {
-            ids.remove(id);
-        }
-        // Default companions follow their builtin provider when it is disabled.
-        // Explicitly enabled companions still undergo normal dependency checks.
-        if !ids.contains("template") && !config.enabled.contains(&"parameters".into()) {
-            ids.remove("parameters");
-        }
-        if !ids.contains("nc") && !config.enabled.contains(&"nc-parameters".into()) {
-            ids.remove("nc-parameters");
-            ids.remove("nc-managed");
-            ids.remove("sync-turning");
-            ids.remove("undercut");
-            ids.remove("process-parameters");
-        }
+        let ids = Self::selected_ids(&config);
         let mut plugins: Vec<Arc<dyn Plugin>> = Vec::new();
         if ids.contains("template") {
             plugins.push(Arc::new(nctool_plugin_template::TemplatePlugin::new(
@@ -139,6 +105,127 @@ impl App {
             next_request: AtomicU64::new(1),
         }))
     }
+    /// Preview an explicit conversion to the template profile without starting plugins.
+    /// NC remains supported by nc-bundle; this conversion is never applied at boot.
+    fn migration_at(
+        home: &Path,
+    ) -> PluginResult<(
+        Config,
+        Option<nctool_assets::FileFingerprint>,
+        Option<Vec<u8>>,
+        Vec<String>,
+    )> {
+        let path = home.join("config.json");
+        let fingerprint =
+            nctool_assets::WriteKernel::read_fingerprint(&path).map_err(config::asset_error)?;
+        let bytes = if let Some(fp) = fingerprint {
+            let bytes = std::fs::read(&path)?;
+            if nctool_assets::FileFingerprint::of_bytes(&bytes, fp.mtime) != fp
+                || nctool_assets::WriteKernel::read_fingerprint(&path)
+                    .map_err(config::asset_error)?
+                    != fingerprint
+            {
+                return Err(PluginError::new("conflict", "配置在读取时发生变化"));
+            }
+            Some(bytes)
+        } else {
+            None
+        };
+        let mut proposed: Config = match &bytes {
+            Some(bytes) => serde_json::from_value(parse_json(bytes)?)?,
+            None => Config::default(),
+        };
+        config::validate(&proposed)?;
+        let mut changes = vec![];
+        if proposed.profile == "nc" {
+            proposed.profile = "template".into();
+            changes.push("profile: nc -> template".into());
+        }
+        // These are conversion candidates, not globally retired plugin IDs.
+        let domain_ids = [
+            "nc",
+            "nc-parameters",
+            "nc-managed",
+            "sync-turning",
+            "undercut",
+            "process",
+            "process-parameters",
+        ];
+        for (field, ids) in [
+            ("enabled", &mut proposed.enabled),
+            ("disabled", &mut proposed.disabled),
+        ] {
+            ids.retain(|id| {
+                if domain_ids.contains(&id.as_str()) {
+                    changes.push(format!("{field}: remove {id}"));
+                    false
+                } else {
+                    true
+                }
+            });
+        }
+        proposed.providers.retain(|service, provider| {
+            if domain_ids.contains(&provider.as_str()) {
+                changes.push(format!("providers: remove {service}"));
+                false
+            } else {
+                true
+            }
+        });
+        proposed.plugins.retain(|id, _| {
+            if domain_ids.contains(&id.as_str()) {
+                changes.push(format!("plugins: remove {id}"));
+                false
+            } else {
+                true
+            }
+        });
+        Ok((proposed, fingerprint, bytes, changes))
+    }
+    pub fn migration_check_at(home: &Path) -> PluginResult<Value> {
+        let (proposed, fingerprint, _, changes) = Self::migration_at(home)?;
+        let mut report = json!({"proposed":proposed,"fingerprint":fingerprint.map(|fp|serde_json::to_string(&fp)).transpose()?,"changes":changes});
+        match Self::validate_config_at(home, &proposed) {
+            Ok(plan) => {
+                report["valid"] = json!(true);
+                report["composition"] = plan;
+            }
+            Err(error) => {
+                report["valid"] = json!(false);
+                report["error"] = serde_json::to_value(error)?;
+            }
+        }
+        Ok(report)
+    }
+    pub fn migration_apply_at(
+        home: &Path,
+        expected: Option<nctool_assets::FileFingerprint>,
+    ) -> PluginResult<Value> {
+        let (proposed, fingerprint, bytes, changes) = Self::migration_at(home)?;
+        if expected != fingerprint {
+            return Err(PluginError::new("conflict", "配置指纹已变化，请重新检查"));
+        }
+        Self::validate_config_at(home, &proposed)?;
+        if changes.is_empty() {
+            return Ok(json!({"migrated":false,"config":proposed,"backup":null}));
+        }
+        let bytes = bytes.ok_or_else(|| PluginError::new("conflict", "配置文件不存在"))?;
+        let backup = home.join(format!(
+            "config.backup-{}-{}.json",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_nanos()
+        ));
+        let saved = nctool_assets::WriteKernel::write_guarded(&backup, &bytes, None)
+            .map_err(config::asset_error)?;
+        if let Err(error) = config::save(home, &proposed, expected) {
+            let _ = nctool_assets::WriteKernel::remove_guarded(&backup, saved.revision);
+            return Err(error);
+        }
+        Ok(json!({"migrated":true,"config":proposed,"backup":backup,"changes":changes}))
+    }
     pub fn request_id(&self) -> String {
         format!(
             "request-{}",
@@ -146,6 +233,10 @@ impl App {
         )
     }
     fn definitions(&self) -> PluginResult<Vec<(PluginDescriptor, Vec<ActionDescriptor>)>> {
+        Self::definitions_at(&self.home)
+    }
+    fn definitions_at(home: &Path) -> PluginResult<Vec<(PluginDescriptor, Vec<ActionDescriptor>)>> {
+        #[allow(unused_mut)]
         let mut definitions = vec![
             (
                 nctool_plugin_parameters::ParametersPlugin::definition(),
@@ -194,15 +285,17 @@ impl App {
             ]);
         }
         definitions.extend(
-            config::installed(&self.home)?
+            config::installed(home)?
                 .into_iter()
                 .map(|(manifest, _)| (manifest.descriptor, manifest.actions)),
         );
         Ok(definitions)
     }
     fn validate_config(&self, config: &Config) -> PluginResult<Value> {
-        config::validate(config)?;
-        let definitions = self.definitions()?;
+        Self::validate_config_at(&self.home, config)
+    }
+    /// Shared selection for boot, configuration preview and next-start inventory.
+    fn selected_ids(config: &Config) -> BTreeSet<String> {
         let mut enabled: BTreeSet<String> = ["template".to_string(), "parameters".to_string()]
             .into_iter()
             .collect();
@@ -236,6 +329,12 @@ impl App {
             enabled.remove("undercut");
             enabled.remove("process-parameters");
         }
+        enabled
+    }
+    fn validate_config_at(home: &Path, config: &Config) -> PluginResult<Value> {
+        config::validate(config)?;
+        let definitions = Self::definitions_at(home)?;
+        let enabled = Self::selected_ids(config);
         for id in &enabled {
             if !definitions
                 .iter()
@@ -404,6 +503,7 @@ impl App {
         let active = self.runtime.descriptors();
         let definitions = self.definitions()?;
         let (saved, _) = config::load(&self.home)?;
+        let selected = Self::selected_ids(&saved);
         let external = config::installed(&self.home)?;
         let mut plugins = Vec::new();
         for id in [
@@ -419,7 +519,7 @@ impl App {
             "process-parameters",
         ] {
             let available = ["template", "parameters"].contains(&id) || cfg!(feature = "nc-bundle");
-            plugins.push(json!({"id":id,"builtin":true,"available":available,"descriptor":definitions.iter().find(|(d,_)|d.id==id).map(|(d,_)|d),"active":active.iter().any(|d|d.id==id),"enabled_next_start":!saved.disabled.contains(&id.into()) && (["template", "parameters"].contains(&id) || saved.enabled.contains(&id.into()) || saved.profile=="nc")}));
+            plugins.push(json!({"id":id,"builtin":true,"available":available,"descriptor":definitions.iter().find(|(d,_)|d.id==id).map(|(d,_)|d),"active":active.iter().any(|d|d.id==id),"enabled_next_start":selected.contains(id)}));
         }
         for (manifest, _) in external {
             let id = &manifest.descriptor.id;

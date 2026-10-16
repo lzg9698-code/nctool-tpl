@@ -9,6 +9,33 @@ use std::{
     sync::Arc,
 };
 
+/// Builtins supported by the current distribution (availability is feature-dependent).
+pub const BUILTIN_PLUGIN_IDS: &[&str] = &[
+    "template",
+    "parameters",
+    "math",
+    "nc",
+    "nc-parameters",
+    "nc-managed",
+    "sync-turning",
+    "undercut",
+    "process",
+    "process-parameters",
+];
+
+/// No builtin has been retired from the current nc-bundle architecture.
+pub const RETIRED_PLUGIN_IDS: &[&str] = &[];
+
+pub fn ensure_plugin_allowed(id: &str) -> PluginResult<()> {
+    if !crate::valid_id(id) {
+        return Err(PluginError::new("invalid_plugin_id", id));
+    }
+    if RETIRED_PLUGIN_IDS.contains(&id) {
+        return Err(PluginError::new("retired_plugin", id));
+    }
+    Ok(())
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
@@ -53,9 +80,7 @@ pub fn validate(c: &Config) -> PluginResult<()> {
         .chain(c.plugins.keys())
         .chain(c.providers.values())
     {
-        if !crate::valid_id(id) {
-            return Err(PluginError::new("invalid_plugin_id", id));
-        }
+        ensure_plugin_allowed(id)?;
     }
     Ok(())
 }
@@ -71,9 +96,7 @@ pub fn save(
     Ok(())
 }
 pub fn set_enabled(home: &Path, id: &str, enabled: bool) -> PluginResult<()> {
-    if !crate::valid_id(id) {
-        return Err(PluginError::new("invalid_plugin_id", id));
-    }
+    ensure_plugin_allowed(id)?;
     let (mut config, fp) = load(home)?;
     config.enabled.retain(|s| s != id);
     config.disabled.retain(|s| s != id);
@@ -109,19 +132,8 @@ pub fn installed(home: &Path) -> PluginResult<Vec<(ExternalManifest, PathBuf)>> 
 pub fn external_plugins(home: &Path, config: &Config) -> PluginResult<Vec<Arc<dyn Plugin>>> {
     let installed = installed(home)?;
     for id in &config.enabled {
-        if ![
-            "template",
-            "parameters",
-            "math",
-            "nc",
-            "nc-parameters",
-            "nc-managed",
-            "sync-turning",
-            "undercut",
-            "process",
-            "process-parameters",
-        ]
-        .contains(&id.as_str())
+        ensure_plugin_allowed(id)?;
+        if !BUILTIN_PLUGIN_IDS.contains(&id.as_str())
             && !installed.iter().any(|(m, _)| &m.descriptor.id == id)
         {
             return Err(PluginError::new("plugin_missing", id));
@@ -138,20 +150,8 @@ pub fn external_plugins(home: &Path, config: &Config) -> PluginResult<Vec<Arc<dy
 pub fn install(home: &Path, source: &Path) -> PluginResult<String> {
     let source = source.canonicalize()?;
     let manifest = ExternalManifest::read(&source)?;
-    if [
-        "template",
-        "parameters",
-        "math",
-        "nc",
-        "nc-parameters",
-        "nc-managed",
-        "sync-turning",
-        "undercut",
-        "process",
-        "process-parameters",
-    ]
-    .contains(&manifest.descriptor.id.as_str())
-    {
+    ensure_plugin_allowed(&manifest.descriptor.id)?;
+    if BUILTIN_PLUGIN_IDS.contains(&manifest.descriptor.id.as_str()) {
         return Err(PluginError::new(
             "reserved_plugin_id",
             &manifest.descriptor.id,
