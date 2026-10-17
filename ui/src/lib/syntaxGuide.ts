@@ -8,7 +8,7 @@ export interface SyntaxExample {
   input: Record<string, unknown>;
   note?: string;
   action?: string;
-  plugin?: "math" | "nc";
+  plugin?: "math";
 }
 export const syntaxCategories = [
   "基础与数据",
@@ -66,7 +66,7 @@ export const syntaxExamples: SyntaxExample[] = [
     source:
       "{% if qty > 0 and approved %}可以交付{% elif qty == 0 %}数量为零{% else %}待审核{% endif %}",
     input: { context: { qty: 3, approved: true } },
-    note: "每个 if 都需要 endif。模板可以控制输出结构；加工规则仍由领域插件校验。",
+    note: "每个 if 都需要 endif。模板可以控制输出结构；领域规则仍由对应插件校验。",
   },
   {
     id: "for",
@@ -195,19 +195,6 @@ export const syntaxExamples: SyntaxExample[] = [
     source:
       "平方根：{{ 9 | sqrt }}\n平方：{{ 3 | pow(2) }}\n30° 的正弦：{{ 30 | sin_d | round(3) }}",
     input: { context: {}, extensions: ["math"] },
-    note: '安装或启用插件不等于所有模板自动获得过滤器。普通 template.render 需要显式选择 extensions: ["math"]；NC 生成会选择 math 和 nc 扩展。',
-  },
-  {
-    id: "nc",
-    category: "插件语法",
-    title: "NC 数值格式",
-    plugin: "nc",
-    action: "nc.generate",
-    description:
-      "nc_fixed 输出固定小数位，nc_signed 显式输出正负号，nc_strip 去掉多余尾零，nc_pad 补足数字位宽。",
-    source:
-      "X{{ x | nc_fixed(3) }} Y{{ y | nc_signed(2) }}\nO{{ program | nc_pad(4) }}\nF{{ feed | nc_strip }}",
-    input: { params: { x: 12.5, y: 2.5, program: 42, feed: 100.0 } },
-    note: "本例通过 NC 生成动作试跑。nc_fixed / nc_signed 会在指定精度把非零值变成零时拒绝输出；提高小数位后再生成。数值格式不能替代领域参数校验。",
+    note: '安装或启用插件不等于所有模板自动获得过滤器。普通 template.render 需要显式选择 extensions: ["math"]。',
   },
 ];

@@ -155,7 +155,7 @@ struct Replacement;
 impl Plugin for Replacement {
     fn descriptor(&self) -> PluginDescriptor {
         let mut d = PluginDescriptor::builtin("replacement");
-        d.provides = vec![Service::new("nc.generate", "replacement.generate")];
+        d.provides = vec![Service::new("text.render", "replacement.generate")];
         d
     }
     fn actions(&self) -> Vec<ActionDescriptor> {
@@ -172,35 +172,88 @@ impl Plugin for Replacement {
         ))
     }
 }
+/// Generic service consumer: depends only on the versioned `text.render` service,
+/// which any provider can satisfy. This is the mechanism external plugins use;
+/// it is not tied to any removed domain implementation.
+struct Consumer;
+impl Plugin for Consumer {
+    fn descriptor(&self) -> PluginDescriptor {
+        let mut d = PluginDescriptor::builtin("consumer");
+        d.requires.push(Requirement::new("text.render"));
+        d
+    }
+    fn actions(&self) -> Vec<ActionDescriptor> {
+        vec![ActionDescriptor::new(
+            "consumer.generate",
+            "consume",
+            object_schema(),
+        )]
+    }
+    fn invoke(&self, _: &str, input: Value, ctx: &Context) -> PluginResult<ActionResult> {
+        let options = input
+            .get("options")
+            .cloned()
+            .unwrap_or_else(|| json!({"line_number_start": 0}));
+        let mut cursor = options["line_number_start"].as_u64().unwrap_or(0);
+        let mut lines = String::new();
+        for op in input["ops"].as_array().cloned().unwrap_or_default() {
+            let result = ctx.call(
+                "text.render",
+                1,
+                json!({"params": op["params"], "options": {"line_number_start": cursor}}),
+            )?;
+            cursor = result.data["end_line_number"].as_u64().unwrap_or(cursor);
+            lines.push_str(result.data["text"].as_str().unwrap_or_default());
+            lines.push('\n');
+        }
+        Ok(ActionResult::data(
+            json!({"text": lines.trim_end(), "end_line_number": cursor}),
+        ))
+    }
+}
 #[test]
-fn process_consumer_works_with_an_unrelated_provider() {
-    let runtime = boot(vec![
-        Arc::new(nctool_plugin_process::ProcessPlugin),
-        Arc::new(Replacement),
-    ])
-    .unwrap();
-    let output=runtime.invoke("process.generate",json!({"params":{"value":1},"ops":[{"source":"unused"},{"source":"unused","params":{"value":2}}]})).unwrap();
-    assert_eq!(output.data["text"], "N0010 1\nN0020 2\n");
+fn service_consumer_works_with_an_unrelated_provider() {
+    let runtime = boot(vec![Arc::new(Consumer), Arc::new(Replacement)]).unwrap();
+    let output = runtime
+        .invoke(
+            "consumer.generate",
+            json!({"ops":[{"params":{"value":1}},{"params":{"value":2}}]}),
+        )
+        .unwrap();
+    assert_eq!(output.data["text"], "N0010 1\nN0020 2");
     assert_eq!(output.data["end_line_number"], 20);
+}
+fn duplicate_provider(binding: BTreeMap<String, String>) -> PluginResult<Arc<Runtime>> {
+    let log = Arc::new(Mutex::new(vec![]));
+    let mut first = Probe::new("first", &log);
+    first.descriptor.provides[0].id = "text.render".into();
+    Runtime::start(
+        vec![Arc::new(first), Arc::new(Replacement), Arc::new(Consumer)],
+        BTreeMap::new(),
+        binding,
+    )
 }
 #[test]
 fn duplicate_provider_requires_explicit_binding() {
-    let log = Arc::new(Mutex::new(vec![]));
-    let mut first = Probe::new("first", &log);
-    first.descriptor.provides[0].id = "nc.generate".into();
-    let runtime = Runtime::start(
-        vec![
-            Arc::new(first),
-            Arc::new(Replacement),
-            Arc::new(nctool_plugin_process::ProcessPlugin),
-        ],
-        BTreeMap::new(),
-        [("nc.generate".into(), "replacement".into())]
+    // Two providers for the same service must not resolve without a choice.
+    assert_eq!(
+        duplicate_provider(BTreeMap::new()).err().unwrap().code,
+        "duplicate_service"
+    );
+    // The explicit binding selects the replacement, so the consumer routes to it.
+    let runtime = duplicate_provider(
+        [("text.render".to_string(), "replacement".to_string())]
             .into_iter()
             .collect(),
     )
     .unwrap();
-    assert_eq!(runtime.bindings()["nc.generate"][2], "replacement");
+    assert_eq!(
+        runtime
+            .invoke("consumer.generate", json!({"ops":[{"params":{"value":9}}]}))
+            .unwrap()
+            .data["text"],
+        "N0010 9"
+    );
 }
 
 struct Cleanup {
@@ -266,4 +319,93 @@ fn failed_registration_cleans_its_scope_and_predecessors() {
         *log.lock().unwrap(),
         vec!["start:a", "start:b", "stop:b", "stop:a"]
     );
+}
+
+struct Static {
+    descriptor: PluginDescriptor,
+    actions: Vec<ActionDescriptor>,
+}
+impl Plugin for Static {
+    fn descriptor(&self) -> PluginDescriptor {
+        self.descriptor.clone()
+    }
+    fn actions(&self) -> Vec<ActionDescriptor> {
+        self.actions.clone()
+    }
+    fn invoke(&self, _: &str, input: Value, _: &Context) -> PluginResult<ActionResult> {
+        Ok(ActionResult::data(input))
+    }
+}
+fn static_plugin(descriptor: PluginDescriptor, actions: Vec<ActionDescriptor>) -> Arc<dyn Plugin> {
+    Arc::new(Static {
+        descriptor,
+        actions,
+    })
+}
+
+#[test]
+fn retired_builtin_identities_cannot_be_reclaimed_by_another_plugin() {
+    // The retired plugin id itself stays reserved.
+    assert_eq!(
+        boot(vec![static_plugin(PluginDescriptor::builtin("nc"), vec![])])
+            .err()
+            .unwrap()
+            .code,
+        "retired_plugin"
+    );
+    // An unrelated plugin id may not supply a retired action.
+    let actions = vec![ActionDescriptor::new("nc.generate", "NC", object_schema())];
+    assert_eq!(
+        boot(vec![static_plugin(
+            PluginDescriptor::builtin("alias"),
+            actions
+        )])
+        .err()
+        .unwrap()
+        .code,
+        "retired_identity"
+    );
+    // ... nor declare a retired service.
+    let mut descriptor = PluginDescriptor::builtin("alias");
+    descriptor.provides = vec![Service::new("sync-turning.generate", "alias.generate")];
+    let actions = vec![ActionDescriptor::new(
+        "alias.generate",
+        "generate",
+        object_schema(),
+    )];
+    assert_eq!(
+        boot(vec![static_plugin(descriptor, actions)])
+            .err()
+            .unwrap()
+            .code,
+        "retired_identity"
+    );
+    // ... nor occupy a retired asset collection.
+    let mut descriptor = PluginDescriptor::builtin("alias");
+    descriptor.asset_collections = vec![AssetCollection {
+        id: "sync-turning-assets".into(),
+        export_action: "alias.export".into(),
+        import_action: "alias.import".into(),
+    }];
+    let actions = vec![
+        ActionDescriptor::new("alias.export", "export", object_schema()),
+        ActionDescriptor::new("alias.import", "import", object_schema()),
+    ];
+    assert_eq!(
+        boot(vec![static_plugin(descriptor, actions)])
+            .err()
+            .unwrap()
+            .code,
+        "retired_identity"
+    );
+    // Similar-looking names are never reclassified: only the exact tokens and their
+    // dotted namespaces are reserved.
+    let mut descriptor = PluginDescriptor::builtin("machine-learning");
+    descriptor.provides = vec![Service::new("nctool.ready", "machine-learning.run")];
+    let actions = vec![
+        ActionDescriptor::new("machine-learning.run", "run", object_schema()),
+        ActionDescriptor::new("processing.generate", "process", object_schema()),
+    ];
+    let runtime = boot(vec![static_plugin(descriptor, actions)]).unwrap();
+    assert!(runtime.invoke("processing.generate", json!({})).is_ok());
 }

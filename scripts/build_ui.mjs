@@ -85,7 +85,7 @@ function sourceHash(directory) {
       /\.(ts|tsx|css|svg|png|ico)$/.test(entry.name) &&
       !entry.name.includes(".test.")
     ) {
-      fingerprint.update(relative(ui, path));
+      fingerprint.update(relative(ui, path).replaceAll("\\", "/"));
       fingerprint.update(readFileSync(path));
     }
   }

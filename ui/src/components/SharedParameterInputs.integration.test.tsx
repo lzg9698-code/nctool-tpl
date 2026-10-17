@@ -2,7 +2,7 @@
 import { useState } from "react";
 import { afterEach, expect, it, vi } from "vitest";
 import { cleanup, fireEvent, render, screen, waitFor } from "@testing-library/react";
-import { newDocument, encode, type Data } from "../lib/data";
+import { newDocument, encode } from "../lib/data";
 import { SharedParameterInputs } from "./SharedParameterInputs";
 vi.mock("../lib/api", () => ({ action: vi.fn(async () => ({ data: { items: [] } })) }));
 vi.mock("../lib/managedParameters", async original => ({

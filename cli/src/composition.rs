@@ -13,6 +13,13 @@ use std::{
     },
 };
 
+type ConfigMigration = (
+    Config,
+    Option<nctool_assets::FileFingerprint>,
+    Option<Vec<u8>>,
+    Vec<String>,
+);
+
 pub struct App {
     pub runtime: Arc<Runtime>,
     pub home: PathBuf,
@@ -41,57 +48,16 @@ impl App {
                 workspace,
             )?));
         }
-        #[cfg(feature = "nc-bundle")]
-        {
-            if ids.contains("math") {
-                plugins.push(Arc::new(nctool_plugin_math::MathPlugin));
-            }
-            if ids.contains("nc") {
-                plugins.push(Arc::new(nctool_plugin_nc::NcPlugin::new(workspace)?));
-            }
-            if ids.contains("nc-parameters") {
-                plugins.push(Arc::new(nctool_plugin_nc::NcFoundationPlugin::new(
-                    workspace,
-                )?));
-            }
-            if ids.contains("sync-turning") {
-                plugins.push(Arc::new(
-                    nctool_plugin_sync_turning::SyncTurningPlugin::new(workspace)?,
-                ));
-            }
-            if ids.contains("undercut") {
-                plugins.push(Arc::new(nctool_plugin_undercut::UndercutPlugin::new(
-                    workspace,
-                )?));
-            }
-            if ids.contains("nc-managed") {
-                plugins.push(Arc::new(nctool_plugin_nc::NcManagedPlugin::new(
-                    ids.contains("sync-turning"),
-                    ids.contains("undercut"),
-                )));
-            }
-            if ids.contains("process-parameters") {
-                plugins.push(Arc::new(nctool_plugin_process::ManagedProcessPlugin));
-            }
-            if ids.contains("process") {
-                plugins.push(Arc::new(nctool_plugin_process::ProcessPlugin));
-            }
+        #[cfg(feature = "math")]
+        if ids.contains("math") {
+            plugins.push(Arc::new(nctool_plugin_math::MathPlugin));
         }
-        #[cfg(not(feature = "nc-bundle"))]
-        if ids.iter().any(|id| {
-            [
-                "math",
-                "nc",
-                "nc-parameters",
-                "nc-managed",
-                "sync-turning",
-                "undercut",
-                "process",
-                "process-parameters",
-            ]
-            .contains(&id.as_str())
-        }) {
-            return Err(PluginError::new("bundle_unavailable","This is the template-only build. Install the full distribution or build with --features nc-bundle."));
+        #[cfg(not(feature = "math"))]
+        if ids.contains("math") {
+            return Err(PluginError::new(
+                "feature_unavailable",
+                "此构建未包含 math 扩展；请使用 --features math 构建。",
+            ));
         }
         plugins.extend(config::external_plugins(home, &config)?);
         let runtime = Runtime::start(plugins, config.plugins.clone(), config.providers.clone())?;
@@ -106,15 +72,8 @@ impl App {
         }))
     }
     /// Preview an explicit conversion to the template profile without starting plugins.
-    /// NC remains supported by nc-bundle; this conversion is never applied at boot.
-    fn migration_at(
-        home: &Path,
-    ) -> PluginResult<(
-        Config,
-        Option<nctool_assets::FileFingerprint>,
-        Option<Vec<u8>>,
-        Vec<String>,
-    )> {
+    /// Legacy NC identities and profile are removed here; this never runs at boot.
+    fn migration_at(home: &Path) -> PluginResult<ConfigMigration> {
         let path = home.join("config.json");
         let fingerprint =
             nctool_assets::WriteKernel::read_fingerprint(&path).map_err(config::asset_error)?;
@@ -131,32 +90,35 @@ impl App {
         } else {
             None
         };
+        // Legacy configuration is parsed read-only first; retired NC identities and
+        // the retired profile are stripped before any current validation runs.
         let mut proposed: Config = match &bytes {
             Some(bytes) => serde_json::from_value(parse_json(bytes)?)?,
             None => Config::default(),
         };
-        config::validate(&proposed)?;
         let mut changes = vec![];
-        if proposed.profile == "nc" {
-            proposed.profile = "template".into();
-            changes.push("profile: nc -> template".into());
+        // Only the retired NC profile may be converted; an unrecognized profile is
+        // rejected instead of being silently rewritten to template.
+        match proposed.profile.as_str() {
+            "template" => {}
+            "nc" => {
+                changes.push(format!("profile: {} -> template", proposed.profile));
+                proposed.profile = "template".into();
+            }
+            other => {
+                return Err(PluginError::new(
+                    "invalid_profile",
+                    format!("不支持迁移的 profile：{other}；仅支持旧 nc profile 迁移到 template。"),
+                ))
+            }
         }
-        // These are conversion candidates, not globally retired plugin IDs.
-        let domain_ids = [
-            "nc",
-            "nc-parameters",
-            "nc-managed",
-            "sync-turning",
-            "undercut",
-            "process",
-            "process-parameters",
-        ];
+        let retired = config::RETIRED_PLUGIN_IDS;
         for (field, ids) in [
             ("enabled", &mut proposed.enabled),
             ("disabled", &mut proposed.disabled),
         ] {
             ids.retain(|id| {
-                if domain_ids.contains(&id.as_str()) {
+                if retired.contains(&id.as_str()) {
                     changes.push(format!("{field}: remove {id}"));
                     false
                 } else {
@@ -164,8 +126,10 @@ impl App {
                 }
             });
         }
+        // A provider entry is dropped when it selects a retired plugin or when its
+        // service key is a retired identity; both are checked before validation.
         proposed.providers.retain(|service, provider| {
-            if domain_ids.contains(&provider.as_str()) {
+            if retired.contains(&provider.as_str()) || config::is_retired_namespace_id(service) {
                 changes.push(format!("providers: remove {service}"));
                 false
             } else {
@@ -173,13 +137,14 @@ impl App {
             }
         });
         proposed.plugins.retain(|id, _| {
-            if domain_ids.contains(&id.as_str()) {
+            if retired.contains(&id.as_str()) {
                 changes.push(format!("plugins: remove {id}"));
                 false
             } else {
                 true
             }
         });
+        config::validate(&proposed)?;
         Ok((proposed, fingerprint, bytes, changes))
     }
     pub fn migration_check_at(home: &Path) -> PluginResult<Value> {
@@ -247,43 +212,11 @@ impl App {
                 nctool_plugin_template::TemplatePlugin::action_definitions(),
             ),
         ];
-        #[cfg(feature = "nc-bundle")]
-        {
-            definitions.extend([
-                (
-                    nctool_plugin_nc::NcFoundationPlugin::definition(),
-                    nctool_plugin_nc::NcFoundationPlugin::action_definitions(),
-                ),
-                (
-                    nctool_plugin_nc::NcManagedPlugin::definition(),
-                    nctool_plugin_nc::NcManagedPlugin::action_definitions(),
-                ),
-                (
-                    nctool_plugin_sync_turning::SyncTurningPlugin::definition(),
-                    nctool_plugin_sync_turning::SyncTurningPlugin::action_definitions(),
-                ),
-                (
-                    nctool_plugin_undercut::UndercutPlugin::definition(),
-                    nctool_plugin_undercut::UndercutPlugin::action_definitions(),
-                ),
-                (
-                    nctool_plugin_process::ManagedProcessPlugin::definition(),
-                    nctool_plugin_process::ManagedProcessPlugin::action_definitions(),
-                ),
-                (
-                    nctool_plugin_math::MathPlugin::definition(),
-                    nctool_plugin_math::MathPlugin::action_definitions(),
-                ),
-                (
-                    nctool_plugin_nc::NcPlugin::definition(),
-                    nctool_plugin_nc::NcPlugin::action_definitions(),
-                ),
-                (
-                    nctool_plugin_process::ProcessPlugin::definition(),
-                    nctool_plugin_process::ProcessPlugin::action_definitions(),
-                ),
-            ]);
-        }
+        #[cfg(feature = "math")]
+        definitions.push((
+            nctool_plugin_math::MathPlugin::definition(),
+            nctool_plugin_math::MathPlugin::action_definitions(),
+        ));
         definitions.extend(
             config::installed(home)?
                 .into_iter()
@@ -299,35 +232,12 @@ impl App {
         let mut enabled: BTreeSet<String> = ["template".to_string(), "parameters".to_string()]
             .into_iter()
             .collect();
-        if config.profile == "nc" {
-            enabled.extend(
-                [
-                    "math",
-                    "nc",
-                    "nc-parameters",
-                    "nc-managed",
-                    "sync-turning",
-                    "undercut",
-                    "process",
-                    "process-parameters",
-                ]
-                .iter()
-                .map(|id| id.to_string()),
-            );
-        }
         enabled.extend(config.enabled.iter().cloned());
         for id in &config.disabled {
             enabled.remove(id);
         }
         if !enabled.contains("template") && !config.enabled.contains(&"parameters".into()) {
             enabled.remove("parameters");
-        }
-        if !enabled.contains("nc") && !config.enabled.contains(&"nc-parameters".into()) {
-            enabled.remove("nc-parameters");
-            enabled.remove("nc-managed");
-            enabled.remove("sync-turning");
-            enabled.remove("undercut");
-            enabled.remove("process-parameters");
         }
         enabled
     }
@@ -348,13 +258,7 @@ impl App {
         }
         let mut selected = vec![];
         let mut actions = BTreeSet::new();
-        for (mut descriptor, descriptions) in definitions {
-            if descriptor.id == "nc-managed" {
-                descriptor.requires.retain(|r| {
-                    !(r.id.starts_with("sync-turning.") && !enabled.contains("sync-turning")
-                        || r.id.starts_with("undercut.") && !enabled.contains("undercut"))
-                });
-            }
+        for (descriptor, descriptions) in definitions {
             if !enabled.contains(&descriptor.id) {
                 continue;
             }
@@ -426,6 +330,17 @@ impl App {
         let records = bundle["collections"]
             .as_object()
             .ok_or_else(|| PluginError::new("invalid_bundle", "缺少资产集合"))?;
+        // A bundle still carrying a retired asset collection is refused as a whole
+        // before any provider is consulted or any file is written, so no alias
+        // declaration (or same-named provider) can re-supply the removed collection.
+        for id in records.keys() {
+            if config::is_retired_collection_id(id) {
+                return Err(PluginError::new(
+                    "collection_missing",
+                    format!("请先启用提供资产集合 {id} 的插件"),
+                ));
+            }
+        }
         let mut available = std::collections::BTreeMap::new();
         for descriptor in self.runtime.descriptors() {
             for collection in descriptor.asset_collections {
@@ -506,20 +421,14 @@ impl App {
         let selected = Self::selected_ids(&saved);
         let external = config::installed(&self.home)?;
         let mut plugins = Vec::new();
-        for id in [
-            "template",
-            "parameters",
-            "math",
-            "nc",
-            "nc-parameters",
-            "nc-managed",
-            "sync-turning",
-            "undercut",
-            "process",
-            "process-parameters",
-        ] {
-            let available = ["template", "parameters"].contains(&id) || cfg!(feature = "nc-bundle");
-            plugins.push(json!({"id":id,"builtin":true,"available":available,"descriptor":definitions.iter().find(|(d,_)|d.id==id).map(|(d,_)|d),"active":active.iter().any(|d|d.id==id),"enabled_next_start":selected.contains(id)}));
+        for id in config::BUILTIN_PLUGIN_IDS {
+            let available = ["template", "parameters"].contains(id) || cfg!(feature = "math");
+            plugins.push(json!({"id":id,"builtin":true,"retired":false,"available":available,"descriptor":definitions.iter().find(|(d,_)| d.id == *id).map(|(d,_)|d),"active":active.iter().any(|d| d.id == *id),"enabled_next_start":selected.contains(*id)}));
+        }
+        // Retired NC identities stay listed so the UI can explain that they are gone
+        // instead of offering an unknown plugin.
+        for id in config::RETIRED_PLUGIN_IDS {
+            plugins.push(json!({"id":id,"builtin":true,"retired":true,"available":false,"descriptor":null,"active":active.iter().any(|d|&d.id==id),"enabled_next_start":false}));
         }
         for (manifest, _) in external {
             let id = &manifest.descriptor.id;
@@ -535,6 +444,7 @@ impl App {
                 Ok(json!({"id":self.workbench.workspace_id,"profile":self.profile}))
             }
             ("GET", "/api/v2/runs") => self.workbench.list(),
+            ("POST", "/api/v2/runs/query") => self.workbench.query(body),
             ("POST", "/api/v2/runs") => {
                 let action = body["action"]
                     .as_str()
@@ -581,7 +491,11 @@ impl App {
             }
             ("GET", "/api/v2/plugins") => self.inventory(),
             ("GET", "/api/v2/capabilities") => {
-                let mut document_actions: Vec<_> = self
+                // Document entry points are derived only from live, executable actions.
+                // Retired NC intents are recognized by the frontend from template
+                // metadata and the reserved action namespace, so no pseudo provider or
+                // retired declaration is published here.
+                let document_actions: Vec<_> = self
                     .definitions()?
                     .into_iter()
                     .flat_map(|(_, actions)| actions)
@@ -593,14 +507,6 @@ impl App {
                     })
                     .map(|action| json!(action))
                     .collect();
-                // Legacy NC metadata intent is known even by template-only distributions.
-                // This is an association declaration, not a loaded domain implementation.
-                if !document_actions
-                    .iter()
-                    .any(|action| action["id"] == "nc.generate")
-                {
-                    document_actions.push(json!({"id":"nc.generate","ui_schema":{"document_input":{"match_metadata":"nc","bindings":{}}}}));
-                }
                 Ok(
                     json!({"actions":self.runtime.capabilities(),"document_actions":document_actions,"services":self.runtime.bindings(),"panels":self.runtime.descriptors().into_iter().flat_map(|d|d.panels).collect::<Vec<_>>()}),
                 )
@@ -636,20 +542,7 @@ impl App {
                 let id = body["id"]
                     .as_str()
                     .ok_or_else(|| PluginError::new("invalid_input", "缺少插件标识"))?;
-                if [
-                    "template",
-                    "parameters",
-                    "math",
-                    "nc",
-                    "nc-parameters",
-                    "nc-managed",
-                    "sync-turning",
-                    "undercut",
-                    "process",
-                    "process-parameters",
-                ]
-                .contains(&id)
-                {
+                if config::BUILTIN_PLUGIN_IDS.contains(&id) {
                     return Err(PluginError::new("builtin_plugin", "内置能力只能停用"));
                 }
                 if self.runtime.descriptors().iter().any(|d| d.id == id) {

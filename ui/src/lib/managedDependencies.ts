@@ -13,8 +13,6 @@ export function managedDependencyRequest(run?: Run, workspaceId = "", enabled = 
   if (!replay) return;
   const checkAction = replay.job_snapshot && run.action.endsWith(".generate")
     ? run.action.replace(/\.generate$/, ".check")
-    : replay.managed_snapshot ? "nc.managed.check"
-    : replay.process_snapshot ? "process.managed.check"
     : replay.parameter_snapshot ? "parameter.dependencies.check" : undefined;
   if (!checkAction) return;
   const input = encode(checkAction === "parameter.dependencies.check"
@@ -35,7 +33,7 @@ export function createManagedDependencyChecks(check: (id: string, input: Data) =
       const result = await check(entry.request.action, parseData(entry.request.input));
       if (entries.get(entry.request.key) !== entry) return;
       entry.state = result?.data?.current === true ? clear : {
-        stale: true, message: "参数、刀具或模板依赖已变化，请重新生成。",
+        stale: true, message: "参数或模板依赖已变化，请重新生成。",
       };
     } catch {
       if (entries.get(entry.request.key) !== entry) return;

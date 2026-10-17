@@ -10,6 +10,13 @@ import { undo } from "@codemirror/commands";
 
 afterEach(cleanup);
 
+// The production entry loads the editor chunk on demand; these tests exercise the
+// real CodeMirror synchronously, so they bind the wrapper straight to it.
+vi.mock("./LazyEditor", async () => {
+  const actual = await vi.importActual<typeof import("./Editor")>("./Editor");
+  return { Editor: actual.Editor };
+});
+
 function jsonView(container: HTMLElement) {
   return EditorView.findFromDOM(container.querySelector(".cm-editor")!)!;
 }

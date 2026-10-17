@@ -243,17 +243,26 @@ describe("managed check identity and eligibility", () => {
     ).not.toBe(request().key);
   });
 
-  it("retains NC bundle dependency check routes as well as generic snapshots", () => {
+  it("checks generic job and shared parameter snapshots and ignores retired machining snapshots", () => {
     for (const [snapshot, action, expected] of [
-      ["job_snapshot", "sync-turning.generate", "sync-turning.check"],
-      ["managed_snapshot", "nc.generate.managed", "nc.managed.check"],
-      ["process_snapshot", "process.generate.managed", "process.managed.check"],
+      ["job_snapshot", "report.generate", "report.check"],
       ["parameter_snapshot", "template.render.managed", "parameter.dependencies.check"],
     ]) {
       const input = run();
       input.action = action;
       input.result!.data.replay_input = { [snapshot]: { version: 1 } };
       expect(managedDependencyRequest(input, "workspace-a")!.action).toBe(expected);
+    }
+    for (const [snapshot, action] of [
+      ["managed_snapshot", "nc.generate.managed"],
+      ["process_snapshot", "process.generate.managed"],
+    ]) {
+      const input = run();
+      input.action = action;
+      input.result!.data.replay_input = { [snapshot]: { version: 1 } };
+      expect(
+        managedDependencyRequest(input, "workspace-a"),
+      ).toBeUndefined();
     }
   });
 });

@@ -1,46 +1,33 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { action } from "./api";
-import {
-  generalDocuments,
-  loadTemplateCatalog,
-  specializedTemplate,
-} from "./templateCatalog";
+import { generalDocuments, loadTemplateCatalog } from "./templateCatalog";
 import { decodeDraft, encodeDraft } from "./drafts";
-import { newDocument } from "./data";
+import { domainTemplate } from "./documentExecution";
+import { newDocument, type Asset } from "./data";
 
 vi.mock("./api", () => ({ action: vi.fn() }));
-const asset = (id: string) => ({
+
+// Retired machining templates are recognised by their metadata, not by file or
+// template name: `nc` (even a bare null) or a retired execution action.
+const retired = (nc: unknown = { operation: { id: "groove" } }): Asset => ({
   source: "{{ trajectory_program }}",
-  metadata: { nc: { operation: { id } } },
+  metadata: { nc },
 });
+const plain: Asset = { source: "hello" };
+
 beforeEach(() => vi.clearAllMocks());
 
 describe("template presentation ownership", () => {
-  it("classifies only the three supported operation IDs", () => {
-    expect(specializedTemplate(asset("sync.left"))).toBe("sync-turning");
-    expect(specializedTemplate(asset("sync.right"))).toBe("sync-turning");
-    expect(specializedTemplate(asset("groove"))).toBe("undercut");
-    for (const id of ["sync.other", "groove.finish", "direct", "circlip", ""])
-      expect(specializedTemplate(asset(id))).toBeUndefined();
-    expect(
-      specializedTemplate({
-        source: "",
-        tags: ["sync.left"],
-        metadata: { title: "同步车左侧模板" },
-      }),
-    ).toBeUndefined();
-    expect(specializedTemplate(undefined)).toBeUndefined();
-  });
-
-  it("hides specialized drafts without losing their raw input or saved baseline", () => {
+  it("hides retired machining drafts, null metadata included, without losing raw input or baseline", () => {
     const hidden = {
       ...newDocument(),
       title: "自定义文件名",
-      asset: asset("groove"),
+      asset: retired(),
       fingerprint: "old-baseline",
     };
+    const hiddenNull = { ...newDocument(), asset: retired(null) };
     const normal = newDocument();
-    const documents = [hidden, normal];
+    const documents = [hidden, hiddenNull, normal];
     expect(generalDocuments(documents)).toEqual([normal]);
     expect(decodeDraft(encodeDraft(documents))).toEqual(documents);
     expect(documents[0]).toBe(hidden);
@@ -56,10 +43,7 @@ describe("template presentation ownership", () => {
           }
         : {
             data: {
-              asset:
-                input.name === "custom-file"
-                  ? asset("sync.left")
-                  : { source: "hello" },
+              asset: input.name === "custom-file" ? retired() : plain,
               fingerprint: "current-baseline",
             },
           },
@@ -67,7 +51,7 @@ describe("template presentation ownership", () => {
     const result = await loadTemplateCatalog();
     expect(
       result.items
-        .filter((item) => !specializedTemplate(item.asset))
+        .filter((item) => !domainTemplate(item.asset))
         .map((item) => item.id),
     ).toEqual(["sync-turning-template"]);
     expect(result.items[0].fingerprint).toBe("current-baseline");
@@ -82,7 +66,7 @@ describe("template presentation ownership", () => {
           diagnostics: [{ code: "existing" }],
         };
       if (input.name === "broken") throw new Error("read conflict");
-      return { data: { asset: asset("groove"), fingerprint: "current" } };
+      return { data: { asset: retired(), fingerprint: "current" } };
     });
     const result = await loadTemplateCatalog();
     expect(result.items.map((item) => item.id)).toEqual(["ok"]);

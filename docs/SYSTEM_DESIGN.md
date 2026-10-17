@@ -4,11 +4,11 @@
 
 ## 目录与启动
 
-CLI 全局参数为 `--home`、`--workspace`、`--profile template|nc`。工作区默认当前目录；显式 `--home` 优先，否则依次检查 `NCTOOL_HOME`、Windows 的 `%LOCALAPPDATA%/nctool`、`$XDG_CONFIG_HOME/nctool`、`$HOME/.config/nctool`。最后 HOME 不存在时以当前目录下 `.config/nctool` 兜底。
+CLI 全局参数为 `--home`、`--workspace`、`--profile template`。其他 profile 值（含旧 `nc`）以 `invalid_profile` 拒绝；工作区默认当前目录；显式 `--home` 优先，否则依次检查 `NCTOOL_HOME`、Windows 的 `%LOCALAPPDATA%/nctool`、`$XDG_CONFIG_HOME/nctool`、`$HOME/.config/nctool`。最后 HOME 不存在时以当前目录下 `.config/nctool` 兜底。
 
 home 包含 `config.json` 和已安装的 `plugins/`，工作区包含资产和 `.nctool/runs/`。浏览器草稿按工作区标识隔离，不属于已保存资产。WebUI 默认 `127.0.0.1:8788`，可用 `ui --host <回环 IP> --port <端口>` 修改。
 
-默认构建仅包含 template；启用内置 nc 组合前需 `--features nc-bundle` 构建或使用完整发行二进制。构建步骤见[贡献指南](CONTRIBUTING.md)。
+默认构建包含通用模板与共享参数组合；数学扩展需以 `--features math` 构建或使用完整发行二进制。构建步骤见[贡献指南](CONTRIBUTING.md)。
 
 ## 配置组合
 
@@ -24,7 +24,7 @@ home 包含 `config.json` 和已安装的 `plugins/`，工作区包含资产和 
 }
 ```
 
-启动选择顺序：CLI `--profile` 覆盖已保存 profile；profile 的基础插件加 `enabled`；最后移除 `disabled`。`template` 加载模板服务；`nc` 加载模板、math、NC、多工序。外部插件只在显式启用后启动。
+启动选择顺序：CLI `--profile` 覆盖已保存 profile；profile 的基础插件加 `enabled`；最后移除 `disabled`。`template` 组合加载模板与共享参数服务；独立 `math` 扩展或外部插件须在 `enabled` 中显式启用。外部插件只在显式启用后启动。
 
 `plugins` 是按插件 ID 保存的配置，按插件的 `config_schema` 验证；`providers` 是服务 ID 到提供方插件 ID 的显式映射。多候选服务没有选择时失败，不默认选择最后加载者。
 
@@ -32,7 +32,7 @@ home 包含 `config.json` 和已安装的 `plugins/`，工作区包含资产和 
 
 ## 资产
 
-工作区下 `templates/<id>.json`、`presets/<id>.json`、可选 `machines/<id>.json`。资产 ID 是单个合法路径段；引用别的模板使用资产 ID，不借助全局目录分类推断加工类型。
+工作区下 `templates/<id>.json`、`presets/<id>.json` 及插件声明的其他集合（共享参数为 `parameters/<id>.json`）。资产 ID 是单个合法路径段；引用别的模板使用资产 ID，不从全局目录分类推断类型。
 
 模板资产示例：
 
@@ -46,7 +46,7 @@ home 包含 `config.json` 和已安装的 `plugins/`，工作区包含资产和 
 }
 ```
 
-NC 规格可放在 `metadata.nc.specs`，通用模板服务只保存扩展元数据。`template.render` 的请求规格/defaults 优先于资产规格/defaults，调用方显式 context 覆盖同名默认值；默认值采用顶层合并。
+通用模板服务只按约定保存资产元数据，不解释领域字段。`template.render` 的请求规格/defaults 优先于资产规格/defaults，调用方显式 context 覆盖同名默认值；默认值采用顶层合并。
 
 读资产返回完整 `{hash,len,mtime}` 的不透明 JSON 字符串指纹。新建时 expected 为 null/缺省；修改必须携带读取到的指纹。写入在文件锁内比较、原子替换并取得返回指纹，拒绝陈旧覆盖和符号链接越界。
 
@@ -56,11 +56,9 @@ JSON 输入经过数值下溢扫描与实际解析器确认：非零十进制值
 
 `template.render`：支持 `source` 或已保存的 `template`、`templates` 内存引用集合、`context` 对象、`schema/defaults`、`lenient`、`trim_blocks/lstrip_blocks`、显式 `extensions`。
 
-`template.inspect`：递归收集静态模板引用及变量的必选/可选、文件名和行列位置。动态引用无法静态穷举，最终由渲染器解析。`include_snapshot:true` 同时返回模板集合和主模板资产元数据的不可变快照；`template.render` 可仅传入该 `snapshot` 和 context，完全不重读资产。NC 校验、规格解析和渲染使用同一份快照，避免编辑发生在校验与渲染之间时改变程序内容。
+`template.inspect`：递归收集静态模板引用及变量的必选/可选、文件名和行列位置。动态引用无法静态穷举，最终由渲染器解析。`include_snapshot:true` 同时返回模板集合和主模板资产元数据的不可变快照；`template.render` 可仅传入该 `snapshot` 和 context，完全不重读资产。受管渲染的校验与渲染共用同一份快照，避免编辑发生在校验与渲染之间时改变程序内容。
 
-`nc.generate`：支持 `source/template/templates` 或不可混用的 `snapshot`、`params`、领域 `specs`、通用 `schema/defaults`、`machine` 或 `machine_id`、`options`。不使用普通模板 context 作为领域参数。NC 规格保留范围、整数、白名单、条件必选、查表派生和机床动态上界算法；Schema 与 specs 同时校验有效参数，任何领域错误都会失败。NC 渲染保持严格字段策略，请求 lenient 不放宽未定义字段或领域校验。
-
-`process.generate`：支持 name、公共 params/machine/options、非空 ops。工序覆盖公共参数与选项；每段从上一段真实末行号续编，不能自行重置。任何工序失败时返回聚合诊断，成功工序正文不交付。先在内存构造最终结果，再由 CLI `--out` 原子写出。
+`template.render.managed`：普通模板输入另加共享参数 `bindings`、可选 `preset_id`；先解析共享定义/预置与人工输入得到冻结上下文，再走通用渲染，返回渲染结果、参数解析与冻结 `replay_input`。冻结形式不能与 `context/schema/defaults/bindings/preset_id` 混用。字段与服务见[参数管理指南](PARAMETER_MANAGEMENT.md)。
 
 动作实例与 JSON Schema 以 `nctool actions` / `/api/v2/capabilities` 为运行时真值。
 
@@ -89,7 +87,8 @@ HTTP 使用 Axum/Tokio，仅回环地址；普通请求体上限 1 MiB，资产�
 
 - `GET /api/v2/workspace`：工作区标识与当前插件组合。
 - `POST /api/v2/runs`，体 `{action,input,title?}`：创建异步任务，返回 ID。
-- `GET /api/v2/runs`：最近 100 条轻量索引；完整记录仍保留在磁盘。
+- `GET /api/v2/runs`：兼容入口，返回最近最多 100 条轻量索引；完整记录仍保留在磁盘。
+- `POST /api/v2/runs/query`，体 `{query?,status?,offset?,limit?}`：按标题/标识/动作关键词和状态检索全部摘要，返回 `{runs,total,offset,limit}`。关键词不区分大小写；状态仅接受 queued/running/succeeded/failed/cancelled/interrupted；offset 为非负整数，limit 默认 25、范围 1–100。结果按开始时间降序、同时间戳标识升序排列。请求不读取完整记录，但仍扫描全部索引；offset 分页在并发新增/删除时不提供快照一致性。
 - `GET /api/v2/runs/<id>`：实际输入、状态、结果、错误与插件版本。
 - `GET /api/v2/runs/<id>/replay-check`：只读比较历史与当前环境，返回 `{status,differences}`。
 - `POST /api/v2/runs/<id>/cancel` / `remove`：取消任务或删除已结束记录。
@@ -104,18 +103,18 @@ WebUI 使用模式只显示参数表单与结果，编辑模式显示源码和�
 - `POST /api/v2/plugins/inspect {source}`：检查本地插件目录，返回声明，不启动入口。
 - `POST /api/v2/plugins/install {source}`：校验后复制到 home/plugins；不自动启用。
 - `POST /api/v2/plugins/uninstall {id}`：只卸载当前未运行的外部插件。
-- `POST /api/v2/runs/<id>/rerun`：生成新任务，优先使用提供方的 replay_input。成功的内置 NC/工序结果固定模板、机床和选项；执行器版本仍是当前版本，不承诺跨版本逐字一致。
+- `POST /api/v2/runs/<id>/rerun`：生成新任务，优先使用提供方的 replay_input。成功的受管渲染结果固定模板与冻结参数；执行器版本仍是当前版本，不承诺跨版本逐字一致。
 - `GET /api/v2/bundle`：导出当前启用插件声明的所有资产集合。
 - `POST /api/v2/bundle/validate {bundle}`：检查完整性、提供方可用性、资产结构与同名冲突，返回集合及稳定标识映射，不写入资产。
 - `POST /api/v2/bundle/import {bundle}`：全部预检查后应用，失败时通过各集合返回的 receipt 反向回滚已导入资产。指纹不匹配时不会删除其他编辑写入的数据，回滚冲突会明确报告。
 
 资产包结构为 `{format:"nctool-workspace",version:1,collections:{id:data},manifest:[{collection,provider,version,fingerprint}]}`。内容指纹用于发现改动，不是签名或来源认证。导出保留所有稳定标识，模板引用无需重写；首版导入拒绝同名冲突，不自动重命名，也不导入运行历史或宿主启动配置。
 
-模板集合包含 templates/presets，NC 集合包含 machines。单个资产最多 1 MiB、每集合最多 2048 项、整体包最多 64 MiB。集合插件负责内容与路径校验；外部提供方必须遵守 validate_only 和回滚契约。内置导入具备受保护的原子单文件写入和回滚，跨插件导入不提供隔离外部副作用的数据库事务。
+模板集合包含 templates/presets，共享参数插件贡献 definitions/presets 集合。单个资产最多 1 MiB、每集合最多 2048 项、整体包最多 64 MiB。集合插件负责内容与路径校验；外部提供方必须遵守 validate_only 和回滚契约。内置导入具备受保护的原子单文件写入和回滚，跨插件导入不提供隔离外部副作用的数据库事务。
 
-NC 视图通过已保存模板的 schema 生成参数控件；metadata.nc.specs 优先作为领域规格，无领域规格时可从通用 schema 提取数值类型和范围。临时源码使用独立参数，不沿用先前所选模板的规格。机床配置和工序草稿按工作区恢复，未完成数值不转成合法旧值。
+通用模板视图通过已保存模板的 schema 生成参数控件；无 schema 时按基础类型渲染。共享参数绑定、预置选择与草稿按工作区恢复，未完成数值不转成合法旧值。
 
-NC 资产可声明 `metadata.nc.render_options:{trim_blocks,lstrip_blocks}` 作为该领域的空白选项默认值；请求中显式布尔值优先。有效选项进入 replay_input。普通 template.render 不读取领域选项，仍由调用方显式指定。此能力支持用户选择的 V3 模板转换，不恢复发行包的旧业务模板。
+模板可通过 `metadata.parameters.bindings` 声明共享参数绑定；工作台据此生成控件并写入请求。显式输入优先，有效选择进入 replay_input。
 
 ## 历史重执行环境
 

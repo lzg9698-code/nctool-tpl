@@ -1,5 +1,9 @@
 import {
   documentActions,
+  domainTemplate,
+  machiningRemovedMessage,
+  restoreDocument,
+  sameSchema,
   selectDocumentAction,
   documentInput,
   documentSignature,
@@ -8,6 +12,11 @@ import { WorkspaceImport } from "./components/WorkspaceImport";
 import { useManagedDependencies } from "./lib/managedDependencies";
 import { ParameterSelection } from "./plugins/ParameterViews";
 import { SharedParameterInputs } from "./components/SharedParameterInputs";
+const SharedBindingEditor = lazy(() =>
+  import("./components/SharedBindingEditor").then((module) => ({
+    default: module.SharedBindingEditor,
+  })),
+);
 import {
   sharedParameterDocument,
   initialDocumentContext,
@@ -16,18 +25,45 @@ import {
   templatePresetParameters,
   loadTemplatePresetParameters,
 } from "./lib/appDocumentParameters";
-import { managedFormSchema } from "./lib/managedParameters";
-import { SyntaxGuide } from "./components/SyntaxGuide";
-import { PluginPage } from "./components/PluginPage";
-import { PluginSettings } from "./components/PluginSettings";
-import { builtinViews } from "./plugins/registry";
 import {
-  generalDocuments,
-  loadTemplateCatalog,
-  specializedTemplate,
-} from "./lib/templateCatalog";
-import { HistoryPage, type HistoryComparison } from "./components/HistoryPage";
-import { useEffect, useRef, useState, Suspense, type ReactNode } from "react";
+  cloneDocumentForCopy,
+  mergeInspectedParameters,
+  normalizeSchema,
+  prepareDocument,
+} from "./lib/documentModel";
+// Secondary pages are split out: only the workbench is needed to reach first
+// paint, and the history page alone pulls the diff library.
+const SyntaxGuide = lazy(() =>
+  import("./components/SyntaxGuide").then((module) => ({
+    default: module.SyntaxGuide,
+  })),
+);
+const PluginPage = lazy(() =>
+  import("./components/PluginPage").then((module) => ({
+    default: module.PluginPage,
+  })),
+);
+const PluginSettings = lazy(() =>
+  import("./components/PluginSettings").then((module) => ({
+    default: module.PluginSettings,
+  })),
+);
+const HistoryPage = lazy(() =>
+  import("./components/HistoryPage").then((module) => ({
+    default: module.HistoryPage,
+  })),
+);
+import { builtinViews } from "./plugins/registry";
+import { generalDocuments, loadTemplateCatalog } from "./lib/templateCatalog";
+import type { HistoryComparison } from "./components/HistoryPage";
+import {
+  lazy,
+  useEffect,
+  useRef,
+  useState,
+  Suspense,
+  type ReactNode,
+} from "react";
 import {
   Boxes,
   BookOpen,
@@ -46,20 +82,17 @@ import {
   Check,
   AlertTriangle,
   X,
-  MoreHorizontal,
   FileInput,
   Code2,
   ListChecks,
-  Braces,
   LoaderCircle,
   Square,
   PanelLeftClose,
   PanelLeftOpen,
 } from "lucide-react";
-import { Editor, type EditorHandle } from "./components/Editor";
+import { Editor, type EditorHandle } from "./components/LazyEditor";
 import {
   Empty,
-  PageTitle,
   Menu,
   Modal,
   JsonEditor,
@@ -69,12 +102,10 @@ import { Form } from "./components/Form";
 import { SchemaEditor } from "./components/SchemaEditor";
 import { api, action, ApiError } from "./lib/api";
 import {
-  clone,
   encode,
   parseData,
   newDocument,
   isDirty,
-  documentValue,
   mergeDefaults,
   download,
   diagnosticsFrom,
@@ -82,11 +113,15 @@ import {
   type Asset,
   type Data,
   type Run,
-  type Schema,
   type Diagnostic,
   fieldErrors,
 } from "./lib/data";
-import { loadDrafts, saveDrafts, cloneDraft } from "./lib/drafts";
+import { loadDrafts, cloneDraft } from "./lib/drafts";
+import { useDraftPersistence } from "./hooks/useDraftPersistence";
+import { useRunPolling } from "./hooks/useRunPolling";
+import { applyTemplateSaveResult, templateSaveAsset } from "./lib/templateSave";
+import { ConflictDialog } from "./components/ConflictDialog";
+import { TemplateWelcome } from "./components/TemplateWelcome";
 import "./styles.css";
 interface Item {
   id: string;
@@ -109,28 +144,6 @@ const stateNames: Record<string, string> = {
   cancelled: "已取消",
   interrupted: "已中断",
 };
-function normalizeSchema(asset: Asset): Schema {
-  return asset.schema && typeof asset.schema === "object"
-    ? asset.schema
-    : { type: "object", properties: {}, required: [] };
-}
-function prepareDocument(
-  id: string,
-  asset: Asset,
-  fingerprint: string,
-  actionId?: string,
-): Document {
-  const doc = newDocument();
-  doc.id = id;
-  doc.title = asset.metadata?.title || id;
-  doc.asset = asset;
-  doc.context = initialDocumentContext(asset, actionId);
-  doc.fingerprint = fingerprint;
-  doc.mode = "use";
-  doc.outputName = asset.metadata?.output_name || id + ".txt";
-  doc.saved = documentValue(doc);
-  return doc;
-}
 export default function App() {
   const [workspace, setWorkspace] = useState<Data>(null),
     [capabilities, setCapabilities] = useState<Data>({
@@ -167,7 +180,7 @@ export default function App() {
       Record<string, { id: string; signature: string }>
     >({}),
     [selectedHistory, setSelectedHistory] = useState<Run | null>(null);
-  const [inspector, setInspector] = useState<"definition" | "defaults">(
+  const [inspector, setInspector] = useState<"definition" | "defaults" | "bindings">(
       "definition",
     ),
     [paramMode, setParamMode] = useState<"form" | "json">("form"),
@@ -176,9 +189,11 @@ export default function App() {
       "result" | "diagnostics" | "parameters"
     >("result");
   const code = useRef<EditorHandle>(null);
-  const sourceLine = useRef<number | undefined>(undefined);
   const [jump, setJump] = useState<number | undefined>();
   const imported = useRef<HTMLInputElement>(null);
+  // Latest documents for async continuations that must not act on a stale copy.
+  const documentsRef = useRef(documents);
+  documentsRef.current = documents;
   const visibleDocuments = generalDocuments(documents);
   const doc = visibleDocuments.find((d) => d.key === active);
   useEffect(() => {
@@ -251,7 +266,7 @@ export default function App() {
     setCatalogError("");
     try {
       const result = await loadTemplateCatalog();
-      setItems(result.items.filter((item) => !specializedTemplate(item.asset)));
+      setItems(result.items.filter((item) => !domainTemplate(item.asset)));
       setCatalogState("ready");
       if (result.diagnostics?.length) {
         setCatalogError("部分模板无法读取，请检查模板文件");
@@ -360,40 +375,24 @@ export default function App() {
         );
     } catch {}
   }
-  useEffect(() => {
-    if (workspace) {
-      const timeout = setTimeout(() => {
-        if (!saveDrafts(workspace.id, documents, active))
-          notify("浏览器草稿存储空间不足，请及时保存模板", true);
-      }, 350);
-      return () => clearTimeout(timeout);
-    }
-  }, [workspace, documents, active]);
-  useEffect(() => {
-    function flushDrafts() {
-      if (workspace) saveDrafts(workspace.id, documents, active);
-    }
-    function before(event: BeforeUnloadEvent) {
-      flushDrafts();
-      if (documents.some(isDirty)) {
-        event.preventDefault();
-        event.returnValue = "";
-      }
-    }
-    window.addEventListener("beforeunload", before);
-    window.addEventListener("pagehide", flushDrafts);
-    return () => {
-      window.removeEventListener("beforeunload", before);
-      window.removeEventListener("pagehide", flushDrafts);
-    };
-  }, [documents, workspace, active]);
+  useDraftPersistence(
+    workspace?.id,
+    documents,
+    active,
+    () => notify("浏览器草稿存储空间不足，请及时保存模板", true),
+  );
   useEffect(() => {
     function keys(event: KeyboardEvent) {
-      if ((event.ctrlKey || event.metaKey) && event.key.toLowerCase() === "s") {
+      if (!(event.ctrlKey || event.metaKey)) return;
+      // An open dialog or menu owns the keyboard: saving or generating behind it
+      // would act on a document the user cannot see. Text fields keep their own
+      // keys — the editor status bar documents Ctrl+S / Ctrl+Enter there.
+      if (document.querySelector('[role="dialog"], [role="menu"]')) return;
+      if (event.key.toLowerCase() === "s") {
         event.preventDefault();
         if (doc && !saving) void saveDocument();
       }
-      if ((event.ctrlKey || event.metaKey) && event.key === "Enter") {
+      if (event.key === "Enter") {
         event.preventDefault();
         if (doc) void generate();
       }
@@ -401,33 +400,12 @@ export default function App() {
     window.addEventListener("keydown", keys);
     return () => window.removeEventListener("keydown", keys);
   }, [doc, saving, capabilities, jsonError, submitting]);
-  useEffect(() => {
-    const pending = Object.values(runs).filter((r) =>
-      ["queued", "running"].includes(r.status),
-    );
-    if (!pending.length) return;
-    let cancelled = false;
-    const timeout = setTimeout(async () => {
-      for (const run of pending) {
-        try {
-          const fresh = await api("runs/" + run.id);
-          if (cancelled) return;
-          setRuns((current) => ({ ...current, [fresh.id]: fresh }));
-          if (!["queued", "running"].includes(fresh.status)) {
-            setRunList((await api("runs")).runs);
-            if (fresh.status === "failed")
-              notify(fresh.error?.message || "任务失败", true);
-          }
-        } catch (error) {
-          if (!cancelled) fail(error);
-        }
-      }
-    }, 500);
-    return () => {
-      cancelled = true;
-      clearTimeout(timeout);
-    };
-  }, [runs]);
+  useRunPolling(runs, {
+    onRuns: setRuns,
+    onRunList: setRunList,
+    onFailure: fail,
+    onRunFailure: (message) => notify(message, true),
+  });
   async function openTemplate(item: Item) {
     const existing = documents.find((d) => d.id === item.id);
     if (existing) {
@@ -438,8 +416,8 @@ export default function App() {
     }
     try {
       const result = await action("template.read", { name: item.id });
-      if (specializedTemplate(result.data.asset))
-        throw new Error("此格式仅在专用插件的高级设置中选择");
+      if (domainTemplate(result.data.asset))
+        throw new Error(machiningRemovedMessage);
       const loaded = prepareDocument(
         item.id,
         result.data.asset,
@@ -511,46 +489,23 @@ export default function App() {
     const savingKey = doc.key;
     try {
       const id = doc.id || "tpl-" + crypto.randomUUID();
-      const asset = {
-        ...doc.asset,
-        metadata: {
-          ...(doc.asset.metadata || {}),
-          title: doc.title,
-          output_name: doc.outputName,
-          ...(generation
-            ? {
-                execution: {
-                  ...(doc.asset.metadata?.execution || {}),
-                  action: generation.id,
-                },
-              }
-            : {}),
-        },
-      };
+      const asset = templateSaveAsset(doc, generation?.id);
       const response = await action("template.save", {
         name: id,
         asset,
         expected: doc.fingerprint,
       });
-      const savedDoc = {
-        ...doc,
-        id,
-        asset,
-        fingerprint: response.data.fingerprint,
-      };
-      savedDoc.saved = documentValue(savedDoc);
       setDocuments((current) =>
-        current.map((d) =>
-          d.key === savingKey
-            ? {
-                ...d,
+        current.map((currentDoc) =>
+          currentDoc.key === savingKey
+            ? applyTemplateSaveResult(
+                currentDoc,
+                doc,
                 id,
-                fingerprint: response.data.fingerprint,
-                saved: savedDoc.saved,
-                asset:
-                  documentValue(d) === documentValue(doc) ? asset : d.asset,
-              }
-            : d,
+                asset,
+                response.data.fingerprint,
+              )
+            : currentDoc,
         ),
       );
       await catalog();
@@ -563,72 +518,41 @@ export default function App() {
         setDialog({
           title: "模板已被其他编辑修改",
           body: (
-            <>
-              <p>当前草稿保留。请比较两个版本，再决定如何处理。</p>
-              <div className="conflict-columns">
-                <div>
-                  <strong>当前草稿</strong>
-                  <pre>{doc.asset.source}</pre>
-                </div>
-                <div>
-                  <strong>磁盘版本</strong>
-                  <pre>{response?.data.asset.source}</pre>
-                </div>
-              </div>
-            </>
-          ),
-          buttons: (
-            <>
-              <button
-                className="button secondary"
-                onClick={() => setDialog(null)}
-              >
-                继续编辑
-              </button>
-              <button
-                className="button secondary"
-                onClick={() => {
-                  if (response && doc.id) {
-                    editDoc(
-                      {
-                        ...prepareDocument(
-                          doc.id,
-                          response.data.asset,
-                          response.data.fingerprint,
-                          actionForAsset(response.data.asset),
-                        ),
-                        key: savingKey,
-                        mode: doc.mode,
-                        tab: doc.tab,
-                        context: doc.context,
-                      },
-                      savingKey,
-                    );
-                  }
-                  setDialog(null);
-                }}
-              >
-                加载磁盘版本
-              </button>
-              <button
-                className="button primary"
-                onClick={() => {
-                  const copy = {
-                    ...doc,
-                    key: crypto.randomUUID(),
-                    id: null,
-                    fingerprint: null,
-                    title: doc.title + " 副本",
-                    saved: "",
-                  };
-                  setDocuments((d) => [...d, copy]);
-                  setActive(copy.key);
-                  setDialog(null);
-                }}
-              >
-                另存为副本
-              </button>
-            </>
+            <ConflictDialog
+              draftSource={doc.asset.source}
+              diskAsset={response?.data.asset}
+              onContinue={() => setDialog(null)}
+              onLoadDisk={() => {
+                if (response && doc.id) {
+                  editDoc(
+                    (current) => ({
+                      ...prepareDocument(
+                        doc.id!,
+                        response.data.asset,
+                        response.data.fingerprint,
+                        actionForAsset(response.data.asset),
+                      ),
+                      key: savingKey,
+                      mode: doc.mode,
+                      tab: doc.tab,
+                      context: doc.context,
+                      // Preserve the run binding while the new fingerprint marks
+                      // the input as changed against its previous result.
+                      lastRunId: current.lastRunId,
+                      lastRunSignature: current.lastRunSignature,
+                    }),
+                    savingKey,
+                  );
+                }
+                setDialog(null);
+              }}
+              onSaveCopy={() => {
+                const copy = cloneDocumentForCopy(doc);
+                setDocuments((documents) => [...documents, copy]);
+                setActive(copy.key);
+                setDialog(null);
+              }}
+            />
           ),
         });
       } else fail(error);
@@ -657,14 +581,7 @@ export default function App() {
         setDocuments((d) => [...d, copied]);
         setActive(copied.key);
       } else {
-        const copied = {
-          ...cloneDraft(doc),
-          key: crypto.randomUUID(),
-          id: null,
-          fingerprint: null,
-          title: doc.title + " 副本",
-          saved: "",
-        };
+        const copied = cloneDocumentForCopy(doc);
         setDocuments((d) => [...d, copied]);
         setActive(copied.key);
       }
@@ -727,10 +644,8 @@ export default function App() {
           };
       if (typeof asset.source !== "string")
         throw new Error("模板文件缺少 source 字段");
-      if (specializedTemplate(asset))
-        throw new Error(
-          "专用模板请通过工作区资产包导入，并在插件高级设置中选择；源码通过文件或 API 维护。",
-        );
+      if (domainTemplate(asset))
+        throw new Error(machiningRemovedMessage);
       const draft = newDocument();
       draft.asset = asset;
       draft.title =
@@ -746,27 +661,38 @@ export default function App() {
   }
   async function discover() {
     if (!doc) return;
+    // Inspection describes exactly the source and schema captured here. A late
+    // response must never overwrite a schema the user edited while it was in
+    // flight, and must not drop definitions added in the meantime.
+    const request = {
+      key: doc.key,
+      source: doc.asset.source,
+      schema: cloneDraft(normalizeSchema(doc.asset)),
+    };
     try {
       const inspected = await action("template.inspect", {
         source: doc.asset.source,
         ...(doc.id ? { template: doc.id } : {}),
       });
-      const schema = clone(normalizeSchema(doc.asset));
-      schema.properties = schema.properties || {};
-      schema.required = schema.required || [];
-      let added = 0;
-      for (const v of inspected.data.variables) {
-        if (!schema.properties[v.name]) {
-          schema.properties[v.name] = { title: v.name, "x-untyped": true };
-          added++;
-        }
-        if (!v.optional && !schema.required.includes(v.name))
-          schema.required.push(v.name);
+      const current = documentsRef.current.find((d) => d.key === request.key);
+      if (
+        !current ||
+        current.asset.source !== request.source ||
+        !sameSchema(request.schema, normalizeSchema(current.asset))
+      ) {
+        notify("源码或规格已修改，本次识别结果已忽略，请重新识别", true);
+        return;
       }
-      editDoc((d) => ({ ...d, asset: { ...d.asset, schema } }));
+      const merged = mergeInspectedParameters(
+        current.asset,
+        inspected.data.variables,
+      );
+      if (merged.changed) editDoc({ asset: merged.asset }, request.key);
       setInspector("definition");
       notify(
-        added ? `发现 ${added} 个新参数，请选择类型` : "参数已与源码引用同步",
+        merged.added
+          ? `发现 ${merged.added} 个新参数，请选择类型`
+          : "参数已与源码引用同步",
       );
     } catch (error) {
       fail(error);
@@ -775,7 +701,14 @@ export default function App() {
     }
   }
   async function generate() {
-    if (!doc || submitting === doc.key) return;
+    if (!doc) return;
+    // One gate for every entry point. The toolbar and footer buttons disable on
+    // the same condition, so a shortcut must never queue a second task while
+    // this document's previous task is still waiting or running.
+    if (busy) {
+      notify(busyHint, true);
+      return;
+    }
     if (jsonError || inputError) {
       notify(
         jsonError
@@ -984,47 +917,30 @@ export default function App() {
     }
   }
   async function restoreRun(run: Run) {
-    if (run.action === "template.render") {
-      const snapshot = run.input.snapshot;
-      const restored = newDocument();
-      restored.title = run.title + " · 历史输入";
-      restored.generationAction = run.action;
-      restored.asset = snapshot?.asset || {
-        source:
-          run.input.source || snapshot?.templates?.[snapshot.template] || "",
-        schema: run.input.schema || { type: "object", properties: {} },
-        defaults: run.input.defaults || {},
-        metadata: {},
-      };
-      restored.asset = {
-        ...restored.asset,
-        source:
-          snapshot?.templates?.[snapshot.template] ??
-          run.input.source ??
-          restored.asset.source,
-      };
-      if (specializedTemplate(restored.asset)) {
-        setPage("history");
-        setSelectedHistory(run);
-        notify("专用格式的历史输入保留在执行记录中，请从对应插件进入。");
-        return;
-      }
-      restored.context = clone(run.input.context || {});
-      restored.mode = "use";
+    try {
+      // restoreDocument owns the rules: retired machining intent and unavailable
+      // actions are refused, and every generic render action — including shared
+      // parameters — restores its frozen input, preset choice, extensions and
+      // run binding instead of only the plain render action.
+      const restored = restoreDocument(run, capabilities.actions);
       setDocuments((d) => [...d, restored]);
       setActive(restored.key);
       setExecution((e) => ({
         ...e,
         [restored.key]: {
           id: run.id,
-          signature: documentSignature(restored, run.action),
+          signature:
+            restored.lastRunSignature ||
+            documentSignature(restored, run.action),
         },
       }));
       setRuns((r) => ({ ...r, [run.id]: run }));
       setPage("workbench");
-    } else {
-      setPage("history");
-      setSelectedHistory(run);
+      setErrors({});
+      setJsonError("");
+      setParamMode("form");
+    } catch (error) {
+      fail(error);
     }
   }
   const visible = items.filter(
@@ -1069,8 +985,9 @@ export default function App() {
           : latest
             ? "本次任务没有可交付结果，请重新生成"
             : "尚未生成文件，生成成功后才能导出");
+  const busyHint = "任务正在执行，可在结果区取消";
   const generateHint = busy
-    ? "任务正在执行，可在结果区取消"
+    ? busyHint
     : inputError || selection.error || "Ctrl+Enter 生成文件";
   return (
     <div
@@ -1100,9 +1017,8 @@ export default function App() {
         </div>
         <div className="workspace-indicator">
           <span className="online-dot" />
-          {workspace?.profile === "nc" ? "模板与 NC 工作区" : "通用模板工作区"}
-        </div>
-        <div className="sidebar-section-title">工作空间</div>
+          通用模板工作区
+        </div>        <div className="sidebar-section-title">工作空间</div>
         <nav className="sidebar-nav" aria-label="工作空间导航">
           <button
             aria-label={"模板库 · " + items.length + " 个模板"}
@@ -1394,67 +1310,14 @@ export default function App() {
               </div>
             )}
             {!doc ? (
-              <div className="welcome">
-                <div className="welcome-icon">
-                  <FileCode2 size={36} />
-                </div>
-                <p className="eyebrow">YOUR TEMPLATE WORKSPACE</p>
-                <h1>让模板成为可重复的工作</h1>
-                <p>
-                  选择一个模板并填写参数，或创建自己的模板。
-                  <br />
-                  模板源码、参数定义与输出文件都在同一个工作区。
-                </p>
-                <div className="welcome-actions">
-                  <button className="button primary" onClick={create}>
-                    <Plus size={16} />
-                    新建模板
-                  </button>
-                  <button
-                    className="button secondary"
-                    aria-label="导入模板"
-                    title="导入模板"
-                    onClick={() => imported.current?.click()}
-                  >
-                    <FileInput size={16} />
-                    导入 .j2 / JSON
-                  </button>
-                </div>
-                {items.length > 0 && (
-                  <div className="recent-cards">
-                    {items.slice(0, 4).map((item) => (
-                      <button
-                        key={item.id}
-                        onClick={() => void openTemplate(item)}
-                      >
-                        <FileCode2 size={20} />
-                        <strong>{item.title}</strong>
-                        <span>
-                          {item.description || "填写参数并生成文件"}
-                          <ChevronRight size={14} />
-                        </span>
-                      </button>
-                    ))}
-                  </div>
-                )}
-                <div className="welcome-guide">
-                  <div>
-                    <span>01</span>
-                    <strong>制作模板</strong>
-                    <p>编写 Jinja 源码，定义参数类型。</p>
-                  </div>
-                  <div>
-                    <span>02</span>
-                    <strong>填写参数</strong>
-                    <p>通过表单输入，预设可以反复使用。</p>
-                  </div>
-                  <div>
-                    <span>03</span>
-                    <strong>生成与交付</strong>
-                    <p>检查结果，导出文件并保留执行记录。</p>
-                  </div>
-                </div>
-              </div>
+              <TemplateWelcome
+                items={items}
+                onCreate={create}
+                onImport={() => imported.current?.click()}
+                onOpen={(item) => void openTemplate(item)}
+                onSaved={catalog}
+                emptyReady={catalogState === "ready" && !items.length}
+              />
             ) : (
               <>
                 <header className="workbench-toolbar">
@@ -1790,10 +1653,36 @@ export default function App() {
                             >
                               默认参数
                             </button>
+                            <button
+                              className={inspector === "bindings" ? "selected" : ""}
+                              onClick={() => setInspector("bindings")}
+                            >
+                              共享绑定
+                            </button>
                           </div>
                         </div>
                         <div className="pane-scroll">
-                          {inspector === "definition" ? (
+                          {inspector === "bindings" ? (
+                            <Suspense fallback={<p>正在加载共享绑定…</p>}>
+                            <SharedBindingEditor
+                              key={doc.key}
+                              asset={doc.asset}
+                              onChange={(asset) => editDoc((current) => {
+                                const before = !!current.asset.metadata?.parameters;
+                                const after = !!asset.metadata?.parameters;
+                                return {
+                                  ...current,
+                                  asset,
+                                  parameterSelection: undefined,
+                                  replayInput: undefined,
+                                  ...(before !== after ? {
+                                    generationAction: after ? "template.render.managed" : "template.render",
+                                  } : {}),
+                                };
+                              })}
+                            />
+                            </Suspense>
+                          ) : inspector === "definition" ? (
                             <SchemaEditor
                               schema={normalizeSchema(doc.asset)}
                               onChange={(schema) =>
@@ -1917,7 +1806,6 @@ export default function App() {
                         <div className="pane-scroll">
                           {doc.asset.metadata?.parameters && (
                             <ParameterSelection
-                              nc={Boolean(doc.asset.metadata?.nc?.operation)}
                               value={
                                 doc.parameterSelection ||
                                 doc.asset.metadata.parameters.selection ||
@@ -1926,24 +1814,10 @@ export default function App() {
                               onChange={(parameterSelection) =>
                                 editDoc({ parameterSelection })
                               }
-                              slots={[
-                                ...new Set(
-                                  Object.values(
-                                    doc.asset.metadata.parameters
-                                      .tool_bindings || {},
-                                  ).map(
-                                    (binding: Data) => binding.slot as string,
-                                  ),
-                                ),
-                              ]}
                             />
                           )}
                           <Form
-                            schema={managedFormSchema(
-                              normalizeSchema(doc.asset),
-                              doc.asset.metadata?.parameters?.tool_bindings,
-                              doc.parameterSelection,
-                            )}
+                            schema={normalizeSchema(doc.asset)}
                             value={mergeDefaults(
                               doc.asset.defaults,
                               doc.context,
@@ -2098,14 +1972,6 @@ export default function App() {
                                   definition.unit || "",
                                 ]),
                               ),
-                              刀具与加工值: latest?.result?.data.cutting?.slots,
-                              自动派生值:
-                                latest?.result?.data.prepared?.contexts,
-                              派生字段:
-                                latest?.result?.data.prepared?.derived_fields,
-                              算法版本:
-                                latest?.result?.data.prepared
-                                  ?.algorithm_version,
                             },
                             true,
                           )}
@@ -2248,7 +2114,8 @@ export default function App() {
             )}
           </>
         ) : page === "history" ? (
-          <HistoryPage
+          <Suspense fallback={<div className="center-loading">正在加载页面…</div>}>
+            <HistoryPage
             actions={capabilities.actions}
             runList={runList}
             selectedHistory={selectedHistory}
@@ -2274,19 +2141,24 @@ export default function App() {
             notify={notify}
             fail={fail}
           />
+          </Suspense>
         ) : page === "syntax-guide" ? (
-          <SyntaxGuide
-            capabilities={capabilities}
-            back={() => setPage("workbench")}
-            notify={notify}
-          />
+          <Suspense fallback={<div className="center-loading">正在加载页面…</div>}>
+            <SyntaxGuide
+              capabilities={capabilities}
+              back={() => setPage("workbench")}
+              notify={notify}
+            />
+          </Suspense>
         ) : page === "plugins" ? (
-          <PluginSettings
-            inventory={inventory}
-            reload={() => api("plugins").then(setInventory)}
-            notify={notify}
-            fail={fail}
-          />
+          <Suspense fallback={<div className="center-loading">正在加载页面…</div>}>
+            <PluginSettings
+              inventory={inventory}
+              reload={() => api("plugins").then(setInventory)}
+              notify={notify}
+              fail={fail}
+            />
+          </Suspense>
         ) : ContributedView ? (
           <Suspense
             fallback={<div className="center-loading">正在加载插件工作台…</div>}
@@ -2302,15 +2174,17 @@ export default function App() {
             />
           </Suspense>
         ) : (
-          <PluginPage
-            key={(workspace?.id || "") + ":" + page}
-            workspaceId={workspace?.id || ""}
-            panel={capabilities.panels.find((p: Data) => p.id === page)}
-            capabilities={capabilities}
-            start={runAction}
-            runs={runs}
-            fail={fail}
-          />
+          <Suspense fallback={<div className="center-loading">正在加载页面…</div>}>
+            <PluginPage
+              key={(workspace?.id || "") + ":" + page}
+              workspaceId={workspace?.id || ""}
+              panel={capabilities.panels.find((p: Data) => p.id === page)}
+              capabilities={capabilities}
+              start={runAction}
+              runs={runs}
+              fail={fail}
+            />
+          </Suspense>
         )}
         <footer className="status-bar">
           <span>

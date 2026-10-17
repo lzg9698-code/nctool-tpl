@@ -1,18 +1,12 @@
 import { action } from "./api";
-import type { Asset, Data, Document } from "./data";
+import { domainTemplate } from "./documentExecution";
+import type { Data, Document } from "./data";
 
 // Presentation ownership only; storage and rendering APIs remain domain-neutral.
-export function specializedTemplate(
-  asset: Asset | undefined,
-): "sync-turning" | "undercut" | undefined {
-  const operation = asset?.metadata?.nc?.operation?.id;
-  if (operation === "sync.left" || operation === "sync.right")
-    return "sync-turning";
-  if (operation === "groove") return "undercut";
-}
-
+// A document still carrying retired machining intent (metadata.nc — a bare null
+// counts too — or a retired execution action) stays hidden from the workspace.
 export function generalDocuments(documents: Document[]): Document[] {
-  return documents.filter((document) => !specializedTemplate(document.asset));
+  return documents.filter((document) => !domainTemplate(document.asset));
 }
 
 export async function loadTemplateCatalog() {

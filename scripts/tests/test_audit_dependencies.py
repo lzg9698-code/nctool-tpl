@@ -92,6 +92,20 @@ class DependencyAuditTests(unittest.TestCase):
             self.assertEqual((output / "cargo.json").read_text(encoding="utf-8"), text)
             self.assertEqual((output / "cargo.stderr.txt").read_text(encoding="utf-8"), "warning details")
 
+    def test_timeout_preserves_partial_stdout_and_stderr_without_passing(self):
+        error = subprocess.TimeoutExpired(
+            ["cargo", "audit"], 300, output=b'{"partial":true}', stderr=b"fetch started"
+        )
+        with tempfile.TemporaryDirectory() as directory, patch.object(audit.subprocess, "run", side_effect=error):
+            output = Path(directory)
+            result = audit.run_audit("cargo", "cargo", ["cargo", "audit"], output)
+            self.assertEqual(result["status"], "error")
+            self.assertIsNone(result["returncode"])
+            self.assertEqual((output / "cargo.json").read_text(encoding="utf-8"), '{"partial":true}')
+            stderr = (output / "cargo.stderr.txt").read_text(encoding="utf-8")
+            self.assertIn("fetch started", stderr)
+            self.assertIn("timed out", stderr)
+
     def test_missing_tool_and_timeout_are_recorded(self):
         for error in (FileNotFoundError("missing cargo"), subprocess.TimeoutExpired(["cargo"], 300)):
             with tempfile.TemporaryDirectory() as directory, patch.object(audit.subprocess, "run", side_effect=error):

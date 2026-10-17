@@ -3,7 +3,7 @@ import { action } from "../lib/api";
 import { encode, numberText, parseData, type Data, type Document } from "../lib/data";
 import { encodeDraft } from "../lib/drafts";
 import {
-  isStructured, managedRequest, mergeParameterLayers, originLabel, overridePointer,
+  catalogLabel, isStructured, managedRequest, mergeParameterLayers, originLabel, overridePointer,
   pointerValue, previewParameters, removePointer, setParameterOverride,
   type ParameterPreview,
 } from "../lib/managedParameters";
@@ -86,34 +86,42 @@ function SharedParameterDocument({ doc, onChange, mode, errors = {}, disabled = 
 
   function edit(context: Data) { onChange({ context, jsonInput: undefined }); onJsonError?.(""); }
   return <div className="shared-parameter-inputs">
-    <fieldset disabled={disabled} className="shared-parameter-controls">
-      <label>共享预置
-        <select aria-label="共享预置" value={presetId ?? ""} onChange={event => onChange({ parameterSelection: { ...selection, preset_id: event.target.value || null } })}>
-          <option value="">不使用共享预置</option>
-          {presetId && !presets.some(item => item.id === presetId) && <option value={presetId}>{presetId}（当前选择）</option>}
-          {presets.map(item => <option key={item.id} value={item.id}>{item.title || item.id} ({item.id})</option>)}
-        </select>
-      </label>
-      <button type="button" className="text-button" onClick={() => edit({})}>清除全部本次覆盖</button>
-      <button type="button" className="text-button" onClick={() => setRefresh(value => value + 1)}>刷新共享参数</button>
-    </fieldset>
-    {catalogError && <p role="alert" className="inline-error">共享预置目录读取失败：{catalogError}</p>}
-    <p className="parameter-hint">表单展示继承值，只保存本次手动覆盖；JSON 只编辑本次覆盖层。</p>
-    {mode === "json" ? <fieldset disabled={disabled} className="shared-parameter-controls">
-      <JsonEditor editorKey={doc.key} label="本次参数 JSON" value={doc.context} draft={doc.jsonInput}
-        onRawChange={jsonInput => { if (!disabled) onChange({ jsonInput }); }}
-        onChange={context => { if (!disabled) { onChange({ context }); onJsonError?.(""); } }} onError={onJsonError} />
-    </fieldset> : <Form schema={schema} value={effective} errors={errors} disabled={disabled}
-      onChange={() => { /* Form's path event is authoritative, including equal values. */ }}
-      onFieldChange={(pointer, value) => { if (!disabled) edit(setParameterOverride(doc.context, effective, pointer, value)); }} />}
-    {jsonError && <p role="alert" className="inline-error">{jsonError}</p>}
-    {error ? <p role="alert" className="inline-error">当前参数校验失败：{error}</p>
-      : <p role="status" className="parameter-hint">{valid ? "当前参数已通过解析校验" : "正在解析当前参数…"}</p>}
-    {baselineError?.key === baselineKey && <p role="alert" className="inline-error">继承值读取失败：{baselineError.message}。可继续填写本次覆盖。</p>}
-    {errors[""] && <p role="alert" className="inline-error">{errors[""]}</p>}
-    {Object.keys(bindings).length > 0 && <section className="shared-parameter-origins" aria-label="共享参数来源">
-      <strong>逐绑定取值与来源{!valid && "（待校验）"}</strong>
-      <ul>{Object.entries(bindings).map(([pointer, binding]: [string, Data]) => {
+    <div className="binding-section">
+      <h3 className="binding-heading">共享预置</h3>
+      <fieldset disabled={disabled} className="shared-parameter-controls">
+        <label>共享预置
+          <select aria-label="共享预置" value={presetId ?? ""} onChange={event => onChange({ parameterSelection: { ...selection, preset_id: event.target.value || null } })}>
+            <option value="">不使用共享预置</option>
+            {presetId && !presets.some(item => item.id === presetId) && <option value={presetId}>{presetId}（当前选择）</option>}
+            {presets.map(item => <option key={item.id} value={item.id}>{catalogLabel(item)}</option>)}
+          </select>
+        </label>
+        <div className="binding-actions">
+          <button type="button" className="text-button" onClick={() => edit({})}>清除全部本次覆盖</button>
+          <button type="button" className="text-button" onClick={() => setRefresh(value => value + 1)}>刷新共享参数</button>
+        </div>
+      </fieldset>
+      {catalogError && <p role="alert" className="inline-error">共享预置目录读取失败：{catalogError}</p>}
+    </div>
+    <div className="binding-section">
+      <h3 className="binding-heading">本次参数</h3>
+      <p className="parameter-hint">表单展示继承值，只保存本次手动覆盖；JSON 只编辑本次覆盖层。</p>
+      {mode === "json" ? <fieldset disabled={disabled} className="shared-parameter-controls">
+        <JsonEditor editorKey={doc.key} label="本次参数 JSON" value={doc.context} draft={doc.jsonInput}
+          onRawChange={jsonInput => { if (!disabled) onChange({ jsonInput }); }}
+          onChange={context => { if (!disabled) { onChange({ context }); onJsonError?.(""); } }} onError={onJsonError} />
+      </fieldset> : <Form schema={schema} value={effective} errors={errors} disabled={disabled}
+        onChange={() => { /* Form's path event is authoritative, including equal values. */ }}
+        onFieldChange={(pointer, value) => { if (!disabled) edit(setParameterOverride(doc.context, effective, pointer, value)); }} />}
+      {jsonError && <p role="alert" className="inline-error">{jsonError}</p>}
+      {error ? <p role="alert" className="inline-error">当前参数校验失败：{error}</p>
+        : <p role="status" className="parameter-hint">{valid ? "当前参数已通过解析校验" : "正在解析当前参数…"}</p>}
+      {baselineError?.key === baselineKey && <p role="alert" className="inline-error">继承值读取失败：{baselineError.message}。可继续填写本次覆盖。</p>}
+      {errors[""] && <p role="alert" className="inline-error">{errors[""]}</p>}
+    </div>
+    {Object.keys(bindings).length > 0 && <div className="binding-section">
+      <h3 className="binding-heading">取值与来源{!valid && "（待校验）"}</h3>
+      <ul className="binding-list shared-parameter-origins">{Object.entries(bindings).map(([pointer, binding]: [string, Data]) => {
         const definition = current?.value?.definitions[pointer] ?? inherited?.definitions[pointer];
         const restore = overridePointer(doc.context, pointer);
         const manual = pointerValue(doc.context, restore) !== undefined;
@@ -125,14 +133,18 @@ function SharedParameterDocument({ doc, onChange, mode, errors = {}, disabled = 
         let text: string;
         try { text = value === undefined ? "未填写" : value === null ? "空值" : isStructured(value) || Array.isArray(value) ? encode(value) : numberText(value); }
         catch { text = "含未完成的输入"; }
-        return <li key={pointer}>
-          <div><strong>{name}</strong> <code>{pointer}</code></div>
-          <div><span>{text}{unit ? " " + unit : ""}</span> <span className="parameter-hint">{origin ? originLabel(origin) : "来源待解析"}{!valid ? " · 待校验" : ""}</span></div>
+        return <li key={pointer} className="binding-card">
+          <div className="binding-card-head">
+            <strong>{name}</strong>
+            <code>{pointer}</code>
+            <span className="parameter-hint">{origin ? originLabel(origin) : "来源待解析"}{!valid ? " · 待校验" : ""}</span>
+          </div>
+          <div className="binding-value">{text}{unit ? " " + unit : ""}</div>
           {manual && <button type="button" className="text-button" disabled={disabled} onClick={() => edit(removePointer(doc.context, restore))}>
             {restore !== pointer ? `恢复整个数组跟随（${restore}）` : "恢复跟随"}
           </button>}
         </li>;
       })}</ul>
-    </section>}
+    </div>}
   </div>;
 }

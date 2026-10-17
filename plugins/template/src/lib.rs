@@ -40,11 +40,14 @@ impl TemplatePlugin {
             return Ok(snapshot);
         }
         let _group = nctool_assets::GroupGuard::acquire(&self.root).map_err(asset_error)?;
-        let root_name = input
-            .get("template")
-            .and_then(Value::as_str)
-            .unwrap_or("__inline__")
-            .to_owned();
+        // Only an explicitly selected template is the root. A plain source draft
+        // (no `template` field) must never adopt a saved asset that merely shares the
+        // inline sentinel name: not as its root asset, and not through frozen metadata
+        // (schema, defaults or domain intent). An explicitly named template keeps its
+        // stored metadata, so `template`+`source` edit drafts cannot bypass the
+        // domain-intent refusal.
+        let explicit_root = input.get("template").and_then(Value::as_str);
+        let root_name = explicit_root.unwrap_or("__inline__").to_owned();
         let mut root_asset = None;
         let mut sources = BTreeMap::new();
         let mut metadata = BTreeMap::new();
@@ -62,8 +65,16 @@ impl TemplatePlugin {
                 ));
             }
             sources.insert(name.clone(), source.into());
-            metadata.insert(name.clone(), asset["metadata"].clone());
-            if name == root_name {
+            let inline_sentinel = explicit_root.is_none() && name == root_name;
+            metadata.insert(
+                name.clone(),
+                if inline_sentinel {
+                    Value::Null
+                } else {
+                    asset["metadata"].clone()
+                },
+            );
+            if explicit_root == Some(name.as_str()) {
                 root_asset = Some(asset);
             }
         }
@@ -142,6 +153,8 @@ impl TemplatePlugin {
         let snapshot = self.sources(&input)?;
         let name = snapshot.template.clone();
         let asset = snapshot.asset.clone();
+        // No domain renderer remains in this distribution, so the domain intent
+        // check always applies; the plugin can no longer be reached through it.
         if let Some(asset) = &asset {
             ensure_generic_template(asset)?;
         }
@@ -231,11 +244,11 @@ impl TemplatePlugin {
         ))
     }
 }
-/// Compatibility intent is checked independently of the active capability inventory.
-/// Arbitrary third-party metadata does not imply a retired NC template.
+/// Generic actions must not silently render domain assets as plain text.
+/// NC service calls use the same frozen sources after validating their domain input.
 pub fn ensure_generic_template(asset: &Value) -> PluginResult<()> {
     let metadata = &asset["metadata"];
-    let retired = metadata.get("nc").is_some()
+    let domain_intent = metadata.get("nc").is_some()
         || metadata["execution"]["action"]
             .as_str()
             .is_some_and(|action| {
@@ -243,8 +256,8 @@ pub fn ensure_generic_template(asset: &Value) -> PluginResult<()> {
                     .iter()
                     .any(|prefix| action.starts_with(prefix))
             });
-    if retired {
-        return Err(PluginError::new("retired_template", "模板保留旧加工执行意图（metadata.nc 或退役 execution.action）；允许保存、查看和编辑，禁止普通/受管渲染静默降级。请显式移除加工意图并核对含义，或使用独立加工产品。"));
+    if domain_intent {
+        return Err(PluginError::new("domain_action_required", "模板声明了已移除的加工执行意图（metadata.nc 或加工 execution.action），不能作为普通/受管模板渲染。本构建不再提供 NC 动作；请显式移除加工意图并核对含义后转为通用模板。"));
     }
     Ok(())
 }
@@ -306,7 +319,21 @@ impl Plugin for TemplatePlugin {
         Self::action_definitions()
     }
     fn invoke(&self, action: &str, input: Value, ctx: &Context) -> PluginResult<ActionResult> {
-        let _group = if ["template.render", "template.inspect"].contains(&action) {
+        // Rendering is the one action that must not hold the intra-process edit lock
+        // across its (long, cancellable) body: it snapshots its sources under the
+        // workspace group lock inside `sources()` and then renders unlocked.
+        if action == "template.render" {
+            return self.render(input, ctx);
+        }
+        // Uniform lock order: the intra-process `access` lock is always taken before
+        // the cross-process workspace group lock. `template.inspect` takes the group
+        // lock itself inside `sources()`, so it must not take one here; every other
+        // action holds it across its whole multi-asset body. Taking them in the
+        // opposite order (group then access) inverts against inspect's
+        // access-then-group order, and the losing side stalls to the group-lock
+        // deadline and surfaces a spurious `conflict`.
+        let _access = self.access.lock().unwrap();
+        let _group = if action == "template.inspect" {
             None
         } else {
             Some(nctool_assets::GroupGuard::acquire(&self.root).map_err(asset_error)?)
@@ -357,10 +384,6 @@ impl Plugin for TemplatePlugin {
             .map_err(asset_error)?;
             return Ok(ActionResult::data(imported));
         }
-        if action == "template.render" {
-            return self.render(input, ctx);
-        }
-        let _guard = self.access.lock().unwrap();
         if action == "template.inspect" {
             return self.inspect(&input).map(ActionResult::data);
         }

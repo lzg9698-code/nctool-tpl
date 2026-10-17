@@ -15,4 +15,3 @@ jsonschema={version="0.33",default-features=false}
 
 [dev-dependencies]
 nctool-plugin-template={path="../plugins/template",version="2.0.0"}
-nctool-plugin-process={path="../plugins/process",version="2.0.0"}

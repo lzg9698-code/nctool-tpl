@@ -10,10 +10,11 @@ use std::{
 };
 
 /// Builtins supported by the current distribution (availability is feature-dependent).
-pub const BUILTIN_PLUGIN_IDS: &[&str] = &[
-    "template",
-    "parameters",
-    "math",
+pub const BUILTIN_PLUGIN_IDS: &[&str] = &["template", "parameters", "math"];
+
+/// Builtin identities removed from this distribution. Their IDs stay reserved so a
+/// same-named external plugin cannot take over a retired execution identity.
+pub const RETIRED_PLUGIN_IDS: &[&str] = &[
     "nc",
     "nc-parameters",
     "nc-managed",
@@ -23,14 +24,47 @@ pub const BUILTIN_PLUGIN_IDS: &[&str] = &[
     "process-parameters",
 ];
 
-/// No builtin has been retired from the current nc-bundle architecture.
-pub const RETIRED_PLUGIN_IDS: &[&str] = &[];
+/// Domain namespaces that belonged to the removed builtins. These are the same
+/// tokens the frontend uses to recognize retired machining intent, so the rule stays
+/// a minimal reserved-word list rather than a classifier for third-party content:
+/// only these exact ids and `<token>.` prefixes are reserved.
+const RETIRED_DOMAIN_TOKENS: &[&str] = &["nc", "machine", "process", "sync-turning", "undercut"];
+
+/// True when the id names a removed builtin plugin.
+pub fn is_retired_plugin_id(id: &str) -> bool {
+    RETIRED_PLUGIN_IDS.contains(&id)
+}
+
+/// True for a retired action or service identity namespaced by a removed builtin,
+/// for example `nc.generate`, `machine.list` or `sync-turning.generate`.
+pub fn is_retired_namespace_id(id: &str) -> bool {
+    RETIRED_DOMAIN_TOKENS.iter().any(|token| {
+        id.strip_prefix(token)
+            .is_some_and(|rest| rest.starts_with('.'))
+    })
+}
+
+/// Exact asset-collection ids the removed builtins actually declared (read off the
+/// archived descriptors and business helpers, not guessed): the NC machine collection,
+/// the managed NC parameter collection, and the sync-turning / undercut business
+/// collections.
+const RETIRED_COLLECTION_IDS: &[&str] = &[
+    "nc",
+    "nc-parameters",
+    "sync-turning-assets",
+    "undercut-assets",
+];
+
+/// True for a retired asset-collection identity.
+pub fn is_retired_collection_id(id: &str) -> bool {
+    RETIRED_COLLECTION_IDS.contains(&id)
+}
 
 pub fn ensure_plugin_allowed(id: &str) -> PluginResult<()> {
     if !crate::valid_id(id) {
         return Err(PluginError::new("invalid_plugin_id", id));
     }
-    if RETIRED_PLUGIN_IDS.contains(&id) {
+    if is_retired_plugin_id(id) {
         return Err(PluginError::new("retired_plugin", id));
     }
     Ok(())
@@ -70,8 +104,11 @@ pub fn load(home: &Path) -> PluginResult<(Config, Option<nctool_assets::FileFing
     Ok((c, fp))
 }
 pub fn validate(c: &Config) -> PluginResult<()> {
-    if !["template", "nc"].contains(&c.profile.as_str()) {
-        return Err(PluginError::new("invalid_profile", &c.profile));
+    if c.profile != "template" {
+        return Err(PluginError::new(
+            "invalid_profile",
+            "此版本仅支持 template profile；旧 nc profile 请先运行 nctool config check/migrate。",
+        ));
     }
     for id in c
         .enabled
@@ -81,6 +118,13 @@ pub fn validate(c: &Config) -> PluginResult<()> {
         .chain(c.providers.values())
     {
         ensure_plugin_allowed(id)?;
+    }
+    // Provider keys are service identities: a binding to a retired service can never
+    // resolve and must not survive validation.
+    for service in c.providers.keys() {
+        if is_retired_namespace_id(service) {
+            return Err(PluginError::new("retired_identity", service));
+        }
     }
     Ok(())
 }
@@ -107,37 +151,97 @@ pub fn set_enabled(home: &Path, id: &str, enabled: bool) -> PluginResult<()> {
     }
     save(home, &config, fp)
 }
-pub fn installed(home: &Path) -> PluginResult<Vec<(ExternalManifest, PathBuf)>> {
+/// A plugin directory that exists but cannot be loaded. It is kept as a record so the
+/// failure stays visible — and can be reported when that plugin is selected — instead
+/// of being silently dropped or aborting the whole inventory.
+#[derive(Clone, Debug)]
+pub struct InstalledError {
+    /// The directory name under `plugins/`.
+    pub directory: String,
+    /// The directory path.
+    pub path: PathBuf,
+    /// Why the directory could not be loaded.
+    pub error: PluginError,
+}
+
+/// Result of [`scan_installed`]: the loadable manifests and the damaged directories.
+pub type InstalledScan = (Vec<(ExternalManifest, PathBuf)>, Vec<InstalledError>);
+
+/// Scan `plugins/`: every loadable manifest, plus a record of directories that carry a
+/// damaged manifest.
+///
+/// A directory without a `plugin.json` is unrelated to plugins and is skipped; a
+/// permission or other IO failure while listing or reading is returned as a hard error
+/// so it is never masked as a merely damaged manifest.
+pub fn scan_installed(home: &Path) -> PluginResult<InstalledScan> {
     let root = home.join("plugins");
     if !root.exists() {
-        return Ok(vec![]);
+        return Ok((vec![], vec![]));
     }
-    let mut out = vec![];
+    let mut installed = vec![];
+    let mut broken = vec![];
     for entry in std::fs::read_dir(root)? {
         let entry = entry?;
-        if entry.file_type()?.is_dir() && !entry.file_name().to_string_lossy().starts_with('.') {
-            let manifest = ExternalManifest::read(&entry.path())?;
-            if entry.file_name().to_str() != Some(&manifest.descriptor.id) {
-                return Err(PluginError::new(
+        if !entry.file_type()?.is_dir() || entry.file_name().to_string_lossy().starts_with('.') {
+            continue;
+        }
+        let path = entry.path();
+        let directory = entry.file_name().to_string_lossy().into_owned();
+        match std::fs::symlink_metadata(path.join("plugin.json")) {
+            // No manifest at all: not a plugin directory. Skip it instead of failing.
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => continue,
+            // A directory we cannot even probe is a real access failure, not a damaged
+            // plugin; surface it rather than hiding it.
+            Err(error) => return Err(error.into()),
+            Ok(_) => {}
+        }
+        match ExternalManifest::read(&path) {
+            Ok(manifest) if directory == manifest.descriptor.id => installed.push((manifest, path)),
+            Ok(manifest) => broken.push(InstalledError {
+                error: PluginError::new(
                     "plugin_directory",
-                    "plugin directory must match its ID",
-                ));
-            }
-            out.push((manifest, entry.path()));
+                    format!("插件目录名与清单 id {} 不一致", manifest.descriptor.id),
+                ),
+                directory,
+                path,
+            }),
+            // A manifest that exists but cannot be read is an IO/permission failure;
+            // only a parse or validation failure is recorded as a damaged manifest.
+            Err(error) if error.code == "io" => return Err(error),
+            Err(error) => broken.push(InstalledError {
+                directory,
+                path,
+                error,
+            }),
         }
     }
-    out.sort_by(|a, b| a.0.descriptor.id.cmp(&b.0.descriptor.id));
-    Ok(out)
+    installed.sort_by(|a, b| a.0.descriptor.id.cmp(&b.0.descriptor.id));
+    broken.sort_by(|a, b| a.directory.cmp(&b.directory));
+    Ok((installed, broken))
+}
+
+pub fn installed(home: &Path) -> PluginResult<Vec<(ExternalManifest, PathBuf)>> {
+    Ok(scan_installed(home)?.0)
 }
 pub fn external_plugins(home: &Path, config: &Config) -> PluginResult<Vec<Arc<dyn Plugin>>> {
-    let installed = installed(home)?;
+    let (installed, broken) = scan_installed(home)?;
     for id in &config.enabled {
         ensure_plugin_allowed(id)?;
-        if !BUILTIN_PLUGIN_IDS.contains(&id.as_str())
-            && !installed.iter().any(|(m, _)| &m.descriptor.id == id)
+        if BUILTIN_PLUGIN_IDS.contains(&id.as_str())
+            || installed.iter().any(|(m, _)| &m.descriptor.id == id)
         {
-            return Err(PluginError::new("plugin_missing", id));
+            continue;
         }
+        // An enabled plugin that is not loadable stays fail-closed: refuse to start
+        // without it, and name the concrete manifest failure when the directory is
+        // present rather than silently starting without the selected plugin.
+        if let Some(record) = broken.iter().find(|record| &record.directory == id) {
+            return Err(PluginError::new(
+                "plugin_broken",
+                format!("已启用插件 {id} 的目录无法加载：{}", record.error),
+            ));
+        }
+        return Err(PluginError::new("plugin_missing", id));
     }
     Ok(installed
         .into_iter()

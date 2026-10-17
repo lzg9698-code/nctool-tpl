@@ -86,6 +86,13 @@ async function editJson(text) {
 }
 const content = (label) =>
   page.locator('.cm-content[aria-label="' + label + '"]');
+async function openDetails(summary) {
+  const details = page.locator("details").filter({
+    has: page.getByText(summary, { exact: true }),
+  });
+  if (!(await details.evaluate((node) => node.open)))
+    await page.getByText(summary, { exact: true }).click();
+}
 async function taskAfter(button) {
   const started = page.waitForResponse(
     (r) => r.url().endsWith("/api/v2/runs") && r.request().method() === "POST",
@@ -159,42 +166,34 @@ async function main() {
     },
   });
   await page.goto(url);
-  await page
-    .locator(".recent-cards button")
-    .filter({ hasText: "NC marker" })
-    .click();
-  assert.equal(
-    await page.getByLabel("模板生成方式", { exact: true }).inputValue(),
-    "",
-  );
+  assert.equal(await page.locator(".recent-cards button").filter({ hasText: "NC marker" }).count(), 0);
+  const legacyFile = path.join(temp, "legacy-template.json");
+  fs.writeFileSync(legacyFile, JSON.stringify((await action(url, "template.read", { name: "nc-marker" })).data.asset));
+  await page.locator('input[type="file"]').first().setInputFiles(legacyFile);
+  await page.getByRole("alert").filter({ hasText: "已移除的加工意图" }).first().waitFor();
   let submitted = 0;
   const observe = (request) => {
     if (request.url().endsWith("/api/v2/runs") && request.method() === "POST")
       submitted++;
   };
   page.on("request", observe);
-  await page
-    .getByRole("button", { name: "生成文件", exact: true })
-    .first()
-    .click();
-  await page.getByRole("alert").filter({ hasText: "不可用" }).first().waitFor();
   assert.equal(submitted, 0);
-  // Explicit text selection is persisted, never implicitly inferred after plugin removal.
-  await page
-    .getByLabel("模板生成方式", { exact: true })
-    .selectOption("template.render");
-  const save = page.waitForResponse((r) =>
-    r.url().endsWith("/api/v2/actions/template.save"),
-  );
-  await page.getByRole("button", { name: "保存", exact: true }).first().click();
-  await save;
-  assert.equal(
-    (await action(url, "template.read", { name: "nc-marker" })).data.asset
-      .metadata.execution.action,
-    "template.render",
-  );
+  // The legacy asset remains readable, but neither generic action can execute it.
+  for (const id of ["template.render", "template.render.managed"]) {
+    const refused = await fetch(url + "/api/v2/actions/" + id, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ input: { template: "nc-marker" } }),
+    }).then((response) => response.json());
+    assert.equal(refused.ok, false);
+    assert.equal(refused.error.code, "domain_action_required");
+  }
+  const marked = (await action(url, "template.read", { name: "nc-marker" })).data.asset;
+  assert.ok(marked.metadata.nc);
+  assert.equal(marked.metadata.execution?.action, undefined);
+  assert.equal(submitted, 0);
   await page.getByRole("button", { name: "数据报告", exact: true }).click();
-  await page.getByText("高级 JSON 输入", { exact: true }).click();
+  await openDetails("高级 JSON 输入");
   await editJson('{"values":');
   await page.getByRole("button", { name: "执行任务", exact: true }).click();
   await page
@@ -209,11 +208,20 @@ async function main() {
     .first()
     .click();
   await page.getByRole("button", { name: "数据报告", exact: true }).click();
-  await page.getByText("高级 JSON 输入", { exact: true }).click();
+  await openDetails("高级 JSON 输入");
+  await content("插件输入 JSON").waitFor();
+  await page.waitForFunction(
+    (text) => document.querySelector('.cm-content[aria-label="插件输入 JSON"]')?.innerText === text,
+    '{"values":',
+  );
   assert.equal(await content("插件输入 JSON").innerText(), '{"values":');
   await page.reload();
   await page.getByRole("button", { name: "数据报告", exact: true }).click();
-  await page.getByText("高级 JSON 输入", { exact: true }).click();
+  await openDetails("高级 JSON 输入");
+  await page.waitForFunction(
+    (text) => document.querySelector('.cm-content[aria-label="插件输入 JSON"]')?.innerText === text,
+    '{"values":',
+  );
   assert.equal(await content("插件输入 JSON").innerText(), '{"values":');
   for (const raw of ["[]", "null", '{"values":[-]}']) {
     await editJson(raw);
@@ -305,11 +313,11 @@ async function main() {
   const out = process.env.NCTOOL_REPORT || path.join(root, "target/fixes-browser");
   fs.mkdirSync(out, { recursive: true });
   await page.screenshot({ path: path.join(out, "plugin.png"), fullPage: true });
-  const nc = await serve("nc");
-  await action(nc, "template.save", {
-    name: "schema-nc",
+  // Schema 约束与重放一致：超范围输入失败，合法输入成功，重放得到相同结果。
+  await action(url, "template.save", {
+    name: "schema-number",
     asset: {
-      source: "G1 X{{ x | nc_fixed(3) }}",
+      source: "值 X{{ x }}",
       schema: {
         type: "object",
         properties: { x: { type: "number", minimum: 0 } },
@@ -317,19 +325,19 @@ async function main() {
         additionalProperties: false,
       },
       defaults: { x: 10 },
-      metadata: { title: "Schema NC", nc: {} },
+      metadata: { title: "数值约束" },
     },
   });
-  await page.goto(nc);
+  await page.goto(url);
   await page
     .locator(".recent-cards button")
-    .filter({ hasText: "Schema NC" })
+    .filter({ hasText: "数值约束" })
     .click();
   await page.locator('[data-field-path="/x"] input').fill("-10");
   id = await taskAfter(
     page.getByRole("button", { name: "生成文件", exact: true }).first(),
   );
-  run = await finished(nc, id);
+  run = await finished(url, id);
   assert.equal(run.status, "failed");
   assert.equal(run.result, null);
   await page.locator(".result-pane .run-status.failed").waitFor();
@@ -337,19 +345,19 @@ async function main() {
   id = await taskAfter(
     page.getByRole("button", { name: "生成文件", exact: true }).first(),
   );
-  run = await finished(nc, id);
+  run = await finished(url, id);
   assert.equal(run.status, "succeeded");
-  assert.equal(run.result.data.text, "G1 X10.000\n");
+  assert.equal(run.result.data.text, "值 X10");
   await page.locator(".result-pane .run-status.succeeded").waitFor();
-  const replay = (await api(nc, "runs/" + id + "/rerun", {})).data.id;
-  assert.equal((await finished(nc, replay)).result.data.text, "G1 X10.000\n");
+  const replay = (await api(url, "runs/" + id + "/rerun", {})).data.id;
+  assert.equal((await finished(url, replay)).result.data.text, "值 X10");
   await page.screenshot({
-    path: path.join(out, "schema-nc.png"),
+    path: path.join(out, "schema-number.png"),
     fullPage: true,
   });
   // Real HTTP numeric ingress rejects both underflow and oversized integer literals.
   for (const literal of ["18446744073709551617", "-9223372036854775809"]) {
-    const r = await fetch(nc + "/api/v2/actions/template.render", {
+    const r = await fetch(url + "/api/v2/actions/template.render", {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: '{"input":{"source":"{{ x }}","context":{"x":' + literal + "}}}",
@@ -360,7 +368,7 @@ async function main() {
   }
   assert.deepEqual(errors, []);
   console.log(
-    "PASS: missing NC capability blocks fallback; explicit intent persists; invalid/wrong-type raw JSON never dispatches and survives navigation/reload; submitted values are current; stale/failed plugin output cannot export; Schema constraints and replay agree; HTTP integer ingress rejects silent rounding",
+    "PASS: retired NC intent blocks fallback and cannot be downgraded; invalid/wrong-type raw JSON never dispatches and survives navigation/reload; submitted values are current; stale/failed plugin output cannot export; generic Schema constraints and replay agree; HTTP integer ingress rejects silent rounding",
   );
 }
 main()

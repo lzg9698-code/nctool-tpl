@@ -3,11 +3,7 @@ import { encode, newDocument, parseData, type Run } from "./data";
 import {
   applyOverrides,
   managedFields,
-  managedFormSchema,
-  managedRawInput,
   managedRequest,
-  isStructured,
-  validatedSelection,
   originLabel,
   pointerEscape,
   pointerTokens,
@@ -15,20 +11,6 @@ import {
   removePointer,
 } from "./managedParameters";
 import { restoreDocument } from "./documentExecution";
-
-describe("NC parameter compatibility", () => {
-  it("locks only bound managed tool fields and preserves raw numeric input", () => {
-    const schema = { type: "object", properties: { "a/b": { type: "number" }, free: { type: "number" } } };
-    const bindings = { "/a~1b": { slot: "main" } };
-    const selection = { slots: { main: { tool_id: "tool" } } };
-    expect(managedFormSchema(schema, bindings, selection).properties["a/b"].readOnly).toBe(true);
-    expect(schema.properties["a/b"]).not.toHaveProperty("readOnly");
-    expect(encode(managedRawInput(parseData('{"a/b":1,"free":9007199254740993}'), bindings, selection))).toBe('{"free":9007199254740993}');
-    expect(() => validatedSelection({ slots: { main: { inputs_draft: "{" } } })).toThrow("JSON");
-    expect(isStructured(parseData("9007199254740993"))).toBe(false);
-    expect(isStructured({ width: 1 })).toBe(true);
-  });
-});
 
 describe("shared parameter pointers", () => {
   it("escapes and unescapes RFC 6901 tokens", () => {

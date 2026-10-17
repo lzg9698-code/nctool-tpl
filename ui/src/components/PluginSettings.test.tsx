@@ -2,6 +2,7 @@
 
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
+  act,
   cleanup,
   fireEvent,
   render,
@@ -15,7 +16,7 @@ import type { Data } from "../lib/data";
 import { PluginSettings } from "./PluginSettings";
 
 vi.mock("../lib/api", () => ({ api: vi.fn(), action: vi.fn() }));
-vi.mock("./Editor", () => ({
+vi.mock("./LazyEditor", () => ({
   Editor: ({
     value,
     onChange,
@@ -201,5 +202,151 @@ describe("PluginSettings capability selection", () => {
     editDraft({ disabled: ["parameters"] });
     expectEnabled("通用模板", true);
     expectEnabled("共享参数", false);
+  });
+});
+
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  let reject!: (error: unknown) => void;
+  const promise = new Promise<T>((res, rej) => {
+    resolve = res;
+    reject = rej;
+  });
+  return { promise, resolve, reject };
+}
+
+describe("PluginSettings async request gating", () => {
+  it("drops an inspect reply whose directory changed, keeps the latest, and installs the inspected directory", async () => {
+    const { user, reload } = await setup();
+    const first = deferred<Data>();
+    const second = deferred<Data>();
+    let inspectCalls = 0;
+    vi.mocked(api).mockImplementation(async (path) => {
+      if (path === "plugins/inspect")
+        return inspectCalls++ === 0 ? first.promise : second.promise;
+      if (path === "plugins/install") return {};
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    const directory = screen.getByRole("textbox", { name: "插件目录" });
+    fireEvent.change(directory, { target: { value: "/plugins/A" } });
+    await user.click(screen.getByRole("button", { name: "读取插件信息" }));
+    // Edit the directory before the first reply arrives.
+    fireEvent.change(directory, { target: { value: "/plugins/B" } });
+    await user.click(screen.getByRole("button", { name: "读取插件信息" }));
+
+    await act(async () => {
+      first.resolve({
+        descriptor: { id: "plugin-A", version: "1.0.0", requires: [] },
+        actions: [],
+      });
+    });
+    expect(api).toHaveBeenCalledWith("plugins/inspect", {
+      source: "/plugins/A",
+    });
+    // The late reply for the abandoned directory must not be shown.
+    expect(screen.queryByText(/plugin-A/)).toBeNull();
+
+    await act(async () => {
+      second.resolve({
+        descriptor: { id: "plugin-B", version: "2.0.0", requires: [] },
+        actions: [],
+      });
+    });
+    expect(await screen.findByText("plugin-B · 2.0.0")).toBeTruthy();
+
+    await user.click(screen.getByRole("button", { name: "安装插件" }));
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith("plugins/install", {
+        source: "/plugins/B",
+      }),
+    );
+    expect(reload).toHaveBeenCalled();
+  });
+
+  it("keeps the save button disabled while the config POST is pending, then re-enables it", async () => {
+    const { user, reload } = await setup();
+    const post = deferred<Data>();
+    vi.mocked(api).mockImplementation(async (path, body) => {
+      if (path === "config/validate") return { plan: { order: [] } };
+      if (path === "config" && body === undefined)
+        return { config: baseConfig, fingerprint: "fingerprint-2" };
+      if (path === "config") return post.promise;
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    const saveButton = screen.getByRole("button", {
+      name: "验证并保存配置",
+    });
+    await user.click(saveButton);
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith("config", {
+        config: baseConfig,
+        expected: "saved-fingerprint",
+      }),
+    );
+    // Validation already finished (checking=false) but the save is still in
+    // flight: the button must stay disabled so it cannot be clicked twice.
+    expect((saveButton as HTMLButtonElement).disabled).toBe(true);
+    await act(async () => {
+      post.resolve({});
+    });
+    await waitFor(() => expect(reload).toHaveBeenCalled());
+    await waitFor(() =>
+      expect((saveButton as HTMLButtonElement).disabled).toBe(false),
+    );
+  });
+
+  it("preserves draft edits made during save and keeps the stored fingerprint for the next save", async () => {
+    const { user } = await setup();
+    const post = deferred<Data>();
+    let configLoads = 0;
+    vi.mocked(api).mockImplementation(async (path, body) => {
+      if (path === "config/validate") return { plan: { order: [] } };
+      if (path === "config" && body === undefined) {
+        configLoads += 1;
+        return { config: baseConfig, fingerprint: `fingerprint-${configLoads}` };
+      }
+      if (path === "config") return post.promise;
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    const draft = { ...baseConfig, enabled: ["math"] };
+    const saveButton = screen.getByRole("button", {
+      name: "验证并保存配置",
+    });
+    await user.click(saveButton);
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith("config", {
+        config: baseConfig,
+        expected: "saved-fingerprint",
+      }),
+    );
+    // Edit the draft while the POST is still in flight.
+    const editor = screen.getByRole("textbox", { name: "启动配置 JSON" });
+    fireEvent.change(editor, { target: { value: JSON.stringify(draft) } });
+    await act(async () => {
+      post.resolve({});
+    });
+    await waitFor(() => expect(configLoads).toBe(1));
+    // The reloaded (pre-edit) config must not overwrite the newer draft.
+    expect((editor as HTMLTextAreaElement).value).toBe(JSON.stringify(draft));
+
+    // The fingerprint still advances to the value the server just stored.
+    const secondPost = deferred<Data>();
+    vi.mocked(api).mockImplementation(async (path, body) => {
+      if (path === "config/validate") return { plan: { order: [] } };
+      if (path === "config" && body === undefined)
+        return { config: baseConfig, fingerprint: "fingerprint-2" };
+      if (path === "config") return secondPost.promise;
+      throw new Error(`Unexpected API call: ${path}`);
+    });
+    await user.click(saveButton);
+    await waitFor(() =>
+      expect(api).toHaveBeenCalledWith("config", {
+        config: draft,
+        expected: "fingerprint-1",
+      }),
+    );
+    await act(async () => {
+      secondPost.resolve({});
+    });
   });
 });

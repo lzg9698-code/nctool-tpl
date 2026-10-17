@@ -31,7 +31,7 @@ vi.mock("./lib/managedDependencies", () => ({
   useManagedDependencies: () => ({ stale: false }),
 }));
 vi.mock("./plugins/registry", () => ({ builtinViews: {} }));
-vi.mock("./components/Editor", () => ({ Editor: () => <div>源码编辑器</div> }));
+vi.mock("./components/LazyEditor", () => ({ Editor: () => <div>源码编辑器</div> }));
 vi.mock("./components/SchemaEditor", () => ({
   SchemaEditor: () => <div>参数定义编辑器</div>,
 }));
@@ -159,14 +159,18 @@ describe("active App shared parameter integration", () => {
     expect(screen.queryByText("共享参数输入")).toBeNull();
     expect(screen.getByText("恢复默认值")).toBeTruthy();
   });
-  it("keeps NC metadata on the original parameter controls", async () => {
+  it("preserves retired NC drafts without opening any executable parameter controls", async () => {
     setup("template.render.managed", true, {
-      nc: { operation: { id: "turn" } },
+      nc: null,
       parameters: {},
     });
-    await screen.findByText("原参数表单");
-    expect(screen.getByText("原共享选择器")).toBeTruthy();
+    await waitFor(() => expect(api).toHaveBeenCalledWith("workspace"));
+    await screen.findByText("让模板成为可重复的工作");
+    expect(screen.queryByText("原参数表单")).toBeNull();
+    expect(screen.queryByText("原共享选择器")).toBeNull();
     expect(screen.queryByText("共享参数输入")).toBeNull();
+    expect(screen.queryByRole("button", { name: "生成文件" })).toBeNull();
+    expect(vi.mocked(loadDrafts).mock.results[0].value.documents[0].asset.metadata.nc).toBeNull();
   });
   it("opens a shared template with empty overrides", async () => {
     setup("template.render.managed", false);

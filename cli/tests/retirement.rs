@@ -1,17 +1,29 @@
 use nctool_cli::composition::App;
 use nctool_plugin_sdk::*;
-use std::{path::PathBuf, process::Command, sync::Arc};
+use std::{
+    path::PathBuf,
+    process::Command,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
+
+/// A process-wide counter keeps parallel tests from colliding when the system
+/// clock returns the same nanosecond value for two of them.
+static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
         let root = std::env::temp_dir().join(format!(
-            "nctool-retirement-{}-{}",
+            "nctool-retirement-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir(&root).unwrap();
         Self(root)
@@ -164,19 +176,47 @@ fn migration_preserves_external_selection_and_checks_dependencies_without_runnin
 }
 
 #[test]
-fn retired_ids_cannot_be_enabled_or_claimed_by_external_plugins() {
+fn retired_nc_plugins_are_gone_and_builtin_ids_remain_reserved() {
     let f = Fixture::new();
     let app = f.app();
-    for &id in nctool_runtime::config::RETIRED_PLUGIN_IDS {
+    assert_eq!(app.profile, "template");
+    let mut active: Vec<_> = app
+        .runtime
+        .descriptors()
+        .into_iter()
+        .map(|d| d.id)
+        .collect();
+    active.sort();
+    assert_eq!(active, ["parameters", "template"]);
+    let inventory = app.inventory().unwrap();
+    let plugins = inventory["plugins"].as_array().unwrap();
+    // Math survives as an optional, non-domain extension.
+    nctool_runtime::config::ensure_plugin_allowed("math").unwrap();
+    let math = plugins.iter().find(|p| p["id"] == "math").unwrap();
+    assert_eq!(math["active"], false);
+    assert_eq!(math["available"], cfg!(feature = "math"));
+    assert_eq!(math["retired"], false);
+    // Every NC identity is retired: unavailable, listed for explanation, and its ID
+    // stays reserved so a same-named external plugin cannot take over.
+    for id in [
+        "nc",
+        "nc-parameters",
+        "nc-managed",
+        "process",
+        "process-parameters",
+        "sync-turning",
+        "undercut",
+    ] {
         assert_eq!(
-            app.dispatch("POST", &format!("/api/v2/plugins/{id}/enable"), json!({}))
+            nctool_runtime::config::ensure_plugin_allowed(id)
                 .unwrap_err()
                 .code,
             "retired_plugin"
         );
-        let output = f.cli(&["plugins", "enable", id]);
-        assert!(!output.status.success());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("retired_plugin"));
+        let plugin = plugins.iter().find(|p| p["id"] == id).unwrap();
+        assert_eq!(plugin["active"], false);
+        assert_eq!(plugin["available"], false);
+        assert_eq!(plugin["retired"], true);
         let source = f.0.join(format!("plugin-{id}"));
         std::fs::create_dir(&source).unwrap();
         let manifest = json!({"descriptor":PluginDescriptor::builtin(id),"actions":[],"command":["never-execute"]});
@@ -185,26 +225,41 @@ fn retired_ids_cannot_be_enabled_or_claimed_by_external_plugins() {
             serde_json::to_vec(&manifest).unwrap(),
         )
         .unwrap();
-        let code = nctool_runtime::config::install(&f.home(), &source)
-            .unwrap_err()
-            .code;
-        assert!(
-            matches!(code.as_str(), "reserved_plugin_id" | "retired_plugin"),
-            "unexpected code {code} for {id}"
+        assert_eq!(
+            nctool_runtime::config::install(&f.home(), &source)
+                .unwrap_err()
+                .code,
+            "retired_plugin"
         );
     }
+    // A builtin that is still present (math) keeps the reserved-ID protection.
+    let source = f.0.join("plugin-math");
+    std::fs::create_dir(&source).unwrap();
+    let manifest = json!({"descriptor":PluginDescriptor::builtin("math"),"actions":[],"command":["never-execute"]});
+    std::fs::write(
+        source.join("plugin.json"),
+        serde_json::to_vec(&manifest).unwrap(),
+    )
+    .unwrap();
+    assert_eq!(
+        nctool_runtime::config::install(&f.home(), &source)
+            .unwrap_err()
+            .code,
+        "reserved_plugin_id"
+    );
     assert!(!f.home().join("config.json").exists());
-    let inventory = app.inventory().unwrap();
-    assert!(inventory["plugins"]
-        .as_array()
-        .unwrap()
-        .iter()
-        .filter(|p| p["retired"] == true)
-        .all(|p| p["available"] == false && p["active"] == false && p["descriptor"].is_null()));
+    // The retired nc profile is rejected instead of silently loading anything.
+    assert_eq!(
+        App::boot(&f.home(), &f.workspace(), Some("nc"))
+            .err()
+            .unwrap()
+            .code,
+        "invalid_profile"
+    );
 }
 
 #[test]
-fn retired_template_intent_is_blocked_across_live_drafts_snapshots_managed_and_cli() {
+fn domain_intent_requires_nc_actions_across_live_drafts_snapshots_managed_and_cli() {
     let f = Fixture::new();
     let app = f.app();
     for (index, metadata) in [
@@ -248,7 +303,7 @@ fn retired_template_intent_is_blocked_across_live_drafts_snapshots_managed_and_c
             for action in ["template.render", "template.render.managed"] {
                 assert_eq!(
                     app.runtime.invoke(action, input.clone()).unwrap_err().code,
-                    "retired_template"
+                    "domain_action_required"
                 );
                 assert_eq!(
                     app.dispatch(
@@ -258,7 +313,7 @@ fn retired_template_intent_is_blocked_across_live_drafts_snapshots_managed_and_c
                     )
                     .unwrap_err()
                     .code,
-                    "retired_template"
+                    "domain_action_required"
                 );
             }
         }
@@ -278,7 +333,7 @@ fn retired_template_intent_is_blocked_across_live_drafts_snapshots_managed_and_c
             out.to_str().unwrap(),
         ]);
         assert!(!output.status.success());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("retired_template"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("domain_action_required"));
         assert!(!out.exists());
     }
     app.runtime.invoke("template.save", json!({"name":"generic","asset":{"source":"{{ payload.value }}:{{ nullable }}","metadata":{"report":{"custom":true},"arbitrary":"metadata"}}})).unwrap();
@@ -292,7 +347,7 @@ fn retired_template_intent_is_blocked_across_live_drafts_snapshots_managed_and_c
 }
 
 #[test]
-fn retired_dependencies_are_checked_when_loaded_and_frozen_with_their_intent() {
+fn domain_dependencies_are_checked_when_loaded_and_frozen_with_their_intent() {
     let f = Fixture::new();
     let app = f.app();
     app.runtime
@@ -347,7 +402,7 @@ fn retired_dependencies_are_checked_when_loaded_and_frozen_with_their_intent() {
                 for action in ["template.render", "template.render.managed"] {
                     assert_eq!(
                         app.runtime.invoke(action, input.clone()).unwrap_err().code,
-                        "retired_template",
+                        "domain_action_required",
                         "{action}: {input}"
                     );
                 }
@@ -405,7 +460,7 @@ fn retired_dependencies_are_checked_when_loaded_and_frozen_with_their_intent() {
                 )
                 .unwrap_err()
                 .code,
-            "retired_template"
+            "domain_action_required"
         );
         assert_eq!(
             app.runtime
@@ -418,7 +473,7 @@ fn retired_dependencies_are_checked_when_loaded_and_frozen_with_their_intent() {
 }
 
 #[test]
-fn retired_transitive_dependency_failure_never_delivers_cli_or_task_artifacts() {
+fn domain_dependency_failure_never_delivers_cli_or_task_artifacts() {
     let f = Fixture::new();
     let app = f.app();
     for (name, asset) in [
@@ -443,7 +498,7 @@ fn retired_transitive_dependency_failure_never_delivers_cli_or_task_artifacts() 
             output_file.to_str().unwrap(),
         ]);
         assert!(!output.status.success());
-        assert!(String::from_utf8_lossy(&output.stderr).contains("retired_template"));
+        assert!(String::from_utf8_lossy(&output.stderr).contains("domain_action_required"));
         assert!(!output_file.exists());
         std::fs::write(&output_file, "previous output").unwrap();
         let output = f.cli(&[
@@ -478,7 +533,7 @@ fn retired_transitive_dependency_failure_never_delivers_cli_or_task_artifacts() 
                 .unwrap();
             if !["queued", "running"].contains(&run["status"].as_str().unwrap()) {
                 assert_eq!(run["status"], "failed");
-                assert_eq!(run["error"]["code"], "retired_template");
+                assert_eq!(run["error"]["code"], "domain_action_required");
                 assert!(run["result"].is_null());
                 break;
             }
@@ -513,7 +568,7 @@ fn legacy_snapshot_replay_preserves_root_checks_and_rejects_unknown_dependency_i
                 Err(code) => assert_eq!(result.unwrap_err().code, code),
             }
         }
-        assert_eq!(app.runtime.invoke(action, json!({"snapshot":{"template":"main","templates":{"main":"OLD"},"asset":{"metadata":{"nc":null}}}})).unwrap_err().code, "retired_template");
+        assert_eq!(app.runtime.invoke(action, json!({"snapshot":{"template":"main","templates":{"main":"OLD"},"asset":{"metadata":{"nc":null}}}})).unwrap_err().code, "domain_action_required");
         for snapshot in [
             json!({"format_version":2,"template":"main","templates":{"main":"OK"}}),
             json!({"format_version":2,"template":"main","templates":{"main":"OK","old":"OLD"},"metadata":{"main":null}}),
@@ -531,7 +586,7 @@ fn legacy_snapshot_replay_preserves_root_checks_and_rejects_unknown_dependency_i
 }
 
 #[test]
-fn mixed_retired_bundle_is_rejected_before_any_collection_is_written() {
+fn mixed_domain_bundle_requires_its_provider_before_any_collection_is_written() {
     let source = Fixture::new();
     let app = source.app();
     app.runtime
@@ -540,31 +595,42 @@ fn mixed_retired_bundle_is_rejected_before_any_collection_is_written() {
             json!({"name":"hello","asset":{"source":"hello"}}),
         )
         .unwrap();
-    let mut bundle = app.dispatch("GET", "/api/v2/bundle", json!({})).unwrap();
-    bundle["collections"]["nc"] = json!({"records":[]});
+    // No build provides NC anymore; a bundle from one that still holds retired
+    // collections must be rejected as a whole before any file is written.
+    let bundle = app.dispatch("GET", "/api/v2/bundle", json!({})).unwrap();
     let target = Fixture::new();
     let imported = target.app();
-    for path in ["/api/v2/bundle/validate", "/api/v2/bundle/import"] {
-        assert_eq!(
-            imported
-                .dispatch("POST", path, json!({"bundle":bundle}))
-                .unwrap_err()
-                .code,
-            "retired_collection"
-        );
-        assert!(imported
-            .runtime
-            .invoke("template.list", json!({}))
-            .unwrap()
-            .data["names"]
-            .as_array()
-            .unwrap()
-            .is_empty());
+    for collection in [
+        "nc",
+        "nc-parameters",
+        "sync-turning-assets",
+        "undercut-assets",
+    ] {
+        let mut candidate = bundle.clone();
+        candidate["collections"][collection] = json!({"records":[]});
+        for path in ["/api/v2/bundle/validate", "/api/v2/bundle/import"] {
+            assert_eq!(
+                imported
+                    .dispatch("POST", path, json!({"bundle":candidate}))
+                    .unwrap_err()
+                    .code,
+                "collection_missing",
+                "{collection} via {path}"
+            );
+            assert!(imported
+                .runtime
+                .invoke("template.list", json!({}))
+                .unwrap()
+                .data["names"]
+                .as_array()
+                .unwrap()
+                .is_empty());
+        }
     }
 }
 
 #[test]
-fn retired_history_keeps_original_artifacts_and_refuses_replay() {
+fn unavailable_nc_history_keeps_original_artifacts_and_refuses_replay() {
     let f = Fixture::new();
     let app = f.app();
     let path = f.workspace().join(".nctool/runs/old-nc.json");
@@ -579,13 +645,192 @@ fn retired_history_keeps_original_artifacts_and_refuses_replay() {
     assert_eq!(
         app.dispatch("GET", "/api/v2/runs/old-nc/replay-check", json!({}))
             .unwrap()["status"],
-        "retired"
+        "unknown"
     );
     assert_eq!(
         app.dispatch("POST", "/api/v2/runs/old-nc/rerun", json!({}))
             .unwrap_err()
             .code,
-        "retired_action"
+        "action_not_found"
     );
-    assert_eq!(std::fs::read(path).unwrap(), original);
+    assert_eq!(std::fs::read(&path).unwrap(), original);
+}
+
+#[cfg(feature = "math")]
+#[test]
+fn math_is_opt_in_and_reports_a_clear_error_when_the_extension_is_missing() {
+    let f = Fixture::new();
+    App::boot(&f.home(), &f.workspace(), None).unwrap();
+    nctool_runtime::config::set_enabled(&f.home(), "math", true).unwrap();
+    let app = App::boot(&f.home(), &f.workspace(), None).unwrap();
+    assert!(app.runtime.descriptors().iter().any(|d| d.id == "math"));
+    // The filter is not global: it only exists when the run selects the extension.
+    let missing = app
+        .runtime
+        .invoke(
+            "template.render",
+            json!({"source":"{{ 2 | pow(10) }}","context":{}}),
+        )
+        .unwrap_err();
+    assert_eq!(missing.code, "template_error");
+    let rendered = app
+        .runtime
+        .invoke(
+            "template.render",
+            json!({"source":"{{ 2 | pow(10) }}","context":{},"extensions":["math"]}),
+        )
+        .unwrap();
+    assert_eq!(rendered.data["text"], "1024.0");
+}
+
+#[cfg(not(feature = "math"))]
+#[test]
+fn math_enable_is_rejected_on_a_build_without_the_feature() {
+    let f = Fixture::new();
+    assert_eq!(
+        App::boot(&f.home(), &f.workspace(), None)
+            .unwrap()
+            .inventory()
+            .unwrap()["plugins"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|p| p["id"] == "math")
+            .unwrap()["available"],
+        false
+    );
+}
+
+#[test]
+fn retired_identity_is_not_reclaimable_by_an_aliased_external_plugin() {
+    let f = Fixture::new();
+    let install = |name: &str, manifest: Value| {
+        let source = f.0.join(name);
+        std::fs::create_dir(&source).unwrap();
+        std::fs::write(
+            source.join("plugin.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        nctool_runtime::config::install(&f.home(), &source)
+    };
+    // The retired plugin id stays reserved regardless of the claimed content.
+    assert_eq!(
+        install(
+            "alias-id",
+            json!({"descriptor":PluginDescriptor::builtin("nc"),"actions":[],"command":["never-execute"]})
+        )
+        .unwrap_err()
+        .code,
+        "retired_plugin"
+    );
+    // A non-retired plugin id cannot provide a retired action, service or collection;
+    // a same-named alias therefore cannot take over old NC history or asset bundles.
+    let action = ActionDescriptor::new("nc.generate", "NC", object_schema());
+    assert_eq!(
+        install(
+            "alias-action",
+            json!({"descriptor":PluginDescriptor::builtin("alias-action"),"actions":[action],"command":["never-execute"]})
+        )
+        .unwrap_err()
+        .code,
+        "retired_identity"
+    );
+    let mut descriptor = PluginDescriptor::builtin("alias-service");
+    descriptor.provides = vec![Service::new("sync-turning.generate", "alias.echo")];
+    let action = ActionDescriptor::new("alias.echo", "echo", object_schema());
+    assert_eq!(
+        install(
+            "alias-service",
+            json!({"descriptor":descriptor,"actions":[action],"command":["never-execute"]})
+        )
+        .unwrap_err()
+        .code,
+        "retired_identity"
+    );
+    // Every real retired collection is reserved by its exact archived name, so a
+    // same-named alias cannot re-supply it.
+    for collection in [
+        "nc",
+        "nc-parameters",
+        "sync-turning-assets",
+        "undercut-assets",
+    ] {
+        let mut descriptor = PluginDescriptor::builtin("alias-collection");
+        descriptor.asset_collections = vec![AssetCollection {
+            id: collection.into(),
+            export_action: "alias.export".into(),
+            import_action: "alias.import".into(),
+        }];
+        let actions = vec![
+            ActionDescriptor::new("alias.export", "export", object_schema()),
+            ActionDescriptor::new("alias.import", "import", object_schema()),
+        ];
+        assert_eq!(
+            install(
+                &format!("alias-collection-{collection}"),
+                json!({"descriptor":descriptor,"actions":actions,"command":["never-execute"]})
+            )
+            .unwrap_err()
+            .code,
+            "retired_identity",
+            "{collection}"
+        );
+    }
+    assert!(!f.home().join("plugins").exists());
+    // A generic, unrelated plugin is still installed and runs; only the retired
+    // namespaces are reserved.
+    let descriptor = PluginDescriptor::builtin("reporter");
+    let action = ActionDescriptor::new("report.generate", "report", object_schema());
+    assert_eq!(
+        install(
+            "reporter",
+            json!({"descriptor":descriptor,"actions":[action],"command":["never-execute"]})
+        )
+        .unwrap(),
+        "reporter"
+    );
+    let app = f.app();
+    let retired = |id: &str| {
+        ["nc", "machine", "process", "sync-turning", "undercut"]
+            .iter()
+            .any(|token| {
+                id.strip_prefix(token)
+                    .is_some_and(|rest| rest.starts_with('.'))
+            })
+    };
+    assert!(app
+        .runtime
+        .capabilities()
+        .iter()
+        .all(|c| !retired(&c.action.id)));
+}
+
+#[test]
+fn migration_rejects_unknown_profiles_and_strips_retired_provider_keys() {
+    let f = Fixture::new();
+    // An unrecognized profile is refused instead of being silently rewritten.
+    let original = f.config(json!({"profile":"garbage","enabled":[],"plugins":{}}));
+    assert_eq!(
+        App::migration_check_at(&f.home()).unwrap_err().code,
+        "invalid_profile"
+    );
+    assert_eq!(
+        std::fs::read(f.home().join("config.json")).unwrap(),
+        original
+    );
+    assert_eq!(std::fs::read_dir(f.home()).unwrap().count(), 1);
+    assert!(!f.workspace().exists());
+    // A retired provider service key is stripped even when its provider is not retired.
+    f.config(
+        json!({"profile":"nc","enabled":[],"providers":{"nc.generate":"reporter"},"plugins":{}}),
+    );
+    let check = App::migration_check_at(&f.home()).unwrap();
+    assert_eq!(check["valid"], true);
+    assert_eq!(check["proposed"]["profile"], "template");
+    assert_eq!(check["proposed"]["providers"], json!({}));
+    assert!(check["changes"].as_array().unwrap().iter().any(|c| c
+        .as_str()
+        .unwrap()
+        .contains("providers: remove nc.generate")));
 }

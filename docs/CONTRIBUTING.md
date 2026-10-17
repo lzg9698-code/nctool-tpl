@@ -8,7 +8,7 @@
 
 Rust 1.89+，前端使用 Node.js 22.12+ 和 npm。Python 插件与验证脚本需要 Python 3；源码快照工具需要 Python 3.9+。Windows 可将下列 `python3` 改为可用的 `python`，不要依赖不可用的 WindowsApps 命令别名。
 
-先在仓库根目录执行 `npm ci --prefix ui` 和 `node scripts/build_ui.mjs`，再运行 `cargo run -p nctool-cli -- ui`。默认 WebUI 地址为 `http://127.0.0.1:8788`。NC 组合使用 `cargo run -p nctool-cli --features nc-bundle -- --profile nc ui`。
+先在仓库根目录执行 `npm ci --prefix ui` 和 `node scripts/build_ui.mjs`，再运行 `cargo run -p nctool-cli -- ui`。默认 WebUI 地址为 `http://127.0.0.1:8788`。数学扩展使用 `cargo run -p nctool-cli --features math -- ui`，并需在配置 `enabled` 中启用、在请求 `extensions` 中显式选择。
 
 前端开发可执行 `npm run --prefix ui dev`；Vite 将 `/api` 转发到 `127.0.0.1:8788`，同时运行 Rust 宿主。前端源码变更后重新生成嵌入资源并编译宿主，才能在发行式 WebUI 中看到更新。
 
@@ -16,6 +16,7 @@ Rust 1.89+，前端使用 Node.js 22.12+ 和 npm。Python 插件与验证脚本�
 
 ```bash
 npm ci --prefix ui
+npm run --prefix ui lint
 npm run --prefix ui test
 node scripts/build_ui.mjs
 python3 scripts/check_v2.py
@@ -31,7 +32,9 @@ cargo +1.89.0 check --workspace --all-features --locked
 
 外部协议测试需要 Python 3，会使用可用的 python3/python 命令。真实进程测试覆盖握手、逆向服务调用、精度检查、错误输出、消息限制、崩溃、堵塞 stdin、超时、取消与下一次调用恢复。
 
-`python3 scripts/check_v2.py` 验证纯模板依赖树、旧桌面源码及入口移除、workspace 与 NC 组合无 Tauri 依赖、引擎领域注册隔离、Python 示例适配器一致性、UI 生成物与 JavaScript 语法、基础包内容。
+`python3 scripts/check_v2.py` 验证默认 template + parameters 不包含 NC，`math` 为唯一可选 feature，领域中立组件只有白名单生产依赖，旧桌面入口移除、Tauri 隔离、引擎领域注册隔离、Python 适配器、UI 资源与 JavaScript 语法、基础包内容均无加工实现。数学由独立 `math` feature 提供，运行扩展仍需显式选择。
+
+`npm run --prefix ui lint` 执行 TypeScript 类型及未使用声明检查，不是 ESLint。前端依赖与测试环境必须声明在清单并锁定；不要依赖已有 node_modules 中未声明的包。当前 P0 范围、基线与验收见[开发方案](DEVELOPMENT_PLAN_2026-10-16.md)。
 
 ## 修改边界
 
@@ -45,30 +48,34 @@ cargo +1.89.0 check --workspace --all-features --locked
 
 ## 浏览器验收
 
-默认组合：无 NC/机床/工序导航；编辑嵌套参数、检查变量、渲染、保存/重新读取、陈旧保存冲突、下载产物。
+默认组合：无 NC/机床/工序导航；编辑嵌套参数、检查变量、渲染、保存/重新读取、陈旧保存冲突、下载产物。带旧加工元数据的模板被拒绝，不降级为普通渲染。
 
-NC 组合：用专用表单新建机床、选择加工模板、编辑参数与行号；添加、复制、排序工序并生成连续编号；任一工序失败突出失败工序，不显示/下载半成品。
+数学扩展：默认构建未启用时不注册数学过滤器；显式编译、配置启用并在请求 `extensions` 选择后可渲染，历史保存扩展选择。
 
-历史与迁移：比较两次成功输出，重新执行固定输入的历史任务；导出集合并在新工作区校验、导入，验证引用、预设、机床和元数据，重复导入拒绝覆盖。
+历史与迁移：比较两次成功输出，重新执行固定输入的历史任务；导出集合并在新工作区校验、导入，验证引用、预设和元数据，重复导入拒绝覆盖。含退役加工集合的资产包整体拒绝。
 
 历史环境：验证新记录的插件版本和服务绑定，环境一致、已变化及旧记录信息不完整三种提示。重执行必须记录来源与实际环境检查，不改写原历史文件。`scripts/browser_v2.cjs` 在临时工作区模拟旧版本记录；`cli/tests/platform.rs` 同时覆盖宿主、插件和服务绑定差异，兼容旧记录及不可比较的格式版本。
 
 外部插件：通过页面检查本地目录、安装、检查依赖、保存启用配置，重启后出现数据报告表单，可调用模板服务生成结果。配置页面显示当前状态与下次启动状态。
 
-同时检查 HTTP 的 Host/Origin/Content-Type/体积限制，任务运行时能查询能力与取消。平台发布需要 Linux/Windows/macOS CI 成功；测试输出不作为机床工艺验收。
+同时检查 HTTP 的 Host/Origin/Content-Type/体积限制，任务运行时能查询能力与取消。平台发布需要 Linux/Windows/macOS CI 成功。
 
-自动浏览器验收：先构建 `cargo build -p nctool-cli --features nc-bundle`，安装 Playwright 1.62.1 和 Chromium，再执行 `node scripts/browser_v2.cjs`。可用 `NCTOOL_PLAYWRIGHT` 指定独立安装目录，`NCTOOL_CHROMIUM` 指定浏览器路径。脚本使用临时 home/workspace，覆盖两种组合与 Python 插件，不修改用户配置。
+自动浏览器验收：先构建 `cargo build -p nctool-cli --features math`，安装 Playwright 1.62.1 和 Chromium，再执行 `node scripts/browser_v2.cjs`。可用 `NCTOOL_PLAYWRIGHT` 指定独立安装目录，`NCTOOL_CHROMIUM` 指定浏览器路径。脚本使用临时 home/workspace，覆盖默认与数学组合、退役边界与 Python 插件，不修改用户配置。
 
 手工逐项走查见[WebUI 验收清单](UI_ACCEPTANCE_CHECKLIST.md)，每次记录平台、源码版本和实际执行结果。
 
 
 ## 审查缺陷回归
 
-运行 `node scripts/browser_review_fixes.cjs`（与既有浏览器验收使用相同的 Playwright/Chromium 环境）。这个脚本使用临时工作区和一次性外部提供方，覆盖领域能力缺失、显式动作保存、错误 JSON 不提交、草稿跨页/刷新恢复、动作切换、取消/失败、过期导出以及真实 HTTP 数值入口。Linux 浏览器 CI 同时运行两个验收脚本。
+运行 `node scripts/browser_review_fixes.cjs`（与既有浏览器验收使用相同的 Playwright/Chromium 环境）。这个脚本使用临时工作区和一次性外部提供方，覆盖领域能力缺失、显式动作保存、错误 JSON 不提交、草稿跨页/刷新恢复、动作切换、取消/失败、过期导出以及真实 HTTP 数值入口。Linux 浏览器 CI 同时运行三个验收脚本。
 
-`cli/tests/platform.rs` 的 `review_r*` 回归覆盖 CLI 原子输出不覆盖、直接动作、后台任务、工序、历史快照、动态模板依赖、参数 Schema 与 specs、机床直接输入及外部编辑、整数边界和集合导入。新增功能要保持这些边界；不要仅用单一路径通过来代替全部入口的约束。
+`cli/tests/platform.rs` 的 `review_r*` 回归覆盖 CLI 原子输出不覆盖、直接动作、后台任务、历史快照、动态模板依赖、参数 Schema 与整数边界、集合导入，以及退役领域身份不再被声明为可执行。新增功能要保持这些边界；不要仅用单一路径通过来代替全部入口的约束。
 
-并行测试时不要让 template-only 和 nc-bundle 构建覆盖正在使用的同一个 `target/debug/nctool`。浏览器可通过 `NCTOOL_BINARY` 使用事先复制好的固定二进制；前端有改动后先运行 `node scripts/build_ui.mjs` 并重新编译宿主。
+并行测试时不要让默认与 `math` 构建覆盖正在使用的同一个 `target/debug/nctool`。浏览器可通过 `NCTOOL_BINARY` 使用事先复制好的固定二进制；前端有改动后先运行 `node scripts/build_ui.mjs` 并重新编译宿主。
+
+## 共享参数与数学扩展回归
+
+运行 `node scripts/browser_generic_parameters.cjs`（与既有浏览器验收使用相同的 Playwright/Chromium 环境，`NCTOOL_BINARY` 指向固定程序）。这个脚本使用临时 home/workspace 覆盖通用共享参数链：定义、预置与绑定模板的继承值和来源，手改覆盖及保留、共享预置切换、恢复跟随、取消预置，未完成数值与无效 JSON 阻止执行，修正后只发送本次覆盖，以及修改依赖使旧结果过期并禁止导出。二进制包含 `math` 扩展（`--features math`）时，脚本继续启用并重启临时服务，验证语法页试跑 math 示例、工作台生成携带 `extensions`、HTTP 无 `extensions` 报未知过滤器，以及后台 math 任务记录扩展且重执行不改写原历史；未包含扩展时打印限制并只验证共享参数链。
 
 ## 源码基线与发布门槛
 
@@ -83,6 +90,6 @@ python3 scripts/source_baseline.py verify .nctool-backups/my-source-baseline
 
 恢复时先在新的空目录解压 `sources.tar.gz`，核对 `manifest.json`；补丁和 `status.txt` 用于重建 Git 暂存状态与删除记录。不要直接覆盖正在使用的工作区。
 
-标签发布现在必须先通过复用的完整 CI：三平台 Rust/前端/架构检查、Linux 两组 Chromium 验收及 MSRV 检查。任何验证作业失败，二进制构建和发布不会执行。发行包按明确的 Rust target 编译，并附带每个二进制的 SHA-256 文件。工作流配置与本机通过不能替代 GitHub Actions 的实际三平台结果，也不替代真实控制器验收。
+标签发布现在必须先通过复用的完整 CI：三平台 Rust/前端/架构检查、Linux 三组 Chromium 验收及 MSRV 检查。任何验证作业失败，二进制构建和发布不会执行。发行包按明确的 Rust target 编译，并附带每个二进制的 SHA-256 文件。工作流配置与本机通过不能替代 GitHub Actions 的实际三平台结果；测试输出也不替代使用方对生成正文的最终核对。
 
 标签、资产名称、签收和 crates.io 边界见[发布说明](RELEASE.md)。当前限制与待验证项见[项目状态](PROJECT_STATUS.md)。

@@ -1,8 +1,41 @@
-.shared-parameter-inputs { display: grid; gap: 12px; min-width: 0; }
+/* The parameters pane has no horizontal padding of its own, so the shared
+   parameter sections inset their content instead of touching the pane edge. */
+.shared-parameter-inputs { display: grid; gap: 16px; min-width: 0; padding: 4px 14px 14px; }
 .shared-parameter-controls { border: 0; margin: 0; padding: 0; min-width: 0; display: grid; gap: 8px; }
 .shared-parameter-controls label { display: grid; gap: 6px; }
-.shared-parameter-origins { border-top: 1px solid var(--border, #d8dce2); padding-top: 12px; }
-.shared-parameter-origins ul { list-style: none; padding: 0; margin: 8px 0 0; display: grid; gap: 10px; }
-.shared-parameter-origins li { display: grid; gap: 4px; overflow-wrap: anywhere; }
+.shared-parameter-origins,
+.shared-parameter-inputs .binding-section { min-width: 0; }
+.binding-section { display: grid; gap: 8px; min-width: 0; }
+.binding-section + .binding-section { border-top: 1px solid var(--line, #e4e8ed); padding-top: 14px; }
+.binding-heading { margin: 0; font-size: 13px; font-weight: 600; color: var(--text, #253244); }
+.binding-actions,
+.binding-add { display: flex; flex-wrap: wrap; align-items: flex-end; gap: 8px; }
+.binding-add label { flex: 1 1 180px; }
+.binding-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 8px; }
+.binding-list li { display: grid; gap: 4px; overflow-wrap: anywhere; }
+.binding-card {
+  border: 1px solid var(--line, #e4e8ed);
+  border-radius: var(--radius, 8px);
+  padding: 10px 12px;
+  background: #fff;
+}
+.binding-card-head { display: flex; flex-wrap: wrap; align-items: baseline; gap: 8px; }
+.binding-card-head code { font-size: 11px; color: var(--muted, #596779); }
+.binding-card-head .text-button { margin-left: auto; }
+.binding-value { font-size: 13px; overflow-wrap: anywhere; }
+/* In the workbench's parameter pane, nested object headings and their clear
+   actions span the full row; inset them to align with the input content. */
+.parameters-pane .field-heading { padding-inline: 12px; }
+.binding-summary { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 4px 14px; margin: 4px 0 0; }
+.binding-summary div { display: flex; gap: 6px; min-width: 0; }
+.binding-summary dt { font-size: 11px; color: var(--muted, #596779); flex: none; }
+.binding-summary dd { margin: 0; font-size: 12px; overflow-wrap: anywhere; }
+.binding-danger summary { cursor: pointer; font-size: 12px; color: var(--danger, #a83434); }
 .shared-parameter-origins code { font-size: 0.85em; }
+/* The binding author panel lives in the definition pane, which also has no
+   horizontal padding of its own. */
+section.shared-parameter-inputs { padding: 4px 14px 14px; }
 .shared-parameter-origins .text-button { justify-self: start; }
+@media (max-width: 760px) {
+  .binding-summary { grid-template-columns: 1fr; }
+}

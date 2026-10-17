@@ -26,12 +26,12 @@ gh run view <运行ID> --repo lzg9698-code/nctool-tpl --log-failed
 浏览器插件用于手工复现与页面检查。启动固定二进制：
 
 ```bash
-cargo build -p nctool-cli --features nc-bundle --locked --target-dir target/codex-nc
+cargo build -p nctool-cli --features math --locked --target-dir target/codex-math
 # Windows 在二进制文件名后加 .exe
-target/codex-nc/debug/nctool --home <临时home> --workspace <临时workspace> --profile template ui --port 0
+target/codex-math/debug/nctool --home <临时home> --workspace <临时workspace> ui --port 0
 ```
 
-打开启动日志的实际 loopback 地址；NC 使用 `--profile nc`。产品默认端口仍是 8788。不要改用用户工作台测试。批量回归运行 `scripts/browser_v2.cjs`、`scripts/browser_review_fixes.cjs`，`NCTOOL_BINARY` 指向固定程序；Playwright/Chromium 方法见[贡献指南](CONTRIBUTING.md)。工具无法连接时记录限制，继续隔离自动回归；脚本通过不代表手工或全部平台验收通过。
+打开启动日志的实际 loopback 地址。`--profile` 仅支持 `template`，旧 `nc` profile 以 `invalid_profile` 拒绝；数学扩展需以 `--features math` 构建（完整二进制已包含），在配置 `enabled` 中启用，并在请求 `extensions` 中显式选择。产品默认端口仍是 8788。不要改用用户工作台测试。批量回归运行 `scripts/browser_v2.cjs`、`scripts/browser_review_fixes.cjs` 与 `scripts/browser_generic_parameters.cjs`（后者独立覆盖通用共享参数链与可选 `math` 扩展；必要时加 `scripts/browser_ui_refactor.cjs`），`NCTOOL_BINARY` 指向固定程序；Playwright/Chromium 方法见[贡献指南](CONTRIBUTING.md)。工具无法连接时记录限制，继续隔离自动回归；脚本通过不代表手工或全部平台验收通过。
 
 ## Context7
 
@@ -43,7 +43,7 @@ target/codex-nc/debug/nctool --home <临时home> --workspace <临时workspace> -
 
 ## 依赖审计
 
-验收报告需与历史证据分开时，八组 `scripts/browser_*.cjs` 支持 `NCTOOL_REPORT` 指定各自输出目录。受管参数浏览器验收还可通过 `NCTOOL_COMPARISON_REPORT` 指向本轮 CLI/HTTP `report.json`；报告中的 WebUI 路径按实际输出位置记录。`verify_specialized_turning.py` 支持 `--report`，受管验证使用 `--assets` 指定示例包副本，避免修改提交候选文件。固定二进制、隔离目录及完整示例见[贡献指南](CONTRIBUTING.md)。
+验收报告需与历史证据分开时，`scripts/browser_*.cjs` 支持 `NCTOOL_REPORT` 指定各自输出目录；报告中的 WebUI 路径按实际输出位置记录。固定二进制、隔离目录及完整示例见[贡献指南](CONTRIBUTING.md)。
 
 默认检查根 `Cargo.lock` 与当前 `ui/package-lock.json`：
 

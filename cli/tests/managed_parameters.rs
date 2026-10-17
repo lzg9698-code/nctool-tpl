@@ -1,6 +1,16 @@
 use nctool_cli::composition::App;
 use nctool_plugin_sdk::*;
-use std::{path::PathBuf, sync::Arc};
+use std::{
+    path::PathBuf,
+    sync::{
+        atomic::{AtomicU64, Ordering},
+        Arc,
+    },
+};
+/// Tests in one binary run on parallel threads, and the system clock can hand the
+/// same nanosecond value to two of them; a process-wide counter keeps each temp
+/// directory distinct so one fixture's cleanup cannot delete another's files.
+static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 struct Fixture {
     root: PathBuf,
     app: Arc<App>,
@@ -8,12 +18,13 @@ struct Fixture {
 impl Fixture {
     fn new(profile: &str) -> Self {
         let root = std::env::temp_dir().join(format!(
-            "managed-{}-{}",
+            "managed-{}-{}-{}",
             std::process::id(),
             std::time::SystemTime::now()
                 .duration_since(std::time::UNIX_EPOCH)
                 .unwrap()
-                .as_nanos()
+                .as_nanos(),
+            NEXT_TEMP.fetch_add(1, Ordering::Relaxed)
         ));
         std::fs::create_dir(&root).unwrap();
         let app = App::boot(&root.join("home"), &root.join("workspace"), Some(profile)).unwrap();
