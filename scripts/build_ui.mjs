@@ -66,6 +66,15 @@ const rust =
     )
     .join("\n") +
   "\n];\n";
+// Hash text with normalized line endings so a CRLF checkout and an LF checkout
+// record the same fingerprint; binary assets are hashed byte-for-byte.
+const TEXT = /\.(ts|tsx|css|svg|json|html)$/;
+function sourceBytes(path) {
+  const bytes = readFileSync(path);
+  return TEXT.test(path)
+    ? Buffer.from(bytes.toString("utf8").replace(/\r\n/g, "\n"), "utf8")
+    : bytes;
+}
 const fingerprint = createHash("sha256");
 for (const path of [
   "package.json",
@@ -74,7 +83,7 @@ for (const path of [
   "vite.config.ts",
   "index.html",
 ])
-  fingerprint.update(readFileSync(join(ui, path)));
+  fingerprint.update(sourceBytes(join(ui, path)));
 function sourceHash(directory) {
   for (const entry of readdirSync(directory, { withFileTypes: true }).sort(
     (a, b) => a.name.localeCompare(b.name),
@@ -86,7 +95,7 @@ function sourceHash(directory) {
       !entry.name.includes(".test.")
     ) {
       fingerprint.update(relative(ui, path).replaceAll("\\", "/"));
-      fingerprint.update(readFileSync(path));
+      fingerprint.update(sourceBytes(path));
     }
   }
 }
