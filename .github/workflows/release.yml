@@ -61,9 +61,13 @@ jobs:
     needs: binaries
     runs-on: ubuntu-latest
     steps:
+      # Only the binary artifacts belong in the release. Downloading every
+      # artifact would also pull the dependency-audit reports, and GitHub rejects
+      # their empty *.stderr.txt files ("size must be greater than or equal to 1").
       - uses: actions/download-artifact@v4
         with:
           path: dist
+          pattern: nctool-*
           merge-multiple: true
       - uses: softprops/action-gh-release@v3
         with:
