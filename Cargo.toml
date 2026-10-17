@@ -1,5 +1,5 @@
 [workspace]
-members = [".", "assets", "sdk", "runtime", "plugins/template", "plugins/parameters", "plugins/math", "plugins/nc", "plugins/sync-turning", "plugins/undercut", "plugins/process", "cli"]
+members = [".", "assets", "sdk", "runtime", "plugins/template", "plugins/parameters", "plugins/math", "cli"]
 default-members = [".", "cli"]
 resolver = "2"
 

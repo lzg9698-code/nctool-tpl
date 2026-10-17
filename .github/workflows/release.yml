@@ -40,7 +40,7 @@ jobs:
           node-version: 22
       - run: npm ci --prefix ui
       - run: node scripts/build_ui.mjs
-      - run: cargo build --release -p nctool-cli --features nc-bundle --target ${{ matrix.target }} --locked
+      - run: cargo build --release -p nctool-cli --features math --target ${{ matrix.target }} --locked
       - shell: bash
         run: cp '${{ matrix.binary }}' '${{ matrix.artifact }}'
       - name: Record binary checksum

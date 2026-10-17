@@ -3,17 +3,18 @@ import { action } from "../lib/api";
 import { clone, type Data } from "../lib/data";
 import { encodeDraft, decodeDraft } from "../lib/drafts";
 import { JsonEditor, PageTitle } from "../components/WorkbenchUi";
+import { DefinitionEditor, PresetEditor } from "../components/ParameterAssetEditor";
+import { catalogLabel } from "../lib/managedParameters";
 import type { ViewProps } from "./ViewProps";
 
 const titles: Record<string, string> = {
   definitions: "参数定义",
   presets: "共享预置",
 };
-const groups = ["definitions", "presets"];
 function seed(group: string): Data {
   const fields: Record<string, Data> = {
     definitions: {
-      schema: { type: "number" },
+      schema: { type: "string" },
       unit: "",
       group: "",
       description: "",
@@ -23,6 +24,7 @@ function seed(group: string): Data {
   return { format_version: 1, id: "", title: "", ...fields[group] };
 }
 export function ParameterLibrary(props: ViewProps) {
+  const groups = ["definitions", "presets"];
   const key = `nctool:parameter-draft:${props.workspaceId}:parameter`;
   const [draft, update] = useState<Data>(() => {
     try {
@@ -37,6 +39,8 @@ export function ParameterLibrary(props: ViewProps) {
     group: draft.group,
     items: [],
   });
+  const [definitions, setDefinitions] = useState<Data[]>([]);
+  const [query, setQuery] = useState("");
   const [message, setMessage] = useState("");
   const current = useRef(draft);
   const identity = useRef(0);
@@ -64,6 +68,17 @@ export function ParameterLibrary(props: ViewProps) {
     localStorage.setItem(key, encodeDraft(next));
     setMessage("");
   }
+  /** Edit the asset of the current draft without touching group, raw or fingerprint. */
+  function patchAsset(fields: Data) {
+    const asset = { ...current.current.asset, ...fields };
+    for (const field of Object.keys(fields))
+      if (fields[field] === undefined) delete asset[field];
+    // The structured edit supersedes any unresolved raw JSON, so drop the key
+    // rather than storing undefined: a tagged draft would round-trip it as set.
+    const next = { ...current.current, asset };
+    delete next.raw;
+    patch(next);
+  }
   async function reload(guard: () => boolean = () => true) {
     const group = draft.group;
     // Each request carries its own identity and the group it was issued for, so
@@ -74,16 +89,35 @@ export function ParameterLibrary(props: ViewProps) {
     if (guard() && mine === requestId.current)
       setCatalog({ group, items: result.data.items });
   }
+  // Presets reference definitions by id, so the editor needs the definition list
+  // even while the preset group is the one being edited.
+  async function loadDefinitions() {
+    try {
+      const result = await action("parameter.catalog", { group: "definitions" });
+      if (mounted.current) setDefinitions(result.data.items);
+    } catch {
+      // A missing definition catalog only degrades the preset editor's labels;
+      // existing stored values stay visible and editable.
+    }
+  }
   useEffect(() => {
     // Switching group first drops any catalog that does not belong to it, then
     // reloads; only a response for the group still in flight can be adopted.
     setCatalog((previous) =>
       previous.group === draft.group ? previous : { group: draft.group, items: [] },
     );
+    setQuery("");
     void reload().catch(props.fail);
   }, [draft.group]);
+  useEffect(() => {
+    void loadDefinitions();
+  }, []);
   // Reading and rendering only ever see the catalog of the group being edited.
   const items = catalog.group === draft.group ? catalog.items : [];
+  const visible = items.filter((item) =>
+    query.trim() ? catalogLabel(item).toLowerCase().includes(query.trim().toLowerCase()) : true,
+  );
+  const stored = !!draft.expected;
   async function save() {
     // The ref also gates clicks before React has rendered the disabled button.
     if (savingRef.current) return;
@@ -121,6 +155,7 @@ export function ParameterLibrary(props: ViewProps) {
       localStorage.setItem(key, encodeDraft(next));
       if (latest === submitted) setMessage("已保存");
       await reload(isCurrent);
+      if (submitted.group === "definitions") void loadDefinitions();
     } catch (e) {
       if (!isCurrent()) return;
       if (current.current === submitted) {
@@ -141,32 +176,32 @@ export function ParameterLibrary(props: ViewProps) {
         title="共享参数"
         description="定义与预置独立保存。本次输入和生成结果不会修改共享资产。"
       />
-      <section className="panel">
-        <div className="panel-content">
-          <label>
-            资产类型
-            <select
-              aria-label="资产类型"
-              value={draft.group}
-              onChange={(e) =>
-                patch(
-                  {
-                    group: e.target.value,
-                    asset: seed(e.target.value),
-                    expected: null,
-                  },
-                  true,
-                )
-              }
-            >
-              {groups.map((g) => (
-                <option key={g} value={g}>
-                  {titles[g]}
-                </option>
-              ))}
-            </select>
-          </label>
-          <div className="toolbar">
+      <div className="parameter-library">
+        <section className="panel parameter-list">
+          <div className="panel-header">
+            <label className="parameter-list-type">
+              资产类型
+              <select
+                aria-label="资产类型"
+                value={draft.group}
+                onChange={(e) =>
+                  patch(
+                    {
+                      group: e.target.value,
+                      asset: seed(e.target.value),
+                      expected: null,
+                    },
+                    true,
+                  )
+                }
+              >
+                {groups.map((g) => (
+                  <option key={g} value={g}>
+                    {titles[g]}
+                  </option>
+                ))}
+              </select>
+            </label>
             <button
               className="button secondary"
               onClick={() =>
@@ -182,51 +217,92 @@ export function ParameterLibrary(props: ViewProps) {
             >
               新建资产
             </button>
-            <button
-              className="button secondary"
-              onClick={() => void reload().catch(props.fail)}
-            >
-              刷新目录
-            </button>
           </div>
-          <label>
-            读取资产
-            <select
-              aria-label="读取资产"
-              value=""
-              onChange={(e) => {
-                // Only the catalog loaded for the current group can be read back,
-                // so a stale entry from another type can never be loaded as draft.
-                const item = items.find((i) => i.id === e.target.value);
-                if (item)
-                  patch(
-                    {
-                      group: draft.group,
-                      asset: clone(item.asset),
-                      expected: item.fingerprint,
-                    },
-                    true,
-                  );
-              }}
-            >
-              <option value="">选择资产；读取会替换当前编辑草稿</option>
-              {items.map((i) => (
-                <option key={i.id} value={i.id}>
-                  {i.title} ({i.id})
-                </option>
+          <div className="panel-content">
+            <div className="toolbar">
+              <input
+                aria-label="搜索资产"
+                value={query}
+                onChange={(e) => setQuery(e.target.value)}
+                placeholder="搜索名称或标识"
+              />
+              <button
+                className="button secondary"
+                onClick={() => void reload().catch(props.fail)}
+              >
+                刷新目录
+              </button>
+            </div>
+            <div className="parameter-list-items" role="list">
+              {visible.map((item) => (
+                <button
+                  type="button"
+                  role="listitem"
+                  key={item.id}
+                  className={
+                    "parameter-list-item " +
+                    (draft.asset.id === item.id && stored ? "selected" : "")
+                  }
+                  aria-label={`读取资产 ${item.id}`}
+                  onClick={() =>
+                    // Only the catalog loaded for the current group can be read
+                    // back, so a stale entry from another type can never be
+                    // loaded as draft.
+                    patch(
+                      {
+                        group: draft.group,
+                        asset: clone(item.asset),
+                        expected: item.fingerprint,
+                      },
+                      true,
+                    )
+                  }
+                >
+                  <strong>{item.title || item.id}</strong>
+                  <code>{item.id}</code>
+                </button>
               ))}
-            </select>
-          </label>
-          <JsonEditor
-            editorKey={`${key}:${draft.group}:${identity.current}`}
-            label="资产内容"
-            value={draft.asset}
-            draft={draft.raw}
-            onRawChange={(raw) => patch({ ...draft, raw })}
-            onChange={(asset) => patch({ ...draft, asset, raw: undefined })}
-            onError={setMessage}
-          />
-          <div className="toolbar">
+              {!visible.length && (
+                <p className="parameter-hint">
+                  {items.length ? "没有匹配的资产。" : `还没有${titles[draft.group]}，点击“新建资产”开始。`}
+                </p>
+              )}
+            </div>
+          </div>
+        </section>
+        <section className="panel parameter-editor">
+          <div className="panel-header">
+            <strong>
+              {draft.asset.id || "新资产"}
+              {stored ? "" : "（未保存）"}
+            </strong>
+            <span className="parameter-hint">{titles[draft.group]}</span>
+          </div>
+          <div className="panel-content">
+            {draft.group === "definitions" ? (
+              <DefinitionEditor asset={draft.asset} stored={stored} onChange={patchAsset} />
+            ) : (
+              <PresetEditor
+                asset={draft.asset}
+                stored={stored}
+                definitions={definitions}
+                onChange={patchAsset}
+              />
+            )}
+            <p className="parameter-hint">
+              高级 JSON 直接编辑完整资产；表单与 JSON 表示同一份内容。
+            </p>
+            <JsonEditor
+              editorKey={`${key}:${draft.group}:${identity.current}`}
+              label="资产内容"
+              value={draft.asset}
+              draft={draft.raw}
+              onRawChange={(raw) => patch({ ...draft, raw })}
+              onChange={(asset) => patch({ ...draft, asset, raw: undefined })}
+              onError={setMessage}
+            />
+          </div>
+          <div className="panel-footer">
             <button
               className="button primary"
               disabled={saving || draft.raw !== undefined}
@@ -250,6 +326,7 @@ export function ParameterLibrary(props: ViewProps) {
                     expected: null,
                   });
                   await reload();
+                  if (draft.group === "definitions") void loadDefinitions();
                 } catch (e) {
                   props.fail(e);
                 }
@@ -258,9 +335,13 @@ export function ParameterLibrary(props: ViewProps) {
               删除当前资产
             </button>
           </div>
-          {message && <p role="status">{message}</p>}
-        </div>
-      </section>
+          {message && (
+            <div className="panel-footer">
+              <p role="status">{message}</p>
+            </div>
+          )}
+        </section>
+      </div>
     </div>
   );
 }
@@ -277,34 +358,33 @@ export function ParameterSelection({
   useEffect(() => {
     let alive = true;
     void action("parameter.catalog", { group: "presets" })
-      .then((result) => {
-        if (alive) setPresets(result.data.items);
-      })
-      .catch((e) => {
-        if (alive) setError((e as Error).message);
-      });
+      .then((result) => alive && setPresets(result.data.items))
+      .catch((e) => alive && setError((e as Error).message));
     return () => {
       alive = false;
     };
   }, []);
+  function patch(next: Data) {
+    onChange(next);
+    setError("");
+  }
   return (
     <div className="parameter-selection">
       <label>
         共享预置
         <select
           aria-label="共享预置"
-          value={value.preset_id || ""}
+          value={Object.hasOwn(value, "preset_id") ? value.preset_id ?? "__none" : ""}
           onChange={(e) => {
             const next = { ...value };
-            // Decline explicitly: an absent preset_id would fall back to the
-            // preset saved on the template, which is not what "don't use one" means.
-            if (e.target.value) next.preset_id = e.target.value;
-            else next.preset_id = null;
-            onChange(next);
-            setError("");
+            if (e.target.value === "__none") next.preset_id = null;
+            else if (e.target.value) next.preset_id = e.target.value;
+            else delete next.preset_id;
+            patch(next);
           }}
         >
-          <option value="">不选择共享预置</option>
+          <option value="">跟随模板共享预置</option>
+          <option value="__none">不使用共享预置</option>
           {presets.map((p) => (
             <option value={p.id} key={p.id}>
               {p.title}
@@ -312,9 +392,6 @@ export function ParameterSelection({
           ))}
         </select>
       </label>
-      <p className="parameter-hint">
-        共享预置按参数定义提供取值；本次填写仍优先于预置。
-      </p>
       {error && (
         <p className="inline-error" role="alert">
           {error}

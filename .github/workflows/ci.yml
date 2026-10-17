@@ -50,10 +50,12 @@ jobs:
         with:
           python-version: '3.12'
       - run: npm ci --prefix ui
+      - run: npm run --prefix ui lint
       - run: npm run --prefix ui test
       - run: node scripts/build_ui.mjs
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --all-features --locked -- -D warnings
+      - run: cargo test --workspace --all-targets --locked
       - run: cargo test --workspace --all-targets --all-features --locked
       - run: cargo test --workspace --all-features --doc --locked
       - run: python scripts/check_v2.py
@@ -63,11 +65,12 @@ jobs:
         if: runner.os == 'Linux'
         shell: bash
         run: |
-          cargo build -p nctool-cli --features nc-bundle --locked
+          cargo build -p nctool-cli --features math --locked
           npm install --prefix "$RUNNER_TEMP/nctool-browser" --no-save playwright@1.62.1
           "$RUNNER_TEMP/nctool-browser/node_modules/.bin/playwright" install --with-deps chromium
           NCTOOL_PLAYWRIGHT="$RUNNER_TEMP/nctool-browser/node_modules/playwright" node scripts/browser_v2.cjs
           NCTOOL_PLAYWRIGHT="$RUNNER_TEMP/nctool-browser/node_modules/playwright" node scripts/browser_review_fixes.cjs
+          NCTOOL_PLAYWRIGHT="$RUNNER_TEMP/nctool-browser/node_modules/playwright" node scripts/browser_generic_parameters.cjs
   msrv:
     runs-on: ubuntu-latest
     steps:

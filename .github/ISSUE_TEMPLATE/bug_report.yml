@@ -12,10 +12,9 @@ body:
 
         - [ ] 已用**最新版**（`nctool --version`）复现
         - [ ] 已在本仓库搜索过同类 issue
-        - [ ] 若问题与**生成的 G-code 是否正确**有关，请先读
-              [工艺核对清单](https://github.com/lzg9698-code/nctool-tpl/blob/master/docs/PROCESS_CHECKLIST.md)——
-              当前示例与用户 NC 资产不能以软件测试代替真实工艺评审，**投产前必须由熟悉目标机床的
-              工艺人员逐行核对**。本 issue 只用于工具本身的缺陷。
+        - [ ] 若问题与**生成文本内容是否正确**有关，请先自行确认模板与输入数据——
+              工具只对渲染、校验、精度与资产写入负责，不代替使用方对输出内容的最终核对。
+              内置 NC 能力已移除，本 issue 只用于当前通用模板/参数平台本身的缺陷。
 
   - type: input
     id: version
@@ -35,7 +34,7 @@ body:
         - 参数校验（该报错没报 / 误报）
         - CLI 命令/退出码
         - Web UI（`nctool ui`）
-        - 机床配置（machines JSON 资产）
+        - 共享参数（定义 / 预置 / 绑定）
         - 模板引用与资产（include / 稳定 ID / 指纹）
         - 其他
     validations:
@@ -53,11 +52,11 @@ body:
     id: repro
     attributes:
       label: 复现命令
-      description: 可复制运行的完整命令（含 profile、动作 ID 和输入 JSON）；请一并提供最小输入
+      description: 可复制运行的完整命令（含动作 ID 和输入 JSON）；请一并提供最小输入
       render: bash
       placeholder: |
-        nctool --profile nc run nc.generate --input input.json
-        # input.json 包含 source/template、params、machine/machine_id 和 options
+        nctool --profile template run template.render --input input.json
+        # input.json 含 source/template、context 与可选 schema/defaults/extensions
     validations:
       required: true
 

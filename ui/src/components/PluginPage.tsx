@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { Play } from "lucide-react";
-import { clone, encode, type Data, type Run, fieldErrors } from "../lib/data";
+import { clone, type Data, type Run, fieldErrors } from "../lib/data";
 import { encodeDraft, decodeDraft } from "../lib/drafts";
 import { signature, validPluginInput } from "../lib/execution";
 import { Form } from "./Form";

@@ -40,8 +40,7 @@ export function SyntaxGuide({
   const available = (example: SyntaxExample) =>
     !example.plugin ||
     capabilities.actions.some(
-      (entry: Data) =>
-        entry.id === (example.plugin === "math" ? "math.info" : "nc.generate"),
+      (entry: Data) => entry.id === example.plugin + ".info",
     );
   const matching = syntaxExamples.filter((example) => {
     if (!query.trim()) return example.category === category;
@@ -164,11 +163,7 @@ export function SyntaxGuide({
             <header>
               <div>
                 <span className="syntax-badge">
-                  {example.plugin
-                    ? example.plugin === "math"
-                      ? "数学插件"
-                      : "NC 插件"
-                    : "通用模板"}
+                  {example.plugin ? "数学插件" : "通用模板"}
                 </span>
                 <h2>{example.title}</h2>
               </div>
@@ -228,7 +223,7 @@ export function SyntaxGuide({
       {!matching.length && (
         <Empty
           title="没有匹配的语法"
-          description="试试变量、循环、include、default 或 nc_fixed。"
+          description="试试变量、循环、include、default 或 trim。"
         />
       )}
       <section className="syntax-tips">
@@ -240,7 +235,7 @@ export function SyntaxGuide({
           </li>
           <li>
             <strong>过滤器不存在：</strong>
-            核对拼写、当前插件和渲染扩展。普通文本渲染不会自动注入 machine。
+            核对拼写、当前插件和渲染扩展；过滤器只来自你显式启用的扩展。
           </li>
           <li>
             <strong>引用模板找不到：</strong>

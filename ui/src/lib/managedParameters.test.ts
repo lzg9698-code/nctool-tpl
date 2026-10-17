@@ -115,6 +115,13 @@ describe("managed request construction", () => {
     doc.parameterSelection = { preset_id: "finish" };
     expect(managedRequest(doc).preset_id).toBe("finish");
     doc.parameterSelection = undefined;
+    expect(managedRequest(doc).preset_id).toBe("rough");
+    doc.parameterSelection = {};
+    expect(managedRequest(doc).preset_id).toBe("rough");
+    doc.asset.metadata = { parameters: { selection: { preset_id: null }, preset_id: "rough" } };
+    doc.parameterSelection = undefined;
+    expect(managedRequest(doc).preset_id).toBeNull();
+    doc.asset.metadata = {};
     expect(managedRequest(doc)).not.toHaveProperty("preset_id");
   });
   it("lists only schema-backed fields", () => {

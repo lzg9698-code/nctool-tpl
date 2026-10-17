@@ -1,6 +1,6 @@
 # 模板编写指南
 
-适用于 NCtool 2.2 工作台及 2.0 模板插件。模板由 MiniJinja 解析与渲染，通用能力和 NC 扩展分别启用。页面操作见 [WebUI 使用指南](WEBUI_USER_GUIDE.md)，完整动作字段见[系统设计](SYSTEM_DESIGN.md)与运行时 `nctool actions`。
+适用于 NCtool 2.2 工作台及 2.0 模板插件。模板由 MiniJinja 解析与渲染；通用能力默认启用，数学扩展需显式编译、启用并在单次渲染中选择。页面操作见 [WebUI 使用指南](WEBUI_USER_GUIDE.md)，完整动作字段见[系统设计](SYSTEM_DESIGN.md)与运行时 `nctool actions`。
 
 ## 普通模板的最小示例
 
@@ -12,7 +12,7 @@ cargo run -p nctool-cli -- run template.render --input examples/v2/render.json
 
 请求中的 `source` 是 Jinja 源码，`context` 是模板数据；输出在 `data.text`，可用 `--out hello.txt` 原子写出正文。若要在 Rust 中直接使用引擎，运行 `cargo run --example demo`，源码见[引擎示例](../examples/demo.rs)。
 
-普通渲染不经过 NC 参数派生、机床注入或 G 代码后处理。对象、数组、字符串、数值、布尔和 null 均可作为通用上下文值。
+普通渲染不经过任何领域派生、注入或后处理。对象、数组、字符串、数值、布尔和 null 均可作为通用上下文值。
 
 ## 保存为 JSON 资产
 
@@ -73,67 +73,34 @@ JSON 入口保留支持范围内的整数；小数/指数使用有限 f64，不�
 
 `template.inspect` 的 `include_snapshot:true` 返回冻结的源码集合与根资产元数据；随后传 `snapshot` 和 `context` 渲染，不再读取资产。`snapshot` 不能与 `source/template/templates` 混用。空白选项 `trim_blocks`、`lstrip_blocks` 需显式指定，生成前检查结果换行。
 
-## NC 模板与扩展
+## 渲染扩展
 
-先构建 `nc-bundle` 并启用 `nc` 组合，运行现有 [NC 示例](../examples/v2/nc.json)：
+数学是当前唯一随发行提供的内置可选扩展，以独立 `math` feature 编译，不在默认构建中。使用数学过滤器需要三步都显式：
 
 ```bash
-cargo run -p nctool-cli --features nc-bundle -- --profile nc run nc.generate --input examples/v2/nc.json
+# 以 math feature 构建，或使用已包含它的完整二进制
+cargo run -p nctool-cli --features math -- run template.render --input examples/v2/render.json
 ```
 
-NC 请求使用 `params`，不是普通渲染的 `context`；机床通过 `machine` 或 `machine_id` 二选一指定。NC 自动注册数学与 NC 扩展、注入 `machine`，校验有效参数后进行格式化和后处理。
-
-| NC 过滤器 | 用途 |
-| --- | --- |
-| `nc_fixed(3)` | 固定小数位输出 |
-| `nc_signed(3)` | 带符号的固定小数位输出 |
-| `nc_strip` | 去除数值尾部多余零 |
-| `nc_pad(4)` | 整数补零，例如程序号 |
-
-通用 `template.render` 若需要这些过滤器，必须在已启用提供方的前提下显式传 `extensions:["math","nc"]`；这只注册扩展，不自动取得 NC 校验或机床上下文。程序号和刀具号应定义为整数，不靠格式化截断错误数值。
-
-保存 NC 资产时，在 `metadata.nc` 中声明领域规格和默认生成设置；工作台会据此匹配 NC 生成方式。示例：
+1. 编译：使用 `--features math` 构建，或使用完整二进制。
+2. 启用：在 `home/config.json` 的 `enabled` 中加入 `math`；默认构建未包含 math 时会在启动时报错。
+3. 单次选择：在渲染请求中显式列出 `extensions`：
 
 ```json
-{
-  "source": "O{{ program | nc_pad(4) }}\nG1 X{{ x | nc_fixed(3) }}\nM30",
-  "schema": {
-    "type":"object",
-    "properties":{"program":{"type":"integer","minimum":1},"x":{"type":"number"}},
-    "required":["program","x"]
-  },
-  "defaults": {"program":1},
-  "metadata": {
-    "execution": {"action":"nc.generate"},
-    "nc": {
-      "specs": [
-        {"name":"program","kind":"integer","min":1},
-        {"name":"x","kind":"number","min":-100,"max":100,"unit":"mm"}
-      ],
-      "options": {"line_numbers":true},
-      "render_options": {"trim_blocks":true,"lstrip_blocks":true}
-    }
-  }
-}
+{"source":"{{ x | sqrt }}","context":{"x":9},"extensions":["math"]}
 ```
 
-`metadata.execution.action` 表达工作台的执行意图；直接调用动作时仍应显式传递所需输入。`metadata.nc.options` 和 `machine_id` 是工作台绑定设置，不是所有直接 NC 请求的自动默认项。领域空白默认值来自 `render_options`，请求显式布尔值优先。
+数学过滤器包括 `sin`、`cos`、`tan`、`asin`、`acos`、`atan`、`sqrt`、`exp`、`ln`、`log10`、`pow`、`floor`、`ceil`，以及以度为单位的 `sin_d`、`cos_d`、`tan_d`、`asin_d`、`acos_d`、`atan_d`；非有限结果（NaN/Inf）会失败。扩展选择进入输入签名与历史重放；未编译、未启用或未显式选择时不注册任何数学过滤器。领域过滤器不属于内置范围，领域能力应通过通用插件机制贡献。
 
-NC specs 支持类型、范围、整数、枚举、条件必选、派生和机床动态上界。其 `required` 是文档性声明；要求 JSON 字段必填应设置 Schema 的 `required`，实际模板引用和兜底也影响缺参校验。Schema 与 specs 同时校验，单位字段不做单位换算。
+模板资产只保存通用字段（`source`、`tags`、`schema`、`defaults`、`metadata`）。`metadata.title` 用于显示名称，`metadata.parameters.bindings` 用于共享参数绑定，见[参数管理指南](PARAMETER_MANAGEMENT.md)。
 
-默认值优先级为用户参数、显式或根资产 defaults、specs defaults、模板内联 default；派生值覆盖同名输入。NC 参数支持数值、i64 整数、字符串、布尔和递归列表，不支持通用对象/null。NC 渲染保持严格字段策略，`lenient` 不跳过领域校验。
+带旧加工元数据（如 `metadata.nc` 或加工 `execution.action`）的资产会被识别并拒绝，不会降级为普通渲染。`metadata.execution.action` 仍可表达工作台对当前已安装通用动作的默认执行意图。
 
-## 多工序与交付前检查
+## 交付前检查
 
-现有[多工序示例](../examples/v2/process.json)通过 `process.generate` 执行，公共参数被工序参数覆盖，行号跨工序续编；任一失败时整个正文不交付：
-
-```bash
-cargo run -p nctool-cli --features nc-bundle -- --profile nc run process.generate --input examples/v2/process.json
-```
-
-- 检查变量、Schema、默认值与 specs 的含义是否一致，覆盖缺参、错误类型和边界值。
-- 检查静态/动态模板引用、空白、扩展条件和生成方式，保存后重读确认。
-- 在选定机床上核对参数与输出选项，检查所有警告及最终正文。
-- 按[工艺核对清单](PROCESS_CHECKLIST.md)完成实际 NC 资产复核；软件示例不作为加工程序。
+- 检查变量、Schema、默认值的含义是否一致，覆盖缺参、错误类型和边界值。
+- 检查静态/动态模板引用、空白选项、扩展条件与生成方式，保存后重读确认。
+- 使用数学过滤器时确认已显式编译、启用并选择；核对非有限结果与输入范围。
+- 交付成功后核对正文、诊断与下载内容一致；软件示例不作为生产正文。
 
 旧版模板指南见[历史归档](archive/legacy/TEMPLATE_WRITING_GUIDE.md)。

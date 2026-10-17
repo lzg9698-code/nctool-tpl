@@ -393,12 +393,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "equivalent"
-version = "1.0.2"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "877a4ace8713b0bcf2a4e7eec82529c029f1d0619886d18145fea96c3ffe5c0f"
-
-[[package]]
 name = "errno"
 version = "0.3.14"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -510,12 +504,6 @@ dependencies = [
  "crunchy",
  "zerocopy",
 ]
-
-[[package]]
-name = "hashbrown"
-version = "0.17.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "ed5909b6e89a2db4456e54cd5f673791d7eca6732202bbf2a9cc504fe2f9b84a"
 
 [[package]]
 name = "heck"
@@ -708,16 +696,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "indexmap"
-version = "2.14.1"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "07aa2048142242915a31d35844fb311e0e53fcca590c3a0a40dcf1b841fa09eb"
-dependencies = [
- "equivalent",
- "hashbrown",
-]
-
-[[package]]
 name = "is_terminal_polyfill"
 version = "1.70.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -859,7 +837,6 @@ version = "2.0.0"
 dependencies = [
  "serde",
  "serde_json",
- "serde_yaml",
 ]
 
 [[package]]
@@ -870,13 +847,9 @@ dependencies = [
  "clap",
  "nctool-assets",
  "nctool-plugin-math",
- "nctool-plugin-nc",
  "nctool-plugin-parameters",
- "nctool-plugin-process",
  "nctool-plugin-sdk",
- "nctool-plugin-sync-turning",
  "nctool-plugin-template",
- "nctool-plugin-undercut",
  "nctool-runtime",
  "serde",
  "serde_json",
@@ -893,35 +866,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "nctool-plugin-nc"
-version = "2.0.0"
-dependencies = [
- "minijinja",
- "nctool-assets",
- "nctool-plugin-math",
- "nctool-plugin-parameters",
- "nctool-plugin-sdk",
- "nctool-tpl",
- "serde",
- "serde_json",
- "serde_yaml",
-]
-
-[[package]]
 name = "nctool-plugin-parameters"
 version = "2.0.0"
 dependencies = [
  "nctool-assets",
  "nctool-plugin-sdk",
- "serde_json",
-]
-
-[[package]]
-name = "nctool-plugin-process"
-version = "2.0.0"
-dependencies = [
- "nctool-plugin-sdk",
- "nctool-tpl",
  "serde_json",
 ]
 
@@ -937,16 +886,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "nctool-plugin-sync-turning"
-version = "2.0.0"
-dependencies = [
- "nctool-plugin-nc",
- "nctool-plugin-parameters",
- "nctool-plugin-sdk",
- "serde_json",
-]
-
-[[package]]
 name = "nctool-plugin-template"
 version = "2.0.0"
 dependencies = [
@@ -958,22 +897,11 @@ dependencies = [
 ]
 
 [[package]]
-name = "nctool-plugin-undercut"
-version = "2.0.0"
-dependencies = [
- "nctool-plugin-nc",
- "nctool-plugin-parameters",
- "nctool-plugin-sdk",
- "serde_json",
-]
-
-[[package]]
 name = "nctool-runtime"
 version = "2.0.0"
 dependencies = [
  "jsonschema",
  "nctool-assets",
- "nctool-plugin-process",
  "nctool-plugin-sdk",
  "nctool-plugin-template",
  "semver",
@@ -1389,19 +1317,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "serde_yaml"
-version = "0.9.34+deprecated"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "6a8b1a1a2ebf674015cc02edccce75287f1a0130d394307b36743c2f5d504b47"
-dependencies = [
- "indexmap",
- "itoa",
- "ryu",
- "serde",
- "unsafe-libyaml",
-]
-
-[[package]]
 name = "shlex"
 version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1589,12 +1504,6 @@ name = "unicode-ident"
 version = "1.0.24"
 source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "e6e4313cd5fcd3dad5cafa179702e2b244f760991f45397d14d4ebf38247da75"
-
-[[package]]
-name = "unsafe-libyaml"
-version = "0.2.11"
-source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "673aac59facbab8a9007c7f6108d11f63b603f7cabff99fabf650fea5c32b861"
 
 [[package]]
 name = "utf8_iter"
@@ -1792,9 +1701,9 @@ dependencies = [
 
 [[package]]
 name = "yoke-derive"
-version = "0.8.3"
+version = "0.8.4"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "33811428bee40dbceb6d545e95754741d17a6aef9a4849f0fd62e2ba4f412a78"
+checksum = "ec8ebde2db3681e8c9980cc27822030e68752690ddfa9473e739aeb4dbde6d71"
 dependencies = [
  "proc-macro2",
  "quote",

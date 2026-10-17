@@ -20,7 +20,7 @@
 - [ ] `cargo +1.89.0 check --workspace --all-features --locked`
 - [ ] `npm run --prefix ui test` 与 `node scripts/build_ui.mjs`（前端改动）
 - [ ] `python scripts/check_v2.py` 与源码快照测试（相关改动及发布验证）
-- [ ] 两组 Chromium 验收（相关交互改动及发布验证，见 `docs/CONTRIBUTING.md`）
+- [ ] 三组 Chromium 验收（相关交互改动及发布验证，见 `docs/CONTRIBUTING.md`）
 - [ ] 文档链接、接口和示例命令已核对（纯文档改动可注明其余检查不适用）
 - [ ] `python scripts/audit_dependencies.py`（依赖变动或安全审计；附报告，注明未完成/发现项）
 
@@ -39,13 +39,13 @@
 
 - [ ] `CHANGELOG.md` 已登记（Added / Changed / Fixed）
 - [ ] 涉及架构 / 模块职责 → `docs/ARCHITECTURE.md`
-- [ ] 涉及机床配置键 → `docs/MACHINE_CONFIG_GUIDE.md`
-- [ ] 涉及模板写法 / 过滤器 → `docs/TEMPLATE_WRITING_GUIDE.md`
+- [ ] 涉及模板写法 / 渲染扩展 → `docs/TEMPLATE_WRITING_GUIDE.md`
+- [ ] 涉及共享参数 / 受管渲染 → `docs/PARAMETER_MANAGEMENT.md`
 - [ ] 涉及 CLI / 动作 Schema / HTTP / 历史记录契约 → 测试与 `docs/SYSTEM_DESIGN.md`、`docs/PLUGIN_PROTOCOL.md` 同步
 - [ ] 新增或归档文档 → `docs/README.md` 与历史索引同步
 
-## 工艺安全（改动涉及模板 / 机床时必填）
+## 退役边界（改动涉及加工意图 / 资产包时必填）
 
 - [ ] 不涉及
-- [ ] 涉及 G/M 代码或机床资产：已记录实际工艺复核状态，投产前须由工艺人员逐行核对
-      并在机床上空运行（见 `docs/PROCESS_CHECKLIST.md`）
+- [ ] 涉及旧加工元数据 / 冻结引用 / 旧历史 / 资产包：已保持拒绝降级、只读历史与混合包整体拒绝，
+      未恢复任何内置 NC 动作、插件、页面或资源（见 `docs/PROJECT_STATUS.md`）

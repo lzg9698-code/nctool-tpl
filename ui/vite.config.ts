@@ -25,5 +25,17 @@ export default defineConfig({
       },
     },
   },
-  server: { proxy: { "/api": "http://127.0.0.1:8788" } },
+  server: {
+    proxy: {
+      "/api": {
+        target: "http://127.0.0.1:8788",
+        changeOrigin: true,
+        configure: (proxy) => {
+          proxy.on("proxyReq", (request) =>
+            request.setHeader("Origin", "http://127.0.0.1:8788"),
+          );
+        },
+      },
+    },
+  },
 });

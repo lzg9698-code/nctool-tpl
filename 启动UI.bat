@@ -5,7 +5,7 @@ if errorlevel 1 (
     pause
     exit /b 1
 )
-cargo run -p nctool-cli --features nc-bundle --locked --target-dir target/parameters-nc -- --profile nc ui
+cargo run -p nctool-cli --features math --locked --target-dir target/platform-math -- --profile template ui
 set "NCTOOL_UI_EXIT_CODE=%ERRORLEVEL%"
 pause
 exit /b %NCTOOL_UI_EXIT_CODE%

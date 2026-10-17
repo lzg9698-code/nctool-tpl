@@ -46,6 +46,9 @@ __pycache__/
 # Standalone WebUI dependency/cache folders
 ui/node_modules/
 ui/.vite/
+# A resumed test run can create a vitest cache at the repository root; it is
+# generated state, not source, and must not enter a release candidate.
+/node_modules/
 /.nctool/
 
 # Repository-root workbench assets are local data; portable samples live in examples/.

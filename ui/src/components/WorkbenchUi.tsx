@@ -15,7 +15,7 @@ import {
   Download,
   AlertTriangle,
 } from "lucide-react";
-import { Editor } from "./Editor";
+import { Editor } from "./LazyEditor";
 import { useManagedDependencies } from "../lib/managedDependencies";
 import {
   encode,
@@ -164,7 +164,7 @@ export function Menu({
         <DropdownMenu.Trigger asChild>
           <button
             type="button"
-            className="menu-trigger"
+            className={"menu-trigger" + (text ? " nav-item" : "")}
             aria-label={label}
             title={label}
           >

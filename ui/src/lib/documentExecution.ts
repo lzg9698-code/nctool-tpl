@@ -10,38 +10,39 @@ import {
   type Schema,
 } from "./data";
 
-// Compatibility recognition only: retired intent must survive a smaller capability list.
-export function retiredAction(id: unknown): boolean {
+// Legacy machining recognition only. The machining capability has been removed,
+// so a template carrying old machining metadata or a retired execution action
+// must never downgrade to plain or shared rendering. The UI refuses it and asks
+// the user to remove the machining intent; availability always comes from the
+// current capabilities.
+export const machiningRemovedMessage =
+  "此模板带有已移除的加工意图，不能按普通模板渲染。请移除加工元数据或旧的加工执行动作后再生成。";
+export function domainAction(id: unknown): boolean {
   return (
     typeof id === "string" && /^(nc|machine|process|sync-turning|undercut)\./.test(id)
   );
 }
-export function retiredTemplate(asset?: Asset): boolean {
+export function domainTemplate(asset?: Asset): boolean {
   const metadata = asset?.metadata;
   return (
     !!metadata &&
-    (Object.hasOwn(metadata, "nc") || retiredAction(metadata.execution?.action))
+    (Object.hasOwn(metadata, "nc") || domainAction(metadata.execution?.action))
   );
 }
-export const retirementMessage =
-  "此模板使用已退役的加工能力，可查看和编辑，不能执行或试跑。请另行制作并核对通用模板，显式清除旧执行意图。";
 export function documentActions(actions: Data[]): Data[] {
   return actions.filter(
-    (entry) =>
-      !retiredAction(entry.id) && entry.ui_schema?.document_input?.bindings,
+    (entry) => !domainAction(entry.id) && entry.ui_schema?.document_input?.bindings,
   );
 }
 export function activePanels(panels: Data[], actions: Data[]): Data[] {
   const ids = new Set(
-    actions
-      .filter((entry) => !retiredAction(entry.id))
-      .map((entry) => entry.id),
+    actions.filter((entry) => !domainAction(entry.id)).map((entry) => entry.id),
   );
   return panels
     .filter(
       (panel) =>
-        !retiredAction(panel.view) &&
-        !retiredAction(panel.id) &&
+        !domainAction(panel.view) &&
+        !domainAction(panel.id) &&
         panel.view !== "template-editor" &&
         panel.id !== "presets",
     )
@@ -58,8 +59,8 @@ export function selectDocumentAction(
   actions: Data[],
   knownActions: Data[] = actions,
 ): { entry?: Data; error?: string } {
-  if (retiredTemplate(doc.asset) || retiredAction(doc.generationAction))
-    return { error: retirementMessage };
+  if (domainTemplate(doc.asset) || domainAction(doc.generationAction))
+    return { error: machiningRemovedMessage };
   const choices = documentActions(actions);
   const requested =
     doc.generationAction || doc.asset.metadata?.execution?.action;
@@ -94,11 +95,11 @@ export function selectDocumentAction(
 }
 export function documentInput(doc: Document, entry: Data): Data {
   if (
-    retiredTemplate(doc.asset) ||
-    retiredAction(doc.generationAction) ||
-    retiredAction(entry.id)
+    domainTemplate(doc.asset) ||
+    domainAction(doc.generationAction) ||
+    domainAction(entry.id)
   )
-    throw new Error(retirementMessage);
+    throw new Error(machiningRemovedMessage);
   const values: Record<string, Data> = {
     source: doc.asset.source,
     id: doc.id || undefined,
@@ -112,11 +113,12 @@ export function documentInput(doc: Document, entry: Data): Data {
       doc.parameterSelection || doc.asset.metadata?.parameters?.selection,
     // Keep an explicit decline: `?? undefined` or `|| undefined` would drop it
     // and let the backend fall back to the preset saved on the template.
-    parameter_preset_id:
-      doc.parameterSelection !== undefined
-        ? doc.parameterSelection.preset_id
-        : (doc.asset.metadata?.parameters?.selection?.preset_id ??
-          doc.asset.metadata?.parameters?.preset_id),
+    parameter_preset_id: (() => {
+      const selection = doc.parameterSelection ?? doc.asset.metadata?.parameters?.selection;
+      return selection && Object.hasOwn(selection, "preset_id")
+        ? selection.preset_id
+        : doc.asset.metadata?.parameters?.preset_id;
+    })(),
   };
   const pairs: [string, Data][] = [];
   for (const [target, binding] of Object.entries(
@@ -224,11 +226,11 @@ function signatureOfSchema(schema: Schema): string {
 export function historyExecutionReason(run: Run, actions: Data[]): string {
   const input = run.result?.data?.replay_input || run.input;
   if (
-    retiredAction(run.action) ||
-    retiredTemplate(input?.snapshot?.asset) ||
-    retiredTemplate(run.input?.snapshot?.asset)
+    domainAction(run.action) ||
+    domainTemplate(input?.snapshot?.asset) ||
+    domainTemplate(run.input?.snapshot?.asset)
   )
-    return "此记录使用已退役的加工能力；历史结果仍可查看、比较和导出，不能重执行或恢复为执行文档。";
+    return "此记录带有已移除的加工意图，不能重执行或恢复为模板文档；历史结果仍可查看、比较和导出。";
   if (!actions.some((entry) => entry.id === run.action))
     return `动作 ${run.action} 当前没有可用提供方；历史结果保留，不能重执行或恢复输入。`;
   return "";

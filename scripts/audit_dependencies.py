@@ -50,7 +50,15 @@ def run_audit(name, kind, command, output, root=ROOT):
                                 encoding="utf-8", errors="replace", timeout=300)
         code, stdout, stderr = result.returncode, result.stdout, result.stderr
         status = classify(kind, code, stdout)
-    except (OSError, subprocess.TimeoutExpired) as error:
+    except subprocess.TimeoutExpired as error:
+        # Keep partial tool output as evidence, but a timeout never passes.
+        def text(value):
+            return value.decode("utf-8", errors="replace") if isinstance(value, bytes) else value or ""
+
+        code, stdout, stderr, status = (
+            None, text(error.stdout), text(error.stderr) + "\n" + str(error), "error"
+        )
+    except OSError as error:
         code, stdout, stderr, status = None, "", str(error), "error"
     (output / (name + ".json")).write_text(stdout, encoding="utf-8")
     (output / (name + ".stderr.txt")).write_text(stderr, encoding="utf-8")

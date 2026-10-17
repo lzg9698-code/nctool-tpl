@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import {
   Boxes,
   Save,
@@ -32,20 +32,33 @@ export function PluginSettings({
     [jsonError, setJsonError] = useState(""),
     [source, setSource] = useState(""),
     [inspected, setInspected] = useState<Data>(null),
-    [installing, setInstalling] = useState(false);
+    [inspectedSource, setInspectedSource] = useState(""),
+    [installing, setInstalling] = useState(false),
+    [saving, setSaving] = useState(false);
+  // Gate asynchronous results on the request they belong to: bumping the
+  // revision (on every source edit) makes any in-flight inspect stale, so a
+  // late reply for a previously typed directory is never shown or installed.
+  const inspectRevision = useRef(0);
+  // Tracks local draft edits so a save that races with editing keeps the newer
+  // draft instead of overwriting it with the reloaded (older) config.
+  const editRevision = useRef(0);
   useEffect(() => {
     void refreshConfig();
   }, []);
-  async function refreshConfig() {
+  async function refreshConfig(applyConfig = true) {
     try {
       const saved = await api("config");
-      setConfig(saved.config);
+      // Keep fingerprint semantics even when the draft changed mid-save: the
+      // token still tracks the server's stored configuration, but a newer local
+      // draft must not be clobbered by the reloaded (pre-edit) config.
+      if (applyConfig) setConfig(saved.config);
       setToken(saved.fingerprint);
     } catch (e) {
       fail(e);
     }
   }
   function change(next: Data) {
+    editRevision.current += 1;
     setConfig(next);
     setValidation(null);
     setProblem("");
@@ -70,15 +83,20 @@ export function PluginSettings({
     }
   }
   async function save(next = config) {
-    const checked = await validate(next);
-    if (!checked) return;
+    if (saving) return;
+    setSaving(true);
+    const draftRevision = editRevision.current;
     try {
+      const checked = await validate(next);
+      if (!checked) return;
       await api("config", { config: next, expected: token });
-      await refreshConfig();
+      await refreshConfig(editRevision.current === draftRevision);
       await reload();
       notify("配置已验证并保存，下次启动生效");
     } catch (e) {
       fail(e);
+    } finally {
+      setSaving(false);
     }
   }
   async function toggle(id: string, enabled: boolean) {
@@ -107,14 +125,13 @@ export function PluginSettings({
             <strong>已安装的能力</strong>
           </div>
           {config &&
-            inventory.plugins.map((plugin: Data) => {
+            inventory.plugins.filter((plugin: Data) => !plugin.retired).map((plugin: Data) => {
               const id = plugin.id;
               const enabled =
                 !config.disabled.includes(id) &&
                 (id === "template" ||
                   config.enabled.includes(id) ||
-                  (config.profile === "nc" &&
-                    ["math", "nc", "process"].includes(id)));
+                  (id === "parameters" && !config.disabled.includes("template")));
               return (
                 <div className="plugin-config-card" key={id}>
                   <div className="plugin-card">
@@ -126,9 +143,8 @@ export function PluginSettings({
                         {(
                           {
                             template: "通用模板",
+                            parameters: "共享参数",
                             math: "数学扩展",
-                            nc: "NC 生成",
-                            process: "多工序",
                           } as Record<string, string>
                         )[id] || id}
                       </strong>
@@ -218,12 +234,11 @@ export function PluginSettings({
                     }
                   >
                     <option value="template">通用模板工作区</option>
-                    <option value="nc">模板 + NC + 多工序</option>
                   </select>
                 </label>
                 <p className="hint">
-                  NC 组合同时启用数学扩展、NC
-                  生成和工序编排。单独停用依赖项时预检查会指出受影响的服务。
+                  通用模板工作区启用通用模板与共享参数。旧 NC
+                  组合已移除；启动配置若仍指向它，配置检查会给出兼容错误，需要显式迁移。
                 </p>
                 <details className="advanced">
                   <summary>服务提供方和高级配置</summary>
@@ -258,7 +273,7 @@ export function PluginSettings({
                   <button
                     className="button secondary"
                     onClick={() => void validate()}
-                    disabled={checking}
+                    disabled={checking || saving}
                   >
                     <Check size={14} />
                     {checking ? "检查中" : "检查配置"}
@@ -266,7 +281,7 @@ export function PluginSettings({
                   <button
                     className="button primary"
                     onClick={() => void save()}
-                    disabled={checking}
+                    disabled={checking || saving}
                   >
                     <Save size={14} />
                     验证并保存配置
@@ -287,8 +302,10 @@ export function PluginSettings({
                 aria-label="插件目录"
                 value={source}
                 onChange={(e) => {
+                  inspectRevision.current += 1;
                   setSource(e.target.value);
                   setInspected(null);
+                  setInspectedSource("");
                 }}
                 placeholder="包含 plugin.json 的本地目录"
               />
@@ -299,11 +316,18 @@ export function PluginSettings({
             <button
               className="button secondary"
               onClick={async () => {
+                const requested = source;
+                const revision = inspectRevision.current;
                 try {
-                  setInspected(await api("plugins/inspect", { source }));
+                  const result = await api("plugins/inspect", {
+                    source: requested,
+                  });
+                  if (revision !== inspectRevision.current) return;
+                  setInspected(result);
+                  setInspectedSource(requested);
                   notify("插件描述已读取");
                 } catch (e) {
-                  fail(e);
+                  if (revision === inspectRevision.current) fail(e);
                 }
               }}
             >
@@ -333,8 +357,9 @@ export function PluginSettings({
                   onClick={async () => {
                     setInstalling(true);
                     try {
-                      await api("plugins/install", { source });
+                      await api("plugins/install", { source: inspectedSource });
                       setInspected(null);
+                      setInspectedSource("");
                       setSource("");
                       await reload();
                       notify("插件已安装，请检查并保存启用配置");

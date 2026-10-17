@@ -1,0 +1,222 @@
+
+/* Syntax reference stays within the workbench and preserves the editor draft. */
+.syntax-page {
+  scroll-behavior: smooth;
+}
+.syntax-intro {
+  padding: 20px 24px;
+  margin-bottom: 22px;
+}
+.syntax-intro > div {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  color: var(--brand);
+}
+.syntax-intro > div span {
+  color: var(--muted);
+  font-size: 12px;
+}
+.syntax-intro dl {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 18px;
+  margin: 22px 0;
+}
+.syntax-intro dt code {
+  color: #365f51;
+  background: #eff6f2;
+  padding: 6px 8px;
+  border-radius: 5px;
+  font-size: 12px;
+}
+.syntax-intro dd {
+  margin: 12px 0 0;
+  font-size: 12px;
+  color: var(--muted);
+}
+.syntax-intro p {
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--muted);
+}
+.syntax-tools {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 16px;
+  margin-bottom: 22px;
+}
+.syntax-categories {
+  display: flex;
+  gap: 5px;
+  flex-wrap: wrap;
+}
+.syntax-categories button {
+  padding: 9px 12px;
+  border-radius: 7px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.syntax-categories button.selected {
+  color: #22745c;
+  background: #e8f2ed;
+  font-weight: 600;
+}
+.syntax-search {
+  display: flex;
+  flex-direction: row;
+  align-items: center;
+  gap: 9px;
+  border: 1px solid #dce5e9;
+  border-radius: 7px;
+  background: #fff;
+  padding: 0 10px;
+  color: var(--muted);
+  flex: 1;
+  min-width: 220px;
+  max-width: 360px;
+}
+.syntax-search input {
+  border: 0;
+  background: transparent;
+  min-width: 0;
+}
+.syntax-examples {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
+}
+.syntax-card {
+  display: block;
+  padding: 22px;
+  min-width: 0;
+}
+.syntax-card header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+.syntax-card h2 {
+  font-size: 16px;
+  color: #4b5f73;
+  margin: 9px 0 0;
+}
+.syntax-badge {
+  font-size: 12px;
+  background: #edf4f0;
+  color: var(--brand);
+  border-radius: 4px;
+  padding: 4px 7px;
+}
+.syntax-card > p {
+  font-size: 12px;
+  line-height: 1.9;
+  color: var(--muted);
+  margin: 16px 0;
+}
+.syntax-code,
+.syntax-input pre,
+.syntax-result pre {
+  background: #f5f8fa;
+  border: 1px solid #e5ecf0;
+  border-radius: 7px;
+  padding: 16px;
+  font:
+    12px/1.8 ui-monospace,
+    SFMono-Regular,
+    Consolas,
+    monospace;
+  color: #344e63;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  margin: 12px 0;
+}
+.syntax-input {
+  font-size: 12px;
+  color: var(--muted);
+}
+.syntax-input summary {
+  cursor: pointer;
+  padding: 7px 0;
+}
+.syntax-card > .syntax-note {
+  border-left: 3px solid #ceded5;
+  padding-left: 12px;
+  color: var(--brand);
+}
+.syntax-run {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-top: 18px;
+}
+.syntax-run span {
+  font-size: 12px;
+  line-height: 1.8;
+  color: var(--muted);
+}
+.syntax-result {
+  margin-top: 18px;
+  font-size: 12px;
+  color: var(--brand);
+}
+.syntax-tips {
+  margin: 28px 0 10px;
+  padding: 22px;
+  border-top: 1px solid #e0e8ed;
+  font-size: 12px;
+  line-height: 1.9;
+  color: var(--muted);
+}
+.syntax-tips h2 {
+  font-size: 15px;
+  color: #4b5f73;
+  margin-bottom: 14px;
+}
+.syntax-tips ul {
+  padding-left: 20px;
+}
+.syntax-tips li {
+  margin: 8px 0;
+}
+.syntax-tips a {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--brand);
+  margin-top: 12px;
+}
+@media (max-width: 1100px) {
+  .syntax-examples {
+    grid-template-columns: minmax(0, 1fr);
+  }
+}
+@media (max-width: 760px) {
+  .syntax-intro,
+  .syntax-card {
+    padding: 16px;
+  }
+  .syntax-intro dl {
+    grid-template-columns: minmax(0, 1fr);
+    gap: 14px;
+  }
+  .syntax-intro > div {
+    flex-wrap: wrap;
+  }
+  .syntax-search {
+    max-width: none;
+    min-width: 0;
+    width: 100%;
+  }
+  .syntax-card header {
+    flex-wrap: wrap;
+  }
+  .syntax-card h2 {
+    font-size: 15px;
+  }
+  .syntax-run {
+    flex-wrap: wrap;
+  }
+}

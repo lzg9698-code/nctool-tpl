@@ -2,40 +2,33 @@
 
 适用于当前 2.2 CLI/WebUI 与 2.0 核心组件。操作入口见[文档总览](README.md)，字段与路由见[系统设计](SYSTEM_DESIGN.md)，当前限制见[项目状态](PROJECT_STATUS.md)。
 
-默认产品是通用 Jinja 模板平台；NC 与多工序是可选能力。借鉴 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.md) 和 [Cordis](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cordis-primer.md) 的服务上下文、依赖声明、作用域注册与可撤销生命周期设计，在 Rust workspace 中实现。
+默认产品是通用 Jinja 模板平台；内置 NC 能力已移除，领域能力通过开放的通用插件机制提供，数学扩展独立可选。借鉴 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.md) 和 [Cordis](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cordis-primer.md) 的服务上下文、依赖声明、作用域注册与可撤销生命周期设计，在 Rust workspace 中实现。
 
 ```mermaid
 flowchart TB
     Surfaces[CLI / WebUI] --> Runtime[插件运行时 / 动作注册表]
     Runtime --> Template[通用模板插件]
     Template --> Engine[独立 Jinja 引擎]
-    Runtime --> NC[NC 插件]
-    Runtime --> Process[多工序插件]
+    Runtime --> Parameters[共享参数插件]
+    Runtime --> Math[可选数学扩展]
     Runtime --> External[外部进程插件]
-    NC -->|template.render / inspect| Template
-    Process -->|nc.generate v1| NC
     External -->|声明的服务调用| Runtime
 ```
 
 ## 依赖规则
 
-- `nctool-tpl` 只依赖 MiniJinja；不包含领域模型、数学默认扩展、NC 过滤器或加工 lint。
-- SDK、运行时、模板服务不依赖 NC 或多工序实现。
-- 多工序插件不依赖 NC crate；调用版本化服务。
-- CLI 的 `composition` 是唯一装配入口，可选 `nc-bundle` feature 引入内置领域插件；CLI 参数和 HTTP/WebUI 只处理通用动作数据。
-- 默认构建不含 math/NC/process 依赖；完整发行包包含这些可选实现，默认配置仍是 `template`。
-- 默认 `parameters` 插件只处理通用定义、JSON Schema、共享预置和来源；几何与工艺计算由可选 `nc-parameters` 提供。`process-parameters` 只消费 `nc.managed.freeze`、`nc.generate.managed`、`nc.managed.check`、`nc.output.finalize` v1，不依赖 NC crate。
+- `nctool-tpl` 只依赖 MiniJinja；不包含领域模型、数学默认扩展或加工 lint。
+- SDK、运行时、模板与参数服务不依赖任何领域实现。
+- CLI 的 `composition` 是唯一装配入口；默认装配 `template` + `parameters`，不引入内置 NC/工序插件。域外能力只能通过通用插件机制扩展。
+- 默认构建不含 math 依赖；完整发行包包含可选 math 实现，默认配置仍只启用 `template` + `parameters`。
+- 数学插件以独立 `math = ["dep:nctool-plugin-math"]` feature 编译，保持领域中立；构建可用、运行启用（配置 `enabled`）与单次 `extensions` 选择分别显式，选择进入输入签名与历史重放。
 - 所有业务调用使用显式服务或动作，观测扩展使用 `ActionStarted` / `ActionFinished` 事件。事件不更改正文或吞掉执行错误。
 
 ## 渲染数据流
 
 普通渲染：模板资产或源码 + JSON 上下文 → 通用规格/defaults → 显式渲染扩展 → Jinja → 文本/诊断。
 
-NC 生成：领域规格与机床 → 模板引用检查 → 领域校验 → 参数派生和默认值 → 通用渲染服务（显式 math/NC 扩展）→ NC 后处理 → 文本/行号游标/诊断。
-
-多工序：继承公共参数 → 工序覆盖 → 调用所选 NC 服务 → 游标连续传递 → 汇总诊断 → 全部成功后一次交付。
-
-受管路径先冻结参数、刀具、标准、模板、机床和选择确认状态，再由 Rust NC 工艺处理器从原始输入产生完整上下文；命名文件拼接后统一后处理。`nc.output.finalize` 直接处理已生成文本，在 NC 插件内部与普通生成共用最终处理函数，不再读取模板集合或通过虚拟模板重新渲染；两条入口保留机床/选项校验、取消检查、非有限输出拒绝与行号告警。最终处理的新记录按自己的动作格式保存原始文本、输出名、机床和选项供重执行。历史重执行用原冻结输入，资源变化使当前旧结果失效。完整契约见[参数管理指南](PARAMETER_MANAGEMENT.md)。
+受管渲染：普通模板输入 + 共享参数绑定/预置 → 参数解析（定义默认 → 模板默认 → 显式预置 → 人工输入）→ 冻结快照 → 通用渲染服务（显式扩展）→ 文本/诊断。冻结形式（snapshot + parameter_snapshot + parameter_request）不能混用 context、schema、defaults、bindings 或 preset_id。
 
 过滤器属于新建的单次渲染环境，不修改全局 Environment。重名扩展、重名过滤器和覆盖 Jinja 内置过滤器都报错。
 
@@ -57,13 +50,13 @@ NC 生成：领域规格与机床 → 模板引用检查 → 领域校验 → �
 
 独立 React/TypeScript 前端由 Vite 构建，通过编译期静态资源表嵌入 Rust 服务。CodeMirror 提供 Jinja/JSON/输出编辑视图，结构化参数控件按 Schema 递归渲染，数值全程保留原始字面量。浏览器草稿采用隔离的工作区存储。
 
-宿主 Workbench 层负责通用异步任务、取消、工作区标识与记录，不导入 NC 工艺模型。通用模板任务在执行前冻结模板集合，并把实际输入和快照写入记录。任务文件使用原子写入，活动任务持有 OS 文件锁；其他进程启动不会把仍在运行的任务标为中断。任务列表读取单独的轻量索引，避免加载所有历史产物。
+宿主 Workbench 层负责通用异步任务、取消、工作区标识与记录，不导入任何领域模型。通用模板任务在执行前冻结模板集合，并把实际输入和快照写入记录。任务文件使用原子写入，活动任务持有 OS 文件锁；其他进程启动不会把仍在运行的任务标为中断。任务列表读取单独的轻量索引，避免加载所有历史产物。
 
-插件以 Panel.view 选择已注册的前端视图。NC 生成、机床和多工序视图放在 `ui/src/plugins/NcViews.tsx`，按需载入；未知视图回退到通用 Schema 表单，不运行第三方前端脚本。动作的可选 ui_schema.properties 提供显示提示，document_input 声明文档工作台的输入绑定与元数据匹配；后端校验仍以 input_schema 为准。
+插件以 Panel.view 选择已注册的前端视图。领域专用视图由插件贡献并按需载入；未知视图回退到通用 Schema 表单，不运行第三方前端脚本。动作的可选 ui_schema.properties 提供显示提示，document_input 声明文档工作台的输入绑定与元数据匹配；后端校验仍以 input_schema 为准。
 
 配置预检查与启动共用运行时的纯依赖解析函数；预检查读取描述和 Schema，不启动插件进程或创建领域资产。集合导入导出通过描述中的 asset_collections 动作扩展，宿主只调度集合，不导入具体资产类型。内置资产操作用工作区分组锁取得一致的短时快照，执行和渲染不持有整段锁。
 
-NC/多工序服务可返回 replay_input，记录原始模板快照、机床、参数规格和选项。Workbench 重执行优先采用它；提供方没有该字段时使用原始输入。历史差异比较在前端进行，不修改记录。
+动作服务可返回 replay_input，记录原始模板快照与冻结参数。Workbench 重执行优先采用它；提供方没有该字段时使用原始输入。历史差异比较在前端进行，不修改记录。
 
 执行历史页面的列表、详情、差异比较和重执行请求集中在 `ui/src/components/HistoryPage.tsx`；应用壳继续持有共享任务状态与文档恢复逻辑，页面切换保留已选记录及比较状态。
 
@@ -73,6 +66,6 @@ Workbench 在任务创建时记录宿主/插件版本和服务绑定；只读重
 
 `scripts/source_baseline.py` 为包含未提交改动的完整源码工作树生成恢复归档、Git 状态/补丁及逐文件校验清单，不修改索引。该本地快照与正式 Git 提交分别追踪；忽略的运行资产需独立备份。
 
-标签发布依赖复用的完整 CI；验证完成后才按明确的 Rust target 构建发行二进制和校验文件。配置的三平台检查需取得实际运行证据，真实控制器验收另行完成。
+标签发布依赖复用的完整 CI；验证完成后才按明确的 Rust target 构建发行二进制和校验文件。配置的三平台检查需取得实际运行证据。
 
 本地构建与快照步骤见[贡献指南](CONTRIBUTING.md)，标签及发行资产规范见[发布说明](RELEASE.md)。

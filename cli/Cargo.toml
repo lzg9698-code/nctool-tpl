@@ -11,8 +11,6 @@ nctool-plugin-sdk={path="../sdk",version="2.0.0"}
 nctool-plugin-template={path="../plugins/template",version="2.0.0"}
 nctool-plugin-parameters={path="../plugins/parameters",version="2.0.0"}
 nctool-plugin-math={path="../plugins/math",version="2.0.0",optional=true}
-nctool-plugin-nc={path="../plugins/nc",version="2.0.0",optional=true}
-nctool-plugin-process={path="../plugins/process",version="2.0.0",optional=true}
 clap={version="4",features=["derive"]}
 serde_json="1"
 serde={version="1",features=["derive"]}
@@ -20,12 +18,9 @@ nctool-assets={path="../assets",version="2.0.0"}
 axum="0.8"
 tokio={version="1",features=["rt-multi-thread","macros","net","signal","sync","time"]}
 
-nctool-plugin-sync-turning={path="../plugins/sync-turning",version="2.0.0",optional=true}
-nctool-plugin-undercut={path="../plugins/undercut",version="2.0.0",optional=true}
-
 [features]
 default=[]
-nc-bundle=["dep:nctool-plugin-math","dep:nctool-plugin-nc","dep:nctool-plugin-process","dep:nctool-plugin-sync-turning","dep:nctool-plugin-undercut"]
+math=["dep:nctool-plugin-math"]
 
 [[bin]]
 name="nctool"

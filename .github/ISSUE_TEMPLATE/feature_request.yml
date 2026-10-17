@@ -1,5 +1,5 @@
 name: 功能提案
-description: 提案新功能 / 改进（CLI / Web UI / 模板系统 / 机床配置）
+description: 提案新功能 / 改进（CLI / Web UI / 模板与参数系统 / 插件）
 title: "[Feature]: "
 labels: ["enhancement"]
 assignees: []
@@ -57,7 +57,7 @@ body:
     id: break
     attributes:
       label: 是否破坏兼容
-      description: 是否会改变退出码 / JSON 响应 / 宿主配置 / JSON 资产格式 / G-code 输出？
+      description: 是否会改变退出码 / JSON 响应 / 宿主配置 / JSON 资产格式 / 渲染输出？
         若是，请说明迁移路径
     validations:
       required: false

@@ -132,23 +132,47 @@ impl Workbench {
         });
         // Interrupted records remain failures, never candidates for exporting a partial result.
         for summary in controller.summaries()? {
-            if ["queued", "running"].contains(&summary["status"].as_str().unwrap_or("")) {
-                let id = summary["id"].as_str().unwrap();
-                let guard = controller.guard(id)?;
-                if guard.try_lock().is_err() {
+            if !["queued", "running"].contains(&summary["status"].as_str().unwrap_or("")) {
+                continue;
+            }
+            // The index is derived state: a malformed entry (for example a missing or
+            // unusable `id`) must not panic or abort boot for every other run.
+            let Some(id) = summary["id"]
+                .as_str()
+                .filter(|id| nctool_runtime::valid_id(id))
+            else {
+                continue;
+            };
+            let guard = controller.guard(id)?;
+            if guard.try_lock().is_err() {
+                continue;
+            }
+            let mut run = match controller.get(id) {
+                Ok(run) => run,
+                // The run record was removed but its derived index entry survived (for
+                // example, a stop between the two deletions). The index is rebuildable,
+                // so drop the orphan entry instead of failing every boot on it.
+                Err(error) if error.code == "not_found" => {
+                    controller.prune_summary(id)?;
                     continue;
                 }
-                let run = controller.get(id)?;
-                let mut run = run;
-                run.status = "interrupted".into();
-                run.finished_at = Some(now());
-                run.result = None;
-                run.error = Some(PluginError::new(
-                    "interrupted",
-                    "上次服务停止时任务尚未完成，可恢复输入后重新执行。",
-                ));
-                controller.save(&run)?;
-            }
+                // Every other read failure (permission, IO) is real and stays visible.
+                Err(error) => return Err(error),
+            };
+            run.status = "interrupted".into();
+            run.finished_at = Some(now());
+            run.result = None;
+            run.error = Some(PluginError::new(
+                "interrupted",
+                "上次服务停止时任务尚未完成，可恢复输入后重新执行。",
+            ));
+            // The authoritative record must be written: a real write failure surfaces here
+            // rather than being masked as a successful recovery.
+            controller.save_run(&run)?;
+            // The index summary is rebuilt from run records, so a failure to refresh it does
+            // not invalidate the interrupted state already persisted above, and it self-heals
+            // on the next successful write; a rebuildable-index failure must not block boot.
+            let _ = controller.save_summary(&run);
         }
         Ok(controller)
     }
@@ -173,11 +197,22 @@ impl Workbench {
             .open(path)?)
     }
     fn save(&self, run: &Run) -> PluginResult<()> {
+        self.save_run(run)?;
+        self.save_summary(run)
+    }
+    /// Persist the authoritative run record. A failure here is a real write failure and
+    /// must never be swallowed.
+    fn save_run(&self, run: &Run) -> PluginResult<()> {
         let bytes = serde_json::to_vec(run)?;
         if bytes.len() > 64 * 1024 * 1024 {
             return Err(PluginError::new("record_limit", "任务记录超过 64 MiB 上限"));
         }
-        WriteKernel::write_atomic(&self.path(&run.id)?, &bytes).map_err(crate::asset_error)?;
+        WriteKernel::write_atomic(&self.path(&run.id)?, &bytes).map_err(crate::asset_error)
+    }
+    /// Refresh the derived `_index` summary for a run. The index is rebuilt from the run
+    /// records, so it is written separately from [`Self::save_run`]: an index-only
+    /// failure leaves the authoritative record intact.
+    fn save_summary(&self, run: &Run) -> PluginResult<()> {
         let folder = self.root.root().join("_index");
         std::fs::create_dir_all(&folder)?;
         let summary = json!({"id":run.id,"title":run.title,"action":run.action,"status":run.status,"started_at":run.started_at,"finished_at":run.finished_at,"diagnostic_count":run.result.as_ref().map(|r|r.diagnostics.len()).or_else(||run.error.as_ref().map(|e|e.diagnostics.len())).unwrap_or(0)});
@@ -186,6 +221,14 @@ impl Workbench {
             &serde_json::to_vec(&summary)?,
         )
         .map_err(crate::asset_error)
+    }
+    /// Drop a derived `_index` entry whose authoritative run record no longer exists.
+    fn prune_summary(&self, id: &str) -> PluginResult<()> {
+        let path = self.root.root().join("_index").join(format!("{id}.json"));
+        if path.exists() {
+            std::fs::remove_file(path)?;
+        }
+        Ok(())
     }
     pub fn get(&self, id: &str) -> PluginResult<Run> {
         use std::io::Read;
@@ -221,11 +264,89 @@ impl Workbench {
                 summaries.push(parse_json(&bytes)?);
             }
         }
-        summaries.sort_by_key(|r| std::cmp::Reverse(r["started_at"].as_u64().unwrap_or(0)));
         Ok(summaries)
     }
+    fn sort_summaries(summaries: &mut [Value]) {
+        summaries.sort_by(|a, b| {
+            b["started_at"]
+                .as_u64()
+                .unwrap_or(0)
+                .cmp(&a["started_at"].as_u64().unwrap_or(0))
+                .then_with(|| {
+                    a["id"]
+                        .as_str()
+                        .unwrap_or_default()
+                        .cmp(b["id"].as_str().unwrap_or_default())
+                })
+        });
+    }
     pub fn list(&self) -> PluginResult<Value> {
-        Ok(json!({"runs":self.summaries()?.into_iter().take(100).collect::<Vec<_>>()}))
+        let mut summaries = self.summaries()?;
+        summaries.sort_by_key(|r| std::cmp::Reverse(r["started_at"].as_u64().unwrap_or(0)));
+        Ok(json!({"runs":summaries.into_iter().take(100).collect::<Vec<_>>()}))
+    }
+    pub fn query(&self, request: Value) -> PluginResult<Value> {
+        let request = request
+            .as_object()
+            .ok_or_else(|| PluginError::new("invalid_input", "query body must be an object"))?;
+        let query = match request.get("query") {
+            None => None,
+            Some(Value::String(value)) => Some(value.to_lowercase()),
+            Some(_) => return Err(PluginError::new("invalid_input", "query must be a string")),
+        };
+        let status = match request.get("status") {
+            None => None,
+            Some(Value::String(value)) => {
+                if ![
+                    "queued",
+                    "running",
+                    "succeeded",
+                    "failed",
+                    "cancelled",
+                    "interrupted",
+                ]
+                .contains(&value.as_str())
+                {
+                    return Err(PluginError::new("invalid_input", "invalid status"));
+                }
+                Some(value.as_str())
+            }
+            Some(_) => return Err(PluginError::new("invalid_input", "status must be a string")),
+        };
+        let offset = match request.get("offset") {
+            None => 0,
+            Some(value) => value
+                .as_u64()
+                .and_then(|v| usize::try_from(v).ok())
+                .ok_or_else(|| PluginError::new("invalid_input", "offset must be a usize"))?,
+        };
+        let limit = match request.get("limit") {
+            None => 25,
+            Some(value) => value
+                .as_u64()
+                .and_then(|v| usize::try_from(v).ok())
+                .filter(|v| (1..=100).contains(v))
+                .ok_or_else(|| {
+                    PluginError::new("invalid_input", "limit must be between 1 and 100")
+                })?,
+        };
+
+        let mut summaries = self.summaries()?;
+        Self::sort_summaries(&mut summaries);
+        summaries.retain(|run| {
+            let matches_status = status.is_none_or(|s| run["status"].as_str() == Some(s));
+            let matches_query = query.as_ref().is_none_or(|q| {
+                ["title", "id", "action"].iter().any(|field| {
+                    run[field]
+                        .as_str()
+                        .is_some_and(|value| value.to_lowercase().contains(q))
+                })
+            });
+            matches_status && matches_query
+        });
+        let total = summaries.len();
+        let runs: Vec<_> = summaries.into_iter().skip(offset).take(limit).collect();
+        Ok(json!({"runs":runs,"total":total,"offset":offset,"limit":limit}))
     }
     pub fn start(
         self: &Arc<Self>,

@@ -42,6 +42,12 @@ impl Library {
             .map_err(asset_error)
     }
     pub fn changed(&self, snapshot: &Value) -> PluginResult<Vec<String>> {
+        // Compare every frozen record under the same workspace group lock `capture`
+        // and `invoke` use, so a concurrent multi-asset import can never be observed
+        // half-applied. No caller holds this lock already — `parameter.dependencies.
+        // check` calls this method directly, not through `invoke` — so this cannot
+        // self-deadlock on the cross-process group lock.
+        let _guard = GroupGuard::acquire(&self.root).map_err(asset_error)?;
         if snapshot["version"] != 1 {
             return Err(PluginError::new("snapshot_version", "不支持的参数快照版本"));
         }

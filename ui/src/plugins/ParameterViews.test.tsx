@@ -18,7 +18,7 @@ import type { ViewProps } from "./ViewProps";
 vi.mock("../lib/api", () => ({ action: vi.fn() }));
 // Exercise the real JsonEditor parsing and ParameterLibrary persistence; only replace
 // CodeMirror's DOM surface so the request ordering tests do not depend on geometry.
-vi.mock("../components/Editor", () => ({
+vi.mock("../components/LazyEditor", () => ({
   Editor: ({
     value,
     onChange,
@@ -90,9 +90,15 @@ function saveCalls() {
   return vi.mocked(action).mock.calls.filter(([id]) => id === "parameter.save");
 }
 function openCatalog(option: string) {
-  fireEvent.change(screen.getByLabelText("读取资产"), {
-    target: { value: option },
-  });
+  // The catalog is now a list of buttons; an empty id means "no selection".
+  if (!option) return;
+  fireEvent.click(screen.getByLabelText(`读取资产 ${option}`));
+}
+function listedAssets() {
+  return screen
+    .queryAllByRole("listitem")
+    .map((item) => item.textContent || "")
+    .join("\n");
 }
 async function mount() {
   const view = render(
@@ -135,6 +141,44 @@ afterEach(() => {
   cleanup();
   localStorage.clear();
   vi.resetAllMocks();
+});
+
+describe("ParameterLibrary structured form", () => {
+  // The structured editor writes through the same asset as the advanced JSON
+  // editor. A regression here silently reverts every keystroke, because React
+  // re-renders the input from an unchanged draft.
+  it("keeps a structured field edit in the asset and the stored draft", async () => {
+    const view = await mount();
+    fireEvent.change(screen.getByLabelText("显示名称"), { target: { value: "加工深度" } });
+    fireEvent.change(screen.getByLabelText("单位"), { target: { value: "mm" } });
+    expect((screen.getByLabelText("显示名称") as HTMLInputElement).value).toBe("加工深度");
+    expect(stored().asset).toMatchObject({ title: "加工深度", unit: "mm" });
+    view.unmount();
+  });
+
+  it("switches a definition type and drops containers that no longer apply", async () => {
+    const view = render(
+      <StrictMode>
+        <ParameterLibrary {...props} />
+      </StrictMode>,
+    );
+    await act(async () => {});
+    fireEvent.change(screen.getByLabelText("参数类型"), { target: { value: "number" } });
+    await act(async () => {});
+    expect(stored().asset.schema).toEqual({ type: "number" });
+    view.unmount();
+  });
+
+  it("clears the advanced JSON draft when a structured field is edited", async () => {
+    const view = await mount();
+    // An unresolved raw draft would otherwise win over the structured edit.
+    fireEvent.change(editor(), { target: { value: '{"id":"a", broken' } });
+    expect(stored()).toHaveProperty("raw");
+    fireEvent.change(screen.getByLabelText("显示名称"), { target: { value: "重新编辑" } });
+    expect(stored()).not.toHaveProperty("raw");
+    expect(stored().asset.title).toBe("重新编辑");
+    view.unmount();
+  });
 });
 
 describe("ParameterLibrary save responses", () => {
@@ -304,6 +348,9 @@ describe("ParameterLibrary save responses", () => {
       const view = await mount();
       save();
       view.unmount();
+      const catalogs = () =>
+        vi.mocked(action).mock.calls.filter(([id]) => id === "parameter.catalog").length;
+      const before = catalogs();
       const replacement = encodeDraft({
         group: "definitions",
         asset: asset("b"),
@@ -316,11 +363,8 @@ describe("ParameterLibrary save responses", () => {
       });
       expect(localStorage.getItem(storageKey)).toBe(replacement);
       expect(fail).not.toHaveBeenCalled();
-      expect(
-        vi
-          .mocked(action)
-          .mock.calls.filter(([id]) => id === "parameter.catalog"),
-      ).toHaveLength(2);
+      // Settling a save after unmount must not trigger further catalog work.
+      expect(catalogs()).toBe(before);
     },
   );
 });
@@ -362,10 +406,8 @@ describe("ParameterLibrary catalog request ordering", () => {
       { id: "p", title: "Preset", asset: preset(), fingerprint: "p0" },
     ]);
     await act(async () => {});
-    expect(screen.getByLabelText("读取资产").textContent).toContain("Preset (p)");
-    expect(screen.getByLabelText("读取资产").textContent).not.toContain(
-      "Definition (d)",
-    );
+    expect(listedAssets()).toContain("p");
+    expect(listedAssets()).not.toContain("Definition");
     respond("definitions", [
       { id: "d", title: "Definition", asset: asset("d"), fingerprint: "d0" },
     ]);
@@ -374,14 +416,9 @@ describe("ParameterLibrary catalog request ordering", () => {
     expect(screen.getByLabelText<HTMLSelectElement>("资产类型").value).toBe(
       "presets",
     );
-    expect(screen.getByLabelText("读取资产").textContent).not.toContain(
-      "Definition (d)",
-    );
-    const options = screen
-      .getAllByRole<HTMLOptionElement>("option")
-      .map((option) => option.value);
-    expect(options).not.toContain("d");
-    openCatalog("");
+    expect(listedAssets()).not.toContain("Definition");
+    // A stale definitions entry must not be listed, so it can never be read back.
+    expect(screen.queryByLabelText("读取资产 d")).toBeNull();
     expect(stored().group).toBe("presets");
     // The draft stayed the preset the user was editing; no definition replaced it.
     expect(stored().asset.id).toBe("");
@@ -403,12 +440,12 @@ describe("ParameterLibrary catalog request ordering", () => {
       { id: "a", title: "A", asset: asset(), fingerprint: "a0" },
     ]);
     await act(async () => {});
-    expect(screen.getByLabelText("读取资产").textContent).toContain("A (a)");
+    expect(listedAssets()).toContain("a");
     fireEvent.change(screen.getByLabelText("资产类型"), {
       target: { value: "presets" },
     });
     // The presets catalog is still in flight, so nothing from definitions remains.
-    expect(screen.getByLabelText("读取资产").textContent).not.toContain("A (a)");
+    expect(listedAssets()).not.toContain("A");
     expect(stored().group).toBe("presets");
   });
 
@@ -433,9 +470,7 @@ describe("ParameterLibrary catalog request ordering", () => {
     expect(screen.getByLabelText<HTMLSelectElement>("资产类型").value).toBe(
       "presets",
     );
-    expect(screen.getByLabelText("读取资产").textContent).not.toContain(
-      "Definition (d)",
-    );
+    expect(listedAssets()).not.toContain("Definition");
     openCatalog("p");
     // Reading keeps the preset the user asked for, not a definition of another group.
     expect(stored().asset.id).toBe("p");

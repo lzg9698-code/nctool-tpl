@@ -73,18 +73,16 @@ export interface EditorHandle {
   insert: (text: string) => void;
   focus: () => void;
 }
-export const Editor = forwardRef<
-  EditorHandle,
-  {
-    value: string;
-    onChange?: (text: string) => void;
-    language?: "jinja" | "json" | "text";
-    readonly?: boolean;
-    label?: string;
-    line?: number;
-    editorKey?: string;
-  }
->(function Editor(
+export interface EditorProps {
+  value: string;
+  onChange?: (text: string) => void;
+  language?: "jinja" | "json" | "text";
+  readonly?: boolean;
+  label?: string;
+  line?: number;
+  editorKey?: string;
+}
+export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
   {
     value,
     onChange,

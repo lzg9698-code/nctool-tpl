@@ -100,7 +100,7 @@ fn run(cli: Cli) -> PluginResult<()> {
                 if id == "math" {
                     return Err(PluginError::new(
                         "feature_unavailable",
-                        "此构建未包含 math；请使用 --features math 构建。",
+                        "此构建未包含 math 扩展；请使用 --features math 构建。",
                     ));
                 }
                 if !config::BUILTIN_PLUGIN_IDS.contains(&id.as_str())

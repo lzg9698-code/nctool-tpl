@@ -10,10 +10,15 @@ import {
   type Schema,
   type Data,
 } from "../lib/data";
+type FieldChange = (pointer: string, value: Data) => void;
+const fieldPointer = (path: string, key: string) =>
+  path + "/" + key.replace(/~/g, "~0").replace(/\//g, "~1");
+
 export function Form({
   schema,
   value,
   onChange,
+  onFieldChange,
   errors = {},
   path = "",
   disabled = false,
@@ -21,6 +26,7 @@ export function Form({
   schema: Schema;
   value: Data;
   onChange: (value: Data) => void;
+  onFieldChange?: FieldChange;
   errors?: Record<string, string>;
   path?: string;
   disabled?: boolean;
@@ -31,6 +37,7 @@ export function Form({
       <Dictionary
         value={value || {}}
         onChange={onChange}
+        onFieldChange={onFieldChange}
         path={path}
         errors={errors}
         disabled={disabled}
@@ -50,9 +57,10 @@ export function Form({
               else next[key] = v;
               onChange(next);
             }}
+            onFieldChange={onFieldChange}
             required={schema.required?.includes(key)}
             name={key}
-            path={path + "/" + key}
+            path={fieldPointer(path, key)}
             errors={errors}
             disabled={disabled}
           />
@@ -64,6 +72,7 @@ export function Form({
       schema={schema}
       value={value}
       onChange={onChange}
+      onFieldChange={onFieldChange}
       name={schema.title || "值"}
       path={path}
       errors={errors}
@@ -74,7 +83,8 @@ export function Form({
 function Field({
   schema,
   value,
-  onChange,
+  onChange: update,
+  onFieldChange,
   required = false,
   name,
   path,
@@ -84,6 +94,7 @@ function Field({
   schema: Schema;
   value: Data;
   onChange: (v: Data) => void;
+  onFieldChange?: FieldChange;
   required?: boolean;
   name: string;
   path: string;
@@ -96,6 +107,10 @@ function Field({
   const error = errors[path];
   const id = "field-" + encodeURIComponent(path);
   const nullable = Array.isArray(schema.type) && schema.type.includes("null");
+  function onChange(next: Data) {
+    onFieldChange?.(path, next);
+    update(next);
+  }
   return (
     <div
       className={"field " + (error ? "field-error" : "")}
@@ -161,7 +176,8 @@ function Field({
           <Form
             schema={schema}
             value={value || {}}
-            onChange={onChange}
+            onChange={update}
+            onFieldChange={onFieldChange}
             path={path}
             errors={errors}
             disabled={disabled}
@@ -329,12 +345,14 @@ function infer(value: Data): Schema {
 function Dictionary({
   value,
   onChange,
+  onFieldChange,
   path,
   errors,
   disabled,
 }: {
   value: Data;
   onChange: (v: Data) => void;
+  onFieldChange?: FieldChange;
   path: string;
   errors: Record<string, string>;
   disabled: boolean;
@@ -351,7 +369,8 @@ function Dictionary({
           schema={types[key] ? { type: types[key] } : infer(v)}
           name={key}
           value={v}
-          path={path + "/" + key}
+          path={fieldPointer(path, key)}
+          onFieldChange={onFieldChange}
           errors={errors}
           disabled={disabled}
           onChange={(next) => {
@@ -393,19 +412,17 @@ function Dictionary({
               return;
             }
             setTypes({ ...types, [key]: type });
-            onChange({
-              ...value,
-              [key]:
-                type === "number"
-                  ? new DraftNumber("0")
-                  : type === "boolean"
-                    ? false
-                    : type === "object"
-                      ? {}
-                      : type === "array"
-                        ? []
-                        : "",
-            });
+            const added = type === "number"
+              ? new DraftNumber("0")
+              : type === "boolean"
+                ? false
+                : type === "object"
+                  ? {}
+                  : type === "array"
+                    ? []
+                    : "";
+            onFieldChange?.(fieldPointer(path, key), added);
+            onChange({ ...value, [key]: added });
             setName("");
             setError("");
           }}

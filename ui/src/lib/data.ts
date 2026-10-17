@@ -39,6 +39,8 @@ export interface Document {
   outputName: string;
   generationAction?: string;
   parameterSelection?: Data;
+  extensions?: string[];
+  replayInput?: Data;
   jsonInput?: string;
   lastRunId?: string;
   lastRunSignature?: string;

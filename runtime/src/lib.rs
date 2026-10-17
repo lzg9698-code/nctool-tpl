@@ -417,6 +417,11 @@ pub fn validate_descriptor(d: &PluginDescriptor, actions: &[ActionDescriptor]) -
     if !valid_id(&d.id) {
         return Err(PluginError::new("invalid_plugin_id", &d.id));
     }
+    // Retired builtin identities stay reserved: neither the plugin id nor any action,
+    // service or collection it declares may reoccupy a removed execution identity.
+    if crate::config::is_retired_plugin_id(&d.id) {
+        return Err(PluginError::new("retired_plugin", &d.id));
+    }
     semver::Version::parse(&d.version)
         .map_err(|e| PluginError::new("plugin_version", e.to_string()))?;
     if d.protocol_version != PROTOCOL_VERSION {
@@ -428,6 +433,9 @@ pub fn validate_descriptor(d: &PluginDescriptor, actions: &[ActionDescriptor]) -
         if !valid_id(&a.id) || !ids.insert(a.id.clone()) {
             return Err(PluginError::new("invalid_action_id", &a.id));
         }
+        if crate::config::is_retired_namespace_id(&a.id) {
+            return Err(PluginError::new("retired_identity", &a.id));
+        }
         compile_schema(&a.input_schema)?;
         compile_schema(&a.output_schema)?;
     }
@@ -436,6 +444,9 @@ pub fn validate_descriptor(d: &PluginDescriptor, actions: &[ActionDescriptor]) -
         if !valid_id(&s.id) || s.version == 0 || !ids.contains(&s.action) || !services.insert(&s.id)
         {
             return Err(PluginError::new("invalid_service", &s.id));
+        }
+        if crate::config::is_retired_namespace_id(&s.id) {
+            return Err(PluginError::new("retired_identity", &s.id));
         }
     }
     for r in &d.requires {
@@ -451,6 +462,9 @@ pub fn validate_descriptor(d: &PluginDescriptor, actions: &[ActionDescriptor]) -
             || !collections.insert(&collection.id)
         {
             return Err(PluginError::new("invalid_collection", &collection.id));
+        }
+        if crate::config::is_retired_collection_id(&collection.id) {
+            return Err(PluginError::new("retired_identity", &collection.id));
         }
     }
     for panel in &d.panels {

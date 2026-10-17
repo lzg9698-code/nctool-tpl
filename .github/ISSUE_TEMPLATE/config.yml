@@ -6,6 +6,6 @@ contact_links:
   - name: ❓ 提问 / 讨论
     url: https://github.com/lzg9698-code/nctool-tpl/discussions
     about: 用法、配置、模板写法等不适合作为 issue 的问题
-  - name: ⚠️ 工艺安全问题
-    url: https://github.com/lzg9698-code/nctool-tpl/blob/master/docs/PROCESS_CHECKLIST.md
-    about: 当前示例不构成工艺验收，实际 NC 资产与目标机床须独立核对
+  - name: ℹ️ 当前范围与限制
+    url: https://github.com/lzg9698-code/nctool-tpl/blob/master/docs/PROJECT_STATUS.md
+    about: 内置 NC 能力已移除；当前通用模板/参数能力、限制与待验证事项

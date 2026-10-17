@@ -1,0 +1,198 @@
+{
+  "format": "nctool-legacy-workbench-archive/1",
+  "date": "2026-10-14",
+  "archive": "workbench-fixed-scheme.tar.gz",
+  "archive_sha256": "35f97872ab6e81885e4f6694722e80ac743fe8c06c474dd22ed80c15d64be7be",
+  "retired_paths": [
+    "workbench",
+    "ui/src/workbench",
+    "ui/tsconfig.workbench.json",
+    "ui/workbench.html",
+    "scripts/start_workbench.py",
+    "scripts/stop_workbench.py",
+    "scripts/build_workbench.mjs",
+    "scripts/browser_workbench.cjs",
+    "scripts/verify_workbench_delivery.py",
+    "启动轴类工作台.cmd",
+    "停止轴类工作台.cmd"
+  ],
+  "context_paths": [
+    "ui/package.json",
+    "ui/package-lock.json",
+    "ui/tsconfig.json"
+  ],
+  "excluded": [
+    "__pycache__",
+    "*.pyc"
+  ],
+  "files": {
+    "scripts/browser_workbench.cjs": {
+      "sha256": "40e3f5f0eaffff8c96b441bc87fdce1dd48495493fd8cc255b24ff24b0158029",
+      "size": 12208
+    },
+    "scripts/build_workbench.mjs": {
+      "sha256": "9bbd4f1fe38a1aed0168d6d9f8f611733ecd615b6647f7d5af0e07c3290f5892",
+      "size": 1419
+    },
+    "scripts/start_workbench.py": {
+      "sha256": "dc5b76904826600d991586012a8a2959bbb9df274e7845017b4948f733a56ef3",
+      "size": 2144
+    },
+    "scripts/stop_workbench.py": {
+      "sha256": "c9523d63e72186af3a3382fc79497c2dc6a04701bfff6cde7fe020468611e4f0",
+      "size": 920
+    },
+    "scripts/verify_workbench_delivery.py": {
+      "sha256": "1c3934537df5251048b9b944ca8ba4b559a33da33f39808f62be3b7d058beb63",
+      "size": 7340
+    },
+    "ui/package-lock.json": {
+      "sha256": "1e05c3c06bfc4aeecf0b84ef8d83c50856b3bdcd26f3e4cf1ab348596c2b81b9",
+      "size": 79724
+    },
+    "ui/package.json": {
+      "sha256": "235945f9f4889d43aeec7b325a3ddd858b63eab4b36f55132f8e4dd78a421e69",
+      "size": 874
+    },
+    "ui/src/workbench/main.tsx": {
+      "sha256": "bf558e09e1ef3f1632b07d9dc5a55936e48bb94b08a2b8c035146a5a7f861794",
+      "size": 33887
+    },
+    "ui/src/workbench/style.css": {
+      "sha256": "b3ae0b26765217cdc004e612e2ec166738484ee0afa1bbb873a763cc59d5ed52",
+      "size": 20797
+    },
+    "ui/tsconfig.json": {
+      "sha256": "95286407286e5cf11e8b2f89dbe42f6ff8acdf0b8e6ccba6531339a6aef9ab3c",
+      "size": 352
+    },
+    "ui/tsconfig.workbench.json": {
+      "sha256": "b142b575f0355c7d9ea95dae02d0f434cbb009f5dba7c358575f7f63dd73d4a8",
+      "size": 118
+    },
+    "ui/workbench.html": {
+      "sha256": "db6af6ea1670b28c3925cc6f2c8d55aa908de1f3ea6df28468267d2633cb9f53",
+      "size": 335
+    },
+    "workbench/README.md": {
+      "sha256": "48673e4327df3100ddbec2773564c1b6ec2522822fa10841d8503f3ffbaa5c4a",
+      "size": 6890
+    },
+    "workbench/__init__.py": {
+      "sha256": "34c7fa1d65c07227fe3d20bf2cb1ebf49a9661a0711977f6d624fcfdbe76ba50",
+      "size": 62
+    },
+    "workbench/__main__.py": {
+      "sha256": "22472c6b4b5a26a7d27a838134be5c44522ffa846e2d10cff70db603b01b91f8",
+      "size": 2982
+    },
+    "workbench/domain.py": {
+      "sha256": "b7da1b2061b2f98966ee7e370eedab96e56cceb7ed9d6dab95c5a8e07ca97e8e",
+      "size": 15811
+    },
+    "workbench/post.py": {
+      "sha256": "a671d738f5918d421531d855200e175f9ff42807c0f32e02805ddef39da28d04",
+      "size": 31084
+    },
+    "workbench/resources/catalog.json": {
+      "sha256": "f26c73bed2464b9907b6b26e5fda0c1540e40c6ee57b7de5d0a0463599a34bb0",
+      "size": 5546
+    },
+    "workbench/resources/drawing.png": {
+      "sha256": "d74f451fc8946e7fdfbdf5dd10d87bab6dba18ea25a50a7c34bce1d98e6713e0",
+      "size": 760165
+    },
+    "workbench/resources/manifest.json": {
+      "sha256": "665c87c4f69c9caef412f42c68a8a12a3ffb55770800baa6508f898d967208e9",
+      "size": 1153
+    },
+    "workbench/resources/programs/1_0.MPF": {
+      "sha256": "116b48b8e317e8aecd461695ae6ce0482f7ee7b02c63453085e0c1d982d54b3b",
+      "size": 9038
+    },
+    "workbench/resources/programs/2_0.MPF": {
+      "sha256": "0da81a595d0b2dfd9a03d6e0bee766a8ad47d39788c83557b942b9315761e974",
+      "size": 6489
+    },
+    "workbench/resources/programs/3_0.MPF": {
+      "sha256": "d52dd8119bc9b2e97520d9edb98ed2da055d8d40fea4928bc347ffd36af8c176",
+      "size": 4195
+    },
+    "workbench/resources/programs/DG_CAL_IR9.SPF": {
+      "sha256": "2230382c802bbeb281aeef4b6f896f2723905b25e460eb12e87e89568bd3c1c4",
+      "size": 987
+    },
+    "workbench/resources/programs/KANAL1_2_3.JOB": {
+      "sha256": "d8b59e756392f60629d227a6038772ca40ac70d294ecd5327ba907a1e590c7aa",
+      "size": 73
+    },
+    "workbench/resources/programs/PROBE.SPF": {
+      "sha256": "fd2b9d441081a7281025906dff89437bc04a3d6a1c14f0ba9a0707c30ec63398",
+      "size": 1248
+    },
+    "workbench/resources/programs/UZ_DJ_1.spf": {
+      "sha256": "227fdccd40a247105453ccfaf93146063ab235bce1165fae4d7d5267abec1a64",
+      "size": 972
+    },
+    "workbench/resources/programs/UZ_DJ_2.spf": {
+      "sha256": "7148630cf49e1927de4037e138bd531956dcbf1c3db3e51fbd202c148fd591a9",
+      "size": 974
+    },
+    "workbench/resources/programs/UZ_FKM_1.spf": {
+      "sha256": "2557a8ce53c0b463263ba9036ab5c138cfa5e7d08c81ff9f4b003961255b5112",
+      "size": 889
+    },
+    "workbench/resources/programs/UZ_FKM_2.spf": {
+      "sha256": "ecb790f5310dab1d8ac959e56eb7c53d7142070b1c298da7ea34f613abb7d71e",
+      "size": 892
+    },
+    "workbench/resources/programs/UZ_RKM_1.spf": {
+      "sha256": "d29d24dc1c95f01ab2c43f68e2dc48912fc2bcae8e6612f0d69c16f4eb1959fd",
+      "size": 1022
+    },
+    "workbench/resources/programs/UZ_RKM_2.spf": {
+      "sha256": "0d6588720ad18bd60e328bc4bd778f6f4165eda159c4e39087e12c899dd79ffc",
+      "size": 1024
+    },
+    "workbench/server.py": {
+      "sha256": "e986bcc12918d0022f30f487197f121d791d4d4ea1564b2c2043dc8c7fa4972c",
+      "size": 12970
+    },
+    "workbench/static/assets/workbench-CmzpS0sI.css": {
+      "sha256": "382970ebb5a7329c013e2124fcf24e0ba0aeb21bd6e7c27a9f48dd24cc4175b6",
+      "size": 20793
+    },
+    "workbench/static/assets/workbench-DwxbRYxE.js": {
+      "sha256": "62267ccbb50470c89669a13f4420a8049258ed763219729e4fea15d6ad69146c",
+      "size": 261594
+    },
+    "workbench/static/assets/workbench-DwxbRYxE.js.map": {
+      "sha256": "fdce1b76cbfb0d8a71f3641c356a12322170c64ac7015e5e0ead52e5d7d0dc6a",
+      "size": 1161836
+    },
+    "workbench/static/favicon.svg": {
+      "sha256": "b0dbd28000e42236ece23940395c7e0ef34da22508b60de6ed036caa785a5a22",
+      "size": 188
+    },
+    "workbench/static/source-manifest.json": {
+      "sha256": "584206a29b1acc3d1fa538552db7bfb5a5997a6b036d4808a08e203bf0638f2d",
+      "size": 836
+    },
+    "workbench/static/workbench.html": {
+      "sha256": "1e5faf57d4b31dfeabaaccb6f2f92a6bc7cf299cb75b3c230f5216248c279ea6",
+      "size": 432
+    },
+    "workbench/test_workbench.py": {
+      "sha256": "68085fd87fd84b14329424c88befbd2263f7ed8a8fc3041a79dd79d39e28238f",
+      "size": 15556
+    },
+    "停止轴类工作台.cmd": {
+      "sha256": "0eeae449d33cb9e7c0bb65d9f56cfe8733404a7d841f9b311cd5824c6fdd6973",
+      "size": 322
+    },
+    "启动轴类工作台.cmd": {
+      "sha256": "dbf37ac40abfd328e3502991c410adf6fa815c08c920e95cffd8d1ab2b29c89a",
+      "size": 324
+    }
+  }
+}
