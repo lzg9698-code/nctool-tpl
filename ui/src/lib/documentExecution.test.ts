@@ -326,6 +326,31 @@ describe("history recovery", () => {
     expect(live).not.toHaveProperty("parameter_snapshot");
     expect(live).not.toHaveProperty("parameter_request");
   });
+  it("honours an explicit preset decline instead of inheriting the frozen replay preset", () => {
+    const history = run();
+    history.result = {
+      artifacts: [],
+      diagnostics: [],
+      data: {
+        replay_input: parseData(
+          '{"snapshot":{"template":"main","templates":{"main":"{{ x }}"},"asset":{"source":"{{ x }}"}},"parameter_snapshot":{"version":1,"records":[]},"parameter_request":{"values":{"x":1},"defaults":{},"schema":{"type":"object"},"bindings":{"x":"shared-x"},"preset_id":"frozen-preset"}}',
+        ),
+      },
+    };
+    const doc = restoreDocument(history, [managed]);
+    // The user explicitly turns the preset off after restoring the record. The
+    // frozen request must not put it back.
+    doc.parameterSelection = { preset_id: null };
+    const declined = documentInput(doc, managed);
+    expect(declined.preset_id).toBeNull();
+    expect(declined).not.toHaveProperty("parameter_snapshot");
+    expect(declined).not.toHaveProperty("parameter_request");
+    // Saying nothing still replays the frozen request, preset included.
+    doc.parameterSelection = {};
+    const replayed = documentInput(doc, managed);
+    expect(replayed.parameter_request.preset_id).toBe("frozen-preset");
+    expect(replayed).toHaveProperty("parameter_snapshot");
+  });
   it("retains ordinary template snapshot references and original input defaults/extensions", () => {
     const history = run(text.id);
     history.input = {

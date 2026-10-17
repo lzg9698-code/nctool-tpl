@@ -162,7 +162,10 @@ export function documentInput(doc: Document, entry: Data): Data {
     if (
       entry.id === "template.render.managed" &&
       replay.parameter_snapshot &&
-      !input.preset_id
+      // Only inherit the frozen request when the caller said nothing about the
+      // preset. An explicit `null` is a deliberate "no preset" and must not be
+      // overwritten by whatever the replayed run happened to use.
+      input.preset_id === undefined
     ) {
       input.parameter_snapshot = clone(replay.parameter_snapshot);
       input.parameter_request = {

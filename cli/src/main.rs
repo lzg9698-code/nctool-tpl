@@ -273,16 +273,22 @@ fn main() -> ExitCode {
 mod tests {
     use super::*;
 
+    // Tests in this binary run on parallel threads, and the system clock can hand
+    // two of them the same nanosecond value; the counter keeps each root distinct
+    // so one test's cleanup cannot race another's `create_dir`.
+    static NEXT_OUTPUT_ROOT: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(0);
+
     struct OutputRoot(PathBuf);
     impl OutputRoot {
         fn new() -> Self {
             let path = std::env::temp_dir().join(format!(
-                "nctool-delivery-{}-{}",
+                "nctool-delivery-{}-{}-{}",
                 std::process::id(),
                 std::time::SystemTime::now()
                     .duration_since(std::time::UNIX_EPOCH)
                     .unwrap()
-                    .as_nanos()
+                    .as_nanos(),
+                NEXT_OUTPUT_ROOT.fetch_add(1, std::sync::atomic::Ordering::Relaxed)
             ));
             std::fs::create_dir(&path).unwrap();
             Self(path)
