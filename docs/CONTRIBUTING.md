@@ -34,7 +34,7 @@ cargo +1.89.0 check --workspace --all-features --locked
 
 `python3 scripts/check_v2.py` 验证默认 template + parameters 不包含 NC，`math` 为唯一可选 feature，领域中立组件只有白名单生产依赖，旧桌面入口移除、Tauri 隔离、引擎领域注册隔离、Python 适配器、UI 资源与 JavaScript 语法、基础包内容均无加工实现。数学由独立 `math` feature 提供，运行扩展仍需显式选择。
 
-`npm run --prefix ui lint` 执行 TypeScript 类型及未使用声明检查，不是 ESLint。前端依赖与测试环境必须声明在清单并锁定；不要依赖已有 node_modules 中未声明的包。当前 P0 范围、基线与验收见[开发方案](DEVELOPMENT_PLAN_2026-10-16.md)。
+`npm run --prefix ui lint` 执行 TypeScript 类型及未使用声明检查，不是 ESLint。前端依赖与测试环境必须声明在清单并锁定；不要依赖已有 node_modules 中未声明的包。当前范围与验收门槛见[路线图](ROADMAP.md)与[项目状态](PROJECT_STATUS.md)；2026-10-16 的 P0 方案已归档，仅作历史参考。
 
 ## 修改边界
 
