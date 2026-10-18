@@ -2,7 +2,7 @@
 
 本文件记录 WebUI「视觉设计 + 架构」重构的选型、实际采用情况与兼容边界。任务入口见 [nctool-ui-refactor skill](../.agents/skills/nctool-ui-refactor/SKILL.md)。
 
-> **后续变更（2026-10-17）**：本文描述的 `ui/src/features/workbench/**` 拆分实现从未被生产入口 `ui/src/main.tsx → App.tsx` 引用，已整目录删除；仅服务该入口的 `zustand`、`sonner` 依赖一并移除。表内这两项现为历史选型记录，不代表当前安装内容。当前活路径为 App 与其 `ui/src/lib/`、`ui/src/components/` 模块。详见[优化记录](OPTIMIZATION_LOG_2026-10-17.md)。
+> **后续变更（2026-10-17）**：本文描述的 `ui/src/features/workbench/**` 拆分实现从未被生产入口 `ui/src/main.tsx → App.tsx` 引用，已整目录删除；仅服务该入口的 `zustand`、`sonner` 依赖一并移除。表内这两项现为历史选型记录，不代表当前安装内容。当前活路径为 App 与其 `ui/src/lib/`、`ui/src/components/` 模块。详见[优化记录](archive/records/OPTIMIZATION_LOG_2026-10-17.md)。
 
 版本与实施状态更新于 **2026-10-14**。已采用版本以 `ui/package.json` 和锁文件为依据；候选版本来自当天重构前的 registry 查询，仅供后续评估。仓库约束见 [AGENTS.md](../AGENTS.md)、[贡献指南](CONTRIBUTING.md) 与 `scripts/check_v2.py`。用户已授权的重构包含实现所需依赖调整，无须因本文件再次请求许可；超出任务范围的批量升级不在授权内。
 
@@ -80,9 +80,9 @@
 ## 三、本次实现结构
 
 - `ui/src/App.tsx` 保留为组装入口；`ui/src/features/workbench/` 中的 views、controller、`useDocumentOperations`、`useParameterPresets`、session、scoped store 与 model 分担页面、操作和状态。
-- 工作区页头提供明亮/深色切换，浏览器全局 `nctool:theme` 保存偏好；首次无有效偏好时参考系统配色。根节点 CSS 变量原位更新 CodeMirror 颜色，主题切换不重建 `EditorView`，浏览器已验证编辑器 DOM 保持和草稿/主题刷新恢复；该专项脚本没有直接断言选区与撤销历史。
-- `ui/src/styles/tokens.css` 集中语义令牌，`styles/editor.css` 提供编辑器样式；布局与组件 CSS 仍主要在 `styles.css`。入口引入 Tailwind theme/utilities，未引入 preflight，未全量转换为 Tailwind。蓝色 nav 令牌使两种主题均保留深蓝侧栏。
-- `WorkbenchUi` 使用 Radix Dialog/DropdownMenu；Sonner 提供通知。Zustand store 由每个 WorkspaceProvider 独立创建，持有文档和会话状态；草稿持久化仍由 session/drafts 执行，交付资格仍由模型与执行签名派生。
+- 重构期曾提供工作区页头明亮/深色切换与 `nctool:theme` 偏好存储。该入口及其 `data-theme` 暗色调色板已在后续精简中移除（2026-10-17 删除 `features/workbench` 时一并退出），当前构建只有明亮主题；对应一次性验收脚本已于 2026-10-18 删除。
+- 重构期曾引入 `ui/src/styles/tokens.css`（含 Tailwind `@theme`）与蓝色 nav 令牌，但两者从未接入导入链。`tokens.css` 已于 2026-10-18 删除；实际生效的令牌集中在 `styles/base-workbench.css` 的 `:root`，`styles/editor.css` 提供编辑器与语法高亮样式并已加入 `styles.css` 导入。项目没有安装 Tailwind。
+- `WorkbenchUi` 使用 Radix Dialog/DropdownMenu。Sonner 与 Zustand 已随 `features/workbench` 一并移除（2026-10-17），当前状态由 `App.tsx` 与 `ui/src/lib/documentModel.ts`、`hooks/` 持有；草稿持久化仍由 `hooks/useDraftPersistence.ts` 执行，交付资格仍由模型与执行签名派生。
 - `npm run --prefix ui lint` 实际执行 `tsc --noEmit --noUnusedLocals --noUnusedParameters`。现有静态测试保留，新增组件测试覆盖菜单、对话框与工作区交互；Windows 两组通用浏览器回归与主题/布局专项已通过。
 - 桌面导航移除独立 max-height 限制，不产生无须存在的滚动区域；全局滚动条使用主题变量，侧栏覆盖为导航配色。专项验收覆盖四种窗口尺寸及桌面导航不滚动。
 
@@ -134,7 +134,7 @@
 
 依赖变更运行 `python scripts/audit_dependencies.py`，保留原始报告，不执行 `npm audit fix`。2026-10-14 本轮 npm 审计为 0 漏洞；Rust 公告数据库下载两次中断，因此整体审计尚未完成。重试报告位于 `target/ui-refactor-20261014/dependency-audit-retry/`（本地忽略目录，不保证随仓库分发）。后续测试、构建、包体积及 App 行数应在对应验证记录中按实际结果列明。
 
-已核对的 Windows 浏览器报告位于 `target/ui-refactor-20261014/` 下的 `browser-main-final/report.json`、`browser-boundaries-retry/report.json` 和 `browser-design/report.json`，三份均为 passed。新增 `scripts/browser_ui_refactor.cjs` 覆盖主题与编辑器 DOM 保持、刷新后草稿/主题恢复、菜单到对话框的 Tab/Esc 焦点恢复、1280×720/1440×900/1920×1080/375×812 无页面横向溢出、桌面导航不滚动及侧栏折叠/展开；专项报告记录无 pageerror，保存明亮/深色/移动窗口截图。报告与截图均为本地忽略目录证据。
+已核对的 Windows 浏览器报告位于 `target/ui-refactor-20261014/` 下的 `browser-main-final/report.json`、`browser-boundaries-retry/report.json` 和 `browser-design/report.json`，三份均为 passed。当时的专项脚本 `scripts/browser_ui_refactor.cjs` 覆盖主题与编辑器 DOM 保持、刷新后草稿/主题恢复、菜单到对话框的 Tab/Esc 焦点恢复、四种窗口无横向溢出、桌面导航不滚动及侧栏折叠/展开。该脚本已于 2026-10-18 删除：它依赖此后被移除的主题切换入口，且不在 CI 中；原始字节保存在 `docs/archive/legacy/rust-nc-removal-20261016.tar.gz`。报告与截图均为本地忽略目录证据，只描述当时构建。
 
 ## 六、相关文档
 

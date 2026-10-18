@@ -44,9 +44,9 @@ description: 重构 NCtool WebUI 的视觉设计与前端架构，核对设计�
 
 依赖变更执行 `python scripts/audit_dependencies.py`，保留原始报告，不执行 `npm audit fix`。网络失败记为未完成；2026-10-14 本轮 npm 审计 0 漏洞，Rust 公告数据库下载两次中断，整体审计未完成。重试报告在 `target/ui-refactor-20261014/dependency-audit-retry/`。
 
-浏览器在隔离 home/workspace 与空闲 loopback 端口运行，按 [UI 验收清单](../../../docs/UI_ACCEPTANCE_CHECKLIST.md)检查布局、主题、对比度、菜单键盘、对话框焦点，以及精度、冲突、草稿与退役边界。两组通用回归保留；主题/布局变更可加跑 `node scripts/browser_ui_refactor.cjs`，使用同一固定二进制和 Playwright/Chromium 环境。单元测试或构建成功不能替代真实浏览器验收。
+浏览器在隔离 home/workspace 与空闲 loopback 端口运行，按 [UI 验收清单](../../../docs/UI_ACCEPTANCE_CHECKLIST.md)检查布局、对比度、菜单键盘、对话框焦点，以及精度、冲突、草稿与退役边界。三组 CI 通用回归为 `scripts/browser_v2.cjs`、`scripts/browser_review_fixes.cjs` 与 `scripts/browser_generic_parameters.cjs`，使用同一固定二进制和 Playwright/Chromium 环境。单元测试或构建成功不能替代真实浏览器验收。
 
-2026-10-14 Windows 三组浏览器报告均 passed，位于 `target/ui-refactor-20261014/` 的 `browser-main-final/report.json`、`browser-boundaries-retry/report.json`、`browser-design/report.json`。专项覆盖主题与编辑器 DOM 保持、刷新草稿/主题恢复、Radix menu→dialog Tab/Esc 焦点恢复、四种窗口无横向溢出、桌面导航不滚动及侧栏折叠；不推导未被脚本直接验证的选区/撤销或完整对比度通过。
+`scripts/browser_ui_refactor.cjs` 已于 2026-10-18 删除：它是 2026-10 重构期的一次性专项脚本，依赖当时已被移除的主题切换入口，且不在 CI 与 `check_v2.py` 中。原始字节保存在 `docs/archive/legacy/rust-nc-removal-20261016.tar.gz`；2026-10-14 Windows 三份历史报告仍留在本地忽略目录 `target/ui-refactor-20261014/`，只作当时的证据，不代表当前构建可复现。
 
 ## 交付
 
