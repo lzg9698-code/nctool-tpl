@@ -587,6 +587,71 @@ fn cancellation_before_dispatch_and_other_host_start_do_not_corrupt_run_state() 
 }
 
 #[test]
+fn panicking_action_releases_the_slot_and_records_a_failure() {
+    use std::sync::Arc;
+    struct Exploding;
+    impl Plugin for Exploding {
+        fn descriptor(&self) -> PluginDescriptor {
+            PluginDescriptor::builtin("exploding")
+        }
+        fn actions(&self) -> Vec<ActionDescriptor> {
+            vec![ActionDescriptor::new(
+                "explode.run",
+                "exploding",
+                object_schema(),
+            )]
+        }
+        fn invoke(&self, _: &str, _: Value, _: &Context) -> PluginResult<ActionResult> {
+            panic!("plugin exploded");
+        }
+    }
+    let temp = Temp::new();
+    let runtime = nctool_runtime::Runtime::start(
+        vec![Arc::new(Exploding)],
+        Default::default(),
+        Default::default(),
+    )
+    .unwrap();
+    let workbench = nctool_cli::workbench::Workbench::new(runtime, &temp.0).unwrap();
+    // More panics than the concurrency limit: a leaked slot would make the last start fail
+    // with `plugin_busy` and would leave every run id undeletable forever.
+    for attempt in 0..12 {
+        let id = workbench
+            .start("explode.run", json!({}), "explode")
+            .unwrap_or_else(|error| panic!("attempt {attempt} rejected: {error:?}"));
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            let run = workbench.get(&id).unwrap();
+            if !["queued", "running"].contains(&run.status.as_str()) {
+                assert_eq!(run.status, "failed", "attempt {attempt}");
+                assert_eq!(
+                    run.error.as_ref().map(|error| error.code.as_str()),
+                    Some("internal_error"),
+                    "attempt {attempt}"
+                );
+                break;
+            }
+            assert!(std::time::Instant::now() < deadline, "attempt {attempt}");
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        // The cancellation entry is released right after the terminal record is saved, so
+        // a finished run becomes deletable. The record may be visible one scheduling step
+        // before that release, so allow the release to land.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(10);
+        loop {
+            match workbench.remove(&id) {
+                Ok(()) => break,
+                Err(error) if error.code == "conflict" => {
+                    assert!(std::time::Instant::now() < deadline, "attempt {attempt}");
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+                Err(error) => panic!("attempt {attempt}: {error:?}"),
+            }
+        }
+    }
+}
+
+#[test]
 fn config_preview_validates_dependencies_without_starting_or_saving_plugins() {
     let temp = Temp::new();
     let app = temp.app("template");

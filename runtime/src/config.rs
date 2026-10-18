@@ -341,17 +341,95 @@ pub fn uninstall(home: &Path, id: &str) -> PluginResult<()> {
     }
     Ok(())
 }
+/// Map an asset-layer error to a plugin error whose message never contains a filesystem path.
+///
+/// This is the only form exposed over HTTP; absolute paths stay in CLI/stderr output
+/// (see the redaction contract in `nctool_assets::lock`). The code and the distinction
+/// between a conflicting write and a busy lock are preserved.
 pub fn asset_error(error: WriteError) -> PluginError {
-    let code = match error {
-        WriteError::Conflict { .. } | WriteError::LockBusy { .. } => "conflict",
-        WriteError::PathEscape { .. } => "path_escape",
-        WriteError::NotFound(_) => "not_found",
-        _ => "asset_error",
+    let (code, message) = match &error {
+        WriteError::Conflict { .. } => (
+            "conflict",
+            "资产已被其他进程或窗口修改，请刷新后重试".to_string(),
+        ),
+        WriteError::LockBusy { .. } => (
+            "conflict",
+            "资产文件正被另一个 nctool 进程写入，请稍后重试".to_string(),
+        ),
+        WriteError::PathEscape { .. } => ("path_escape", error.to_string()),
+        WriteError::NotFound(_) => ("not_found", error.to_string()),
+        WriteError::NumRange {
+            literal,
+            line,
+            column,
+        } => (
+            "asset_error",
+            format!("整数超出 JSON 支持范围 (i64/u64): {literal} at {line}:{column}"),
+        ),
+        WriteError::NumUnderflow {
+            literal,
+            line,
+            column,
+            ..
+        } => (
+            "asset_error",
+            format!("JSON 小数下溢为 0: {literal} at {line}:{column}"),
+        ),
+        WriteError::ReadOnly { .. } => ("asset_error", "目标只读或无写入权限".to_string()),
+        // `Corrupt` and `Io` carry no path, only the underlying message.
+        WriteError::Corrupt(message) => ("asset_error", format!("写入目标不可用：{message}")),
+        WriteError::Io(io) => ("asset_error", format!("IO 错误：{io}")),
+        // `WriteError` is non-exhaustive: a future variant must still be path-free here.
+        _ => ("asset_error", "资产操作失败".to_string()),
     };
-    PluginError::new(code, error.to_string())
+    PluginError::new(code, message)
 }
 
 /// Generated output is written atomically only after the action has fully succeeded.
 pub fn write_output(path: &Path, bytes: &[u8]) -> PluginResult<()> {
     WriteKernel::write_atomic(path, bytes).map_err(asset_error)
+}
+
+#[cfg(test)]
+mod asset_error_tests {
+    use super::*;
+
+    #[test]
+    fn http_facing_messages_never_include_absolute_paths() {
+        let absolute = std::path::PathBuf::from("/home/someone/workspace/templates/demo.j2");
+        for error in [
+            WriteError::Conflict {
+                path: absolute.clone(),
+                expected: None,
+                actual: None,
+            },
+            WriteError::LockBusy {
+                path: absolute.clone(),
+            },
+            WriteError::ReadOnly {
+                path: absolute.clone(),
+            },
+        ] {
+            let mapped = asset_error(error);
+            assert!(
+                !mapped.message.contains("/home/someone"),
+                "path leaked over HTTP: {}",
+                mapped.message
+            );
+        }
+        // The two write failures stay distinguishable to clients.
+        assert_eq!(
+            asset_error(WriteError::Conflict {
+                path: absolute.clone(),
+                expected: None,
+                actual: None,
+            })
+            .message,
+            "资产已被其他进程或窗口修改，请刷新后重试"
+        );
+        assert_eq!(
+            asset_error(WriteError::LockBusy { path: absolute }).code,
+            "conflict"
+        );
+    }
 }

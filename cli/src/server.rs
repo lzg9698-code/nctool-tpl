@@ -116,16 +116,20 @@ async fn handle(State(state): State<WebState>, request: Request) -> Response {
             "POST requires application/json",
         ));
     }
+    let is_bundle = path.starts_with("/api/v2/bundle/");
+    let body_limit = if is_bundle {
+        64 * 1024 * 1024
+    } else {
+        1024 * 1024
+    };
+    let limit_message = if is_bundle {
+        "request body exceeds 64 MiB"
+    } else {
+        "request body exceeds 1 MiB"
+    };
     let bytes = match tokio::time::timeout(
         Duration::from_secs(10),
-        to_bytes(
-            request.into_body(),
-            if path.starts_with("/api/v2/bundle/") {
-                64 * 1024 * 1024
-            } else {
-                1024 * 1024
-            },
-        ),
+        to_bytes(request.into_body(), body_limit),
     )
     .await
     {
@@ -133,14 +137,14 @@ async fn handle(State(state): State<WebState>, request: Request) -> Response {
         Ok(Err(_)) => {
             return response(
                 StatusCode::PAYLOAD_TOO_LARGE,
-                json!({"ok":false,"error":{"code":"body_limit","message":"request body exceeds 1 MiB"}}),
+                json!({"ok":false,"error":{"code":"body_limit","message":limit_message}}),
             )
         }
         Err(_) => {
-            return error(PluginError::new(
-                "body_timeout",
-                "request body read timed out",
-            ))
+            return response(
+                StatusCode::REQUEST_TIMEOUT,
+                json!({"ok":false,"error":{"code":"body_timeout","message":"request body read timed out"}}),
+            )
         }
     };
     let body = if bytes.is_empty() {

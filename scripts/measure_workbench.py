@@ -47,7 +47,13 @@ def invoke(binary, home, workspace, source, context, extensions):
         stdin=subprocess.PIPE, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     # communicate closes stdin and drains stdout, avoiding deadlock on larger output.
-    output, error = process.communicate(payload, timeout=60)
+    try:
+        output, error = process.communicate(payload, timeout=60)
+    except subprocess.TimeoutExpired:
+        # Never leave a hung measurement process behind; the sample still fails.
+        process.kill()
+        process.communicate()
+        raise
     elapsed = (time.perf_counter() - started) * 1000
     memory = peak_working_set(process)
     if process.returncode:

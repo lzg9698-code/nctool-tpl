@@ -361,6 +361,15 @@ impl Runtime {
             })
             .collect()
     }
+    /// Look up one registered action descriptor without cloning the whole registry.
+    pub fn action_descriptor(&self, action: &str) -> Option<ActionDescriptor> {
+        self.state
+            .lock()
+            .unwrap()
+            .actions
+            .get(action)
+            .map(|registered| registered.descriptor.clone())
+    }
     pub fn bindings(&self) -> Value {
         json!(self.state.lock().unwrap().services)
     }

@@ -19,6 +19,8 @@ static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 // Keep failure detection bounded, and make the fixture sleep exceed that budget.
 const STARTUP_TIMEOUT_MS: u64 = 10_000;
 const FAULT_TIMEOUT_MS: u64 = 10_000;
+/// Short deadline used to observe a plugin reply that arrives after the host gave up.
+const LATE_TIMEOUT_MS: u64 = 500;
 const FAULT_UPPER_BOUND: Duration = Duration::from_secs(20);
 impl Temp {
     fn new() -> Self {
@@ -110,6 +112,12 @@ def invoke(action,data,server,request_id):
     mode=data.pop('mode','')
     if mode=='crash': os._exit(9)
     if mode=='sleep': time.sleep(30)
+    if mode=='wait': time.sleep(1)
+    if mode=='wait3': time.sleep(0.4)
+    if mode=='wait4': time.sleep(0.4)
+    if mode=='late':
+        time.sleep(0.7)
+        return compute(action,data,server,request_id)
     if mode=='malformed':
         print('not-json',flush=True)
         time.sleep(2)
@@ -235,6 +243,133 @@ fn cancellation_and_parallel_host_queries_do_not_block() {
         .invoke("report.compute", json!({"values":[2]}))
         .is_ok());
 }
+#[test]
+fn cancelling_one_request_keeps_concurrent_requests_alive() {
+    let temp = Temp::new();
+    fixture(&temp.0, STARTUP_TIMEOUT_MS);
+    let runtime = boot(&temp.0, &temp.0.join("workspace"));
+    // Warm the process so both requests are served by the same transport instance.
+    runtime
+        .invoke("report.compute", json!({"values":[1]}))
+        .unwrap();
+    let worker = runtime.clone();
+    let sibling = std::thread::spawn(move || {
+        worker.invoke_request(
+            "sibling",
+            "report.compute",
+            json!({"values":[7],"mode":"wait"}),
+        )
+    });
+    // Both requests must be in flight before the cancellation is issued, otherwise the
+    // "sibling" would merely recover after the process restart.
+    std::thread::sleep(Duration::from_millis(300));
+    let cancelled = runtime.clone();
+    let doomed = std::thread::spawn(move || {
+        cancelled.invoke_request(
+            "doomed",
+            "report.compute",
+            json!({"values":[1],"mode":"sleep"}),
+        )
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !runtime.cancel("doomed") {
+        assert!(Instant::now() < deadline, "doomed request never started");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(doomed.join().unwrap().unwrap_err().code, "cancelled");
+    // Cancelling one request must not tear down the transport for its sibling.
+    let sibling_result = sibling.join().unwrap();
+    assert!(
+        sibling_result.is_ok(),
+        "sibling request was failed by the cancellation: {sibling_result:?}"
+    );
+}
+
+#[test]
+fn a_sibling_survives_a_request_timeout_or_incompatible_frame() {
+    // A dead line of output ("incompatible frame") is a transport failure, and a single
+    // request deadline is a per-request failure. Only the former may fail the sibling.
+    for mode in ["sleep", "malformed"] {
+        let temp = Temp::new();
+        fixture(&temp.0, FAULT_TIMEOUT_MS);
+        let runtime = boot(&temp.0, &temp.0.join("workspace"));
+        runtime
+            .invoke("report.compute", json!({"values":[1]}))
+            .unwrap();
+        let worker = runtime.clone();
+        let sibling = std::thread::spawn(move || {
+            worker.invoke_request(
+                "sibling",
+                "report.compute",
+                json!({"values":[7],"mode":"wait"}),
+            )
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        let error = runtime
+            .invoke("report.compute", json!({"values":[1],"mode":mode}))
+            .unwrap_err();
+        assert_eq!(
+            error.code,
+            if mode == "sleep" {
+                "plugin_timeout"
+            } else {
+                "rpc_protocol"
+            }
+        );
+        let sibling_result = sibling.join().unwrap();
+        if mode == "sleep" {
+            // Only the timed-out request fails; the sibling keeps using the process.
+            assert!(
+                sibling_result.is_ok(),
+                "timeout failed the concurrent request: {sibling_result:?}"
+            );
+        } else {
+            // A malformed stream is untrustworthy: the process is torn down on purpose.
+            assert!(sibling_result.is_err());
+        }
+        // Either way the next invocation re-handshakes and succeeds.
+        assert!(runtime
+            .invoke("report.compute", json!({"values":[2]}))
+            .is_ok());
+    }
+}
+
+#[test]
+fn a_late_reply_after_a_timeout_does_not_break_a_concurrent_request() {
+    // Timeline with a 500 ms deadline: the "late" request starts at 0, times out at
+    // ~500 ms and its plugin reply arrives at ~700 ms. A sibling starts at ~450 ms and
+    // answers at ~850 ms (deadline ~950 ms), so it is in flight when the late reply
+    // arrives. Tearing the transport down for that reply would fail it.
+    let temp = Temp::new();
+    fixture(&temp.0, LATE_TIMEOUT_MS);
+    let runtime = boot(&temp.0, &temp.0.join("workspace"));
+    runtime
+        .invoke("report.compute", json!({"values":[1]}))
+        .unwrap();
+    let worker = runtime.clone();
+    let sibling = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(450));
+        worker.invoke_request(
+            "sibling",
+            "report.compute",
+            json!({"values":[7],"mode":"wait4"}),
+        )
+    });
+    let error = runtime
+        .invoke("report.compute", json!({"values":[1],"mode":"late"}))
+        .unwrap_err();
+    assert_eq!(error.code, "plugin_timeout");
+    let sibling_result = sibling.join().unwrap();
+    assert!(
+        sibling_result.is_ok(),
+        "timeout or late reply failed the concurrent request: {sibling_result:?}"
+    );
+    let result = runtime
+        .invoke("report.compute", json!({"values":[3]}))
+        .unwrap();
+    assert_eq!(result.data["total"], 3);
+}
+
 #[test]
 fn incompatible_manifest_and_package_symlink_rejected() {
     let temp = Temp::new();

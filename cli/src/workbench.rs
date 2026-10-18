@@ -12,6 +12,19 @@ use std::{
     },
     time::{SystemTime, UNIX_EPOCH},
 };
+/// Readable text for a caught panic payload, without leaking panic internals.
+fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
+    let detail = payload
+        .downcast_ref::<&str>()
+        .map(|text| (*text).to_string())
+        .or_else(|| payload.downcast_ref::<String>().cloned())
+        .unwrap_or_default();
+    if detail.is_empty() {
+        "任务执行发生内部错误".into()
+    } else {
+        format!("任务执行发生内部错误：{detail}")
+    }
+}
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -196,6 +209,16 @@ impl Workbench {
             .truncate(false)
             .open(path)?)
     }
+    /// Release one run's concurrency slot and cancellation entry exactly once.
+    ///
+    /// Called from a `Drop` guard so a panic anywhere in the run thread cannot leave the
+    /// workbench permanently at its concurrency limit or with an undeletable run id.
+    fn release(&self, id: &str) {
+        let removed = self.controls.lock().unwrap().remove(id);
+        if removed.is_some() {
+            self.active.fetch_sub(1, Ordering::SeqCst);
+        }
+    }
     fn save(&self, run: &Run) -> PluginResult<()> {
         self.save_run(run)?;
         self.save_summary(run)
@@ -255,13 +278,22 @@ impl Workbench {
         let mut summaries = vec![];
         for entry in std::fs::read_dir(folder)? {
             let entry = entry?;
-            if entry.file_type()?.is_file() && entry.path().extension().is_some_and(|e| e == "json")
+            if !entry.file_type()?.is_file()
+                || !entry.path().extension().is_some_and(|e| e == "json")
             {
-                let bytes = std::fs::read(entry.path())?;
-                if bytes.len() > 1024 * 1024 {
-                    return Err(PluginError::new("record_limit", "任务索引超过上限"));
-                }
-                summaries.push(parse_json(&bytes)?);
+                continue;
+            }
+            // The index is derived state: a single unreadable, oversized or unparseable
+            // entry must not block boot or every history request. It is skipped like any
+            // other unusable summary and re-created on the next write of that run.
+            let Ok(bytes) = std::fs::read(entry.path()) else {
+                continue;
+            };
+            if bytes.len() > 1024 * 1024 {
+                continue;
+            }
+            if let Ok(summary) = parse_json(&bytes) {
+                summaries.push(summary);
             }
         }
         Ok(summaries)
@@ -410,13 +442,11 @@ impl Workbench {
         title: &str,
         replay: Option<ReplayOrigin>,
     ) -> PluginResult<String> {
-        let capability = self
+        let descriptor = self
             .runtime
-            .capabilities()
-            .into_iter()
-            .find(|c| c.action.id == action)
+            .action_descriptor(action)
             .ok_or_else(|| PluginError::new("action_not_found", action))?;
-        nctool_runtime::validate_schema(&capability.action.input_schema, &input, "invalid_input")?;
+        nctool_runtime::validate_schema(&descriptor.input_schema, &input, "invalid_input")?;
         if self.active.fetch_add(1, Ordering::SeqCst) >= 8 {
             self.active.fetch_sub(1, Ordering::SeqCst);
             return Err(PluginError::new("plugin_busy", "最多同时执行 8 个任务"));
@@ -462,12 +492,23 @@ impl Workbench {
             .unwrap()
             .insert(id.clone(), cancellation.clone());
         let controller = self.clone();
+        struct Released(Arc<Workbench>, String);
+        impl Drop for Released {
+            fn drop(&mut self) {
+                self.0.release(&self.1);
+            }
+        }
+        let _released = Released(self.clone(), id.clone());
         std::thread::spawn(move || {
+            let _released = _released;
             let _guard = guard;
             let mut run = run;
             run.status = "running".into();
             let _ = controller.save(&run);
-            let outcome = (|| {
+            // A panic in a plugin call must not leak the concurrency slot or the
+            // cancellation entry: those are released by the guard below, and the run is
+            // recorded as a failure instead of staying "running" forever.
+            let outcome = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 cancellation.check()?;
                 // Freeze the generic template service's entire source collection before executing it.
                 // Domain and third-party actions retain their own input contracts.
@@ -479,8 +520,12 @@ impl Workbench {
                         inspected.data.get("snapshot").cloned().ok_or_else(|| {
                             PluginError::new("invalid_output", "模板检查未返回快照")
                         })?;
-                    for field in ["source", "template", "templates"] {
-                        run.input.as_object_mut().unwrap().remove(field);
+                    // The input schema requires an object, but never panic on untrusted
+                    // input: without a map the snapshot is still attached below.
+                    if let Some(fields) = run.input.as_object_mut() {
+                        for field in ["source", "template", "templates"] {
+                            fields.remove(field);
+                        }
                     }
                     run.input["snapshot"] = snapshot;
                 }
@@ -491,7 +536,11 @@ impl Workbench {
                     run.input.clone(),
                     cancellation.clone(),
                 )
-            })();
+            }));
+            let outcome = match outcome {
+                Ok(outcome) => outcome,
+                Err(panic) => Err(PluginError::new("internal_error", panic_message(panic))),
+            };
             match outcome {
                 Ok(result) if !cancellation.is_cancelled() => {
                     run.status = "succeeded".into();
@@ -518,8 +567,7 @@ impl Workbench {
                 run.error = Some(error);
                 let _ = controller.save(&run);
             }
-            controller.controls.lock().unwrap().remove(&run.id);
-            controller.active.fetch_sub(1, Ordering::SeqCst);
+            // The slot, controls entry and cancellation token are released by `_released`.
         });
         Ok(id)
     }

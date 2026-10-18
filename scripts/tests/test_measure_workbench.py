@@ -1,8 +1,10 @@
 """Independent checks for the reproducible performance report helper."""
 import importlib.util
 from pathlib import Path
+import subprocess
 import tempfile
 import unittest
+from unittest import mock
 
 SPEC = importlib.util.spec_from_file_location(
     "measure_workbench", Path(__file__).resolve().parents[1] / "measure_workbench.py"
@@ -24,6 +26,23 @@ class CompressionTests(unittest.TestCase):
             self.assertEqual(report["raw_bytes"], 2018)
             self.assertLess(report["gzip_bytes"], report["raw_bytes"])
             self.assertGreaterEqual(report["decompress_all_ms_median"], 0)
+
+
+class InvokeTimeoutTests(unittest.TestCase):
+    def test_timed_out_measurement_kills_the_child_and_still_fails(self):
+        process = mock.Mock()
+        process.communicate.side_effect = [
+            subprocess.TimeoutExpired(cmd="nctool", timeout=60),
+            (b"", b""),
+        ]
+        with mock.patch.object(MODULE.subprocess, "Popen", return_value=process):
+            with self.assertRaises(subprocess.TimeoutExpired):
+                MODULE.invoke(
+                    Path("nctool"), Path("home"), Path("workspace"), "x", {}, []
+                )
+        # A hung measurement must not leak the CLI process.
+        process.kill.assert_called_once_with()
+        self.assertEqual(process.communicate.call_count, 2)
 
 
 if __name__ == "__main__":
