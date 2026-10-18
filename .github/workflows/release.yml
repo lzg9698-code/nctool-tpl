@@ -1,4 +1,4 @@
-name: NCtool 2.0 release
+name: NCtool release
 on:
   push:
     tags: ['v2.*']

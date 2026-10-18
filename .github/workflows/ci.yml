@@ -1,4 +1,4 @@
-name: NCtool 2.0 CI
+name: NCtool CI
 on:
   push:
     branches: [master]
