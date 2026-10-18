@@ -194,6 +194,22 @@ class PreviewLaunchTests(unittest.TestCase):
             self.assertEqual([c["name"] for c in config["configurations"]], ["dev-template", "dev-math"])
             self.assertFalse((root / ".claude/settings.json").exists())
 
+    def test_launch_check_exit_codes_match_missing_stale_and_ready(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="setup-exits-") as directory:
+            root = Path(directory)
+            script = root / "scripts/dev/setup_agent_env.mjs"
+            script.parent.mkdir(parents=True)
+            shutil.copy2(DEV / "setup_agent_env.mjs", script)
+            args = ("node", str(script), "--with-launch", "--json")
+            self.assertEqual(run(*args).returncode, 1)
+            self.assertFalse((root / ".claude").exists())
+            self.assertEqual(run(*args, "--apply").returncode, 0)
+            self.assertEqual(run(*args).returncode, 0)
+            launch = root / ".claude/launch.json"
+            launch.write_text('{}', encoding="utf-8")
+            self.assertEqual(run(*args).returncode, 1)
+            self.assertEqual(launch.read_text(encoding="utf-8"), '{}')
+
     def test_plain_apply_creates_settings_without_template(self) -> None:
         with tempfile.TemporaryDirectory(prefix="setup-default-") as directory:
             root = Path(directory)

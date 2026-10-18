@@ -310,22 +310,22 @@ function checkMcp() {
 }
 
 function main() {
-  // Launch-only setup must work from a checkout without personal agent settings.
+  // Launch-only setup is independent, but uses the same exit-code contract.
+  let skills = [];
   if (withLaunch && !withSettings && !withHook) {
     setupLaunch();
-    report();
-    return;
+  } else {
+    skills = linkSkills();
+    checkClaudeMd();
+    checkMcp();
+    setupSettings();
+    setupLaunch();
+    setupMemoryNote();
   }
-  const skills = linkSkills();
-  checkClaudeMd();
-  checkMcp();
-  setupSettings();
-  setupLaunch();
-  setupMemoryNote();
 
   const errors = actions.filter((action) => action.state === "error");
   const pending = actions.filter((action) =>
-    ["missing", "broken", "conflict"].includes(action.state),
+    ["missing", "broken", "conflict", "pending"].includes(action.state),
   );
   if (!json)
     console.log(
