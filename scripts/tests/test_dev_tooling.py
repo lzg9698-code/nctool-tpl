@@ -31,6 +31,13 @@ def run(*command: str, stdin: str | None = None) -> subprocess.CompletedProcess[
 
 
 class SessionContextTests(unittest.TestCase):
+    def test_truncated_context_includes_suffix_within_limit(self) -> None:
+        spec = importlib.util.spec_from_file_location("session_fixture", DEV / "session_context.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        with patch.object(module, "status_summary", return_value=("HEAD", "x" * 7000)):
+            self.assertLessEqual(len(module.build()), module.LIMIT)
+
     def test_emits_session_start_payload(self) -> None:
         result = run(sys.executable, str(DEV / "session_context.py"))
         self.assertEqual(result.returncode, 0, result.stderr)

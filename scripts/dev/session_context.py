@@ -81,7 +81,8 @@ def build() -> str:
     ]
     text = "\n".join(parts)
     if len(text) > LIMIT:
-        text = text[:LIMIT].rstrip() + "\n…（会话基线已截断）"
+        suffix = "\n…（会话基线已截断）"
+        text = text[:LIMIT - len(suffix)].rstrip() + suffix
     return text
 
 
