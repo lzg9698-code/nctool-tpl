@@ -13,7 +13,7 @@ const modulePath = join(tools, "node_modules", "playwright");
 const apply = process.argv.includes("--apply");
 const force = process.argv.includes("--force");
 
-const npm = process.platform === "win32" ? "npm.cmd" : "npm";
+const npm = "npm";
 const shell = process.platform === "win32";
 
 function installPlaywright() {
@@ -31,10 +31,11 @@ function installPlaywright() {
   }
   // Spawn the .cmd shim through cmd.exe instead of using shell:true with args,
   // which Node deprecates because the arguments are only concatenated.
+  const npmShim = execFileSync("where.exe", ["npm.cmd"], { encoding: "utf8" }).trim().split(/\r?\n/)[0];
   execFileSync(
     process.env.ComSpec || "cmd.exe",
-    ["/d", "/s", "/c", [npm, ...args].map((part) => `"${part}"`).join(" ")],
-    { stdio: "inherit" },
+    ["/d", "/s", "/c", `"${[npmShim, ...args].map((part) => `"${part}"`).join(" ")}"`],
+    { stdio: "inherit", windowsVerbatimArguments: true },
   );
 }
 
