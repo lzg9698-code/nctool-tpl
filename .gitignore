@@ -54,3 +54,9 @@ ui/.vite/
 # Repository-root workbench assets are local data; portable samples live in examples/.
 /parameters/
 /templates/
+/presets/
+
+# ui/dist is a build intermediate: `node scripts/build_ui.mjs` regenerates it and
+# copies the same bytes into cli/ui, which is the tracked release copy. Tracking
+# both made every UI build produce a duplicate diff.
+/ui/dist/

@@ -41,7 +41,7 @@ cargo +1.89.0 check --workspace --all-features --locked
 - 引擎保持仅 MiniJinja 依赖；领域规则移入插件。
 - 服务实现者和消费者共同遵守服务版本；改变接口语义需升级服务版本。
 - CLI/WebUI 不导入领域模型；内置构造器只出现在 composition root。
-- WebUI 源码是 `ui/src` 的 React/TypeScript/CSS。首次执行 `npm ci --prefix ui`；`node scripts/build_ui.mjs` 构建 `ui/dist` 并生成 `cli/ui` 的静态资源及 Rust 嵌入表。不要直接编辑生成文件。
+- WebUI 源码是 `ui/src` 的 React/TypeScript/CSS。首次执行 `npm ci --prefix ui`；`node scripts/build_ui.mjs` 构建 `ui/dist` 并生成 `cli/ui` 的静态资源及 Rust 嵌入表。不要直接编辑生成文件。`ui/dist` 是构建中间产物且被 Git 忽略，受版本控制的是 `cli/ui`；新克隆必须先构建一次，`node scripts/build_ui.mjs --check` 与 `python scripts/check_v2.py` 才有可比对的产物。
 - 新动作提供 JSON Schema、可运行示例和插件贡献的页面描述。
 - 资产必须经 JsonStore/WriteKernel；不跳过指纹或静默替换文件。
 - 旧 Tauri 桌面 GUI 已移除；界面开发使用当前 WebUI，旧 GUI 资料仅作历史参考。
