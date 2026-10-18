@@ -57,7 +57,7 @@ nctool --workspace ./my-workspace --home ./my-config ui
 
 ## 已移除的领域能力
 
-当前版本已移除内置 NC、机床、多工序、同步粗车、越程槽与轨迹预设，以及它们的专用页面和编辑器；默认组合为 `template` + `parameters`，数学扩展为唯一可选能力。历史入口与替代说明见[机床配置指南（历史入口）](MACHINE_CONFIG_GUIDE.md)、[同步粗车与越程槽专用插件（历史入口）](SPECIALIZED_TURNING_PLUGINS.md)与[项目状态](PROJECT_STATUS.md)。
+当前版本已移除内置 NC、机床、多工序、同步粗车、越程槽与轨迹预设，以及它们的专用页面和编辑器；默认组合为 `template` + `parameters`，数学扩展为唯一可选能力。当前能力与替代方案见[项目状态](PROJECT_STATUS.md)与[插件协议](PLUGIN_PROTOCOL.md)；原始指南保存在[历史归档](archive/README.md)。
 
 带旧加工元数据（`metadata.nc` 或加工 `execution.action`）的模板不会被降级为普通渲染；旧加工历史只可查看、比较和导出原产物，不能重跑或恢复为可执行文档。包含退役加工集合的资产包在预检查阶段整体拒绝，不做部分导入。
 

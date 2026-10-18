@@ -14,7 +14,7 @@
 | [模板编写指南](TEMPLATE_WRITING_GUIDE.md) | 模板作者：JSON 资产、参数定义、模板引用与显式渲染扩展 |
 | [独立参数与受管生成](PARAMETER_MANAGEMENT.md) | 共享定义、预置、绑定、来源、冻结快照与通用受管渲染 |
 
-旧机床、同步粗车/越程槽与工艺核对清单已降级为历史入口，只标注当前替代入口，不再描述可执行操作：[机床配置指南（历史入口）](MACHINE_CONFIG_GUIDE.md) · [同步粗车与越程槽专用插件（历史入口）](SPECIALIZED_TURNING_PLUGINS.md) · [工艺核对清单（历史入口）](PROCESS_CHECKLIST.md)。移除前的完整源码上下文与恢复说明见[NC 移除恢复说明](NC_REMOVAL_RECOVERY_2026-10-16.md)。
+已移除的内置能力（机床、工序、同步粗车、越程槽、轨迹、旧固定工作台迁移）不再设独立入口页。原始指南按原路径保存在 `docs/archive/legacy/` 的恢复包中，恢复方法见[历史归档索引](archive/README.md)；当前能力见[项目状态](PROJECT_STATUS.md)，领域能力通过[插件协议](PLUGIN_PROTOCOL.md)自行实现。移除前的完整源码上下文与恢复说明见[NC 移除恢复说明](NC_REMOVAL_RECOVERY_2026-10-16.md)。
 
 ## 开发与接口
 
