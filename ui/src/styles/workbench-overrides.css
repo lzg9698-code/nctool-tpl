@@ -38,7 +38,21 @@
     padding: 10px 16px;
   }
 }
+.connection-dot {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--muted);
+  margin-right: 6px;
+}
+.connection-dot.failed {
+  background: var(--danger);
+}
 /* Workbench layout and shared interaction states. */
+input:focus-visible,
+select:focus-visible,
+textarea:focus-visible,
 button:focus-visible,
 summary:focus-visible,
 a:focus-visible,
@@ -103,6 +117,9 @@ small {
   font-size: 14px;
   min-height: 40px;
 }
+.nav-item > span {
+  opacity: 1;
+}
 .nav-item .nav-label {
   margin-left: 0;
   flex: 1;
@@ -124,6 +141,13 @@ small {
 }
 .search-field input {
   font-size: 14px;
+}
+.search-field:focus-within {
+  outline: 2px solid var(--focus);
+  outline-offset: 3px;
+}
+.search-field input:focus-visible {
+  outline: none;
 }
 .filter-summary {
   display: flex;

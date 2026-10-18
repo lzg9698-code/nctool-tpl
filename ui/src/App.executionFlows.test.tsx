@@ -31,9 +31,15 @@ vi.mock("./lib/managedDependencies", () => ({
   useManagedDependencies: () => ({ stale: false }),
 }));
 vi.mock("./plugins/registry", () => ({ builtinViews: {} }));
-vi.mock("./components/LazyEditor", () => ({
-  Editor: ({ value }: Data) => <pre data-testid="editor">{value}</pre>,
-}));
+const editorHarness = vi.hoisted(() => ({ ready: undefined as (() => void) | undefined, insert: vi.fn() }));
+vi.mock("./components/LazyEditor", async () => {
+  const { useEffect, useImperativeHandle } = await import("react");
+  return { Editor: ({ value, ref, onReady }: Data) => {
+    useImperativeHandle(ref, () => ({ insert: editorHarness.insert, focus: vi.fn() }), []);
+    useEffect(() => { editorHarness.ready = onReady; return () => { editorHarness.ready = undefined; }; }, [onReady]);
+    return <pre data-testid="editor">{value}</pre>;
+  } };
+});
 vi.mock("./components/SchemaEditor", () => ({
   SchemaEditor: ({ schema, onChange }: Data) => (
     <div>
@@ -94,6 +100,7 @@ vi.mock("./components/WorkbenchUi", () => ({
 
 afterEach(() => {
   cleanup();
+  editorHarness.ready = undefined;
   vi.clearAllMocks();
   localStorage.clear();
 });
@@ -132,6 +139,107 @@ function shell(path: string) {
 }
 
 describe("active App execution lifecycle", () => {
+  it.each(["workspace", "capabilities", "plugins"])("reports a failed %s initialization accurately", async (failedPath) => {
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      if (path === failedPath) throw new Error("offline");
+      return shell(path);
+    });
+    render(<App />);
+    await screen.findByText("工作区连接失败");
+    expect(screen.queryByText("本地服务已连接")).toBeNull();
+  });
+
+  it("keeps the connection established when only the catalog fails", async () => {
+    vi.mocked(loadDrafts).mockReturnValue({ documents: [], active: null });
+    vi.mocked(loadTemplateCatalog).mockRejectedValue(new Error("catalog unavailable"));
+    vi.mocked(api).mockImplementation(async (path: string) => shell(path) || { runs: [] });
+    render(<App />);
+    await screen.findByText("本地服务已连接");
+    expect((await screen.findAllByText("catalog unavailable")).length).toBeGreaterThan(0);
+    expect(screen.queryByText("工作区连接失败")).toBeNull();
+  });
+
+  it("waits for the target editor and consumes an include insertion only once", async () => {
+    const doc = sharedDocument();
+    doc.mode = "edit";
+    doc.tab = "settings";
+    vi.mocked(loadDrafts).mockReturnValue({ documents: [doc], active: doc.key });
+    vi.mocked(loadTemplateCatalog).mockResolvedValue({ items: [{ id: "shared", title: "共享模板", tags: [] }], diagnostics: [] });
+    vi.mocked(api).mockImplementation(async (path: string) => shell(path) || { runs: [] });
+    render(<App />);
+    fireEvent.change(await screen.findByLabelText("插入其他模板引用"), { target: { value: "shared" } });
+    await screen.findByTestId("editor");
+    expect(editorHarness.insert).not.toHaveBeenCalled();
+    editorHarness.ready?.();
+    editorHarness.ready?.();
+    expect(editorHarness.insert).toHaveBeenCalledExactlyOnceWith('{% include "shared" %}');
+  });
+
+  it("discards a pending include when switching documents before readiness", async () => {
+    const doc = sharedDocument();
+    doc.mode = "edit";
+    doc.tab = "settings";
+    doc.title = "引用目标";
+    const other = sharedDocument();
+    other.title = "另一个文档";
+    vi.mocked(loadDrafts).mockReturnValue({ documents: [doc, other], active: doc.key });
+    vi.mocked(loadTemplateCatalog).mockResolvedValue({ items: [{ id: "shared", title: "共享模板", tags: [] }], diagnostics: [] });
+    vi.mocked(api).mockImplementation(async (path: string) => shell(path) || { runs: [] });
+    render(<App />);
+    fireEvent.change(await screen.findByLabelText("插入其他模板引用"), { target: { value: "shared" } });
+    await screen.findByTestId("editor");
+    const lateReady = editorHarness.ready;
+    fireEvent.click(screen.getByRole("button", { name: other.title }));
+    lateReady?.();
+    fireEvent.click(screen.getByRole("button", { name: doc.title }));
+    await screen.findByTestId("editor");
+    editorHarness.ready?.();
+    expect(editorHarness.insert).not.toHaveBeenCalled();
+  });
+
+  it("exposes the current document and selected workbench controls", async () => {
+    const first = sharedDocument();
+    first.title = "第一个模板";
+    const second = sharedDocument();
+    second.title = "第二个模板";
+    vi.mocked(loadDrafts).mockReturnValue({ documents: [first, second], active: first.key });
+    vi.mocked(loadTemplateCatalog).mockResolvedValue({ items: [], diagnostics: [] });
+    vi.mocked(api).mockImplementation(async (path: string) => {
+      const base = shell(path);
+      if (base) return base;
+      if (path === "runs") return { runs: [] };
+      throw new Error("unexpected api call: " + path);
+    });
+    vi.mocked(action).mockResolvedValue({ data: { items: [] } });
+    render(<App />);
+    const firstButton = await screen.findByRole("button", { name: first.title });
+    expect(firstButton.getAttribute("aria-current")).toBe("page");
+    fireEvent.click(screen.getByRole("button", { name: second.title }));
+    expect(firstButton.hasAttribute("aria-current")).toBe(false);
+    expect(screen.getByRole("button", { name: second.title }).getAttribute("aria-current")).toBe("page");
+
+    const selected = (name: string, value: boolean) =>
+      screen.getByRole("button", { name, pressed: value });
+    selected("使用模板", true);
+    selected("编辑模板", false);
+    selected("生成结果", true);
+    fireEvent.click(selected("检查信息", false));
+    selected("检查信息", true);
+    selected("生成结果", false);
+    fireEvent.click(selected("编辑模板", false));
+    selected("编辑模板", true);
+    selected("使用模板", false);
+    selected("模板源码", true);
+    fireEvent.click(selected("模板信息", false));
+    selected("模板信息", true);
+    selected("模板源码", false);
+    selected("参数定义", true);
+    fireEvent.click(selected("默认参数", false));
+    selected("默认参数", true);
+    selected("参数定义", false);
+    expect(vi.mocked(api).mock.calls.every(([, body]) => body === undefined)).toBe(true);
+  });
+
   it("enabling shared bindings updates the active action and survives a draft flush", async () => {
     const doc = newDocument();
     doc.generationAction = "template.render";

@@ -55,11 +55,13 @@ const HistoryPage = lazy(() =>
 );
 import { builtinViews } from "./plugins/registry";
 import { generalDocuments, loadTemplateCatalog } from "./lib/templateCatalog";
+import { filterCatalogItems, catalogTags } from "./lib/workbenchDerived";
 import type { HistoryComparison } from "./components/HistoryPage";
 import {
   lazy,
   useEffect,
   useRef,
+  useMemo,
   useState,
   Suspense,
   type ReactNode,
@@ -161,6 +163,7 @@ export default function App() {
       null,
     ),
     [dialog, setDialog] = useState<Dialog | null>(null);
+  const [connection, setConnection] = useState<"connecting" | "connected" | "failed">("connecting");
   const [sidebarCollapsed, setSidebarCollapsed] = useState(false);
   const [catalogState, setCatalogState] = useState<
     "loading" | "ready" | "error"
@@ -189,13 +192,29 @@ export default function App() {
       "result" | "diagnostics" | "parameters"
     >("result");
   const code = useRef<EditorHandle>(null);
+  const pendingInsert = useRef<{ key: string; text: string } | null>(null);
   const [jump, setJump] = useState<number | undefined>();
   const imported = useRef<HTMLInputElement>(null);
   // Latest documents for async continuations that must not act on a stale copy.
   const documentsRef = useRef(documents);
   documentsRef.current = documents;
-  const visibleDocuments = generalDocuments(documents);
+  const visibleDocuments = useMemo(() => generalDocuments(documents), [documents]);
+  const dirtyKeys = useMemo(
+    () => new Set(documents.filter(isDirty).map((document) => document.key)),
+    [documents],
+  );
   const doc = visibleDocuments.find((d) => d.key === active);
+  const sourceTarget = useRef<string | undefined>(undefined);
+  sourceTarget.current = page === "workbench" && doc?.mode === "edit" && doc.tab === "source"
+    ? doc.key : undefined;
+  if (pendingInsert.current && pendingInsert.current.key !== sourceTarget.current)
+    pendingInsert.current = null;
+  function insertWhenReady(key: string) {
+    const pending = pendingInsert.current;
+    if (pending?.key !== key || sourceTarget.current !== key || !code.current) return;
+    pendingInsert.current = null;
+    code.current.insert(pending.text);
+  }
   useEffect(() => {
     setJsonError("");
   }, [active]);
@@ -296,6 +315,7 @@ export default function App() {
   }
   useEffect(() => {
     let cancelled = false;
+    let workspaceConnected = false;
     (async () => {
       try {
         const [w, c, i] = await Promise.all([
@@ -305,6 +325,8 @@ export default function App() {
         ]);
         if (cancelled) return;
         setWorkspace(w);
+        setConnection("connected");
+        workspaceConnected = true;
         try {
           setSidebarCollapsed(
             localStorage.getItem("nctool:sidebar:" + w.id) === "collapsed",
@@ -355,9 +377,12 @@ export default function App() {
         const records = await api("runs");
         setRunList(records.runs);
       } catch (error) {
-        fail(error);
+        if (!cancelled) {
+          if (!workspaceConnected) setConnection("failed");
+          fail(error);
+        }
       } finally {
-        setLoading(false);
+        if (!cancelled) setLoading(false);
       }
     })();
     return () => {
@@ -943,16 +968,8 @@ export default function App() {
       fail(error);
     }
   }
-  const visible = items.filter(
-    (item) =>
-      (!query ||
-        [item.title, item.description, item.id, ...item.tags]
-          .join(" ")
-          .toLowerCase()
-          .includes(query.toLowerCase())) &&
-      (!tag || item.tags.includes(tag)),
-  );
-  const tags = [...new Set(items.flatMap((item) => item.tags))];
+  const visible = useMemo(() => filterCatalogItems(items, query, tag), [items, query, tag]);
+  const tags = useMemo(() => catalogTags(items), [items]);
   const diagnostics = latest?.error
     ? diagnosticsFrom(latest.error)
     : latest?.result?.diagnostics || [];
@@ -1274,6 +1291,7 @@ export default function App() {
                   }
                 >
                   <button
+                    aria-current={document.key === active ? "page" : undefined}
                     onClick={() => {
                       setActive(document.key);
                       setErrors({});
@@ -1283,7 +1301,7 @@ export default function App() {
                   >
                     <FileCode2 size={14} />
                     {document.title}
-                    {isDirty(document) && <span className="dirty-dot" />}
+                    {dirtyKeys.has(document.key) && <span className="dirty-dot" />}
                   </button>
                   <button
                     aria-label={"关闭" + document.title}
@@ -1330,12 +1348,12 @@ export default function App() {
                         onChange={(e) => editDoc({ title: e.target.value })}
                       />
                       <span className="document-state">
-                        {isDirty(doc) ? (
+                        {dirtyKeys.has(doc.key) ? (
                           <span className="dirty-dot" />
                         ) : (
                           <Check size={12} />
                         )}
-                        {isDirty(doc) ? "有未保存修改" : "已保存"}
+                        {dirtyKeys.has(doc.key) ? "有未保存修改" : "已保存"}
                         {doc.id ? "" : " · 新模板"}
                       </span>
                     </div>
@@ -1391,6 +1409,7 @@ export default function App() {
                     <div className="mode-controls">
                       <div className="segmented">
                         <button
+                          aria-pressed={doc.mode === "use"}
                           className={doc.mode === "use" ? "selected" : ""}
                           onClick={() => useTemplate()}
                         >
@@ -1398,6 +1417,7 @@ export default function App() {
                           使用模板
                         </button>
                         <button
+                          aria-pressed={doc.mode === "edit"}
                           className={doc.mode === "edit" ? "selected" : ""}
                           onClick={() => editDoc({ mode: "edit" })}
                         >
@@ -1477,18 +1497,21 @@ export default function App() {
                         <div className="pane-toolbar">
                           <div className="pane-tabs">
                             <button
+                              aria-pressed={doc.tab === "source"}
                               className={doc.tab === "source" ? "selected" : ""}
                               onClick={() => editDoc({ tab: "source" })}
                             >
                               模板源码
                             </button>
                             <button
+                              aria-pressed={doc.tab === "schema"}
                               className={doc.tab === "schema" ? "selected" : ""}
                               onClick={() => editDoc({ tab: "schema" })}
                             >
                               高级规格
                             </button>
                             <button
+                              aria-pressed={doc.tab === "settings"}
                               className={
                                 doc.tab === "settings" ? "selected" : ""
                               }
@@ -1519,6 +1542,7 @@ export default function App() {
                         {doc.tab === "source" ? (
                           <Editor
                             ref={code}
+                            onReady={() => insertWhenReady(doc.key)}
                             editorKey={doc.key}
                             value={doc.asset.source}
                             onChange={(source) =>
@@ -1605,14 +1629,11 @@ export default function App() {
                                 defaultValue=""
                                 onChange={(e) => {
                                   if (e.target.value) {
+                                    pendingInsert.current = {
+                                      key: doc.key,
+                                      text: `{% include "${e.target.value}" %}`,
+                                    };
                                     editDoc({ tab: "source" });
-                                    setTimeout(
-                                      () =>
-                                        code.current?.insert(
-                                          `{% include "${e.target.value}" %}`,
-                                        ),
-                                      50,
-                                    );
                                   }
                                 }}
                               >
@@ -1638,6 +1659,7 @@ export default function App() {
                         <div className="pane-toolbar">
                           <div className="pane-tabs">
                             <button
+                              aria-pressed={inspector === "definition"}
                               className={
                                 inspector === "definition" ? "selected" : ""
                               }
@@ -1646,6 +1668,7 @@ export default function App() {
                               参数定义
                             </button>
                             <button
+                              aria-pressed={inspector === "defaults"}
                               className={
                                 inspector === "defaults" ? "selected" : ""
                               }
@@ -1654,6 +1677,7 @@ export default function App() {
                               默认参数
                             </button>
                             <button
+                              aria-pressed={inspector === "bindings"}
                               className={inspector === "bindings" ? "selected" : ""}
                               onClick={() => setInspector("bindings")}
                             >
@@ -1737,6 +1761,7 @@ export default function App() {
                         <strong>本次参数</strong>
                         <div className="pane-tabs">
                           <button
+                            aria-pressed={paramMode === "form"}
                             className={paramMode === "form" ? "selected" : ""}
                             onClick={() => {
                               setParamMode("form");
@@ -1746,6 +1771,7 @@ export default function App() {
                             表单
                           </button>
                           <button
+                            aria-pressed={paramMode === "json"}
                             className={paramMode === "json" ? "selected" : ""}
                             onClick={() => setParamMode("json")}
                           >
@@ -1868,12 +1894,14 @@ export default function App() {
                     <div className="pane-toolbar">
                       <div className="pane-tabs">
                         <button
+                          aria-pressed={resultTab === "result"}
                           className={resultTab === "result" ? "selected" : ""}
                           onClick={() => setResultTab("result")}
                         >
                           生成结果
                         </button>
                         <button
+                          aria-pressed={resultTab === "diagnostics"}
                           className={
                             resultTab === "diagnostics" ? "selected" : ""
                           }
@@ -1888,6 +1916,7 @@ export default function App() {
                         </button>
                         {latest?.result?.data.parameters && (
                           <button
+                            aria-pressed={resultTab === "parameters"}
                             className={
                               resultTab === "parameters" ? "selected" : ""
                             }
@@ -2187,9 +2216,9 @@ export default function App() {
           </Suspense>
         )}
         <footer className="status-bar">
-          <span>
-            <span className="online-dot" />
-            本地服务已连接
+          <span role="status">
+            <span className={connection === "connected" ? "online-dot" : "connection-dot " + connection} />
+            {connection === "connected" ? "本地服务已连接" : connection === "failed" ? "工作区连接失败" : "正在连接本地服务…"}
           </span>
           <span>
             草稿自动恢复 ·{" "}

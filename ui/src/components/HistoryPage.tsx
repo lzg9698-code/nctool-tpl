@@ -281,48 +281,48 @@ export function HistoryPage({
               <label>
                 与另一条成功记录比较
                 <input aria-label="搜索比较基准记录" value={compareQuery} onChange={(event) => { setCompareOffset(0); setCompareQuery(event.target.value); }} />
-                <select
-                  aria-label="比较历史记录"
-                  value={compareSelectedId}
-                  onChange={async (event) => {
-                    const id = event.target.value;
-                    if (!id) {
-                      compareRevision.current += 1;
-                      setCompareSelectedId("");
-                      setComparison(null);
-                      return;
-                    }
-                    setCompareSelectedId(id);
-                    const revision = ++compareRevision.current;
-                    const after = selectedHistory;
-                    try {
-                      const before = await api("runs/" + id);
-                      if (revision !== compareRevision.current) return;
-                      setComparison({ before, after });
-                    } catch (error) {
-                      if (revision === compareRevision.current) fail(error);
-                    }
-                  }}
-                >
-                  <option value="">选择基准记录</option>
-                  {[...new Map([...runList, ...page.runs, ...compareRuns].map((record) => [record.id, record])).values()]
-                    .filter(
-                      (record) =>
-                        record.status === "succeeded" &&
-                        (record.id !== selectedHistory.id || record.id === compareSelectedId),
-                    )
-                    .map((record) => (
-                      <option key={record.id} value={record.id}>
-                        {record.title} · {dateText(record.started_at)}
-                      </option>
-                    ))}
-                </select>
-                <div className="history-compare-pagination">
-                  <button className="button secondary" disabled={compareOffset === 0} onClick={() => setCompareOffset(Math.max(0, compareOffset - 25))}>上一页</button>
-                  <span>{compareTotal ? `${compareOffset + 1}-${Math.min(compareOffset + 25, compareTotal)} / ${compareTotal}` : "0 / 0"}</span>
-                  <button className="button secondary" disabled={compareOffset + 25 >= compareTotal} onClick={() => setCompareOffset(compareOffset + 25)}>下一页</button>
-                </div>
               </label>
+              <select
+                aria-label="比较历史记录"
+                value={compareSelectedId}
+                onChange={async (event) => {
+                  const id = event.target.value;
+                  if (!id) {
+                    compareRevision.current += 1;
+                    setCompareSelectedId("");
+                    setComparison(null);
+                    return;
+                  }
+                  setCompareSelectedId(id);
+                  const revision = ++compareRevision.current;
+                  const after = selectedHistory;
+                  try {
+                    const before = await api("runs/" + id);
+                    if (revision !== compareRevision.current) return;
+                    setComparison({ before, after });
+                  } catch (error) {
+                    if (revision === compareRevision.current) fail(error);
+                  }
+                }}
+              >
+                <option value="">选择基准记录</option>
+                {[...new Map([...runList, ...page.runs, ...compareRuns].map((record) => [record.id, record])).values()]
+                  .filter(
+                    (record) =>
+                      record.status === "succeeded" &&
+                      (record.id !== selectedHistory.id || record.id === compareSelectedId),
+                  )
+                  .map((record) => (
+                    <option key={record.id} value={record.id}>
+                      {record.title} · {dateText(record.started_at)}
+                    </option>
+                  ))}
+              </select>
+              <div className="history-compare-pagination">
+                <button className="button secondary" disabled={compareOffset === 0} onClick={() => setCompareOffset(Math.max(0, compareOffset - 25))}>上一页</button>
+                <span>{compareTotal ? `${compareOffset + 1}-${Math.min(compareOffset + 25, compareTotal)} / ${compareTotal}` : "0 / 0"}</span>
+                <button className="button secondary" disabled={compareOffset + 25 >= compareTotal} onClick={() => setCompareOffset(compareOffset + 25)}>下一页</button>
+              </div>
             </div>
           )}
           {comparison && comparison.after?.id === selectedId && (

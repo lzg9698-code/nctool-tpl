@@ -58,6 +58,33 @@ describe("template presentation ownership", () => {
     expect(result.diagnostics).toEqual([]);
   });
 
+  it("keeps every asset's full metadata and read fingerprint, in catalog order", async () => {
+    vi.mocked(action).mockImplementation(async (id, input) =>
+      id === "template.catalog"
+        ? { data: { items: [{ id: "a" }, { id: "b" }] } }
+        : {
+            data: {
+              asset: {
+                source: "x",
+                metadata: { title: "标题 " + input.name, tags: ["t"] },
+              },
+              fingerprint: "fp-" + input.name,
+            },
+          },
+    );
+    const result = await loadTemplateCatalog();
+    // Order is the catalog order, not the read completion order.
+    expect(result.items.map((item) => item.id)).toEqual(["a", "b"]);
+    // The whole asset (metadata included) survives so callers can classify it.
+    expect(result.items[0].asset.metadata.title).toBe("标题 a");
+    expect(result.items[0].asset.metadata.tags).toEqual(["t"]);
+    // The read fingerprint is the baseline the save path compares against.
+    expect(result.items.map((item) => item.fingerprint)).toEqual([
+      "fp-a",
+      "fp-b",
+    ]);
+  });
+
   it("retains readable assets and reports failed reads without leaking unclassified entries", async () => {
     vi.mocked(action).mockImplementation(async (id, input) => {
       if (id === "template.catalog")

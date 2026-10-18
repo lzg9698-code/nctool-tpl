@@ -107,6 +107,14 @@ function Field({
   const error = errors[path];
   const id = "field-" + encodeURIComponent(path);
   const nullable = Array.isArray(schema.type) && schema.type.includes("null");
+  // Only the branches that render an element with id={id} should carry a label
+  // association. Group (object/array), untyped and null placeholder branches
+  // render no such control, so pointing htmlFor at id would reference a
+  // missing element.
+  const hasControl =
+    !schema["x-untyped"] &&
+    !(nullable && value === null) &&
+    !(!schema.enum && (type === "object" || type === "array"));
   function onChange(next: Data) {
     onFieldChange?.(path, next);
     update(next);
@@ -117,7 +125,7 @@ function Field({
       data-field-path={path}
     >
       <div className="field-heading">
-        <label htmlFor={id}>
+        <label htmlFor={hasControl ? id : undefined}>
           {label}
           {required && <span className="required">*</span>}
           {schema["x-unit"] && <span className="unit">{schema["x-unit"]}</span>}
@@ -146,6 +154,7 @@ function Field({
           <button
             className="text-button"
             onClick={() => onChange(defaultValue({ ...schema, type }))}
+            disabled={disabled}
           >
             填写值
           </button>
@@ -215,7 +224,11 @@ function Field({
             </div>
           ))}
           {value === undefined && (
-            <button className="text-button" onClick={() => onChange([])}>
+            <button
+              className="text-button"
+              onClick={() => onChange([])}
+              disabled={disabled}
+            >
               设为空列表
             </button>
           )}
@@ -299,6 +312,7 @@ function Field({
         <button
           className="text-button null-button"
           onClick={() => onChange(null)}
+          disabled={disabled}
         >
           设为空值
         </button>

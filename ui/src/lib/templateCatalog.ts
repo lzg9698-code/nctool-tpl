@@ -9,6 +9,8 @@ export function generalDocuments(documents: Document[]): Document[] {
   return documents.filter((document) => !domainTemplate(document.asset));
 }
 
+// Read every asset to classify its metadata and retain its current save fingerprint.
+// Any concurrency change needs measurement against the real host, not mock latency.
 export async function loadTemplateCatalog() {
   const catalog = await action("template.catalog", {});
   const diagnostics: Data[] = [...(catalog.diagnostics || [])];

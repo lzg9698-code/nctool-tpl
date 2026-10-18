@@ -81,6 +81,7 @@ export interface EditorProps {
   label?: string;
   line?: number;
   editorKey?: string;
+  onReady?: () => void;
 }
 export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
   {
@@ -91,6 +92,7 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
     label = "模板源码",
     line,
     editorKey = "",
+    onReady,
   },
   ref,
 ) {
@@ -98,6 +100,8 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
   const view = useRef<EditorView | null>(null);
   const change = useRef(onChange);
   change.current = onChange;
+  const ready = useRef(onReady);
+  ready.current = onReady;
   useImperativeHandle(
     ref,
     () => ({
@@ -251,5 +255,8 @@ export const Editor = forwardRef<EditorHandle, EditorProps>(function Editor(
       }
     }
   }, [line]);
+  useEffect(() => {
+    ready.current?.();
+  }, [language, readonly, label, editorKey]);
   return <div ref={root} className="code-editor" />;
 });

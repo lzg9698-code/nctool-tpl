@@ -1,11 +1,11 @@
 // @vitest-environment jsdom
 
-import { StrictMode, useState } from "react";
+import { createRef, StrictMode, useState } from "react";
 import { act, cleanup, fireEvent, render } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { EditorView } from "@codemirror/view";
 import { undo, undoDepth } from "@codemirror/commands";
-import { Editor } from "./Editor";
+import { Editor, type EditorHandle } from "./Editor";
 
 afterEach(() => {
   cleanup();
@@ -17,6 +17,20 @@ function viewIn(container: HTMLElement) {
 }
 
 describe("Editor document history", () => {
+  it("can insert on readiness without losing the insertion to controlled synchronization", () => {
+    const ref = createRef<EditorHandle>();
+    const change = vi.fn();
+    function ReadyEditor() {
+      const [value, setValue] = useState("base");
+      return <Editor ref={ref} value={value} onChange={(text) => { change(text); setValue(text); }} onReady={() => ref.current?.insert("include")} />;
+    }
+    const { container } = render(<ReadyEditor />);
+    expect(viewIn(container).state.doc.toString()).toBe("includebase");
+    expect(change).toHaveBeenCalledExactlyOnceWith("includebase");
+    act(() => { expect(undo(viewIn(container))).toBe(true); });
+    expect(viewIn(container).state.doc.toString()).toBe("base");
+  });
+
   it("does not undo an external value replacement or emit it as a user change", () => {
     const onChange = vi.fn();
     const { container, rerender } = render(

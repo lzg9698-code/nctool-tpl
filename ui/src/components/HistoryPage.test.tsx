@@ -358,3 +358,17 @@ describe("history comparison request ordering", () => {
     expect(setComparison).not.toHaveBeenCalled();
   });
 });
+
+describe("history comparison control structure", () => {
+  it("keeps the baseline search, select and pagination out of one shared label", () => {
+    render(<Harness runs={[makeRun("r0"), makeRun("r2")]} selected={makeRun("r1")} />);
+    const search = screen.getByLabelText("搜索比较基准记录");
+    const select = screen.getByLabelText("比较历史记录");
+    const searchLabel = search.closest("label");
+    expect(searchLabel).not.toBeNull();
+    expect(searchLabel!.contains(select)).toBe(false);
+    expect(select.closest("label")).toBeNull();
+    expect(screen.getByRole("button", { name: "上一页" }).closest("label")).toBeNull();
+    expect(screen.getByRole("button", { name: "下一页" }).closest("label")).toBeNull();
+  });
+});
