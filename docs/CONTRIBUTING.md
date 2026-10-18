@@ -62,6 +62,8 @@ cargo +1.89.0 check --workspace --all-features --locked
 
 自动浏览器验收：先构建 `cargo build -p nctool-cli --features math`，安装 Playwright 1.62.1 和 Chromium，再执行 `node scripts/browser_v2.cjs`。可用 `NCTOOL_PLAYWRIGHT` 指定独立安装目录，`NCTOOL_CHROMIUM` 指定浏览器路径。脚本使用临时 home/workspace，覆盖默认与数学组合、退役边界与 Python 插件，不修改用户配置。
 
+`browser_v2.cjs` 还检查实际加载的编辑器样式：CSS 变量均有定义，关键字/数字/字符串/注释具有独立颜色，搜索面板和输入框背景不透明且文字可见，搜索命中高亮出现。报告目录保存 `editor-styles.json` 与 `editor-styles.png`，样式断言失败会阻断现有浏览器 CI。
+
 手工逐项走查见[WebUI 验收清单](UI_ACCEPTANCE_CHECKLIST.md)，每次记录平台、源码版本和实际执行结果。
 
 

@@ -93,6 +93,57 @@ async function generate() {
     .waitFor();
   await complete();
 }
+async function checkEditorStyles() {
+  const editor = content("模板源码");
+  await editor.fill('{% set count = 12 %}\n{{ "sample" }}\n{# editor style regression #}');
+  const tokens = ["keyword", "number", "string", "comment"];
+  for (const token of tokens)
+    await editor.locator(".syntax-" + token).first().waitFor();
+  const styles = await editor.evaluate((element, names) => {
+    const rootStyle = getComputedStyle(element);
+    const variables = [
+      "--editor-text", "--editor-background", "--editor-gutter",
+      "--editor-gutter-text", "--editor-active-line", "--editor-active-gutter",
+      "--editor-selection", "--editor-search", "--editor-match",
+      "--surface-muted", "--warning-line",
+      ...names.map((name) => "--syntax-" + name),
+    ];
+    return {
+      missing: variables.filter((name) => !rootStyle.getPropertyValue(name).trim()),
+      text: rootStyle.color,
+      colors: names.map((name) => getComputedStyle(element.querySelector(".syntax-" + name)).color),
+    };
+  }, tokens);
+  assert.deepEqual(styles.missing, [], "Editor CSS variables must be loaded");
+  assert.equal(new Set(styles.colors).size, tokens.length, "Syntax tokens must have distinct colors");
+  for (const color of styles.colors)
+    assert.notEqual(color, styles.text, "Syntax rules must style tokens beyond inherited text");
+
+  await editor.click();
+  await editor.press(process.platform === "darwin" ? "Meta+f" : "Control+f");
+  const search = page.locator(".source-pane .cm-search");
+  await search.waitFor({ state: "visible" });
+  const searchInput = search.locator('input[name="search"]');
+  await searchInput.fill("sample");
+  await searchInput.press("Enter");
+  await page.locator(".source-pane .cm-searchMatch, .source-pane .cm-selectionMatch").first().waitFor();
+  const panelStyles = await search.evaluate((element) => {
+    const panel = element.closest(".cm-panels");
+    const input = element.querySelector(".cm-textfield");
+    const panelStyle = getComputedStyle(panel);
+    const inputStyle = getComputedStyle(input);
+    return { background: panelStyle.backgroundColor, inputBackground: inputStyle.backgroundColor, text: inputStyle.color };
+  });
+  for (const background of [panelStyles.background, panelStyles.inputBackground]) {
+    assert.notEqual(background, "rgba(0, 0, 0, 0)", "Search surfaces must have an opaque background");
+    assert.notEqual(background, panelStyles.text, "Search text must remain visible");
+  }
+  fs.mkdirSync(reportDir, { recursive: true });
+  await page.screenshot({ path: path.join(reportDir, "editor-styles.png"), fullPage: true });
+  fs.writeFileSync(path.join(reportDir, "editor-styles.json"), JSON.stringify({ styles, panelStyles }, null, 2));
+  await searchInput.press("Escape");
+  await search.waitFor({ state: "hidden" });
+}
 async function main() {
   browser = await chromium.launch({
     headless: true,
@@ -126,6 +177,7 @@ async function main() {
     .first()
     .click();
   await page.getByLabel("模板名称", { exact: true }).fill("检查报告");
+  await checkEditorStyles();
   await content("模板源码").fill(
     "Hello {{ name }}!{% for item in items %}:{{ item }}{% endfor %}",
   );
