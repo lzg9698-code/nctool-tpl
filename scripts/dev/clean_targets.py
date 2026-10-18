@@ -111,18 +111,42 @@ def human(size: int) -> str:
     return f"{size:.1f} PB"
 
 
-def running_binaries() -> list[Path]:
-    """Executable paths of nctool processes, so an in-use directory is never removed."""
+def running_binaries() -> list[Path] | None:
+    """Return absolute executable paths; None means process ownership is unknown."""
     if sys.platform != "win32":
         try:
-            output = subprocess.run(
-                ["ps", "-eo", "comm="], capture_output=True, text=True, timeout=10
-            ).stdout
-        except (OSError, subprocess.SubprocessError):
-            return []
-        return [Path(line.strip()) for line in output.splitlines() if line.strip() == "nctool"]
+            result = subprocess.run(
+                ["ps", "-axo", "pid=,comm="], capture_output=True, text=True, timeout=10
+            )
+            if result.returncode != 0:
+                return None
+            paths = []
+            for line in result.stdout.splitlines():
+                fields = line.strip().split(None, 1)
+                if len(fields) != 2:
+                    return None
+                pid, command = fields
+                if Path(command).name != "nctool":
+                    continue
+                if sys.platform.startswith("linux"):
+                    executable = Path(os.readlink(f"/proc/{int(pid)}/exe"))
+                else:
+                    result = subprocess.run(
+                        ["lsof", "-a", "-p", pid, "-d", "txt", "-Fn"],
+                        capture_output=True, text=True, timeout=10,
+                    )
+                    names = [s[1:] for s in result.stdout.splitlines() if s.startswith("n/")]
+                    if result.returncode != 0 or not names:
+                        return None
+                    executable = Path(names[0])
+                if not executable.is_absolute():
+                    return None
+                paths.append(executable)
+            return paths
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return None
     try:
-        output = subprocess.run(
+        result = subprocess.run(
             [
                 "powershell",
                 "-NoProfile",
@@ -135,10 +159,13 @@ def running_binaries() -> list[Path]:
             timeout=30,
             encoding="utf-8",
             errors="replace",
-        ).stdout
+        )
     except (OSError, subprocess.SubprocessError):
-        return []
-    return [Path(line.strip()) for line in output.splitlines() if line.strip()]
+        return None
+    if result.returncode != 0:
+        return None
+    paths = [Path(line.strip()) for line in result.stdout.splitlines() if line.strip()]
+    return paths if all(p.is_absolute() for p in paths) else None
 
 
 def scan(days: float) -> tuple[list[dict], list[dict]]:
@@ -157,7 +184,9 @@ def scan(days: float) -> tuple[list[dict], list[dict]]:
             reason = "受保护"
         elif name in active:
             reason = "当前工作流引用"
-        elif any(str(binary).lower().startswith(str(path.resolve()).lower()) for binary in in_use):
+        elif in_use is None:
+            reason = "无法确认运行进程，保守保留"
+        elif any(path.resolve() in binary.resolve().parents for binary in in_use):
             reason = "有 nctool 进程正在使用"
         elif age_days < days:
             reason = f"最近 {age_days:.0f} 天内有修改"
@@ -231,7 +260,8 @@ def force_remove(path: Path) -> None:
         os.chmod(target, stat.S_IWRITE)
         func(target)
 
-    shutil.rmtree(path, onexc=clear_readonly)
+    # onerror is supported by the documented Python 3.9 minimum.
+    shutil.rmtree(path, onerror=clear_readonly)
 
 
 def main() -> int:

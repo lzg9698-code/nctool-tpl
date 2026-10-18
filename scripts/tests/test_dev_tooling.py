@@ -9,6 +9,9 @@ import shutil
 import tempfile
 import sys
 import unittest
+from unittest.mock import patch
+import importlib.util
+from types import SimpleNamespace
 
 ROOT = Path(__file__).resolve().parents[2]
 DEV = ROOT / "scripts" / "dev"
@@ -45,27 +48,80 @@ class SessionContextTests(unittest.TestCase):
 
 
 class CleanTargetTests(unittest.TestCase):
-    def test_dry_run_deletes_nothing(self) -> None:
-        before = sorted(path.name for path in (ROOT / "target").iterdir() if path.is_dir())
-        result = run(sys.executable, str(DEV / "clean_targets.py"), "--days", "0")
+    def setUp(self) -> None:
+        self.fixture = tempfile.TemporaryDirectory(prefix="clean-target-tests-")
+        self.addCleanup(self.fixture.cleanup)
+        self.root = Path(self.fixture.name)
+        script = self.root / "scripts" / "dev" / "clean_targets.py"
+        script.parent.mkdir(parents=True)
+        shutil.copy2(DEV / "clean_targets.py", script)
+        (self.root / "target" / "debug").mkdir(parents=True)
+        (self.root / "target" / "platform-default").mkdir()
+
+    def invoke(self, *args: str):
+        return run(sys.executable, str(self.root / "scripts/dev/clean_targets.py"), *args)
+
+    def module(self):
+        spec = importlib.util.spec_from_file_location("clean_target_fixture", self.root / "scripts/dev/clean_targets.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+    def test_missing_target_reports_without_crashing(self) -> None:
+        shutil.rmtree(self.root / "target")
+        result = self.invoke("--days", "0")
+        self.assertEqual(result.returncode, 2)
+        self.assertNotIn("Traceback", result.stderr)
+
+    def test_no_legacy_debug_directory_is_required(self) -> None:
+        (self.root / "target/debug").rmdir()
+        result = self.invoke("--delete", "debug")
         self.assertEqual(result.returncode, 0, result.stderr)
-        after = sorted(path.name for path in (ROOT / "target").iterdir() if path.is_dir())
+        self.assertFalse((self.root / "target/debug").exists())
+
+    def test_running_and_unknown_processes_are_kept(self) -> None:
+        module = self.module()
+        candidate = self.root / "target" / "old-preview"
+        candidate.mkdir()
+        with patch.object(module, "referenced_names", return_value=(set(), set())):
+            for processes in ([candidate / "nctool"], None):
+                with patch.object(module, "running_binaries", return_value=processes):
+                    candidates, kept = module.scan(0)
+                    self.assertNotIn("old-preview", {e["name"] for e in candidates})
+                    self.assertIn("old-preview", {e["name"] for e in kept})
+
+    def test_linux_resolves_executable_instead_of_process_name(self) -> None:
+        module = self.module()
+        executable = str(self.root / "target/old-preview/nctool")
+        with patch.object(module.sys, "platform", "linux"), patch.object(module.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="123 nctool\n")), patch.object(module.os, "readlink", return_value=executable):
+            self.assertEqual(module.running_binaries(), [Path(executable)])
+
+    def test_windows_removal_uses_python39_callback(self) -> None:
+        module = self.module()
+        with patch.object(module.sys, "platform", "win32"), patch.object(module.shutil, "rmtree") as remove:
+            module.force_remove(self.root / "target/debug")
+            self.assertIn("onerror", remove.call_args.kwargs)
+            self.assertNotIn("onexc", remove.call_args.kwargs)
+
+    def test_dry_run_deletes_nothing(self) -> None:
+        before = sorted(path.name for path in (self.root / "target").iterdir() if path.is_dir())
+        result = self.invoke("--days", "0")
+        self.assertEqual(result.returncode, 0, result.stderr)
+        after = sorted(path.name for path in (self.root / "target").iterdir() if path.is_dir())
         self.assertEqual(before, after)
         self.assertIn("干跑", result.stdout)
 
     def test_protected_directories_are_never_candidates(self) -> None:
-        result = run(sys.executable, str(DEV / "clean_targets.py"), "--days", "0", "--json")
+        result = self.invoke("--days", "0", "--json")
         self.assertEqual(result.returncode, 0, result.stderr)
         report = json.loads(result.stdout)
         names = {entry["name"] for entry in report["candidates"]}
         for protected in ("debug", "dependency-audit", "agent-tools"):
             self.assertNotIn(protected, names)
-        self.assertLessEqual(len(names), len(list((ROOT / "target").glob("*"))))
+        self.assertLessEqual(len(names), len(list((self.root / "target").glob("*"))))
 
     def test_explicit_delete_refuses_protected_name(self) -> None:
-        result = run(
-            sys.executable,
-            str(DEV / "clean_targets.py"),
+        result = self.invoke(
             "--days",
             "0",
             "--delete",
@@ -73,7 +129,7 @@ class CleanTargetTests(unittest.TestCase):
         )
         self.assertNotEqual(result.returncode, 2)
         self.assertIn("跳过 debug", result.stderr)
-        self.assertTrue((ROOT / "target" / "debug").is_dir())
+        self.assertTrue((self.root / "target" / "debug").is_dir())
 
 
 class CheckEnvTests(unittest.TestCase):
