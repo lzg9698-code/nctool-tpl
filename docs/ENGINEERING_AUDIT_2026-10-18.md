@@ -70,14 +70,15 @@
 
 | # | 严重度 | 位置 | 问题 | 证据/复现 | 修复 | 回归测试 |
 | --- | --- | --- | --- | --- | --- | --- |
-| R1 | P1 | `cli/src/workbench.rs` `summaries()` | `_index` 中任一文件截断、超大或被数值策略拒绝时，`parse_json`/长度检查返回 `Err` → `Workbench::new` → `App::boot` 失败 → **`nctool ui` 无法启动**；`GET /api/v2/runs` 也整体 400。索引是派生状态，与既有"跳过畸形条目"策略矛盾。 | 写入 `_index/truncated.json` 内容 `{`，或 `{"started_at":1e-400}`（下溢拒绝） | 逐条跳过不可读/超限/不可解析条目，其余照常返回 | `cli/tests/recovery.rs::unparseable_or_oversized_index_entries_do_not_abort_boot_or_history` |
+| R1 | P1 | `cli/src/workbench.rs` `summaries()` | `_index` 中任一文件截断、超大或被数值策略拒绝时，`parse_json`/长度检查返回 `Err` → `Workbench::new` → `App::boot` 失败 → **`nctool ui` 无法启动**；`GET /api/v2/runs` 也整体 400。索引是派生状态，与既有"跳过畸形条目"策略矛盾。**且索引是历史列表的唯一来源**，单纯跳过会让已成功的任务永久不可见（初审发现）。 | 写入 `_index/truncated.json` 内容 `{`，或 `{"started_at":1e-400}`（下溢拒绝） | 损坏条目从权威 `<id>.json` 记录重建摘要并回写；记录已不存在则清理孤儿条目；只有重建失败才跳过。启动与查询都不再整体失败 | `cli/tests/recovery.rs::a_damaged_summary_is_rebuilt_so_the_run_stays_visible`、`an_unreadable_summary_whose_record_is_gone_is_pruned`、`unparseable_or_oversized_index_entries_do_not_abort_boot_or_history` |
 | R2 | P1 | `runtime/src/external.rs` `Transport::request` | 取消其中一个外部插件请求时调用 `fail()`：把所有并发 pending 请求一起失败、杀掉子进程。用户在 WebUI 取消一个任务会让**同一插件的其他在途任务全部失败**。 | 并发两个请求，取消其中一个，"sibling" 收到 `cancelled` | 取消只终结该请求并向插件发 `cancel` 通知 | `runtime/tests/external.rs::cancelling_one_request_keeps_concurrent_requests_alive`（修复前失败，修复后通过） |
-| R2b | P1 | 同上 `receive()` | 修复 R2/R3 后，插件对被取消/超时请求的**迟到响应**仍会以 "unknown response ID" 触发 `rpc_protocol`，进而 `fail()` 掉整个传输——并发请求依然被连带失败。插件在取消后继续发起的 `host.call` 也会因 "parent is no longer active" 终止传输。 | 超时请求在 700 ms 返回，兄弟请求 450–850 ms 在途；修复前兄弟收到 `plugin_timeout` | 记录已放弃的请求 ID（`abandoned`，上限 128）；迟到响应丢弃，已放弃父请求的回调在本地返回 `cancelled` 错误 | `runtime/tests/external.rs::a_late_reply_after_a_timeout_does_not_break_a_concurrent_request`（在基线源码上失败，修复后通过；连跑 3 次稳定） |
-| R3 | P1 | 同上 | 单个请求超时也 `fail()` 全链路，兄弟请求被连带失败 | 同上，`mode=sleep` | 超时只终结该请求；协议错误/进程退出仍终止进程（流不可信） | `runtime/tests/external.rs::a_sibling_survives_a_request_timeout_or_incompatible_frame` |
+| R2b | P1 | 同上 `receive()` | 修复 R2/R3 后，插件对被取消/超时请求的**迟到响应**仍会以 "unknown response ID" 触发 `rpc_protocol`，进而 `fail()` 掉整个传输——并发请求依然被连带失败。插件在取消后继续发起的 `host.call` 也会因 "parent is no longer active" 终止传输。 | 超时请求在 700 ms 返回，兄弟请求 450–850 ms 在途；修复前兄弟收到 `plugin_timeout` | 在 `Pending` 条目上标记 `abandoned`：迟到响应丢弃、已放弃父请求的回调在本地返回 `cancelled` 错误，且该条目继续计入插件并发上限；连续两轮并发槽位全为 abandoned 时才重启进程 | `runtime/tests/external.rs::a_late_reply_after_a_timeout_does_not_break_a_concurrent_request`（在基线源码上失败，修复后通过；连跑 3 次稳定） |
+| R3 | P1 | 同上 | 单个请求超时也 `fail()` 全链路，兄弟请求被连带失败 | 同上，`mode=sleep` | 超时只终结该请求并标记 abandoned；协议错误/进程退出仍终止进程（流不可信） | `runtime/tests/external.rs::a_sibling_survives_a_request_timeout_or_incompatible_frame` |
 | R4 | P1 | `cli/src/workbench.rs` 运行线程 | 运行线程内任何 panic 会跳过末尾的 `controls.remove` 与 `active.fetch_sub`：泄漏并发槽位（8 次后永久 `plugin_busy`）并留下无法删除的幽灵任务 | 代码路径确认；`unwrap()` 曾直接暴露 | `catch_unwind` 记录 `internal_error`；`Drop` 守卫 `Released` 保证释放，且按 controls 中是否存在避免重复减计数；移除 `as_object_mut().unwrap()` | `cli/tests/platform.rs::panicking_action_releases_the_slot_and_records_a_failure`（连续 12 次 panic 超过并发上限，仍可继续启动、记录 `internal_error`、删除任务） |
-| R5 | P2 | `runtime/src/config.rs` `asset_error` | HTTP 响应体回显 `WriteError::Display` 中的**绝对文件路径**，违反 `assets/src/lock.rs` 已声明的 P1-17 脱敏约束（"HTTP 响应体不得照抄路径"） | POST 到被占用资产 | `Conflict`/`LockBusy`/`ReadOnly` 映射为固定中文文案；数值错误保留字面量与行列；`Io`/`Corrupt` 去路径；新增 `_` 兜底（`WriteError` 非穷尽） | `runtime/src/config.rs::asset_error_tests::http_facing_messages_never_include_absolute_paths` |
+| R5 | P2 | `assets/src/lib.rs`、`runtime/src/config.rs`、`plugins/template`、`plugins/parameters` | HTTP 响应体回显 `WriteError::Display` 中的**绝对文件路径**，违反 `assets/src/lock.rs` 已声明的 P1-17 脱敏约束。首轮只改了 `runtime::config::asset_error`，**模板/参数插件（`template.save/delete`、`parameter.*`、bundle 导入的主路径）仍原样回显**，`PathEscape`/`NotFound`/`Corrupt` 也仍带路径（初审发现）。 | 锁定/只读模板保存；`.nctool/runs/<id>.json` 做成符号链接后读取；`config.json` 做成目录 | 新增 `WriteError::public_message()` 作为唯一脱敏映射，四处 HTTP 路径统一调用；`PathEscape` 只保留相对资产名；`NotFound`/`Corrupt` 改为固定文案；CLI 专用 `write_output` 保留带路径的 `Display` 供本机诊断 | `runtime/src/config.rs::asset_error_tests::http_facing_messages_never_include_absolute_paths`（覆盖全部 7 类可带路径变体） |
 | R6 | P2 | `cli/src/server.rs` | bundle 上限 64 MiB，但 413 文案固定写 "exceeds 1 MiB"；`body_timeout` 落到默认 400 | 代码确认 | 文案按实际上限生成；超时改为 408 `body_timeout` | HTTP 层仍无自动化测试（见 3.3） |
 | R7 | P2 | `runtime/src/lib.rs` | `Workbench::start_with_replay` 每次启动都克隆全部 `Capability`（含所有 Schema）再线性查找 | 代码确认 | 新增 `Runtime::action_descriptor()` 单点查询，避免整表克隆 | 现有 `cli/tests/platform.rs` 等启动路径测试 |
+| R9 | P2 | `runtime/src/lib.rs` `invoke_cancellable_request` | 注册的取消条目在 `invoke_inner` panic 时不会被移除；工作台现在会 `catch_unwind`，于是每次 panic 泄漏一个 `requests` 条目，`cancel(<该 id>)` 永远返回 `true`（初审发现） | 代码路径确认 | `Drop` 守卫在展开时移除条目 | 由 `panicking_action_releases_the_slot_and_records_a_failure` 间接覆盖（12 次 panic 后仍可删除任务） |
 | R8 | P3 | `docs/PLUGIN_PROTOCOL.md` | 文档写"首版采取终止失效进程的有界取消方式"，与修复后的取消语义不符 | 文档确认 | 改为"取消只终结对应请求；超时/协议错误/退出才终止进程" | — |
 
 ### 3.2 已确认但本轮不处置（附原因）
@@ -137,7 +138,7 @@
 | --- | --- | --- |
 | 格式 | `cargo fmt --all -- --check` | 通过 |
 | Clippy | `cargo clippy --workspace --all-targets --all-features --locked -- -D warnings` | 通过（0 error / 0 warning） |
-| Rust 测试 | `cargo test --workspace --all-targets --all-features --locked` | **288 通过 / 0 失败**（基线 282，新增 6 项回归） |
+| Rust 测试 | `cargo test --workspace --all-targets --all-features --locked` | **291 通过 / 0 失败**（基线 282，新增 9 项回归） |
 | 文档测试 | `cargo test --workspace --all-features --doc --locked` | 通过 |
 | MSRV | `cargo +1.89.0 check --workspace --all-features --locked` | 通过 |
 | 架构检查 | `python scripts/check_v2.py` | PASS |
@@ -158,6 +159,9 @@
 | `runtime/tests/external.rs::cancelling_one_request_keeps_concurrent_requests_alive` | 取消一个请求不再失败同插件的并发请求（修复前该用例失败） |
 | `runtime/tests/external.rs::a_sibling_survives_a_request_timeout_or_incompatible_frame` | 单请求超时只失败该请求；畸形帧仍按设计终止进程；两种情形下一次调用都能恢复 |
 | `runtime/tests/external.rs::a_late_reply_after_a_timeout_does_not_break_a_concurrent_request` | 超时请求的迟到响应不被当作协议错误；兄弟请求存活（基线源码上该用例失败） |
+| `runtime/tests/external.rs::abandoned_work_still_counts_against_plugin_capacity` | 已放弃请求继续占用插件并发名额，迟到响应释放后恢复 |
+| `cli/tests/recovery.rs::a_damaged_summary_is_rebuilt_so_the_run_stays_visible` | 摘要损坏后从权威记录重建，任务不会从历史消失 |
+| `cli/tests/recovery.rs::an_unreadable_summary_whose_record_is_gone_is_pruned` | 无权威记录的损坏摘要被清理 |
 | `runtime/src/config.rs::asset_error_tests::http_facing_messages_never_include_absolute_paths` | HTTP 错误消息不含绝对路径，`Conflict`/`LockBusy` 文案仍可区分 |
 | `scripts/tests/test_measure_workbench.py::InvokeTimeoutTests` | 测量脚本超时会 `kill()` 子进程，不留悬挂进程 |
 
@@ -165,7 +169,7 @@
 
 - 渲染输出字节级一致：用修复前后两个 release 默认构建对 `Hello {{ name }}` 与 1000 行循环模板各执行 25 次，stdout 字节数与内容集合完全相同（197 B / 19,953 B，各 1 种取值）。
 - 外部插件协议只收窄失败范围，不改变成功路径；`docs/PLUGIN_PROTOCOL.md` 已同步取消语义。
-- 索引跳过只影响派生摘要，权威任务记录（`<id>.json`）的读取、恢复、删除路径未改。
+- 索引条目损坏时从权威记录重建摘要（只写派生文件），权威任务记录（`<id>.json`）的读取、恢复、删除路径未改。
 
 ### 5.3 性能复测（同机、同脚本、9 次中位数）
 
@@ -183,8 +187,8 @@
 ### 5.4 剩余风险
 
 1. **HTTP 层无自动化测试**：`cli/src/server.rs` 的 Host/Origin/Content-Type/体积/并发行为只能靠浏览器脚本间接覆盖。R6 的 408 映射与 bundle 文案未单独断言。
-2. **panic 恢复依赖 `catch_unwind`**：插件内部 panic 被转为 `internal_error`，但若 panic 发生在锁中毒（mutex poisoned）场景，后续 `lock().unwrap()` 仍会 panic；本轮未处理中毒锁，属已知边界。
-3. **外部插件超时后进程可能仍在运行该请求**：宿主已发 `cancel` 通知，但插件是否响应由插件实现决定；宿主不再强制终止进程，因此不响应的插件会占用一个并发槽直到自行结束。协议文档已声明该责任。
+2. **panic 恢复依赖 `catch_unwind`**：插件内部 panic 被转为 `internal_error`，但若 panic 发生在锁中毒（mutex poisoned）场景，后续 `lock().unwrap()` 仍会 panic；本轮未处理中毒锁，属已知边界。工作台与运行时的取消条目均由 `Drop` 守卫释放，不再随 panic 泄漏。
+3. **外部插件超时后进程可能仍在运行该请求**：宿主已发 `cancel` 通知，但插件是否响应由插件实现决定。已放弃请求继续占用插件并发名额，因此不响应的插件会让后续请求得到 `plugin_busy`；连续两轮名额全被放弃的请求占满时才重启进程。协议文档已声明该责任，容量行为有回归覆盖。
 4. **并行分支未合并**：WebUI 审计中若干项与 `chore/residual-cleanup-2026-10-18` 重叠，需在合并后复核（见 3.4）。
 5. 未执行联网依赖审计、macOS/Linux 实机与远端 CI。
 
@@ -192,14 +196,14 @@
 
 ### 6.1 总体质量评估
 
-项目基线健康：格式化、Clippy、287 项 Rust 测试、189 项前端测试、35 项 Python 工具测试、架构检查与三组真实浏览器验收全部通过。架构边界清晰（领域中立引擎 + 插件运行时 + 组合根），资产写入与历史记录有原子性、指纹与锁保护。本轮审计集中在"派生状态损坏"和"并发失败隔离"两类高影响缺陷，均已修复并有回归保护。
+项目基线健康：格式化、Clippy、291 项 Rust 测试、189 项前端测试、35 项 Python 工具测试、架构检查与三组真实浏览器验收全部通过。架构边界清晰（领域中立引擎 + 插件运行时 + 组合根），资产写入与历史记录有原子性、指纹与锁保护。本轮审计集中在"派生状态损坏"和"并发失败隔离"两类高影响缺陷，均已修复并有回归保护。
 
 ### 6.2 发现与处置统计
 
 | 等级 | 审计记录 | 本轮修复 | 转交/记录 |
 | --- | --- | --- | --- |
 | P1 | 5 | 5 | 0 |
-| P2 | 14 | 4 | 10 |
+| P2 | 16 | 7 | 9 |
 | P3 | 8 | 1 | 7 |
 
 ### 6.3 已解决问题与提交
@@ -230,7 +234,7 @@
 | 项目按原设计正常运行 | 是：全量测试 + 三组浏览器验收通过 |
 | 原有功能与业务行为兼容 | 是：渲染输出字节一致；协议仅收窄失败范围 |
 | 高优先级问题已修复 | 是：5 项 P1 全部修复并有回归 |
-| 核心路径有自动化回归 | 是：新增 7 项回归，覆盖损坏索引、panic、取消/超时隔离、迟到响应、路径脱敏、测量脚本超时 |
+| 核心路径有自动化回归 | 是：新增 10 项回归（9 项 Rust + 1 项 Python），覆盖损坏索引重建、孤儿清理、panic、取消/超时隔离、迟到响应、放弃容量记账、路径脱敏、测量脚本超时 |
 | 性能优化有测量证据 | 不适用：本轮未做性能优化，未宣称收益 |
 | UI/UX 优化在功能边界内 | 不适用：本轮未改前端，相关项已登记 |
 | 编译/静态分析/测试通过 | 是：见 5.1 |

@@ -10,9 +10,11 @@ pub fn asset_error(e: WriteError) -> PluginError {
     let code = match e {
         WriteError::Conflict { .. } | WriteError::LockBusy { .. } => "conflict",
         WriteError::NotFound(_) => "not_found",
+        WriteError::PathEscape { .. } => "path_escape",
         _ => "asset_error",
     };
-    PluginError::new(code, e.to_string())
+    // Action results reach the WebUI over HTTP; absolute paths stay in CLI/stderr output.
+    PluginError::new(code, e.public_message())
 }
 /// The library only owns generic JSON storage; callers validate their own domain.
 pub struct Library {

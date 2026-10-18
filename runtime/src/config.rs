@@ -347,47 +347,29 @@ pub fn uninstall(home: &Path, id: &str) -> PluginResult<()> {
 /// (see the redaction contract in `nctool_assets::lock`). The code and the distinction
 /// between a conflicting write and a busy lock are preserved.
 pub fn asset_error(error: WriteError) -> PluginError {
-    let (code, message) = match &error {
-        WriteError::Conflict { .. } => (
-            "conflict",
-            "资产已被其他进程或窗口修改，请刷新后重试".to_string(),
-        ),
-        WriteError::LockBusy { .. } => (
-            "conflict",
-            "资产文件正被另一个 nctool 进程写入，请稍后重试".to_string(),
-        ),
-        WriteError::PathEscape { .. } => ("path_escape", error.to_string()),
-        WriteError::NotFound(_) => ("not_found", error.to_string()),
-        WriteError::NumRange {
-            literal,
-            line,
-            column,
-        } => (
-            "asset_error",
-            format!("整数超出 JSON 支持范围 (i64/u64): {literal} at {line}:{column}"),
-        ),
-        WriteError::NumUnderflow {
-            literal,
-            line,
-            column,
-            ..
-        } => (
-            "asset_error",
-            format!("JSON 小数下溢为 0: {literal} at {line}:{column}"),
-        ),
-        WriteError::ReadOnly { .. } => ("asset_error", "目标只读或无写入权限".to_string()),
-        // `Corrupt` and `Io` carry no path, only the underlying message.
-        WriteError::Corrupt(message) => ("asset_error", format!("写入目标不可用：{message}")),
-        WriteError::Io(io) => ("asset_error", format!("IO 错误：{io}")),
-        // `WriteError` is non-exhaustive: a future variant must still be path-free here.
-        _ => ("asset_error", "资产操作失败".to_string()),
+    let code = match &error {
+        WriteError::Conflict { .. } | WriteError::LockBusy { .. } => "conflict",
+        WriteError::PathEscape { .. } => "path_escape",
+        WriteError::NotFound(_) => "not_found",
+        _ => "asset_error",
     };
-    PluginError::new(code, message)
+    PluginError::new(code, error.public_message())
 }
 
 /// Generated output is written atomically only after the action has fully succeeded.
+///
+/// This is a CLI-only path, so the error keeps the path-bearing [`WriteError`] text for
+/// local diagnosis instead of the redacted [`asset_error`] form.
 pub fn write_output(path: &Path, bytes: &[u8]) -> PluginResult<()> {
-    WriteKernel::write_atomic(path, bytes).map_err(asset_error)
+    WriteKernel::write_atomic(path, bytes).map_err(|error| {
+        let code = match &error {
+            WriteError::Conflict { .. } | WriteError::LockBusy { .. } => "conflict",
+            WriteError::PathEscape { .. } => "path_escape",
+            WriteError::NotFound(_) => "not_found",
+            _ => "asset_error",
+        };
+        PluginError::new(code, error.to_string())
+    })
 }
 
 #[cfg(test)]
@@ -397,6 +379,8 @@ mod asset_error_tests {
     #[test]
     fn http_facing_messages_never_include_absolute_paths() {
         let absolute = std::path::PathBuf::from("/home/someone/workspace/templates/demo.j2");
+        // Every variant that can carry a path must be covered: the HTTP mappers in the
+        // template/parameter plugins and the runtime share `public_message()`.
         for error in [
             WriteError::Conflict {
                 path: absolute.clone(),
@@ -409,6 +393,19 @@ mod asset_error_tests {
             WriteError::ReadOnly {
                 path: absolute.clone(),
             },
+            WriteError::PathEscape {
+                rel: "demo.j2".into(),
+                reason: format!("目标是指向别处的符号链接，拒绝写入: {}", absolute.display()),
+            },
+            WriteError::NotFound(format!("删除目标不存在: {}", absolute.display())),
+            WriteError::Corrupt(format!(
+                "目标位置已被占用（存在同名目录或非普通文件）: {}",
+                absolute.display()
+            )),
+            WriteError::Io(std::io::Error::other(format!(
+                "cannot open {}",
+                absolute.display()
+            ))),
         ] {
             let mapped = asset_error(error);
             assert!(
@@ -425,7 +422,7 @@ mod asset_error_tests {
                 actual: None,
             })
             .message,
-            "资产已被其他进程或窗口修改，请刷新后重试"
+            "写入冲突：资产已被其他进程或窗口修改，请刷新后重试"
         );
         assert_eq!(
             asset_error(WriteError::LockBusy { path: absolute }).code,

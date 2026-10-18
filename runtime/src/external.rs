@@ -75,38 +75,43 @@ impl ExternalManifest {
 struct Pending {
     tx: mpsc::Sender<PluginResult<Value>>,
     context: Context,
+    /// The host stopped waiting (cancel/timeout) but the plugin may still answer or call
+    /// back. The entry stays registered so that abandoned work keeps counting against
+    /// `max_concurrency` and a late reply is not mistaken for a protocol violation.
+    abandoned: bool,
 }
 struct Transport {
     input: mpsc::SyncSender<Vec<u8>>,
     child: Mutex<Child>,
     pending: Mutex<BTreeMap<String, Pending>>,
-    /// Requests the host stopped waiting for. A response that arrives afterwards is a
-    /// late reply, not a protocol violation, and must not tear down the transport.
-    abandoned: Mutex<std::collections::VecDeque<String>>,
     counter: AtomicU64,
     failed: AtomicBool,
     callbacks: AtomicUsize,
     limits: Limits,
 }
-/// Enough late replies to cover every concurrent request plus a full retry wave.
-const MAX_ABANDONED: usize = 128;
 impl Transport {
-    /// Remember a request the host stopped waiting for so a late reply is ignored.
+    /// Mark a request the host stopped waiting for. The entry is kept until the plugin
+    /// answers, so abandoned work still counts against the concurrency limit and a late
+    /// reply is recognised instead of being treated as a protocol error.
     fn abandon(&self, id: &str) {
-        let mut abandoned = self.abandoned.lock().unwrap();
-        if abandoned.len() >= MAX_ABANDONED {
-            abandoned.pop_front();
+        let exhausted = {
+            let mut pending = self.pending.lock().unwrap();
+            if let Some(entry) = pending.get_mut(id) {
+                entry.abandoned = true;
+            }
+            // Two full waves of abandoned work (every slot given up on, twice over) mean
+            // the plugin is not recovering on its own; restart it so the next call
+            // re-handshakes instead of wedging the plugin forever. One wave is kept as
+            // headroom: the plugin may still answer its late replies and free the slots.
+            pending.len() >= self.limits.max_concurrency.saturating_mul(2)
+                && pending.values().all(|entry| entry.abandoned)
+        };
+        if exhausted {
+            self.fail(PluginError::new(
+                "plugin_timeout",
+                "plugin stopped responding to cancelled requests",
+            ));
         }
-        abandoned.push_back(id.to_owned());
-    }
-    /// Whether `id` was abandoned by the host. Markers stay for the life of the transport:
-    /// a cancelled plugin may answer late *and* keep issuing callbacks for that request.
-    fn is_abandoned(&self, id: &str) -> bool {
-        self.abandoned
-            .lock()
-            .unwrap()
-            .iter()
-            .any(|entry| entry == id)
     }
 
     fn send(&self, message: Value) -> PluginResult<()> {
@@ -141,6 +146,7 @@ impl Transport {
                 Pending {
                     tx,
                     context: ctx.clone(),
+                    abandoned: false,
                 },
             );
         }
@@ -175,7 +181,14 @@ impl Transport {
                 }
             }
         })();
-        self.pending.lock().unwrap().remove(&id);
+        {
+            let mut pending = self.pending.lock().unwrap();
+            // An abandoned entry stays registered for its late reply (and keeps occupying
+            // plugin capacity); every other path releases the slot immediately.
+            if pending.get(&id).is_some_and(|entry| !entry.abandoned) {
+                pending.remove(&id);
+            }
+        }
         result
     }
     fn fail(&self, error: PluginError) {
@@ -209,23 +222,28 @@ impl Transport {
                 .get("parent_id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| PluginError::new("rpc_protocol", "host.call requires parent_id"))?;
-            let context = self
+            let parent_state = self
                 .pending
                 .lock()
                 .unwrap()
                 .get(parent)
-                .map(|p| p.context.clone());
-            let Some(context) = context else {
-                if self.is_abandoned(parent) {
+                .map(|entry| (entry.context.clone(), entry.abandoned));
+            let context = match parent_state {
+                Some((_, true)) => {
                     // The host already returned a cancel/timeout for this request; a
                     // callback it still issues is answered locally instead of killing the
-                    // transport that other requests are using.
-                    return self.send(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":"parent request was cancelled","data":{"code":"cancelled","message":"parent request was cancelled","diagnostics":[]}}}));
+                    // transport that other requests are using. Best effort: a full write
+                    // queue must not turn this into a transport failure.
+                    let _ = self.send(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":"parent request was cancelled","data":{"code":"cancelled","message":"parent request was cancelled","diagnostics":[]}}}));
+                    return Ok(());
                 }
-                return Err(PluginError::new(
-                    "rpc_protocol",
-                    "host.call parent is no longer active",
-                ));
+                Some((context, false)) => context,
+                None => {
+                    return Err(PluginError::new(
+                        "rpc_protocol",
+                        "host.call parent is no longer active",
+                    ))
+                }
             };
             if self.callbacks.fetch_add(1, Ordering::SeqCst) >= self.limits.max_concurrency {
                 self.callbacks.fetch_sub(1, Ordering::SeqCst);
@@ -274,15 +292,17 @@ impl Transport {
                 "response requires exactly one result or error",
             ));
         }
-        let pending = match self.pending.lock().unwrap().remove(id) {
-            Some(pending) => pending,
-            None if self.is_abandoned(id) => {
-                // A cancelled or timed-out request answered late: drop the reply and keep
-                // serving the other requests on this transport.
-                return Ok(());
-            }
-            None => return Err(PluginError::new("rpc_protocol", "unknown response ID")),
-        };
+        let pending = self
+            .pending
+            .lock()
+            .unwrap()
+            .remove(id)
+            .ok_or_else(|| PluginError::new("rpc_protocol", "unknown response ID"))?;
+        if pending.abandoned {
+            // A cancelled or timed-out request answered late: drop the reply and keep
+            // serving the other requests on this transport.
+            return Ok(());
+        }
         let result = if let Some(error) = message.get("error") {
             Err(error
                 .get("data")
@@ -382,7 +402,6 @@ impl ExternalPlugin {
             input,
             child: Mutex::new(child),
             pending: Mutex::new(BTreeMap::new()),
-            abandoned: Mutex::new(std::collections::VecDeque::new()),
             counter: AtomicU64::new(1),
             failed: AtomicBool::new(false),
             callbacks: AtomicUsize::new(0),

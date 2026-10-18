@@ -299,7 +299,8 @@ fn asset_error(error: WriteError) -> PluginError {
         WriteError::PathEscape { .. } => "path_escape",
         _ => "asset_error",
     };
-    PluginError::new(code, error.to_string())
+    // Action results reach the WebUI over HTTP; absolute paths stay in CLI/stderr output.
+    PluginError::new(code, error.public_message())
 }
 fn render_schema() -> Value {
     json!({"type":"object","properties":{

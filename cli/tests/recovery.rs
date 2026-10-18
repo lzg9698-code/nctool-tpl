@@ -188,9 +188,48 @@ fn unparseable_or_oversized_index_entries_do_not_abort_boot_or_history() {
         .map(|run| run["id"].as_str().unwrap())
         .collect();
     assert_eq!(ids, vec!["good"]);
-    // The unreadable entries are skipped, not deleted: they are not authoritative and
-    // may be repaired by an external tool or a later write.
-    assert!(runs_dir(ws).join("_index/truncated.json").exists());
-    assert!(runs_dir(ws).join("_index/underflow.json").exists());
-    assert!(runs_dir(ws).join("_index/oversized.json").exists());
+    // These three entries have no authoritative record, so they are dropped rather than
+    // kept as permanently unusable noise.
+    assert!(!runs_dir(ws).join("_index/truncated.json").exists());
+    assert!(!runs_dir(ws).join("_index/underflow.json").exists());
+    assert!(!runs_dir(ws).join("_index/oversized.json").exists());
+}
+
+#[test]
+fn a_damaged_summary_is_rebuilt_so_the_run_stays_visible() {
+    let temp = Temp::new();
+    let ws = &temp.0;
+    let finished = write_run(ws, "run-visible", "succeeded");
+    // Simulate a torn write of the derived summary after the run completed. Without a
+    // rebuild the run would vanish from history forever, because the index is the only
+    // listing source.
+    std::fs::write(runs_dir(ws).join("_index/run-visible.json"), b"{").unwrap();
+
+    let wb = Workbench::new(runtime(), ws).unwrap();
+    let ids: Vec<_> = wb.list().unwrap()["runs"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|run| run["id"].as_str().unwrap().to_string())
+        .collect();
+    assert_eq!(ids, vec!["run-visible".to_string()]);
+    // The summary was repaired from the record, and the record itself is untouched.
+    let repaired = std::fs::read(runs_dir(ws).join("_index/run-visible.json")).unwrap();
+    let repaired: serde_json::Value = serde_json::from_slice(&repaired).unwrap();
+    assert_eq!(repaired["status"], "succeeded");
+    assert_eq!(
+        std::fs::read(runs_dir(ws).join("run-visible.json")).unwrap(),
+        finished
+    );
+}
+
+#[test]
+fn an_unreadable_summary_whose_record_is_gone_is_pruned() {
+    let temp = Temp::new();
+    let ws = &temp.0;
+    std::fs::create_dir_all(runs_dir(ws).join("_index")).unwrap();
+    std::fs::write(runs_dir(ws).join("_index/ghost.json"), b"{").unwrap();
+    let wb = Workbench::new(runtime(), ws).unwrap();
+    assert!(wb.list().unwrap()["runs"].as_array().unwrap().is_empty());
+    assert!(!runs_dir(ws).join("_index/ghost.json").exists());
 }

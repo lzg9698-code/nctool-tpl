@@ -327,9 +327,17 @@ impl Runtime {
             }
             requests.insert(id.into(), cancellation.clone());
         }
-        let result = self.invoke_inner(action, input, cancellation, &[]);
-        self.requests.lock().unwrap().remove(id);
-        result
+        // The guard removes the request even if a plugin panics: the workbench catches
+        // panics above this layer, so a leaked entry would make `cancel` report a stale id
+        // as active forever.
+        struct Registered<'a>(&'a Mutex<BTreeMap<String, Cancellation>>, &'a str);
+        impl Drop for Registered<'_> {
+            fn drop(&mut self) {
+                self.0.lock().unwrap().remove(self.1);
+            }
+        }
+        let _registered = Registered(&self.requests, id);
+        self.invoke_inner(action, input, cancellation, &[])
     }
     pub fn cancel(&self, id: &str) -> bool {
         if let Some(c) = self.requests.lock().unwrap().get(id) {

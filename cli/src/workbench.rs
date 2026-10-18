@@ -25,6 +25,11 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
         format!("任务执行发生内部错误：{detail}")
     }
 }
+/// Derived `_index` entry for one run. The index is the only history listing source, so
+/// it can be rebuilt from the authoritative `<id>.json` record at any time.
+fn summary_of(run: &Run) -> Value {
+    json!({"id":run.id,"title":run.title,"action":run.action,"status":run.status,"started_at":run.started_at,"finished_at":run.finished_at,"diagnostic_count":run.result.as_ref().map(|r|r.diagnostics.len()).or_else(||run.error.as_ref().map(|e|e.diagnostics.len())).unwrap_or(0)})
+}
 fn now() -> u64 {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -238,10 +243,9 @@ impl Workbench {
     fn save_summary(&self, run: &Run) -> PluginResult<()> {
         let folder = self.root.root().join("_index");
         std::fs::create_dir_all(&folder)?;
-        let summary = json!({"id":run.id,"title":run.title,"action":run.action,"status":run.status,"started_at":run.started_at,"finished_at":run.finished_at,"diagnostic_count":run.result.as_ref().map(|r|r.diagnostics.len()).or_else(||run.error.as_ref().map(|e|e.diagnostics.len())).unwrap_or(0)});
         WriteKernel::write_atomic(
             &folder.join(format!("{}.json", run.id)),
-            &serde_json::to_vec(&summary)?,
+            &serde_json::to_vec(&summary_of(run))?,
         )
         .map_err(crate::asset_error)
     }
@@ -284,19 +288,48 @@ impl Workbench {
                 continue;
             }
             // The index is derived state: a single unreadable, oversized or unparseable
-            // entry must not block boot or every history request. It is skipped like any
-            // other unusable summary and re-created on the next write of that run.
-            let Ok(bytes) = std::fs::read(entry.path()) else {
-                continue;
-            };
-            if bytes.len() > 1024 * 1024 {
-                continue;
-            }
-            if let Ok(summary) = parse_json(&bytes) {
+            // entry must not block boot or every history request. It is rebuilt from the
+            // authoritative run record below, so a finished run cannot disappear from
+            // history just because its summary was damaged.
+            if let Some(summary) = entry
+                .path()
+                .file_stem()
+                .and_then(|stem| stem.to_str())
+                .and_then(|id| self.repair_summary(id))
+            {
                 summaries.push(summary);
             }
         }
         Ok(summaries)
+    }
+    /// Return a usable summary for one index entry, rebuilding a damaged one from its
+    /// authoritative record. `None` when the entry is unusable and no record exists.
+    fn repair_summary(&self, id: &str) -> Option<Value> {
+        let path = self.root.root().join("_index").join(format!("{id}.json"));
+        let readable = std::fs::read(&path)
+            .ok()
+            .filter(|bytes| bytes.len() <= 1024 * 1024 && parse_json(bytes).is_ok());
+        if let Some(bytes) = readable {
+            return parse_json(&bytes).ok();
+        }
+        if !nctool_runtime::valid_id(id) {
+            return None;
+        }
+        let run = match self.get(id) {
+            Ok(run) => run,
+            // An orphan summary whose record is gone stays pruned, as before.
+            Err(error) if error.code == "not_found" => {
+                let _ = self.prune_summary(id);
+                return None;
+            }
+            // Real read failures (permission, IO) are not ours to delete.
+            Err(_) => return None,
+        };
+        let summary = summary_of(&run);
+        // Best effort: a failed rebuild must not block history listing; it is retried on
+        // the next read.
+        let _ = WriteKernel::write_atomic(&path, &serde_json::to_vec(&summary).ok()?);
+        Some(summary)
     }
     fn sort_summaries(summaries: &mut [Value]) {
         summaries.sort_by(|a, b| {
