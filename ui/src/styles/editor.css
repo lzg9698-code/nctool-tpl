@@ -70,7 +70,7 @@
 }
 .code-editor .cm-editor .cm-search input[type="checkbox"] {
   width: auto;
-  accent-color: var(--primary);
+  accent-color: var(--brand);
 }
 .code-editor .cm-editor .cm-search label {
   display: inline-flex;

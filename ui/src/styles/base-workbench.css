@@ -15,6 +15,26 @@
   --radius: 8px;
   --space: 8px;
   --focus: #176c56;
+  --surface-muted: #f4f7fb;
+  --warning-line: #e7cf9c;
+  --editor-background: var(--surface);
+  --editor-text: var(--text);
+  --editor-gutter: #f4f7fb;
+  --editor-gutter-text: #61718a;
+  --editor-active-line: #f1f5fc;
+  --editor-active-gutter: #e7eefb;
+  --editor-selection: #cbdcf9;
+  --editor-search: #fff0bb;
+  --editor-match: #dce9ff;
+  --syntax-meta: #596779;
+  --syntax-keyword: #6b3fa0;
+  --syntax-atom: #1d5fa8;
+  --syntax-number: #80551a;
+  --syntax-string: #176b4b;
+  --syntax-variable: #24518f;
+  --syntax-type: #0f6470;
+  --syntax-comment: #6b7a8c;
+  --syntax-invalid: #a83434;
 }
 * {
   box-sizing: border-box;
