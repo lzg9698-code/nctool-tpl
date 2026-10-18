@@ -18,10 +18,10 @@
 | [ROADMAP.md](legacy/ROADMAP.md) | 旧 0.x → 1.0 A–F 阶段与进展 | [当前路线图](../ROADMAP.md) |
 | [RELEASE.md](legacy/RELEASE.md) | 旧版本策略、三 crate 发布与 1.0 候选演练 | [当前发布说明](../RELEASE.md) |
 | [TEMPLATE_WRITING_GUIDE.md](legacy/TEMPLATE_WRITING_GUIDE.md) | 旧文件模板与 NC 写法 | [当前模板指南](../TEMPLATE_WRITING_GUIDE.md) |
-| [MACHINE_CONFIG_GUIDE.md](legacy/MACHINE_CONFIG_GUIDE.md) | 旧 core、TOML 与内置机床方案 | [当前机床指南](../MACHINE_CONFIG_GUIDE.md) |
-| [PROCESS_CHECKLIST.md](legacy/PROCESS_CHECKLIST.md) | 旧内置模板与机床方案的自动核对 | [当前工艺清单](../PROCESS_CHECKLIST.md) |
+| [MACHINE_CONFIG_GUIDE.md](legacy/MACHINE_CONFIG_GUIDE.md) | 旧 core、TOML 与内置机床方案 | 顶层入口页已于 2026-10-18 移除，见[项目状态](../PROJECT_STATUS.md) |
+| [PROCESS_CHECKLIST.md](legacy/PROCESS_CHECKLIST.md) | 旧内置模板与机床方案的自动核对 | 顶层入口页已于 2026-10-18 移除，见[项目状态](../PROJECT_STATUS.md) |
 | [UI_ACCEPTANCE_CHECKLIST.md](legacy/UI_ACCEPTANCE_CHECKLIST.md) | 旧 UI 与 2026-09-10 走查结果 | [当前验收清单](../UI_ACCEPTANCE_CHECKLIST.md) |
-| [REAL_PART_WALKTHROUGH.md](legacy/REAL_PART_WALKTHROUGH.md) | 旧内置模板的简化零件走查 | [多工序示例](../../examples/v2/process.json) · [工艺清单](../PROCESS_CHECKLIST.md) |
+| [REAL_PART_WALKTHROUGH.md](legacy/REAL_PART_WALKTHROUGH.md) | 旧内置模板的简化零件走查 | 历史示例文件，当前仓库未保留 |
 
 ## 旧版迁移与融合
 
@@ -44,5 +44,21 @@
 | HEAD f0fda2d 之后的阶段改动 | [阶段收尾与本地提交](records/PHASE_CLOSEOUT_2026-10-08.md) | 2026-10-08 Windows；四处修复、完整本地门槛、运行资产隔离与提交范围 |
 | 项目精简第一轮 | [实施与验证记录](records/2026-10-13-simplification-iteration.md) | 2026-10-13 Windows；产品主线、共享依赖核对、插件政策、构建隔离和轴类契约 |
 | NC 最终处理链收敛 | [实施与验证记录](records/2026-10-13-nc-finalize-iteration.md) | 2026-10-13 Windows；共享最终处理、模板读取隔离与新任务重放格式修复 |
+| `docs/PROJECT_REVIEW_PLAN_2026-10-15.md` | [项目审查计划](records/PROJECT_REVIEW_PLAN_2026-10-15.md) | 2026-10-15；审查范围与方法 |
+| `docs/PROJECT_REVIEW_REPORT_2026-10-15.md` | [项目审查报告](records/PROJECT_REVIEW_REPORT_2026-10-15.md) | 2026-10-15 Windows；确认 8 项缺陷 |
+| `docs/P1_FIXES_2026-10-15.md` | [P1 修复记录](records/P1_FIXES_2026-10-15.md) | 2026-10-15；R1–R4 修复与回归 |
+| `docs/P2_FIXES_2026-10-15.md` | [P2 修复记录](records/P2_FIXES_2026-10-15.md) | 2026-10-15；R5–R8 修复与回归 |
+| `docs/RESIDUAL_CLEANUP_PLAN_2026-10-14.md` | [残余清理范围与状态](records/RESIDUAL_CLEANUP_PLAN_2026-10-14.md) | 2026-10-14/15；上一轮清理边界与证据 |
+| `docs/SPECIALIZED_TURNING_PLUGINS_PLAN.md` | [专用插件方案](records/SPECIALIZED_TURNING_PLUGINS_PLAN.md) | 2026-10-08；规划原文 |
+| `docs/DEVELOPMENT_PLAN_2026-10-16.md` | [轻量完整易用开发方案](records/DEVELOPMENT_PLAN_2026-10-16.md) | 2026-10-16；移除范围与验收条件 |
+| `docs/NC_REMOVAL_IMPLEMENTATION_2026-10-16.md` | [NC 移除最终实施记录](records/NC_REMOVAL_IMPLEMENTATION_2026-10-16.md) | 2026-10-16；实施、本机验证与签名范围 |
+| `docs/NC_REMOVAL_RECOVERY_2026-10-16.md` | [NC 移除恢复说明](records/NC_REMOVAL_RECOVERY_2026-10-16.md) | 2026-10-16；恢复包核对方法 |
+| `docs/CODE_AND_FUNCTION_STATUS_2026-10-17.md` | [代码与功能现状报告](records/CODE_AND_FUNCTION_STATUS_2026-10-17.md) | 2026-10-17；精简层次与本机测量 |
+| `docs/OPTIMIZATION_LOG_2026-10-17.md` | [持续优化记录](records/OPTIMIZATION_LOG_2026-10-17.md) | 2026-10-17；缺陷修复与架构收敛 |
+| `docs/P3_RELEASE_CANDIDATE_2026-10-17.md` | [P3 发行候选](records/P3_RELEASE_CANDIDATE_2026-10-17.md) | 2026-10-17；v2.2.0 候选身份与证据 |
+| `docs/COMMIT_MESSAGE_CORRECTION_PENDING.md` | [提交说明修正待执行](records/COMMIT_MESSAGE_CORRECTION_PENDING.md) | 一次性事故记录，目标已失效 |
+| `docs/CLEANUP_PLAN_2026-10-18.md` | [彻底清理方案与执行结果](records/CLEANUP_PLAN_2026-10-18.md) | 2026-10-18；B1–B6 批次、判定依据与本机验证 |
 
 当前状态页已与历史记录分开。历史日志、浏览器截图和 `.nctool-backups/` 快照为当时本地产物，不保证随仓库提供；记录不等于本轮已重新执行，源码快照不等于提交或发布。缺失历史文件会明确标注，不能以当前文件或新造记录替代。
+
+2026-10-18 起，原 `docs/` 顶层的阶段报告按原文件名整体移入 `records/`，并在文件头标注原路径。这些记录中的源码路径、`examples/v3-managed/*`、`target/*` 报告链接指向已删除或仅本机存在的内容，属历史引用；需要原文时以恢复包为准。

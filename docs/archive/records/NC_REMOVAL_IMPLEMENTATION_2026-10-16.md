@@ -1,3 +1,5 @@
+> 历史记录：原路径 `docs/NC_REMOVAL_IMPLEMENTATION_2026-10-16.md`。保留当时日期、平台与结论，不代表当前源码已重新验收。当前能力见[项目状态](../../PROJECT_STATUS.md)，归档导航见[历史索引](../README.md)。
+
 # 内置 NC 移除与 P0 验证记录
 
 实施开始于 2026-10-16，最终签收于 2026-10-17，平台 Windows 11。提交基线为 `08ab29620a4fbf390517525e3c488b23c1bd35b1`，分支 `feat/shared-parameter-inputs`，结果对应包含未提交改动的工作树；未提交、推送或发布。范围见[开发方案](DEVELOPMENT_PLAN_2026-10-16.md)。

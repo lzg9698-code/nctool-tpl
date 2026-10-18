@@ -1,3 +1,5 @@
+> 历史记录：原路径 `docs/P3_RELEASE_CANDIDATE_2026-10-17.md`。保留当时日期、平台与结论，不代表当前源码已重新验收。当前能力见[项目状态](../../PROJECT_STATUS.md)，归档导航见[历史索引](../README.md)。
+
 # P3 发行候选与签收准备（2026-10-17）
 
 > **发布结果（2026-10-18）**：已发布 [v2.2.0](https://github.com/lzg9698-code/nctool-tpl/releases/tag/v2.2.0)，标签指向 `1443046`。

@@ -1,3 +1,5 @@
+> 历史记录：原路径 `docs/CODE_AND_FUNCTION_STATUS_2026-10-17.md`。保留当时日期、平台与结论，不代表当前源码已重新验收。当前能力见[项目状态](../../PROJECT_STATUS.md)，归档导航见[历史索引](../README.md)。
+
 # 代码精简、代码现状与功能现状报告
 
 日期：2026-10-17。对象：当前 `feat/shared-parameter-inputs` 工作树，HEAD `08ab29620a4fbf390517525e3c488b23c1bd35b1`。
@@ -176,18 +178,18 @@ workspace 目前 8 个 crate；CLI/WebUI 版本 2.2.0，核心组件 2.0.0。根
 
 ## 8. 源码与记录入口
 
-- [workspace 与引擎依赖](../Cargo.toml)
-- [CLI 装配和 API 分发](../cli/src/composition.rs)
-- [任务、历史与重放](../cli/src/workbench.rs)
-- [模板插件与冻结渲染](../plugins/template/src/lib.rs)
-- [共享参数插件](../plugins/parameters/src/lib.rs)
-- [外部插件协议实现](../runtime/src/external.rs)
-- [当前活动前端入口](../ui/src/App.tsx)
-- [执行输入与历史恢复规则](../ui/src/lib/documentExecution.ts)
-- [文档初始化和复制规则](../ui/src/lib/documentModel.ts)
-- [共享参数输入](../ui/src/components/SharedParameterInputs.tsx)
+- [workspace 与引擎依赖](../../../Cargo.toml)
+- [CLI 装配和 API 分发](../../../cli/src/composition.rs)
+- [任务、历史与重放](../../../cli/src/workbench.rs)
+- [模板插件与冻结渲染](../../../plugins/template/src/lib.rs)
+- [共享参数插件](../../../plugins/parameters/src/lib.rs)
+- [外部插件协议实现](../../../runtime/src/external.rs)
+- [当前活动前端入口](../../../ui/src/App.tsx)
+- [执行输入与历史恢复规则](../../../ui/src/lib/documentExecution.ts)
+- [文档初始化和复制规则](../../../ui/src/lib/documentModel.ts)
+- [共享参数输入](../../../ui/src/components/SharedParameterInputs.tsx)
 - [优化与本机测量记录](OPTIMIZATION_LOG_2026-10-17.md)
 - [NC 移除与恢复材料说明](NC_REMOVAL_RECOVERY_2026-10-16.md)
-- [项目状态](PROJECT_STATUS.md)与[路线图](ROADMAP.md)：部分条目滞后，需结合本报告阅读。
+- [项目状态](../../PROJECT_STATUS.md)与[路线图](../../ROADMAP.md)：部分条目滞后，需结合本报告阅读。
 
 会话开始按规则查找项目 `_brief.md`，在仓库与 `D:/ai-brain` 中均未找到，故本报告未将项目简报作为证据，也未用记忆推断历史决定。历史范围仅引用仓库现有源码、diff、记录和恢复清单。

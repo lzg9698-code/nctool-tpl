@@ -1285,7 +1285,7 @@ node scripts/browser_generic_parameters.cjs
 2. `docs/SYSTEM_DESIGN.md` 的 HTTP 段落已更新为 Axum/Tokio，与源码一致；无需按旧版描述复刻。
 3. `assets/src/json_num.rs` 的 `NumUnderflow.column` 文档注释说按字节计，代码产出的是**字符**计。
 4. `assets/src/lib.rs` 的 `WriteError::NumRange`/`NumUnderflow` 文档里还提到 YAML 解析器；当前 `parse_json` 只处理 JSON。
-5. [docs/PROJECT_STATUS.md](PROJECT_STATUS.md) 与 [docs/CODE_AND_FUNCTION_STATUS_2026-10-17.md](CODE_AND_FUNCTION_STATUS_2026-10-17.md) 的行数统计基于各自时点的工作树，与当前 HEAD+未提交改动的精确行数会有出入（例如前端生产源码现为 46 文件 / 11,760 行，早先报告记为 33 / 10,250）。
+5. [docs/PROJECT_STATUS.md](PROJECT_STATUS.md) 与 [docs/CODE_AND_FUNCTION_STATUS_2026-10-17.md](archive/records/CODE_AND_FUNCTION_STATUS_2026-10-17.md) 的行数统计基于各自时点的工作树，与当前 HEAD+未提交改动的精确行数会有出入（例如前端生产源码现为 46 文件 / 11,760 行，早先报告记为 33 / 10,250）。
 6. `cli/src/main.rs` 的 `--help` 描述字符串是英文（`about = "Jinja template platform with optional domain plugins"`），运行时消息是中文。
 
 ---

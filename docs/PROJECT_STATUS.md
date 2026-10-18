@@ -33,7 +33,7 @@ NC 生成、机床、加工参数、刀具/材料/标准、工艺计算、后处
 
 相对 HEAD，当前 Rust 生产源码目录物理行数减少 50.9%，前端生产源码减少 39.4%，两者合计减少 46.0%。统计包含注释、空行及 Rust 源文件内测试，不含示例数据、生成资源和归档。
 
-10 月 17 日 Windows 本机测量记录：默认 release 二进制 8.81 MiB，math 版本 8.87 MiB；首屏 gzip 资源由 291,022 B 降至 141,291 B（下降 51.4%）；`--version` / `actions` 启动中位数为 7.4 / 30.7 ms。按需加载不减少全部嵌入资源的交付范围；内存和代表性渲染耗时尚无完整测量结论。详细口径见[现状报告](CODE_AND_FUNCTION_STATUS_2026-10-17.md)和[优化记录](OPTIMIZATION_LOG_2026-10-17.md)。
+10 月 17 日 Windows 本机测量记录：默认 release 二进制 8.81 MiB，math 版本 8.87 MiB；首屏 gzip 资源由 291,022 B 降至 141,291 B（下降 51.4%）；`--version` / `actions` 启动中位数为 7.4 / 30.7 ms。按需加载不减少全部嵌入资源的交付范围；内存和代表性渲染耗时尚无完整测量结论。详细口径见[现状报告](archive/records/CODE_AND_FUNCTION_STATUS_2026-10-17.md)和[优化记录](archive/records/OPTIMIZATION_LOG_2026-10-17.md)。
 
 ## 当前限制与兼容边界
 
@@ -66,7 +66,7 @@ NC 生成、机床、加工参数、刀具/材料/标准、工艺计算、后处
 
 本机日志在 `target/optimization-20261017/`，不保证随仓库提供。审计采用该目录的 `cargo-audit-yoke.json` 与 `npm-audit.json`；默认 `target/dependency-audit/summary.json` 是 10 月 7 日旧路径的失败材料，不代表本轮结果。“0 漏洞/告警”仅指该次审计，发行前仍需刷新检查。
 
-[NC 移除实施记录](NC_REMOVAL_IMPLEMENTATION_2026-10-16.md)保留较早时点的告警与验证事实；后续修复及性能数据以[10 月 17 日优化记录](OPTIMIZATION_LOG_2026-10-17.md)为准。本次文档同步只核对文档链接、锚点与差异，不新增运行验证结论。
+[NC 移除实施记录](archive/records/NC_REMOVAL_IMPLEMENTATION_2026-10-16.md)保留较早时点的告警与验证事实；后续修复及性能数据以[10 月 17 日优化记录](archive/records/OPTIMIZATION_LOG_2026-10-17.md)为准。本次文档同步只核对文档链接、锚点与差异，不新增运行验证结论。
 
 ## P2 实现与验证（2026-10-17）
 
@@ -101,9 +101,9 @@ NC 生成、机床、加工参数、刀具/材料/标准、工艺计算、后处
 | P2 | 本轮 App/样式职责整理、历史检索分页删除与性能测量已实现，转入回归维护；具体范围见下节 |
 | P3 | **已完成**：源码已提交并合并，三平台 CI 全绿；RustSec 数据库刷新后审计 0 漏洞 0 告警；`v2.2.0` 已发布（标签 `1443046`，发布工作流全绿），三平台资产 SHA-256 核对一致，Windows 产物隔离冒烟通过 |
 
-P3 的可审阅证据与未完成项见[发行候选](P3_RELEASE_CANDIDATE_2026-10-17.md)。
+P3 的可审阅证据与未完成项见[发行候选](archive/records/P3_RELEASE_CANDIDATE_2026-10-17.md)。
 
-[路线图](ROADMAP.md)仅列剩余待办；[开发方案](DEVELOPMENT_PLAN_2026-10-16.md)和早期审查描述各自时点，不覆盖当前状态。
+[路线图](ROADMAP.md)仅列剩余待办；[开发方案](archive/records/DEVELOPMENT_PLAN_2026-10-16.md)和早期审查描述各自时点，不覆盖当前状态。
 
 ## P1 实现与验证（2026-10-17）
 
@@ -119,4 +119,4 @@ P3 的可审阅证据与未完成项见[发行候选](P3_RELEASE_CANDIDATE_2026-
 
 ## 历史与恢复资料
 
-[现状报告](CODE_AND_FUNCTION_STATUS_2026-10-17.md)、[变更记录](../CHANGELOG.md)、[审查报告](PROJECT_REVIEW_REPORT_2026-10-15.md)、[P1 修复](P1_FIXES_2026-10-15.md)/[P2 修复](P2_FIXES_2026-10-15.md)、[NC 移除恢复说明](NC_REMOVAL_RECOVERY_2026-10-16.md)、[历史归档](archive/README.md)。归档和本地恢复快照不等于正式发布，也不包含全部用户运行资产备份。
+[现状报告](archive/records/CODE_AND_FUNCTION_STATUS_2026-10-17.md)、[变更记录](../CHANGELOG.md)、[审查报告](archive/records/PROJECT_REVIEW_REPORT_2026-10-15.md)、[P1 修复](archive/records/P1_FIXES_2026-10-15.md)/[P2 修复](archive/records/P2_FIXES_2026-10-15.md)、[NC 移除恢复说明](archive/records/NC_REMOVAL_RECOVERY_2026-10-16.md)、[历史归档](archive/README.md)。归档和本地恢复快照不等于正式发布，也不包含全部用户运行资产备份。

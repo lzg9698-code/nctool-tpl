@@ -33,4 +33,4 @@
 - 旧workbench迁移/退役、资源按需读取和CSS清理仍待后续收敛；本轮不扩大到这些项。
 - 轴类实际输入、外部模拟、真机测试和工艺审核仍按独立产品的验收边界推进；Rust软件回归不能作为机床加工验收。
 
-前一轮记录见[项目精简第一轮](2026-10-13-simplification-iteration.md)，实施依据见[精简审查建议](../../PROJECT_SIMPLIFICATION_REVIEW_2026-10-13.md)。
+前一轮记录见[项目精简第一轮](2026-10-13-simplification-iteration.md)，实施依据见`docs/PROJECT_SIMPLIFICATION_REVIEW_2026-10-13.md`（历史文件，当前仓库未保留，原字节见恢复包）。

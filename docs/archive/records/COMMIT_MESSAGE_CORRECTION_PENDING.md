@@ -1,3 +1,5 @@
+> 历史记录：原路径 `docs/COMMIT_MESSAGE_CORRECTION_PENDING.md`。保留当时日期、平台与结论，不代表当前源码已重新验收。当前能力见[项目状态](../../PROJECT_STATUS.md)，归档导航见[历史索引](../README.md)。
+
 # 提交说明修正待执行
 
 本轮目标只更正提交信息，保留原提交文件树。远端目前仍为原历史，最新提交 515b58b。尚未执行新的 update-ref 或强制推送。

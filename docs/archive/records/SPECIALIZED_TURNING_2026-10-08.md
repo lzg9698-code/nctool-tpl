@@ -1,6 +1,6 @@
 # 同步粗车与越程槽专用插件实施及验证
 
-2026-10-08，Windows x86_64；基于 HEAD `f0fda2d4e888e70fa5b0726ec77fd7088b6e95d3` 的未提交工作树。现有改动保留，没有提交、推送或发布。版本仍为 CLI/WebUI 2.2、组件 2.0。使用与接口见[专用插件指南](../../SPECIALIZED_TURNING_PLUGINS.md)。
+2026-10-08，Windows x86_64；基于 HEAD `f0fda2d4e888e70fa5b0726ec77fd7088b6e95d3` 的未提交工作树。现有改动保留，没有提交、推送或发布。版本仍为 CLI/WebUI 2.2、组件 2.0。使用与接口见`docs/SPECIALIZED_TURNING_PLUGINS.md`（历史文件，当前仓库未保留，原字节见恢复包）。
 
 ## 实施范围与基线
 

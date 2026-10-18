@@ -1,6 +1,6 @@
 # Rust 工作台加工模块退役归档
 
-日期：2026-10-14。依照[精简方案](../../RUST_WORKBENCH_SIMPLIFICATION_PLAN.md)退出Rust工作台的全部内置加工能力。独立轴类工具和用户加工资产不在移除范围。
+日期：2026-10-14。依照 `docs/RUST_WORKBENCH_SIMPLIFICATION_PLAN.md`（历史文件，当前仓库未保留，原字节见恢复包）退出Rust工作台的全部内置加工能力。独立轴类工具和用户加工资产不在移除范围。
 
 ## 恢复资料
 

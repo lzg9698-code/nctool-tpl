@@ -1,3 +1,5 @@
+> 历史记录：原路径 `docs/PROJECT_REVIEW_REPORT_2026-10-15.md`。保留当时日期、平台与结论，不代表当前源码已重新验收。当前能力见[项目状态](../../PROJECT_STATUS.md)，归档导航见[历史索引](../README.md)。
+
 # NCtool 项目审查报告
 
 日期：2026-10-15。平台：Windows 11 x86_64，Node v24.15.0，Python 3.13.14。依据 [审查计划](PROJECT_REVIEW_PLAN_2026-10-15.md) 和项目 nctool-review/nctool-verify 规则。
@@ -22,7 +24,7 @@
 
 ### R1 · P1 · 被引用旧加工模板可以绕过退役校验
 
-位置：[plugins/template/src/lib.rs:139](../plugins/template/src/lib.rs:139)，来源构造见同文件第 51–65 行。
+位置：[plugins/template/src/lib.rs:139](../../plugins/template/src/lib.rs:139)，来源构造见同文件第 51–65 行。
 
 保存资产 `old-nc`，内容为 `{"source":"G0 X{{ x }}","metadata":{"nc":null}}`。直接运行 `template.render`，输入 `{"template":"old-nc","context":{"x":7}}`，正确拒绝并返回 `retired_template`。但普通或受管渲染输入 `{"source":"{% include \"old-nc\" %}","context":{"x":7}}` 均成功，交付 `G0 X7`。
 
@@ -34,7 +36,7 @@
 
 ### R2 · P1 · Windows 等价文件名造成多文件产物静默丢失
 
-位置：[cli/src/main.rs:197](../cli/src/main.rs:197)，写入与交付在第 227–239 行。
+位置：[cli/src/main.rs:197](../../cli/src/main.rs:197)，写入与交付在第 227–239 行。
 
 外部插件返回两个合法 Artifact：`A.txt=FIRST`、`a.txt=SECOND`。执行 `run delivery-probe.run --input - --out-dir <新目录>`，Windows 上退出码为 0，stdout 仍列出两个产物，实际目录只有 `a.txt=SECOND`。`a.txt` 与 `a.txt.`、`a.txt` 与 `a.txt ` 也复现同一行为。
 
@@ -46,7 +48,7 @@
 
 ### R3 · P1 · 高级规格跨文档共享撤销历史，可将 A 的 schema 写入 B
 
-位置：[ui/src/components/Editor.tsx:230](../ui/src/components/Editor.tsx:230)，调用链为 [WorkbenchUi.tsx:245](../ui/src/components/WorkbenchUi.tsx:245) 与 [AuthorPanes.tsx:84](../ui/src/features/workbench/AuthorPanes.tsx:84)。
+位置：[ui/src/components/Editor.tsx:230](../../ui/src/components/Editor.tsx:230)，调用链为 [WorkbenchUi.tsx:245](../../ui/src/components/WorkbenchUi.tsx:245) 与 `ui/src/features/workbench/AuthorPanes.tsx:84`（历史文件，当前仓库未保留）。
 
 文档 A、B 均停留在高级规格页。A 的 schema 含 alpha，切到含 beta 的 B 后撤销，编辑器恢复 A 的内容，并通过当前 B 的 onChange 写入 B。后续保存可持久化错误规格。
 
@@ -56,7 +58,7 @@
 
 ### R4 · P1 · 共享参数保存晚返回会覆盖新编辑和持久草稿
 
-位置：[ui/src/plugins/ParameterViews.tsx:59](../ui/src/plugins/ParameterViews.tsx:59)，patch 在第 36–39 行写 state 与 localStorage。
+位置：[ui/src/plugins/ParameterViews.tsx:59](../../ui/src/plugins/ParameterViews.tsx:59)，patch 在第 36–39 行写 state 与 localStorage。
 
 提交 title=submitted 的参数资产，在保存请求未返回前继续编辑为 new unsaved edit。响应返回后，patch({...draft, expected:...}) 使用提交时闭包里的旧 draft，界面恢复 submitted，新编辑消失，localStorage 同时被旧草稿覆盖。期间新建、读取或切换资产也可能被旧响应替换。
 
@@ -66,7 +68,7 @@
 
 ### R5 · P2 · 原先缺失的可选引用被创建后，依赖检查仍误报 current（已修复）
 
-位置：[plugins/parameters/src/lib.rs:528](../plugins/parameters/src/lib.rs:528)。前端消费在 [managedDependencies.ts:91](../ui/src/lib/managedDependencies.ts:91)。
+位置：[plugins/parameters/src/lib.rs:528](../../plugins/parameters/src/lib.rs:528)。前端消费在 [managedDependencies.ts:91](../../ui/src/lib/managedDependencies.ts:91)。
 
 空工作区受管渲染 `A{% include "optional" ignore missing %}Z`，输出 AZ。随后保存 optional 模板，源码为 NEW。用首次结果的 parameter_snapshot 和 template snapshot 调用 parameter.dependencies.check，仍返回 `{"current":true,"changes":[]}`；但同一实时输入重新生成已输出 ANEWZ。
 
@@ -80,7 +82,7 @@
 
 ### R6 · P2 · 参数识别的晚响应覆盖请求期间的新 schema（已修复）
 
-位置：[ui/src/features/workbench/useWorkbenchController.tsx:234](../ui/src/features/workbench/useWorkbenchController.tsx:234)。
+位置：`ui/src/features/workbench/useWorkbenchController.tsx:234`（历史文件，当前仓库未保留）。
 
 对 `{{ old }}` 点击识别参数；请求未返回时将源码改成 `{{ newer }}` 并定义 newer:number。响应返回后 source 仍为 newer，但 schema 中新版字段被删除、只剩 old。discover 从请求前 doc.asset 复制 schema，随后将整份旧规格回写，没有核对源码或 schema 版本。
 
@@ -90,7 +92,7 @@
 
 ### R7 · P2 · 参数目录跨类型乱序响应，导致加载错误类型草稿（已修复）
 
-位置：[ui/src/plugins/ParameterViews.tsx:41](../ui/src/plugins/ParameterViews.tsx:41)，读取拼接在第 123–129 行。
+位置：[ui/src/plugins/ParameterViews.tsx:41](../../ui/src/plugins/ParameterViews.tsx:41)，读取拼接在第 123–129 行。
 
 definitions 目录尚未返回时切到 presets；presets 先完成，definitions 后完成。旧请求把 items 替换成定义列表，但资产类型仍是 presets。选择该项后，预置草稿加载了参数定义的 schema 和 fingerprint。
 
@@ -100,7 +102,7 @@ definitions 目录尚未返回时切到 presets；presets 先完成，definition
 
 ### R8 · P2 · 快捷键绕过运行中门禁，并能在其他页面生成隐藏模板（已修复）
 
-位置：[ui/src/features/workbench/useWorkspaceSession.ts:145](../ui/src/features/workbench/useWorkspaceSession.ts:145)，生成入口见 [useWorkbenchController.tsx:258](../ui/src/features/workbench/useWorkbenchController.tsx:258)。
+位置：`ui/src/features/workbench/useWorkspaceSession.ts:145`（历史文件，当前仓库未保留），生成入口见 `ui/src/features/workbench/useWorkbenchController.tsx:258`（历史文件，当前仓库未保留）。
 
 首个生成请求已创建 queued 任务，此时 busy=true、生成按钮禁用，但 Ctrl+Enter 仍创建第二个任务；切到共享参数页后再按 Ctrl+Enter，又创建第三个隐藏模板任务，页面仍为 parameters。全局快捷键没有页面/模态作用域约束，generate 也只检查提交中的瞬时状态，没有拒绝已有 queued/running。
 

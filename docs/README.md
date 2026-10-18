@@ -2,7 +2,7 @@
 
 本目录的当前文档面向 **NCtool 2.2 工作台**。CLI/WebUI 为 2.2.0，核心组件为 2.0.0，外部协议和版本化服务仍使用各自的协议版本。具体版本以各组件清单为准。
 
-2026-10-16 范围决定：**移除全部内置 NC 能力**，保留通用模板、共享参数、插件机制和独立数学扩展，见[修订方案](DEVELOPMENT_PLAN_2026-10-16.md)。源码层已完成该移除：默认组合为 `template` + `parameters`，`math` 为唯一可选 feature，旧 `nc` profile 与内置 NC 插件、动作/服务、页面、示例与资源均已退出当前实现。兼容保护已本机验证。P1（入门示例、共享绑定作者面板）、P2（职责拆分、样式模块化、历史管理、性能测量）与 P3（提交、三平台 CI、审计、`v2.2.0` 发布与下载后签收）均已完成，见[发行候选](P3_RELEASE_CANDIDATE_2026-10-17.md)与[项目状态](PROJECT_STATUS.md)。旧加工指南已降级为历史入口，只标注替代入口，不再描述可执行操作。
+2026-10-16 范围决定：**移除全部内置 NC 能力**，保留通用模板、共享参数、插件机制和独立数学扩展，见[修订方案](archive/records/DEVELOPMENT_PLAN_2026-10-16.md)。源码层已完成该移除：默认组合为 `template` + `parameters`，`math` 为唯一可选 feature，旧 `nc` profile 与内置 NC 插件、动作/服务、页面、示例与资源均已退出当前实现。兼容保护已本机验证。P1（入门示例、共享绑定作者面板）、P2（职责拆分、样式模块化、历史管理、性能测量）与 P3（提交、三平台 CI、审计、`v2.2.0` 发布与下载后签收）均已完成，见[发行候选](archive/records/P3_RELEASE_CANDIDATE_2026-10-17.md)与[项目状态](PROJECT_STATUS.md)。旧加工指南已从顶层导航移除，原始版本见[历史归档](archive/README.md)。
 
 第一次使用先阅读[项目 README](../README.md)；旧版命令、GUI 和迁移资料在[历史归档](archive/README.md)，不作为当前操作说明。
 
@@ -14,7 +14,7 @@
 | [模板编写指南](TEMPLATE_WRITING_GUIDE.md) | 模板作者：JSON 资产、参数定义、模板引用与显式渲染扩展 |
 | [独立参数与受管生成](PARAMETER_MANAGEMENT.md) | 共享定义、预置、绑定、来源、冻结快照与通用受管渲染 |
 
-已移除的内置能力（机床、工序、同步粗车、越程槽、轨迹、旧固定工作台迁移）不再设独立入口页。原始指南按原路径保存在 `docs/archive/legacy/` 的恢复包中，恢复方法见[历史归档索引](archive/README.md)；当前能力见[项目状态](PROJECT_STATUS.md)，领域能力通过[插件协议](PLUGIN_PROTOCOL.md)自行实现。移除前的完整源码上下文与恢复说明见[NC 移除恢复说明](NC_REMOVAL_RECOVERY_2026-10-16.md)。
+已移除的内置能力（机床、工序、同步粗车、越程槽、轨迹、旧固定工作台迁移）不再设独立入口页。原始指南按原路径保存在 `docs/archive/legacy/` 的恢复包中，恢复方法见[历史归档索引](archive/README.md)；当前能力见[项目状态](PROJECT_STATUS.md)，领域能力通过[插件协议](PLUGIN_PROTOCOL.md)自行实现。移除前的完整源码上下文与恢复说明见[NC 移除恢复说明](archive/records/NC_REMOVAL_RECOVERY_2026-10-16.md)。
 
 ## 开发与接口
 
@@ -24,7 +24,7 @@
 | [系统设计与配置](SYSTEM_DESIGN.md) | 配置目录、JSON 资产、动作、HTTP 与任务接口 |
 | [插件协议](PLUGIN_PROTOCOL.md) | SDK、双向 JSON-RPC、服务、页面和资产集合贡献 |
 | [贡献指南](CONTRIBUTING.md) | 工具链、构建、测试、源码快照与修改边界 |
-| [Codex 开发工具与 Skills](CODEX_DEVELOPMENT.md) | 项目规则、专用技能、GitHub、浏览器、Context7 与依赖审计 |
+| [AI 开发工具与 Skills](CODEX_DEVELOPMENT.md) | Codex/Claude Code 环境、专用技能、环境自检、构建目录、GitHub、浏览器、Context7 与依赖审计 |
 | [WebUI 验收清单](UI_ACCEPTANCE_CHECKLIST.md) | 当前工作台的正常、失败、冲突及恢复场景 |
 
 ## 项目状态与发布
@@ -32,14 +32,12 @@
 | 文档 | 内容 |
 | --- | --- |
 | [项目状态](PROJECT_STATUS.md) | 当前能力、限制、待验证事项与历史证据入口 |
-| [P3 发行候选与签收准备 2026-10-17](P3_RELEASE_CANDIDATE_2026-10-17.md) | 候选身份、关键指纹、本轮审计/构建/冒烟证据、发行契约与未完成项 |
-| [当前开发边界（AI 复刻用）](DEVELOPMENT_BOUNDARY_2026-10-17.md) | 按源码契约列出组件 API、数据格式、协议、常量与硬约束，供独立复刻 |
-| [NC 移除最终实施记录](NC_REMOVAL_IMPLEMENTATION_2026-10-16.md) | 2026-10-16 移除实施、本机验证、审计与签名范围 |
-| [持续优化记录 2026-10-17](OPTIMIZATION_LOG_2026-10-17.md) | 缺陷修复、代码精简与架构收敛的发现与验证 |
 | [路线图](ROADMAP.md) | 按 P0–P3 组织的待办与交付门槛，无交付日期承诺 |
-| [轻量完整易用开发方案](DEVELOPMENT_PLAN_2026-10-16.md) | 2026-10-16 源码进度、基线矛盾、产品范围建议、实施顺序与验收条件 |
+| [当前开发边界（AI 复刻用）](DEVELOPMENT_BOUNDARY_2026-10-17.md) | 按源码契约列出组件 API、数据格式、协议、常量与硬约束，供独立复刻 |
 | [发布说明](RELEASE.md) | `v2.*` 标签、CI 前置验证、二进制与校验文件 |
 | [变更记录](../CHANGELOG.md) | 未发布改动及原有版本历史 |
+
+阶段记录（发行候选、NC 移除实施、优化日志、开发方案、审查与修复记录）已移入[历史归档](archive/README.md)的 `records/`，仍可回溯，但不再作为当前操作说明。
 
 ## 历史资料
 

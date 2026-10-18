@@ -4,7 +4,7 @@
 
 ## 范围
 
-按[精简方案](../../RUST_WORKBENCH_SIMPLIFICATION_PLAN.md)把Rust工作台收束为通用Jinja模板产品。移除四个加工crate及它们的动作、服务、页面、资产模型和构建分支；保留根引擎、资产、SDK、运行时、模板插件、共享参数插件和数学扩展（独立feature）。独立 `shaft_programmer` 与其数据、旧工作台归档、研究原型均未改动。
+按`docs/RUST_WORKBENCH_SIMPLIFICATION_PLAN.md`（历史文件，当前仓库未保留，原字节见恢复包）把Rust工作台收束为通用Jinja模板产品。移除四个加工crate及它们的动作、服务、页面、资产模型和构建分支；保留根引擎、资产、SDK、运行时、模板插件、共享参数插件和数学扩展（独立feature）。独立 `shaft_programmer` 与其数据、旧工作台归档、研究原型均未改动。
 
 ## 实现要点
 

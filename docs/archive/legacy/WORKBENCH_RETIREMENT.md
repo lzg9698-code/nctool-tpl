@@ -17,7 +17,7 @@
 
 `workbench/`、`ui/src/workbench/`、`ui/workbench.html`、`ui/tsconfig.workbench.json`、五个旧工作台脚本及根目录启动/停止CMD已移除。旧端口8789不再作为当前源码的启动入口。临时恢复旧目录时，主UI构建仍按原配置排除它，不混入当前产品的来源指纹。
 
-旧工作台的数据仍位于原 `target/shaft-workbench-data/` 或使用者自选home；数据未转换、清空或重写。新工具数据与它独立。可按[迁移指南](../../LEGACY_WORKBENCH_MIGRATION.md)把显式输入转换成待确认草稿。转换不会继承旧NC、旧生成或旧验收身份；特殊跨段键槽等无法保持语义时明确拒绝。
+旧工作台的数据仍位于原 `target/shaft-workbench-data/` 或使用者自选home；数据未转换、清空或重写。新工具数据与它独立。可按 `docs/LEGACY_WORKBENCH_MIGRATION.md`（历史文件，当前仓库未保留，原字节见恢复包）把显式输入转换成待确认草稿。转换不会继承旧NC、旧生成或旧验收身份；特殊跨段键槽等无法保持语义时明确拒绝。
 
 当前工具维护范围已收束；代表性加工输出尚未在真实机床环境对照验收。保存归档使旧行为仍可追溯，不把草稿转换等同于工艺等价证明。
 

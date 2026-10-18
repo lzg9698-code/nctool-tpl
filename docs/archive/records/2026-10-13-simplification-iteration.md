@@ -47,4 +47,4 @@
 - GitHub Actions、Linux/macOS、MSRV 1.89、依赖审计与 scripts/tests 全套未在本轮执行；没有依赖或锁文件变更，也没有准备发布。新 CI 门槛是否跨平台通过须由实际远端结果确认。
 - 软件回归不代表控制器、真实刀具、夹持或机床工艺验收，输出继续为仿真候选。
 
-执行指引：[审查](../../../.agents/skills/nctool-review/SKILL.md)、[验证](../../../.agents/skills/nctool-verify/SKILL.md)、[文档同步](../../../.agents/skills/nctool-docs-release/SKILL.md)。原审查建议见[精简审查报告](../../PROJECT_SIMPLIFICATION_REVIEW_2026-10-13.md)。
+执行指引：[审查](../../../.agents/skills/nctool-review/SKILL.md)、[验证](../../../.agents/skills/nctool-verify/SKILL.md)、[文档同步](../../../.agents/skills/nctool-docs-release/SKILL.md)。原审查建议见`docs/PROJECT_SIMPLIFICATION_REVIEW_2026-10-13.md`（历史文件，当前仓库未保留，原字节见恢复包）。
