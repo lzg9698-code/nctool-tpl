@@ -135,10 +135,13 @@ def running_binaries() -> list[Path] | None:
                         ["lsof", "-a", "-p", pid, "-d", "txt", "-Fn"],
                         capture_output=True, text=True, timeout=10,
                     )
-                    names = [s[1:] for s in result.stdout.splitlines() if s.startswith("n/")]
-                    if result.returncode != 0 or not names:
+                    names = {
+                        Path(s[1:]) for s in result.stdout.splitlines()
+                        if s.startswith("n/") and Path(s[1:]).name == "nctool"
+                    }
+                    if result.returncode != 0 or len(names) != 1:
                         return None
-                    executable = Path(names[0])
+                    executable = names.pop()
                 if not executable.is_absolute():
                     return None
                 paths.append(executable)

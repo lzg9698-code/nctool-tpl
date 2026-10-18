@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from pathlib import Path
+from pathlib import Path, PurePosixPath
 import subprocess
 import shutil
 import tempfile
@@ -119,6 +119,20 @@ class CleanTargetTests(unittest.TestCase):
                 with patch.object(module.sys, "platform", "win32"), patch.object(module.subprocess, "run", return_value=SimpleNamespace(returncode=code, stdout=output)) as query:
                     self.assertEqual(module.running_binaries(), expected)
                     self.assertIn("-ErrorAction Stop", query.call_args.args[0][-1])
+
+    def test_macos_ignores_library_mappings_and_rejects_ambiguity(self) -> None:
+        module = self.module()
+        executable = "/tmp/target/old-preview/nctool"
+        cases = [
+            ("n/usr/lib/libSystem.B.dylib\nn" + executable + "\n", [PurePosixPath(executable)]),
+            ("n/usr/lib/libSystem.B.dylib\n", None),
+            ("n" + executable + "\nn/tmp/other/nctool\n", None),
+        ]
+        for output, expected in cases:
+            with self.subTest(output=output):
+                results = [SimpleNamespace(returncode=0, stdout="123 /tmp/nctool\n"), SimpleNamespace(returncode=0, stdout=output)]
+                with patch.object(module.sys, "platform", "darwin"), patch.object(module, "Path", PurePosixPath), patch.object(module.subprocess, "run", side_effect=results):
+                    self.assertEqual(module.running_binaries(), expected)
 
     def test_windows_removal_uses_python39_callback(self) -> None:
         module = self.module()
