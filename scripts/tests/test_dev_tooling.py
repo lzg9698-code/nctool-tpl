@@ -103,6 +103,23 @@ class CleanTargetTests(unittest.TestCase):
         with patch.object(module.sys, "platform", "linux"), patch.object(module.subprocess, "run", return_value=SimpleNamespace(returncode=0, stdout="123 nctool\n")), patch.object(module.os, "readlink", return_value=executable):
             self.assertEqual(module.running_binaries(), [Path(executable)])
 
+    def test_windows_process_query_preserves_unknown_paths_and_errors(self) -> None:
+        module = self.module()
+        executable = str(self.root / "target/old-preview/nctool.exe")
+        cases = [
+            (0, "[]", []),
+            (0, json.dumps([{"ProcessId": 123, "ExecutablePath": executable}]), [Path(executable)]),
+            (0, '[{"ProcessId":123,"ExecutablePath":null}]', None),
+            (0, "", None),
+            (0, "invalid json", None),
+            (1, "[]", None),
+        ]
+        for code, output, expected in cases:
+            with self.subTest(code=code, output=output):
+                with patch.object(module.sys, "platform", "win32"), patch.object(module.subprocess, "run", return_value=SimpleNamespace(returncode=code, stdout=output)) as query:
+                    self.assertEqual(module.running_binaries(), expected)
+                    self.assertIn("-ErrorAction Stop", query.call_args.args[0][-1])
+
     def test_windows_removal_uses_python39_callback(self) -> None:
         module = self.module()
         with patch.object(module.sys, "platform", "win32"), patch.object(module.shutil, "rmtree") as remove:

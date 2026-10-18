@@ -151,8 +151,11 @@ def running_binaries() -> list[Path] | None:
                 "powershell",
                 "-NoProfile",
                 "-Command",
-                "@(Get-CimInstance Win32_Process -Filter \"Name='nctool.exe'\" | "
-                "Select-Object -ExpandProperty ExecutablePath)",
+                "$ErrorActionPreference = 'Stop'; try { "
+                "$items = @(Get-CimInstance Win32_Process -Filter \"Name='nctool.exe'\" -ErrorAction Stop | "
+                "Select-Object ProcessId, ExecutablePath); "
+                "ConvertTo-Json -InputObject $items -Compress "
+                "} catch { [Console]::Error.WriteLine($_.Exception.Message); exit 1 }",
             ],
             capture_output=True,
             text=True,
@@ -164,8 +167,26 @@ def running_binaries() -> list[Path] | None:
         return None
     if result.returncode != 0:
         return None
-    paths = [Path(line.strip()) for line in result.stdout.splitlines() if line.strip()]
-    return paths if all(p.is_absolute() for p in paths) else None
+    import json
+
+    try:
+        records = json.loads(result.stdout)
+        if not isinstance(records, list):
+            return None
+        paths = []
+        for record in records:
+            if not isinstance(record, dict) or not isinstance(record.get("ProcessId"), int):
+                return None
+            executable = record.get("ExecutablePath")
+            if not isinstance(executable, str) or not executable.strip():
+                return None
+            path = Path(executable)
+            if not path.is_absolute():
+                return None
+            paths.append(path)
+        return paths
+    except (ValueError, TypeError):
+        return None
 
 
 def scan(days: float) -> tuple[list[dict], list[dict]]:
