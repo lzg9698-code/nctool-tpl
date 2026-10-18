@@ -182,7 +182,6 @@ function mergeSettings(settings, template) {
 }
 
 function setupSettings() {
-  if (!withSettings && !withHook) return;
   const path = join(root, ".claude", "settings.json");
   const template = settingsTemplate();
   if (!existsSync(path)) {

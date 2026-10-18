@@ -194,6 +194,23 @@ class PreviewLaunchTests(unittest.TestCase):
             self.assertEqual([c["name"] for c in config["configurations"]], ["dev-template", "dev-math"])
             self.assertFalse((root / ".claude/settings.json").exists())
 
+    def test_plain_apply_creates_settings_without_template(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="setup-default-") as directory:
+            root = Path(directory)
+            script = root / "scripts/dev/setup_agent_env.mjs"
+            script.parent.mkdir(parents=True)
+            shutil.copy2(DEV / "setup_agent_env.mjs", script)
+            (root / ".agents/skills").mkdir(parents=True)
+            (root / "CLAUDE.md").write_text('@AGENTS.md\n', encoding="utf-8")
+            (root / ".mcp.json").write_text('{"mcpServers":{}}', encoding="utf-8")
+            result = run("node", str(script), "--apply", "--json")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            settings = root / ".claude/settings.json"
+            self.assertEqual(json.loads(settings.read_text(encoding="utf-8"))["permissions"], {"allow": [], "ask": []})
+            original = settings.read_bytes()
+            self.assertEqual(run("node", str(script), "--apply", "--json").returncode, 0)
+            self.assertEqual(settings.read_bytes(), original)
+
     def test_missing_binary_check_is_read_only_and_variants_are_isolated(self) -> None:
         with tempfile.TemporaryDirectory(prefix="preview-launch-") as directory:
             root = Path(directory)
