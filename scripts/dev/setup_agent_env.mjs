@@ -141,8 +141,13 @@ function linkDirectory(target, link) {
 
 function settingsTemplate() {
   const path = join(root, ".agents", "claude", "settings.template.json");
-  if (!existsSync(path)) fail(`缺少设置模板 ${relativePath(path)}`);
-  const template = JSON.parse(readFileSync(path, "utf8"));
+  // A fresh checkout can generate launch/hooks without a local permissions template.
+  const template = existsSync(path)
+    ? JSON.parse(readFileSync(path, "utf8"))
+    : {
+        permissions: { allow: [], ask: [] },
+        hooks: { SessionStart: [{ hooks: [{ type: "command", command: 'python "${CLAUDE_PROJECT_DIR}/scripts/dev/session_context.py"', timeout: 20 }] }] },
+      };
   if (!withHook) delete template.hooks;
   return template;
 }
@@ -177,6 +182,7 @@ function mergeSettings(settings, template) {
 }
 
 function setupSettings() {
+  if (!withSettings && !withHook) return;
   const path = join(root, ".claude", "settings.json");
   const template = settingsTemplate();
   if (!existsSync(path)) {
@@ -305,6 +311,12 @@ function checkMcp() {
 }
 
 function main() {
+  // Launch-only setup must work from a checkout without personal agent settings.
+  if (withLaunch && !withSettings && !withHook) {
+    setupLaunch();
+    report();
+    return;
+  }
   const skills = linkSkills();
   checkClaudeMd();
   checkMcp();

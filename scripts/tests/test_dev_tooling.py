@@ -87,6 +87,19 @@ class CheckEnvTests(unittest.TestCase):
 
 @unittest.skipUnless(shutil.which("node"), "Node.js is required")
 class PreviewLaunchTests(unittest.TestCase):
+    def test_fresh_checkout_generates_launch_without_settings_template(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="setup-launch-") as directory:
+            root = Path(directory)
+            script = root / "scripts/dev/setup_agent_env.mjs"
+            script.parent.mkdir(parents=True)
+            shutil.copy2(DEV / "setup_agent_env.mjs", script)
+            (root / ".agents/skills").mkdir(parents=True)
+            result = run("node", str(script), "--apply", "--with-launch", "--json")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            config = json.loads((root / ".claude/launch.json").read_text(encoding="utf-8"))
+            self.assertEqual([c["name"] for c in config["configurations"]], ["dev-template", "dev-math"])
+            self.assertFalse((root / ".claude/settings.json").exists())
+
     def test_missing_binary_check_is_read_only_and_variants_are_isolated(self) -> None:
         with tempfile.TemporaryDirectory(prefix="preview-launch-") as directory:
             root = Path(directory)
