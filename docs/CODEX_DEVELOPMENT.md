@@ -65,3 +65,9 @@ python scripts/audit_dependencies.py
 CI 新增 `dependency-audit` 作业，推送/PR 与发布复用验证均执行，失败仍上传报告。Dependabot 覆盖当前 `/ui`、Cargo 和 Actions。旧 Tauri 桌面源码、锁文件及专属审计配置已移除；审计入口仅检查当前产品锁文件。新作业是否通过须查实际 Actions，本地配置不等于远端运行。
 
 处理发现先区分直接/间接、运行/开发依赖，核对公告、可达入口、受影响版本、修复版与兼容性。不要执行 `npm audit fix --force`、批量更新或无依据隐藏告警；审计与依赖更新分别授权。依据 [RustSec](https://rustsec.org/) 与 [npm audit](https://docs.npmjs.com/cli/v11/commands/npm-audit/)，审计通过不等同于没有安全缺陷。
+
+## 自动准备预览
+
+运行 `node scripts/dev/setup_agent_env.mjs --apply --with-launch` 生成默认与 math 的本地预览配置。
+
+- 预览配置通过 `node scripts/dev/preview_ui.mjs default` 或 `math` 启动：先检查嵌入资源，缺失或过期时重建（缺少前端依赖则先 `npm ci --prefix ui`），再运行 Cargo 增量构建，最后启动隔离 home/workspace 的 UI。Windows 冷启动验证（2026-10-18）：在无 `ui/node_modules`、`ui/dist`、`cli/ui`、Rust target 的独立源码副本中，通过 `preview_start` 自动完成依赖准备、资源生成和宿主编译并打开页面；Rust 编译耗时 24.58 秒。本机 npm/Cargo 下载缓存可用，该结果不代表空下载缓存或其他平台。首次启动可能需要较长构建时间；已有服务占用同一二进制时，先停止对应预览再重启。`--check` 只输出路径、构建和启动参数，不写文件、不安装或构建。启动器接受预览工具设置的 `PORT`，默认端口为 18788/18789。
