@@ -195,10 +195,23 @@
 .parameter-list-type select {
   min-width: 130px;
 }
+.parameter-list .panel-content {
+  display: grid;
+  gap: 20px;
+}
+.parameter-list .toolbar {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 12px;
+}
+.parameter-list .toolbar input {
+  width: 100%;
+}
 .parameter-list-items {
   display: grid;
   gap: 6px;
-  margin-top: 12px;
+  margin-top: 0;
   max-height: 60vh;
   overflow: auto;
 }
