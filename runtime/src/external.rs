@@ -75,6 +75,10 @@ impl ExternalManifest {
 struct Pending {
     tx: mpsc::Sender<PluginResult<Value>>,
     context: Context,
+    /// The host stopped waiting (cancel/timeout) but the plugin may still answer or call
+    /// back. The entry stays registered so that abandoned work keeps counting against
+    /// `max_concurrency` and a late reply is not mistaken for a protocol violation.
+    abandoned: bool,
 }
 struct Transport {
     input: mpsc::SyncSender<Vec<u8>>,
@@ -86,6 +90,30 @@ struct Transport {
     limits: Limits,
 }
 impl Transport {
+    /// Mark a request the host stopped waiting for. The entry is kept until the plugin
+    /// answers, so abandoned work still counts against the concurrency limit and a late
+    /// reply is recognised instead of being treated as a protocol error.
+    fn abandon(&self, id: &str) {
+        let exhausted = {
+            let mut pending = self.pending.lock().unwrap();
+            if let Some(entry) = pending.get_mut(id) {
+                entry.abandoned = true;
+            }
+            // Two full waves of abandoned work (every slot given up on, twice over) mean
+            // the plugin is not recovering on its own; restart it so the next call
+            // re-handshakes instead of wedging the plugin forever. One wave is kept as
+            // headroom: the plugin may still answer its late replies and free the slots.
+            pending.len() >= self.limits.max_concurrency.saturating_mul(2)
+                && pending.values().all(|entry| entry.abandoned)
+        };
+        if exhausted {
+            self.fail(PluginError::new(
+                "plugin_timeout",
+                "plugin stopped responding to cancelled requests",
+            ));
+        }
+    }
+
     fn send(&self, message: Value) -> PluginResult<()> {
         if self.failed.load(Ordering::SeqCst) {
             return Err(PluginError::new("plugin_exited", "plugin transport closed"));
@@ -118,6 +146,7 @@ impl Transport {
                 Pending {
                     tx,
                     context: ctx.clone(),
+                    abandoned: false,
                 },
             );
         }
@@ -126,19 +155,20 @@ impl Transport {
             let deadline = Instant::now() + Duration::from_millis(self.limits.timeout_ms);
             loop {
                 if ctx.cancellation.is_cancelled() {
+                    // Return only this request and notify the plugin; tearing the process down
+                    // here would fail every concurrent request served by the same plugin.
                     let _ =
                         self.send(json!({"jsonrpc":"2.0","method":"cancel","params":{"id":id}}));
-                    self.fail(PluginError::new("cancelled", "plugin request cancelled"));
+                    self.abandon(&id);
                     return Err(PluginError::new("cancelled", "request cancelled"));
                 }
                 let remaining = deadline.saturating_duration_since(Instant::now());
                 if remaining.is_zero() {
+                    // The plugin is unresponsive, but the transport may still serve other
+                    // requests; fail only this one and ask the plugin to abandon its work.
                     let _ =
                         self.send(json!({"jsonrpc":"2.0","method":"cancel","params":{"id":id}}));
-                    self.fail(PluginError::new(
-                        "plugin_timeout",
-                        "plugin exceeded its request deadline",
-                    ));
+                    self.abandon(&id);
                     return Err(PluginError::new(
                         "plugin_timeout",
                         "plugin exceeded its request deadline",
@@ -151,7 +181,14 @@ impl Transport {
                 }
             }
         })();
-        self.pending.lock().unwrap().remove(&id);
+        {
+            let mut pending = self.pending.lock().unwrap();
+            // An abandoned entry stays registered for its late reply (and keeps occupying
+            // plugin capacity); every other path releases the slot immediately.
+            if pending.get(&id).is_some_and(|entry| !entry.abandoned) {
+                pending.remove(&id);
+            }
+        }
         result
     }
     fn fail(&self, error: PluginError) {
@@ -185,15 +222,29 @@ impl Transport {
                 .get("parent_id")
                 .and_then(Value::as_str)
                 .ok_or_else(|| PluginError::new("rpc_protocol", "host.call requires parent_id"))?;
-            let context = self
+            let parent_state = self
                 .pending
                 .lock()
                 .unwrap()
                 .get(parent)
-                .map(|p| p.context.clone())
-                .ok_or_else(|| {
-                    PluginError::new("rpc_protocol", "host.call parent is no longer active")
-                })?;
+                .map(|entry| (entry.context.clone(), entry.abandoned));
+            let context = match parent_state {
+                Some((_, true)) => {
+                    // The host already returned a cancel/timeout for this request; a
+                    // callback it still issues is answered locally instead of killing the
+                    // transport that other requests are using. Best effort: a full write
+                    // queue must not turn this into a transport failure.
+                    let _ = self.send(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":"parent request was cancelled","data":{"code":"cancelled","message":"parent request was cancelled","diagnostics":[]}}}));
+                    return Ok(());
+                }
+                Some((context, false)) => context,
+                None => {
+                    return Err(PluginError::new(
+                        "rpc_protocol",
+                        "host.call parent is no longer active",
+                    ))
+                }
+            };
             if self.callbacks.fetch_add(1, Ordering::SeqCst) >= self.limits.max_concurrency {
                 self.callbacks.fetch_sub(1, Ordering::SeqCst);
                 return self.send(json!({"jsonrpc":"2.0","id":id,"error":{"code":-32000,"message":"callback limit reached","data":{"code":"plugin_busy","message":"callback limit reached","diagnostics":[]}}}));
@@ -247,6 +298,11 @@ impl Transport {
             .unwrap()
             .remove(id)
             .ok_or_else(|| PluginError::new("rpc_protocol", "unknown response ID"))?;
+        if pending.abandoned {
+            // A cancelled or timed-out request answered late: drop the reply and keep
+            // serving the other requests on this transport.
+            return Ok(());
+        }
         let result = if let Some(error) = message.get("error") {
             Err(error
                 .get("data")

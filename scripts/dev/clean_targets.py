@@ -17,6 +17,11 @@ import stat
 import subprocess
 import sys
 
+# Hooks and captured command output use UTF-8 on every platform.
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8")
+
 ROOT = Path(__file__).resolve().parents[2]
 TARGET = ROOT / "target"
 

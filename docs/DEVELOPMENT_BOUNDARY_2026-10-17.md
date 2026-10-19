@@ -616,8 +616,8 @@ impl ExternalManifest {
 - 独立写线程（`sync_channel(capacity = max_concurrency * 2)`）和读线程（`BufReader` + `read_frame`）。
 - 读线程按 id 路由：`method` 字段存在 → 必须是 `host.call`（否则 `rpc_protocol`）；无 `method` → 按字符串 id 找 pending，`result`/`error` 必须**恰好一个**（`rpc_protocol`），未知 id → `rpc_protocol`。
 - `send`：`failed` 时 `plugin_exited`；超 `max_message_bytes` → `message_limit`；`try_send` 失败 → `plugin_busy`。
-- `request(method, params, ctx)`：id = `host-{n}`；`pending.len() >= max_concurrency` → `plugin_busy`；循环里每 20ms 检查取消与超时；取消/超时都先发 `cancel` 通知再 `fail()`。
-- `fail(error)`：`swap(true)` 一次性把所有 pending 以该错误唤醒并 `child.kill()` + `wait()`。
+- `request(method, params, ctx)`：id = `host-{n}`；`pending.len() >= max_concurrency` → `plugin_busy`；循环里每 20ms 检查取消与超时；取消/超时先发 `cancel` 通知，再把该 pending 标记为 abandoned 并只返回本请求的错误，**不** `fail()`。abandoned 条目继续计入并发上限，直到插件迟到响应到达；连续两轮并发槽位全部为 abandoned 时才 `fail()` 重启进程。
+- `fail(error)`：`swap(true)` 一次性把所有 pending 以该错误唤醒并 `child.kill()` + `wait()`。仅用于协议错误、进程退出与上述两轮放弃；收到 abandoned id 的迟到响应会丢弃，abandoned 父请求的 `host.call` 在本地回 `cancelled`。
 - `host.call`：`parent_id` 必须对应活动宿主请求；`callbacks` 计数超 `max_concurrency` → 回一条 `-32000` 错误而不是失败整个进程；回调在**新线程**里执行 `context.call(service, version, input)`，所以等待宿主回调时不堵读线程。
 
 **握手**（`ExternalPlugin::start`）：

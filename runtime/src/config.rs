@@ -341,17 +341,92 @@ pub fn uninstall(home: &Path, id: &str) -> PluginResult<()> {
     }
     Ok(())
 }
+/// Map an asset-layer error to a plugin error whose message never contains a filesystem path.
+///
+/// This is the only form exposed over HTTP; absolute paths stay in CLI/stderr output
+/// (see the redaction contract in `nctool_assets::lock`). The code and the distinction
+/// between a conflicting write and a busy lock are preserved.
 pub fn asset_error(error: WriteError) -> PluginError {
-    let code = match error {
+    let code = match &error {
         WriteError::Conflict { .. } | WriteError::LockBusy { .. } => "conflict",
         WriteError::PathEscape { .. } => "path_escape",
         WriteError::NotFound(_) => "not_found",
         _ => "asset_error",
     };
-    PluginError::new(code, error.to_string())
+    PluginError::new(code, error.public_message())
 }
 
 /// Generated output is written atomically only after the action has fully succeeded.
+///
+/// This is a CLI-only path, so the error keeps the path-bearing [`WriteError`] text for
+/// local diagnosis instead of the redacted [`asset_error`] form.
 pub fn write_output(path: &Path, bytes: &[u8]) -> PluginResult<()> {
-    WriteKernel::write_atomic(path, bytes).map_err(asset_error)
+    WriteKernel::write_atomic(path, bytes).map_err(|error| {
+        let code = match &error {
+            WriteError::Conflict { .. } | WriteError::LockBusy { .. } => "conflict",
+            WriteError::PathEscape { .. } => "path_escape",
+            WriteError::NotFound(_) => "not_found",
+            _ => "asset_error",
+        };
+        PluginError::new(code, error.to_string())
+    })
+}
+
+#[cfg(test)]
+mod asset_error_tests {
+    use super::*;
+
+    #[test]
+    fn http_facing_messages_never_include_absolute_paths() {
+        let absolute = std::path::PathBuf::from("/home/someone/workspace/templates/demo.j2");
+        // Every variant that can carry a path must be covered: the HTTP mappers in the
+        // template/parameter plugins and the runtime share `public_message()`.
+        for error in [
+            WriteError::Conflict {
+                path: absolute.clone(),
+                expected: None,
+                actual: None,
+            },
+            WriteError::LockBusy {
+                path: absolute.clone(),
+            },
+            WriteError::ReadOnly {
+                path: absolute.clone(),
+            },
+            WriteError::PathEscape {
+                rel: "demo.j2".into(),
+                reason: format!("目标是指向别处的符号链接，拒绝写入: {}", absolute.display()),
+            },
+            WriteError::NotFound(format!("删除目标不存在: {}", absolute.display())),
+            WriteError::Corrupt(format!(
+                "目标位置已被占用（存在同名目录或非普通文件）: {}",
+                absolute.display()
+            )),
+            WriteError::Io(std::io::Error::other(format!(
+                "cannot open {}",
+                absolute.display()
+            ))),
+        ] {
+            let mapped = asset_error(error);
+            assert!(
+                !mapped.message.contains("/home/someone"),
+                "path leaked over HTTP: {}",
+                mapped.message
+            );
+        }
+        // The two write failures stay distinguishable to clients.
+        assert_eq!(
+            asset_error(WriteError::Conflict {
+                path: absolute.clone(),
+                expected: None,
+                actual: None,
+            })
+            .message,
+            "写入冲突：资产已被其他进程或窗口修改，请刷新后重试"
+        );
+        assert_eq!(
+            asset_error(WriteError::LockBusy { path: absolute }).code,
+            "conflict"
+        );
+    }
 }

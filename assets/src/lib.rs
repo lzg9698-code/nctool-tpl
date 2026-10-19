@@ -286,6 +286,42 @@ impl std::fmt::Display for WriteError {
     }
 }
 
+impl WriteError {
+    /// Message safe for HTTP response bodies: never contains an absolute path.
+    ///
+    /// [`Display`](std::fmt::Display) embeds paths for CLI/stderr diagnosis. Every host
+    /// surface that answers over HTTP must use this instead (see the redaction contract in
+    /// the `lock` module).
+    pub fn public_message(&self) -> String {
+        match self {
+            // Keep the "写入冲突" prefix: the WebUI and browser acceptance assert on it.
+            WriteError::Conflict { .. } => {
+                "写入冲突：资产已被其他进程或窗口修改，请刷新后重试".into()
+            }
+            WriteError::LockBusy { .. } => {
+                "写入冲突：资产文件正被另一个 nctool 进程写入，请稍后重试".into()
+            }
+            WriteError::ReadOnly { .. } => "目标只读或无写入权限".into(),
+            // The relative asset name is not sensitive; the absolute root is.
+            WriteError::PathEscape { rel, .. } => format!("路径越界被拒绝：{rel}"),
+            WriteError::NotFound(_) => "目标条目不存在".into(),
+            WriteError::Corrupt(_) => "写入目标不可用（同名目录或非普通文件占用）".into(),
+            WriteError::Io(err) => format!("IO 错误：{}", err.kind()),
+            WriteError::NumRange {
+                literal,
+                line,
+                column,
+            } => format!("整数超出 JSON 支持范围 (i64/u64): {literal} at {line}:{column}"),
+            WriteError::NumUnderflow {
+                literal,
+                line,
+                column,
+                ..
+            } => format!("JSON 小数下溢为 0: {literal} at {line}:{column}"),
+        }
+    }
+}
+
 impl std::error::Error for WriteError {
     fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
         match self {

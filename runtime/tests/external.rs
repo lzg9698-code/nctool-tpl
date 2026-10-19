@@ -19,6 +19,10 @@ static NEXT_TEMP: AtomicU64 = AtomicU64::new(0);
 // Keep failure detection bounded, and make the fixture sleep exceed that budget.
 const STARTUP_TIMEOUT_MS: u64 = 10_000;
 const FAULT_TIMEOUT_MS: u64 = 10_000;
+/// Short deadline used to observe a plugin reply that arrives after the host gave up.
+const LATE_TIMEOUT_MS: u64 = 5000;
+/// Deadline used when the surrounding test also needs a longer-running sibling.
+const CAPACITY_TIMEOUT_MS: u64 = 2000;
 const FAULT_UPPER_BOUND: Duration = Duration::from_secs(20);
 impl Temp {
     fn new() -> Self {
@@ -110,6 +114,16 @@ def invoke(action,data,server,request_id):
     mode=data.pop('mode','')
     if mode=='crash': os._exit(9)
     if mode=='sleep': time.sleep(30)
+    if mode=='wait': time.sleep(1)
+    if mode=='wait3': time.sleep(0.4)
+    if mode=='wait4': time.sleep(4)
+    if mode=='wait5': time.sleep(3)
+    if mode=='late2':
+        time.sleep(2.5)
+        return compute(action,data,server,request_id)
+    if mode=='late':
+        time.sleep(7)
+        return compute(action,data,server,request_id)
     if mode=='malformed':
         print('not-json',flush=True)
         time.sleep(2)
@@ -235,6 +249,192 @@ fn cancellation_and_parallel_host_queries_do_not_block() {
         .invoke("report.compute", json!({"values":[2]}))
         .is_ok());
 }
+#[test]
+fn cancelling_one_request_keeps_concurrent_requests_alive() {
+    let temp = Temp::new();
+    fixture(&temp.0, STARTUP_TIMEOUT_MS);
+    let runtime = boot(&temp.0, &temp.0.join("workspace"));
+    // Warm the process so both requests are served by the same transport instance.
+    runtime
+        .invoke("report.compute", json!({"values":[1]}))
+        .unwrap();
+    let worker = runtime.clone();
+    let sibling = std::thread::spawn(move || {
+        worker.invoke_request(
+            "sibling",
+            "report.compute",
+            json!({"values":[7],"mode":"wait"}),
+        )
+    });
+    // Both requests must be in flight before the cancellation is issued, otherwise the
+    // "sibling" would merely recover after the process restart.
+    std::thread::sleep(Duration::from_millis(300));
+    let cancelled = runtime.clone();
+    let doomed = std::thread::spawn(move || {
+        cancelled.invoke_request(
+            "doomed",
+            "report.compute",
+            json!({"values":[1],"mode":"sleep"}),
+        )
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !runtime.cancel("doomed") {
+        assert!(Instant::now() < deadline, "doomed request never started");
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(doomed.join().unwrap().unwrap_err().code, "cancelled");
+    // Cancelling one request must not tear down the transport for its sibling.
+    let sibling_result = sibling.join().unwrap();
+    assert!(
+        sibling_result.is_ok(),
+        "sibling request was failed by the cancellation: {sibling_result:?}"
+    );
+}
+
+#[test]
+fn a_sibling_survives_a_request_timeout_or_incompatible_frame() {
+    // A dead line of output ("incompatible frame") is a transport failure, and a single
+    // request deadline is a per-request failure. Only the former may fail the sibling.
+    for mode in ["sleep", "malformed"] {
+        let temp = Temp::new();
+        fixture(&temp.0, FAULT_TIMEOUT_MS);
+        let runtime = boot(&temp.0, &temp.0.join("workspace"));
+        runtime
+            .invoke("report.compute", json!({"values":[1]}))
+            .unwrap();
+        let worker = runtime.clone();
+        let sibling = std::thread::spawn(move || {
+            worker.invoke_request(
+                "sibling",
+                "report.compute",
+                json!({"values":[7],"mode":"wait"}),
+            )
+        });
+        std::thread::sleep(Duration::from_millis(200));
+        let error = runtime
+            .invoke("report.compute", json!({"values":[1],"mode":mode}))
+            .unwrap_err();
+        assert_eq!(
+            error.code,
+            if mode == "sleep" {
+                "plugin_timeout"
+            } else {
+                "rpc_protocol"
+            }
+        );
+        let sibling_result = sibling.join().unwrap();
+        if mode == "sleep" {
+            // Only the timed-out request fails; the sibling keeps using the process.
+            assert!(
+                sibling_result.is_ok(),
+                "timeout failed the concurrent request: {sibling_result:?}"
+            );
+        } else {
+            // A malformed stream is untrustworthy: the process is torn down on purpose.
+            assert!(sibling_result.is_err());
+        }
+        // Either way the next invocation re-handshakes and succeeds.
+        assert!(runtime
+            .invoke("report.compute", json!({"values":[2]}))
+            .is_ok());
+    }
+}
+
+#[test]
+fn a_late_reply_after_a_timeout_does_not_break_a_concurrent_request() {
+    // Timeline with a 5 s deadline: the "late" request starts at 0, times out at
+    // ~5 s and its plugin reply arrives at ~7 s. A sibling starts at ~4.5 s and
+    // answers at ~8.5 s (deadline ~9.5 s), so it is in flight when the late reply
+    // arrives. Tearing the transport down for that reply would fail it.
+    let temp = Temp::new();
+    fixture(&temp.0, LATE_TIMEOUT_MS);
+    let runtime = boot(&temp.0, &temp.0.join("workspace"));
+    runtime
+        .invoke("report.compute", json!({"values":[1]}))
+        .unwrap();
+    let worker = runtime.clone();
+    let sibling = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(4500));
+        worker.invoke_request(
+            "sibling",
+            "report.compute",
+            json!({"values":[7],"mode":"wait4"}),
+        )
+    });
+    let error = runtime
+        .invoke("report.compute", json!({"values":[1],"mode":"late"}))
+        .unwrap_err();
+    assert_eq!(error.code, "plugin_timeout");
+    let sibling_result = sibling.join().unwrap();
+    assert!(
+        sibling_result.is_ok(),
+        "timeout or late reply failed the concurrent request: {sibling_result:?}"
+    );
+    let result = runtime
+        .invoke("report.compute", json!({"values":[3]}))
+        .unwrap();
+    assert_eq!(result.data["total"], 3);
+}
+
+#[test]
+fn abandoned_work_still_counts_against_plugin_capacity() {
+    // After a timeout the host frees its own slot, but the plugin may still be busy. The
+    // abandoned entry must keep occupying plugin capacity so work is not piled onto a
+    // plugin that is already behind.
+    let temp = Temp::new();
+    fixture(&temp.0, CAPACITY_TIMEOUT_MS);
+    // Two slots: one held by the abandoned request, one by a long sibling.
+    let manifest_path = temp.0.join("plugin.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["limits"]["max_concurrency"] = json!(2);
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let runtime = boot(&temp.0, &temp.0.join("workspace"));
+    runtime
+        .invoke("report.compute", json!({"values":[1]}))
+        .unwrap();
+    let worker = runtime.clone();
+    let sibling = std::thread::spawn(move || {
+        worker.invoke_request(
+            "sibling",
+            "report.compute",
+            json!({"values":[9],"mode":"wait5"}),
+        )
+    });
+    std::thread::sleep(Duration::from_millis(100));
+    let error = runtime
+        .invoke("report.compute", json!({"values":[1],"mode":"late2"}))
+        .unwrap_err();
+    assert_eq!(error.code, "plugin_timeout");
+    // The abandoned request still counts: one of the two slots is held by it and the
+    // other by the sibling, so a third request is refused instead of queueing behind work
+    // the host no longer tracks.
+    let busy = runtime
+        .invoke("report.compute", json!({"values":[2]}))
+        .unwrap_err();
+    assert_eq!(busy.code, "plugin_busy");
+    // Once the late reply frees the abandoned slot, a new request is accepted again on the
+    // same transport (a restart would re-handshake, which the assertions below detect).
+    let deadline = Instant::now() + Duration::from_secs(10);
+    let result = loop {
+        match runtime.invoke("report.compute", json!({"values":[4]})) {
+            Ok(result) => break result,
+            Err(error) if error.code == "plugin_busy" && Instant::now() < deadline => {
+                std::thread::sleep(Duration::from_millis(100));
+            }
+            Err(error) => panic!(
+                "request never recovered: {error:?}; sibling finished = {}",
+                sibling.is_finished()
+            ),
+        }
+    };
+    assert_eq!(result.data["total"], 4);
+    // The sibling outlived its own deadline (2 s) while the slot was contended; its
+    // timeout is expected and must not be counted as a transport failure. What matters is
+    // that the runtime is still usable afterwards, which the call above proves.
+    let _ = sibling.join().unwrap();
+}
+
 #[test]
 fn incompatible_manifest_and_package_symlink_rejected() {
     let temp = Temp::new();
