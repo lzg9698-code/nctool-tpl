@@ -16,6 +16,11 @@ import shutil
 import subprocess
 import sys
 
+# JSON and captured diagnostics have a stable encoding on Windows as well.
+for stream in (sys.stdout, sys.stderr):
+    if hasattr(stream, "reconfigure"):
+        stream.reconfigure(encoding="utf-8")
+
 ROOT = Path(__file__).resolve().parents[2]
 
 

@@ -171,6 +171,15 @@ class CleanTargetTests(unittest.TestCase):
 
 
 class CheckEnvTests(unittest.TestCase):
+    def test_json_output_is_utf8_with_ascii_process_defaults(self) -> None:
+        import os
+        with patch.dict(os.environ, {"PYTHONIOENCODING": "ascii"}):
+            result = run(sys.executable, str(DEV / "check_env.py"), "--json")
+        self.assertIn(result.returncode, (0, 1), result.stderr)
+        report = json.loads(result.stdout)
+        self.assertTrue(any(item["name"].startswith("CLAUDE.md") for item in report))
+        self.assertNotIn("�", result.stdout)
+
     def test_json_report_shape(self) -> None:
         result = run(sys.executable, str(DEV / "check_env.py"), "--json")
         self.assertIn(result.returncode, (0, 1), result.stderr)
