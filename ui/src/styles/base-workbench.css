@@ -73,6 +73,64 @@ select:focus {
   border-color: #74a991;
   box-shadow: 0 0 0 3px #287a6610;
 }
+/* Keep native selection and keyboard semantics while styling supported pickers. */
+select {
+  cursor: pointer;
+}
+@supports (appearance: base-select) {
+  select,
+  select::picker(select) {
+    appearance: base-select;
+  }
+  select {
+    align-items: center;
+    gap: 12px;
+  }
+  select::picker-icon {
+    color: var(--muted);
+    transition: rotate 150ms ease;
+  }
+  select:open::picker-icon {
+    rotate: 180deg;
+  }
+  select::picker(select) {
+    margin-block: 6px;
+    padding: 5px;
+    border: 1px solid var(--line);
+    border-radius: var(--radius);
+    background: var(--surface);
+    color: var(--text);
+    box-shadow: 0 8px 24px #25324424;
+    max-height: min(320px, 50vh);
+    overflow-y: auto;
+  }
+  select option {
+    min-height: 36px;
+    padding: 8px 10px;
+    gap: 10px;
+    border-radius: 5px;
+    cursor: pointer;
+  }
+  select option:checked {
+    background: var(--brand-light);
+    color: var(--brand);
+    font-weight: 600;
+  }
+  select option:hover,
+  select option:focus-visible {
+    background: var(--brand-light);
+    color: var(--brand);
+    outline: none;
+  }
+  select option:disabled {
+    color: var(--muted);
+    opacity: 0.6;
+    cursor: not-allowed;
+  }
+  select option::checkmark {
+    color: var(--brand);
+  }
+}
 textarea {
   resize: vertical;
   line-height: 1.6;
