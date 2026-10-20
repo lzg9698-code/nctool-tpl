@@ -841,13 +841,12 @@ dependencies = [
 
 [[package]]
 name = "nctool-cli"
-version = "2.2.0"
+version = "2.3.0-preview.1"
 dependencies = [
  "axum",
  "clap",
  "nctool-assets",
  "nctool-plugin-math",
- "nctool-plugin-parameters",
  "nctool-plugin-sdk",
  "nctool-plugin-template",
  "nctool-runtime",
@@ -862,15 +861,6 @@ version = "2.0.0"
 dependencies = [
  "nctool-plugin-sdk",
  "nctool-tpl",
- "serde_json",
-]
-
-[[package]]
-name = "nctool-plugin-parameters"
-version = "2.0.0"
-dependencies = [
- "nctool-assets",
- "nctool-plugin-sdk",
  "serde_json",
 ]
 

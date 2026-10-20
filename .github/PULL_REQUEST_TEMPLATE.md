@@ -40,7 +40,7 @@
 - [ ] `CHANGELOG.md` 已登记（Added / Changed / Fixed）
 - [ ] 涉及架构 / 模块职责 → `docs/ARCHITECTURE.md`
 - [ ] 涉及模板写法 / 渲染扩展 → `docs/TEMPLATE_WRITING_GUIDE.md`
-- [ ] 涉及共享参数 / 受管渲染 → `docs/PARAMETER_MANAGEMENT.md`
+- [ ] 涉及模板参数 / 默认值 → `docs/PARAMETER_MANAGEMENT.md`
 - [ ] 涉及 CLI / 动作 Schema / HTTP / 历史记录契约 → 测试与 `docs/SYSTEM_DESIGN.md`、`docs/PLUGIN_PROTOCOL.md` 同步
 - [ ] 新增或归档文档 → `docs/README.md` 与历史索引同步
 

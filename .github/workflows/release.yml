@@ -73,3 +73,6 @@ jobs:
         with:
           files: dist/*
           generate_release_notes: true
+          # Preview tags (e.g. v2.3.0-preview.1) must not replace the latest stable release.
+          prerelease: ${{ contains(github.ref_name, '-') }}
+          make_latest: 'false'

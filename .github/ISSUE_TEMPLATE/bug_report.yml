@@ -21,7 +21,7 @@ body:
     attributes:
       label: nctool 版本
       description: 运行 `nctool --version` 的输出
-      placeholder: "nctool 2.2.0"
+      placeholder: "nctool 2.3.0-preview.1"
     validations:
       required: true
 
@@ -34,7 +34,6 @@ body:
         - 参数校验（该报错没报 / 误报）
         - CLI 命令/退出码
         - Web UI（`nctool ui`）
-        - 共享参数（定义 / 预置 / 绑定）
         - 模板引用与资产（include / 稳定 ID / 指纹）
         - 其他
     validations:
