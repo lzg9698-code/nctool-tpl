@@ -38,7 +38,6 @@ export interface Document {
   tab: "source" | "schema" | "settings";
   outputName: string;
   generationAction?: string;
-  parameterSelection?: Data;
   extensions?: string[];
   replayInput?: Data;
   jsonInput?: string;

@@ -31,7 +31,10 @@ export function domainTemplate(asset?: Asset): boolean {
 }
 export function documentActions(actions: Data[]): Data[] {
   return actions.filter(
-    (entry) => !domainAction(entry.id) && entry.ui_schema?.document_input?.bindings,
+    (entry) =>
+      !domainAction(entry.id) &&
+      entry.id !== "template.render.managed" &&
+      entry.ui_schema?.document_input?.bindings,
   );
 }
 export function activePanels(panels: Data[], actions: Data[]): Data[] {
@@ -50,9 +53,7 @@ export function activePanels(panels: Data[], actions: Data[]): Data[] {
       ...panel,
       actions: (panel.actions || []).filter((id: string) => ids.has(id)),
     }))
-    .filter(
-      (panel) => panel.view === "parameter.library" || panel.actions.length,
-    );
+    .filter((panel) => panel.actions.length);
 }
 export function selectDocumentAction(
   doc: Document,
@@ -109,16 +110,6 @@ export function documentInput(doc: Document, entry: Data): Data {
     defaults: doc.asset.defaults || {},
     extensions:
       doc.extensions ?? doc.asset.metadata?.execution?.extensions ?? [],
-    parameter_selection:
-      doc.parameterSelection || doc.asset.metadata?.parameters?.selection,
-    // Keep an explicit decline: `?? undefined` or `|| undefined` would drop it
-    // and let the backend fall back to the preset saved on the template.
-    parameter_preset_id: (() => {
-      const selection = doc.parameterSelection ?? doc.asset.metadata?.parameters?.selection;
-      return selection && Object.hasOwn(selection, "preset_id")
-        ? selection.preset_id
-        : doc.asset.metadata?.parameters?.preset_id;
-    })(),
   };
   const pairs: [string, Data][] = [];
   for (const [target, binding] of Object.entries(
@@ -136,15 +127,11 @@ export function documentInput(doc: Document, entry: Data): Data {
     if (value !== undefined) pairs.push([target, value]);
   }
   const input = Object.fromEntries(pairs);
-  // Older capability descriptors may omit this binding; both generic render actions
-  // already accept the explicit extension field. Never silently discard a choice.
-  if (["template.render", "template.render.managed"].includes(entry.id))
-    input.extensions = values.extensions;
+  // Older capability descriptors may omit this binding; the generic render
+  // action already accepts the explicit extension field. Never silently discard it.
+  if (entry.id === "template.render") input.extensions = values.extensions;
   const replay = doc.replayInput;
-  if (
-    replay?.snapshot &&
-    ["template.render", "template.render.managed"].includes(entry.id)
-  ) {
+  if (replay?.snapshot && entry.id === "template.render") {
     input.snapshot = clone(replay.snapshot);
     input.snapshot.templates[input.snapshot.template] = doc.asset.source;
     input.snapshot.asset = clone(doc.asset);
@@ -159,32 +146,6 @@ export function documentInput(doc: Document, entry: Data): Data {
       if (input[key] === undefined && replay[key] !== undefined)
         input[key] = clone(replay[key]);
     }
-    if (
-      entry.id === "template.render.managed" &&
-      replay.parameter_snapshot &&
-      // Only inherit the frozen request when the caller said nothing about the
-      // preset. An explicit `null` is a deliberate "no preset" and must not be
-      // overwritten by whatever the replayed run happened to use.
-      input.preset_id === undefined
-    ) {
-      input.parameter_snapshot = clone(replay.parameter_snapshot);
-      input.parameter_request = {
-        ...replay.parameter_request,
-        values: doc.context,
-        schema: replay.parameter_request?.schema ?? input.schema ?? doc.asset.schema ?? true,
-        defaults: input.defaults ?? doc.asset.defaults ?? {},
-        bindings:
-          input.bindings ?? doc.asset.metadata?.parameters?.bindings ?? {},
-      };
-      for (const key of [
-        "context",
-        "schema",
-        "defaults",
-        "bindings",
-        "preset_id",
-      ])
-        delete input[key];
-    }
   }
   encode(input); // Incomplete numeric drafts must not become previous valid values.
   return input;
@@ -198,7 +159,6 @@ export function documentSignature(doc: Document, action?: string): string {
       defaults: doc.asset.defaults,
       metadata: doc.asset.metadata,
       context: doc.context,
-      parameter_selection: doc.parameterSelection,
       extensions: doc.extensions,
       replay_input: doc.replayInput,
       action,
@@ -241,14 +201,10 @@ export function historyExecutionReason(run: Run, actions: Data[]): string {
 export function restoreDocument(run: Run, actions: Data[]): Document {
   const reason = historyExecutionReason(run, actions);
   if (reason) throw new Error(reason);
-  if (!["template.render", "template.render.managed"].includes(run.action))
+  if (run.action !== "template.render")
     throw new Error("此动作不支持恢复为模板文档，原始输入仍可在历史中查看。");
   const input = clone(run.result?.data?.replay_input || run.input);
   const snapshot = input.snapshot;
-  const request =
-    run.action === "template.render.managed"
-      ? input.parameter_request
-      : undefined;
   const restored = newDocument();
   restored.title = run.title + " · 历史输入";
   restored.generationAction = run.action;
@@ -263,27 +219,9 @@ export function restoreDocument(run: Run, actions: Data[]): Document {
     input.source ??
     restored.asset.source;
   restored.asset.schema =
-    snapshot?.asset?.schema ?? request?.schema ?? input.schema ?? restored.asset.schema;
-  restored.asset.defaults =
-    request?.defaults ?? input.defaults ?? restored.asset.defaults;
-  if (request) {
-    restored.asset.metadata = {
-      ...restored.asset.metadata,
-      parameters: {
-        ...restored.asset.metadata?.parameters,
-        bindings: request.bindings || {},
-      },
-    };
-    delete restored.asset.metadata.parameters.preset_id;
-    delete restored.asset.metadata.parameters.selection;
-  }
-  restored.context = clone(request?.values ?? input.context ?? {});
-  // Preserve a frozen decline: an empty selection would fall back to the preset
-  // saved on the template instead of the one this run actually used.
-  restored.parameterSelection =
-    input.preset_id === undefined
-      ? {}
-      : { preset_id: input.preset_id ?? null };
+    snapshot?.asset?.schema ?? input.schema ?? restored.asset.schema;
+  restored.asset.defaults = input.defaults ?? restored.asset.defaults;
+  restored.context = clone(input.context ?? {});
   restored.extensions = input.extensions ?? [];
   restored.replayInput = snapshot ? input : undefined;
   restored.mode = "use";

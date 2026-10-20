@@ -20,20 +20,17 @@ export function normalizeSchema(asset: Asset): Schema {
     : { type: "object", properties: {}, required: [] };
 }
 
-// Build the editable document for a stored template. `actionId` decides whether
-// a shared-parameter template starts with empty overrides (its definitions and
-// presets own the values) or with the schema/defaults pre-filled.
+// Build the editable document using the template's own schema and defaults.
 export function prepareDocument(
   id: string,
   asset: Asset,
   fingerprint: string,
-  actionId?: string,
 ): Document {
   const doc = newDocument();
   doc.id = id;
   doc.title = asset.metadata?.title || id;
   doc.asset = asset;
-  doc.context = initialDocumentContext(asset, actionId);
+  doc.context = initialDocumentContext(asset);
   doc.fingerprint = fingerprint;
   doc.mode = "use";
   doc.outputName = asset.metadata?.output_name || id + ".txt";

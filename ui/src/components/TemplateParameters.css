@@ -1,0 +1,53 @@
+.template-parameter {
+  border: 1px solid var(--line, #d8dde6);
+  border-radius: 10px;
+  padding: 12px;
+  margin-bottom: 10px;
+}
+
+.template-parameter-row {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) minmax(110px, 160px) minmax(160px, 2fr) 32px;
+  gap: 10px;
+  align-items: end;
+}
+
+.template-parameter-name {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  min-width: 0;
+}
+
+.template-parameter-name code {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.template-parameter-default {
+  min-width: 0;
+}
+
+.template-parameter-warning {
+  margin: 8px 0 0;
+}
+
+.template-parameter-advanced {
+  margin-top: 8px;
+}
+
+.template-parameter-advanced > summary {
+  cursor: pointer;
+  color: var(--muted, #5b6472);
+}
+
+.template-parameter-json {
+  margin-top: 12px;
+}
+
+@media (max-width: 900px) {
+  .template-parameter-row {
+    grid-template-columns: 1fr;
+  }
+}

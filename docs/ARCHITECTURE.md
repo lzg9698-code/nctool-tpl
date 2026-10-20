@@ -9,7 +9,6 @@ flowchart TB
     Surfaces[CLI / WebUI] --> Runtime[插件运行时 / 动作注册表]
     Runtime --> Template[通用模板插件]
     Template --> Engine[独立 Jinja 引擎]
-    Runtime --> Parameters[共享参数插件]
     Runtime --> Math[可选数学扩展]
     Runtime --> External[外部进程插件]
     External -->|声明的服务调用| Runtime
@@ -19,7 +18,7 @@ flowchart TB
 
 - `nctool-tpl` 只依赖 MiniJinja；不包含领域模型、数学默认扩展或加工 lint。
 - SDK、运行时、模板与参数服务不依赖任何领域实现。
-- CLI 的 `composition` 是唯一装配入口；默认装配 `template` + `parameters`，不引入内置 NC/工序插件。域外能力只能通过通用插件机制扩展。
+- CLI 的 `composition` 是唯一装配入口；默认装配 `template`，不引入内置 NC/工序插件。域外能力只能通过通用插件机制扩展。
 - 默认构建不含 math 依赖；完整发行包包含可选 math 实现，默认配置仍只启用 `template` + `parameters`。
 - 数学插件以独立 `math = ["dep:nctool-plugin-math"]` feature 编译，保持领域中立；构建可用、运行启用（配置 `enabled`）与单次 `extensions` 选择分别显式，选择进入输入签名与历史重放。
 - 所有业务调用使用显式服务或动作，观测扩展使用 `ActionStarted` / `ActionFinished` 事件。事件不更改正文或吞掉执行错误。
@@ -28,7 +27,7 @@ flowchart TB
 
 普通渲染：模板资产或源码 + JSON 上下文 → 通用规格/defaults → 显式渲染扩展 → Jinja → 文本/诊断。
 
-受管渲染：普通模板输入 + 共享参数绑定/预置 → 参数解析（定义默认 → 模板默认 → 显式预置 → 人工输入）→ 冻结快照 → 通用渲染服务（显式扩展）→ 文本/诊断。冻结形式（snapshot + parameter_snapshot + parameter_request）不能混用 context、schema、defaults、bindings 或 preset_id。
+渲染：模板 `schema` 描述参数，`defaults` 提供初始值，本次 `context` 覆盖同名顶层值 → 通用渲染服务（显式扩展）→ 文本/诊断。参数随模板保存，不经过独立共享服务。
 
 过滤器属于新建的单次渲染环境，不修改全局 Environment。重名扩展、重名过滤器和覆盖 Jinja 内置过滤器都报错。
 

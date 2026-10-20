@@ -1,70 +1,40 @@
 import { describe, expect, it } from "vitest";
 import { DraftNumber, newDocument } from "./data";
-import { documentInput } from "./documentExecution";
 import {
-  initialDocumentContext,
-  resetDocumentParameters,
-  sharedParameterDocument,
   documentForGeneration,
-  templatePresetParameters,
-  loadTemplatePresetParameters,
+  initialDocumentContext,
+  removeDocumentParameter,
+  resetDocumentParameters,
 } from "./appDocumentParameters";
 
 const asset = {
   source: "{{ width }}",
   schema: {
     type: "object",
-    properties: { width: { type: "number", default: 10 } },
+    properties: { width: { type: "number" } },
   },
-  defaults: { width: 20 },
-  metadata: { parameters: { selection: { preset_id: "shared" } } },
+  defaults: { width: 20, label: "" },
 };
-describe("App shared parameter lifecycle", () => {
-  it("starts managed open/import with overrides empty and retains ordinary defaults", () => {
-    expect(initialDocumentContext(asset, "template.render.managed")).toEqual(
-      {},
-    );
-    expect(String(initialDocumentContext(asset, "template.render").width)).toBe(
-      "20",
-    );
-    expect(
-      initialDocumentContext({ ...asset, metadata: {} }, "template.render"),
-    ).toEqual({ width: 20 });
-    expect(
-      initialDocumentContext(
-        { ...asset, metadata: { nc: {} } },
-        "template.render.managed",
-      ),
-    ).toEqual({ width: 20 });
-    expect(sharedParameterDocument(asset, "template.render.managed")).toBe(
-      true,
-    );
-    expect(
-      sharedParameterDocument(
-        { ...asset, metadata: { nc: {} } },
-        "template.render.managed",
-      ),
-    ).toBe(false);
-  });
-  it("clears overrides explicitly without guessing or mutating old drafts", () => {
-    const doc = {
-      ...newDocument(),
-      asset,
-      context: { width: 20 },
-      parameterSelection: { preset_id: null },
-      jsonInput: "bad",
-    };
-    expect(resetDocumentParameters(doc, "template.render.managed")).toEqual({
-      context: {},
-      jsonInput: undefined,
-    });
-    expect(doc.context).toEqual({ width: 20 });
-    expect(doc.parameterSelection).toEqual({ preset_id: null });
-    expect(resetDocumentParameters(doc, "template.render").context).toEqual({
+
+describe("template-local parameters", () => {
+  it("starts a document from the template's own defaults", () => {
+    expect(initialDocumentContext(asset)).toEqual({ width: 20, label: "" });
+    expect(resetDocumentParameters({ ...newDocument(), asset }).context).toEqual({
       width: 20,
+      label: "",
     });
   });
-  it("executes the latest raw JSON and blocks incomplete raw/form drafts", () => {
+  it("removes a field from defaults and this run's input together", () => {
+    const doc = { ...newDocument(), asset, context: { width: 8, keep: true } };
+    const patch = removeDocumentParameter(doc, "width");
+    expect(patch.asset?.defaults).toEqual({ label: "" });
+    expect(patch.context).toEqual({ keep: true });
+    expect(patch.jsonInput).toBeUndefined();
+    // The source document is not mutated.
+    expect(doc.asset.defaults).toEqual({ width: 20, label: "" });
+    expect(doc.context).toEqual({ width: 8, keep: true });
+  });
+  it("executes the latest raw JSON and blocks incomplete drafts", () => {
     const doc = {
       ...newDocument(),
       context: { width: 5 },
@@ -81,36 +51,5 @@ describe("App shared parameter lifecycle", () => {
         context: { width: new DraftNumber("-") },
       }),
     ).toThrow();
-  });
-  it("preserves shared selection and explicit inherited-preset decline in presets and generation", () => {
-    const doc = {
-      ...newDocument(),
-      asset,
-      parameterSelection: { preset_id: null },
-      context: { custom: null },
-    };
-    const saved = templatePresetParameters(doc);
-    expect(saved).toEqual({
-      context: { custom: null },
-      parameter_selection: { preset_id: null },
-    });
-    expect(loadTemplatePresetParameters(saved)).toEqual({
-      context: { custom: null },
-      parameterSelection: { preset_id: null },
-      jsonInput: undefined,
-    });
-    expect(loadTemplatePresetParameters({ context: { legacy: true } })).toEqual(
-      { context: { legacy: true }, jsonInput: undefined },
-    );
-    const input = documentInput(doc, {
-      id: "template.render.managed",
-      ui_schema: {
-        document_input: {
-          bindings: { context: "context", preset_id: "parameter_preset_id" },
-        },
-      },
-    });
-    expect(input.preset_id).toBeNull();
-    expect(input.context.custom).toBeNull();
   });
 });

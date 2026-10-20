@@ -27,9 +27,6 @@ vi.mock("./lib/templateCatalog", async (original) => ({
   ...(await original<typeof import("./lib/templateCatalog")>()),
   loadTemplateCatalog: vi.fn(),
 }));
-vi.mock("./lib/managedDependencies", () => ({
-  useManagedDependencies: () => ({ stale: false }),
-}));
 vi.mock("./plugins/registry", () => ({ builtinViews: {} }));
 const editorHarness = vi.hoisted(() => ({ ready: undefined as (() => void) | undefined, insert: vi.fn() }));
 vi.mock("./components/LazyEditor", async () => {
@@ -62,17 +59,6 @@ vi.mock("./components/SchemaEditor", () => ({
   ),
 }));
 vi.mock("./components/Form", () => ({ Form: () => <div>原有参数表单</div> }));
-vi.mock("./plugins/ParameterViews", () => ({
-  ParameterSelection: () => <div>原有共享选择器</div>,
-}));
-vi.mock("./components/SharedParameterInputs", () => ({
-  SharedParameterInputs: ({ doc }: Data) => (
-    <div>
-      <span>共享参数输入</span>
-      <output data-testid="shared-context">{JSON.stringify(doc.context)}</output>
-    </div>
-  ),
-}));
 vi.mock("./components/WorkbenchUi", () => ({
   Empty: ({ title }: Data) => <div>{title}</div>,
   PageTitle: ({ title }: Data) => <div>{title}</div>,
@@ -105,14 +91,19 @@ afterEach(() => {
   localStorage.clear();
 });
 
-const managedAction = {
-  id: "template.render.managed",
-  title: "共享参数生成",
+const renderAction = {
+  id: "template.render",
+  title: "普通文本生成",
   ui_schema: {
     document_input: {
       default: true,
-      bindings: { source: "source", context: "context" },
-      title: "共享参数生成",
+      bindings: {
+        source: "source",
+        context: "context",
+        schema: "schema",
+        defaults: "defaults",
+      },
+      title: "普通文本生成",
     },
   },
 };
@@ -133,7 +124,7 @@ function sharedDocument() {
 
 function shell(path: string) {
   if (path === "workspace") return { id: "app-test", profile: "template" };
-  if (path === "capabilities") return { actions: [managedAction], panels: [] };
+  if (path === "capabilities") return { actions: [renderAction], panels: [] };
   if (path === "plugins") return { plugins: [] };
   return undefined;
 }
@@ -233,40 +224,36 @@ describe("active App execution lifecycle", () => {
     fireEvent.click(selected("模板信息", false));
     selected("模板信息", true);
     selected("模板源码", false);
-    selected("参数定义", true);
-    fireEvent.click(selected("默认参数", false));
-    selected("默认参数", true);
-    selected("参数定义", false);
+    await screen.findByText("参数");
+    expect(screen.queryByRole("button", { name: "参数定义" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "默认参数" })).toBeNull();
+    expect(screen.queryByRole("button", { name: "共享绑定" })).toBeNull();
     expect(vi.mocked(api).mock.calls.every(([, body]) => body === undefined)).toBe(true);
   });
 
-  it("enabling shared bindings updates the active action and survives a draft flush", async () => {
+  it("has a single everyday parameter area and no shared preset controls", async () => {
     const doc = newDocument();
     doc.generationAction = "template.render";
     doc.asset.source = "Hello";
+    doc.asset.schema = { type: "object", properties: { name: { type: "string" } } };
     vi.mocked(loadDrafts).mockReturnValue({ documents: [doc], active: doc.key });
     vi.mocked(loadTemplateCatalog).mockResolvedValue({ items: [], diagnostics: [] });
     vi.mocked(api).mockImplementation(async (path: string) => {
-      if (path === "capabilities") return { actions: [managedAction, {
-        ...managedAction, id: "template.render", title: "普通模板生成",
-      }], panels: [] };
       const base = shell(path);
       if (base) return base;
       if (path === "runs") return { runs: [] };
       throw new Error("unexpected api call: " + path);
     });
-    vi.mocked(action).mockResolvedValue({ data: { items: [] } });
     render(<App />);
-    fireEvent.click(await screen.findByRole("button", { name: "共享绑定" }));
-    fireEvent.click(await screen.findByRole("button", { name: "启用共享参数绑定" }));
-    await waitFor(() => expect(
-      (screen.getByLabelText("模板生成方式") as HTMLSelectElement).value,
-    ).toBe("template.render.managed"));
+    fireEvent.click(await screen.findByRole("button", { name: "编辑模板" }));
+    await screen.findByText("参数");
+    expect(screen.queryByRole("button", { name: "共享绑定" })).toBeNull();
+    expect(screen.queryByLabelText("共享预置")).toBeNull();
+    expect(screen.queryByText("保存本模板输入预设")).toBeNull();
     window.dispatchEvent(new Event("pagehide"));
     const stored = vi.mocked(saveDrafts).mock.calls.at(-1)?.[1] as Document[];
-    expect(stored[0].asset.metadata?.parameters.bindings).toEqual({});
-    expect(stored[0].generationAction).toBe("template.render.managed");
     expect(stored[0].asset.source).toBe("Hello");
+    expect(stored[0].generationAction).toBe("template.render");
   });
 
   it("never queues a second run from the shortcut while the first is in flight", async () => {
@@ -286,7 +273,7 @@ describe("active App execution lifecycle", () => {
         return {
           id: "run-1",
           title: doc.title,
-          action: "template.render.managed",
+          action: "template.render",
           input: {},
           status: "queued",
           started_at: 0,
@@ -335,11 +322,11 @@ describe("active App execution lifecycle", () => {
     );
   });
 
-  it("restores a shared-parameter history record through the existing button", async () => {
+  it("restores an ordinary history record through the existing button", async () => {
     const run = {
       id: "run-h1",
-      title: "历史共享记录",
-      action: "template.render.managed",
+      title: "历史记录",
+      action: "template.render",
       input: {
         snapshot: {
           template: "tpl-a",
@@ -348,15 +335,11 @@ describe("active App execution lifecycle", () => {
             source: "{{ width }}",
             schema: { type: "object", properties: {} },
             defaults: { width: 7 },
-            metadata: { parameters: { bindings: { width: "width" } } },
+            metadata: {},
           },
         },
-        parameter_request: {
-          bindings: { width: "width" },
-          values: { width: 7 },
-          defaults: {},
-          schema: { type: "object", properties: {} },
-        },
+        context: { width: 7 },
+        defaults: { width: 7 },
       },
       status: "succeeded",
       started_at: 1,
@@ -381,11 +364,10 @@ describe("active App execution lifecycle", () => {
     render(<App />);
     fireEvent.click(await screen.findByRole("button", { name: "执行记录" }));
     fireEvent.click(
-      (await screen.findAllByRole("button", { name: /历史共享记录/ }))[0],
+      (await screen.findAllByRole("button", { name: /历史记录/ }))[0],
     );
     fireEvent.click(await screen.findByRole("button", { name: "恢复输入" }));
-    await screen.findByText("共享参数输入");
-    expect(screen.getByText("历史共享记录 · 历史输入")).toBeTruthy();
+    await screen.findByText("历史记录 · 历史输入");
     // The restored document is bound to the run it was restored from.
     expect(screen.getByText("HISTORY-OUTPUT-42")).toBeTruthy();
   });
@@ -445,7 +427,7 @@ describe("active App execution lifecycle", () => {
         return {
           id: "run-1",
           title: doc.title,
-          action: "template.render.managed",
+          action: "template.render",
           input: {},
           status: "succeeded",
           started_at: 0,

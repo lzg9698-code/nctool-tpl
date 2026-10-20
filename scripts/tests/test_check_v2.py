@@ -25,15 +25,13 @@ def packages():
         "features": {"default": [], "math": ["dep:" + CHECK.MATH_PACKAGE]},
         "dependencies": [
             {"name": CHECK.MATH_PACKAGE, "kind": None, "optional": True},
-        ] + [
-            {"name": "nctool-plugin-" + name, "kind": None, "optional": False}
-            for name in ("template", "parameters")
+            {"name": "nctool-plugin-template", "kind": None, "optional": False},
         ],
     }
     return metadata
 
 
-TEMPLATE_TREE = "nctool-plugin-template nctool-plugin-parameters"
+TEMPLATE_TREE = "nctool-plugin-template"
 MATH_TREE = TEMPLATE_TREE + " " + CHECK.MATH_PACKAGE
 WORKSPACE_TREE = MATH_TREE
 
@@ -91,15 +89,23 @@ class ArchitectureTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.check(metadata)
 
-    def test_default_build_keeps_template_and_parameters(self):
-        for name in ("nctool-plugin-template", "nctool-plugin-parameters"):
-            with self.subTest(name=name):
-                with self.assertRaises(AssertionError):
-                    self.check(template=TEMPLATE_TREE.replace(name, ""))
-                metadata = packages()
-                next(d for d in metadata["nctool-cli"]["dependencies"] if d["name"] == name)["optional"] = True
-                with self.assertRaises(AssertionError):
-                    self.check(metadata)
+    def test_default_build_keeps_template_and_excludes_retired_parameters(self):
+        with self.assertRaises(AssertionError):
+            self.check(template="")
+        metadata = packages()
+        next(
+            d
+            for d in metadata["nctool-cli"]["dependencies"]
+            if d["name"] == "nctool-plugin-template"
+        )["optional"] = True
+        with self.assertRaises(AssertionError):
+            self.check(metadata)
+        metadata = packages()
+        metadata["nctool-plugin-parameters"] = {"name": "nctool-plugin-parameters", "dependencies": []}
+        with self.assertRaises(AssertionError):
+            self.check(metadata)
+        with self.assertRaises(AssertionError):
+            self.check(template=TEMPLATE_TREE + " nctool-plugin-parameters")
 
     def test_engine_production_dependencies_stay_minimal(self):
         metadata = packages()
@@ -115,14 +121,19 @@ class ArchitectureTest(unittest.TestCase):
             with self.subTest(tree=tree), self.assertRaises(AssertionError):
                 self.check(workspace=tree)
 
-    def test_shared_parameter_module_keeps_generic_helpers_only(self):
-        """共享参数模块必须保留通用 helper；NC 专用计算不应再存在。"""
-        module = CHECK.ROOT / "ui/src/lib/managedParameters.ts"
-        self.assertTrue(module.exists(), "共享参数模块缺失，引用方会失效")
-        text = module.read_text(encoding="utf-8")
-        for expected in ["pointerTokens", "pointerValue", "applyOverrides", "managedRequest", "managedFields"]:
-            with self.subTest(exported=expected):
-                self.assertIn(f"export function {expected}", text)
+    def test_shared_parameter_ui_is_retired(self):
+        """共享参数编辑与解析界面已退出；参数改由每个模板自己维护。"""
+        for name in (
+            "ui/src/lib/managedParameters.ts",
+            "ui/src/components/SharedParameterInputs.tsx",
+            "ui/src/components/SharedBindingEditor.tsx",
+            "ui/src/plugins/ParameterViews.tsx",
+        ):
+            with self.subTest(retired=name):
+                self.assertFalse(
+                    (CHECK.ROOT / name).exists(),
+                    f"退役共享参数界面重新出现：{name}",
+                )
 
     def test_retired_nc_sources_must_not_come_back(self):
         for name in CHECK.RETIRED_SOURCES:

@@ -1,4 +1,6 @@
-import { useState } from "react";
+import { useId, useState } from "react";
+import { Form } from "./Form";
+import "./TemplateParameters.css";
 import { Plus, Trash2, ChevronDown } from "lucide-react";
 import {
   DraftNumber,
@@ -19,13 +21,25 @@ export function SchemaEditor({
   schema,
   onChange,
   onInsert,
+  defaults,
+  onDefaultsChange,
+  onRemoveField,
 }: {
   schema: Schema;
   onChange: (s: Schema) => void;
   onInsert?: (name: string) => void;
+  defaults?: Data;
+  onDefaultsChange?: (defaults: Data) => void;
+  onRemoveField?: (name: string) => void;
 }) {
   const [newName, setNewName] = useState("");
   const [error, setError] = useState("");
+  function setDefault(name: string, value: Data) {
+    const next = { ...defaults };
+    if (value === undefined) delete next[name];
+    else next[name] = value;
+    onDefaultsChange?.(next);
+  }
   function add() {
     const name = newName.trim();
     if (!name) {
@@ -41,7 +55,7 @@ export function SchemaEditor({
       type: "object",
       properties: {
         ...(schema.properties || {}),
-        [name]: { title: name, "x-untyped": true },
+        [name]: { type: "string", title: name },
       },
     });
     setNewName("");
@@ -55,6 +69,9 @@ export function SchemaEditor({
           name={name}
           field={field}
           required={schema.required?.includes(name) || false}
+          value={defaults?.[name]}
+          editDefaults={onDefaultsChange !== undefined || defaults !== undefined}
+          changeDefault={onDefaultsChange ? (value) => setDefault(name, value) : undefined}
           change={(next) =>
             onChange({
               ...schema,
@@ -77,6 +94,10 @@ export function SchemaEditor({
               properties,
               required: (schema.required || []).filter((x) => x !== name),
             });
+            if (defaults && Object.prototype.hasOwnProperty.call(defaults, name)) {
+              setDefault(name, undefined);
+            }
+            onRemoveField?.(name);
           }}
           onInsert={onInsert}
         />
@@ -116,6 +137,9 @@ function Definition({
   require,
   remove,
   onInsert,
+  value,
+  editDefaults,
+  changeDefault,
 }: {
   name: string;
   field: Schema;
@@ -124,7 +148,12 @@ function Definition({
   require: (b: boolean) => void;
   remove: () => void;
   onInsert?: (name: string) => void;
+  value: Data;
+  editDefaults: boolean;
+  changeDefault?: (value: Data) => void;
+  onRemoveField?: (name: string) => void;
 }) {
+  const id = useId();
   const type = field["x-untyped"] ? "unknown" : typeOf(field);
   function patch(key: string, value: Data) {
     const next = { ...field };
@@ -142,17 +171,62 @@ function Definition({
     change(next);
   }
   return (
-    <details className="definition" open={type === "unknown"}>
-      <summary>
-        <ChevronDown size={14} />
-        <span className="definition-name">{field.title || name}</span>
-        <code>{name}</code>
-        <span className={"type-tag " + (type === "unknown" ? "warning" : "")}>
-          {TYPES.find(([t]) => t === type)?.[1] || "待定义"}
-        </span>
-      </summary>
-      <div className="definition-body">
-        <div className="two-fields">
+    <div className="definition template-parameter">
+      <div className="template-parameter-row">
+        <div className="template-parameter-name">
+          <span>参数名</span>
+          <code>{name}</code>
+        </div>
+        <label>
+          类型
+          <select
+            aria-label={name + "类型"}
+            value={type}
+            onChange={(e) => setType(e.target.value)}
+          >
+            <option value="unknown" disabled>
+              请选择类型
+            </option>
+            {TYPES.map(([key, label]) => (
+              <option key={key} value={key}>
+                {label}
+              </option>
+            ))}
+          </select>
+        </label>
+        {editDefaults && (
+          <div className="template-parameter-default">
+            {type === "unknown" ? (
+              <>
+                <span>默认值</span>
+                <p className="hint">请先选择类型，再填写默认值。</p>
+              </>
+            ) : (
+              <>
+                <Form
+                  schema={{ ...field, title: name + "默认值", description: undefined, readOnly: false }}
+                  value={value}
+                  onChange={(next) => changeDefault?.(next)}
+                  path={id}
+                  disabled={!changeDefault}
+                />
+                {type === "string" && !field.enum && value === undefined && changeDefault && (
+                  <button className="text-button" type="button" onClick={() => changeDefault("")}>
+                    设为空文本
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        )}
+        <button className="icon-button danger" type="button" aria-label={"删除参数 " + name} onClick={remove}>
+          <Trash2 size={14} />
+        </button>
+      </div>
+      {type === "unknown" && <p className="hint template-parameter-warning">请选择参数类型；识别到的变量不会自动推断类型。</p>}
+      <details className="template-parameter-advanced">
+        <summary><ChevronDown size={14} />高级</summary>
+        <div className="definition-body">
           <label>
             显示名称
             <input
@@ -161,24 +235,6 @@ function Definition({
               placeholder={name}
             />
           </label>
-          <label>
-            类型
-            <select
-              aria-label={name + "类型"}
-              value={type}
-              onChange={(e) => setType(e.target.value)}
-            >
-              <option value="unknown" disabled>
-                请选择类型
-              </option>
-              {TYPES.map(([key, label]) => (
-                <option key={key} value={key}>
-                  {label}
-                </option>
-              ))}
-            </select>
-          </label>
-        </div>
         <label>
           说明
           <input
@@ -303,5 +359,6 @@ function Definition({
         )}
       </div>
     </details>
+    </div>
   );
 }

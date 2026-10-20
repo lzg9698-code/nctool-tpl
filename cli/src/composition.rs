@@ -43,11 +43,6 @@ impl App {
                 workspace,
             )?));
         }
-        if ids.contains("parameters") {
-            plugins.push(Arc::new(nctool_plugin_parameters::ParametersPlugin::new(
-                workspace,
-            )?));
-        }
         #[cfg(feature = "math")]
         if ids.contains("math") {
             plugins.push(Arc::new(nctool_plugin_math::MathPlugin));
@@ -202,16 +197,10 @@ impl App {
     }
     fn definitions_at(home: &Path) -> PluginResult<Vec<(PluginDescriptor, Vec<ActionDescriptor>)>> {
         #[allow(unused_mut)]
-        let mut definitions = vec![
-            (
-                nctool_plugin_parameters::ParametersPlugin::definition(),
-                nctool_plugin_parameters::ParametersPlugin::action_definitions(),
-            ),
-            (
-                nctool_plugin_template::TemplatePlugin::definition(),
-                nctool_plugin_template::TemplatePlugin::action_definitions(),
-            ),
-        ];
+        let mut definitions = vec![(
+            nctool_plugin_template::TemplatePlugin::definition(),
+            nctool_plugin_template::TemplatePlugin::action_definitions(),
+        )];
         #[cfg(feature = "math")]
         definitions.push((
             nctool_plugin_math::MathPlugin::definition(),
@@ -229,15 +218,10 @@ impl App {
     }
     /// Shared selection for boot, configuration preview and next-start inventory.
     fn selected_ids(config: &Config) -> BTreeSet<String> {
-        let mut enabled: BTreeSet<String> = ["template".to_string(), "parameters".to_string()]
-            .into_iter()
-            .collect();
+        let mut enabled: BTreeSet<String> = ["template".to_string()].into_iter().collect();
         enabled.extend(config.enabled.iter().cloned());
         for id in &config.disabled {
             enabled.remove(id);
-        }
-        if !enabled.contains("template") && !config.enabled.contains(&"parameters".into()) {
-            enabled.remove("parameters");
         }
         enabled
     }
@@ -422,7 +406,7 @@ impl App {
         let external = config::installed(&self.home)?;
         let mut plugins = Vec::new();
         for id in config::BUILTIN_PLUGIN_IDS {
-            let available = ["template", "parameters"].contains(id) || cfg!(feature = "math");
+            let available = *id == "template" || cfg!(feature = "math");
             plugins.push(json!({"id":id,"builtin":true,"retired":false,"available":available,"descriptor":definitions.iter().find(|(d,_)| d.id == *id).map(|(d,_)|d),"active":active.iter().any(|d| d.id == *id),"enabled_next_start":selected.contains(*id)}));
         }
         // Retired NC identities stay listed so the UI can explain that they are gone
