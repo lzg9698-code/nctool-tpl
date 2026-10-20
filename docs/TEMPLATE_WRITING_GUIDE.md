@@ -49,7 +49,7 @@ cargo run -p nctool-cli -- run template.render --input examples/v2/render.json
 {"template":"hello","context":{"user":{"name":"Ada"},"items":["templates","plugins"]}}
 ```
 
-参数预设是独立 JSON 资产，通过 WebUI 保存和加载，或用 `preset.*` 动作管理。它不会替代模板定义。
+模板预设是独立的 JSON 资产，通过 `preset.*` 动作管理，用于保存某个模板的一组输入；它不是参数定义，也不替代模板的 `schema`/`defaults`。当前 WebUI 不再提供保存/加载预设入口。
 
 ## 参数定义与默认值
 
@@ -92,7 +92,7 @@ cargo run -p nctool-cli --features math -- run template.render --input examples/
 
 数学过滤器包括 `sin`、`cos`、`tan`、`asin`、`acos`、`atan`、`sqrt`、`exp`、`ln`、`log10`、`pow`、`floor`、`ceil`，以及以度为单位的 `sin_d`、`cos_d`、`tan_d`、`asin_d`、`acos_d`、`atan_d`；非有限结果（NaN/Inf）会失败。扩展选择进入输入签名与历史重放；未编译、未启用或未显式选择时不注册任何数学过滤器。领域过滤器不属于内置范围，领域能力应通过通用插件机制贡献。
 
-模板资产只保存通用字段（`source`、`tags`、`schema`、`defaults`、`metadata`）。`metadata.title` 用于显示名称，`metadata.parameters.bindings` 用于共享参数绑定，见[参数管理指南](PARAMETER_MANAGEMENT.md)。
+模板资产只保存通用字段（`source`、`tags`、`schema`、`defaults`、`metadata`）。`metadata.title` 用于显示名称；参数定义和默认值分别在 `schema` 与 `defaults` 中，见[模板参数指南](PARAMETER_MANAGEMENT.md)。
 
 带旧加工元数据（如 `metadata.nc` 或加工 `execution.action`）的资产会被识别并拒绝，不会降级为普通渲染。`metadata.execution.action` 仍可表达工作台对当前已安装通用动作的默认执行意图。
 

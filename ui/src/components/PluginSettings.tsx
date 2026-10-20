@@ -129,9 +129,7 @@ export function PluginSettings({
               const id = plugin.id;
               const enabled =
                 !config.disabled.includes(id) &&
-                (id === "template" ||
-                  config.enabled.includes(id) ||
-                  (id === "parameters" && !config.disabled.includes("template")));
+                (id === "template" || config.enabled.includes(id));
               return (
                 <div className="plugin-config-card" key={id}>
                   <div className="plugin-card">
@@ -143,7 +141,6 @@ export function PluginSettings({
                         {(
                           {
                             template: "通用模板",
-                            parameters: "共享参数",
                             math: "数学扩展",
                           } as Record<string, string>
                         )[id] || id}
@@ -237,8 +234,7 @@ export function PluginSettings({
                   </select>
                 </label>
                 <p className="hint">
-                  通用模板工作区启用通用模板与共享参数。旧 NC
-                  组合已移除；启动配置若仍指向它，配置检查会给出兼容错误，需要显式迁移。
+                  通用模板工作区启用通用模板；数学扩展可另行启用。参数定义和默认值保存在每个模板内。
                 </p>
                 <details className="advanced">
                   <summary>服务提供方和高级配置</summary>

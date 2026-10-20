@@ -292,16 +292,14 @@ fn configuration_changes_apply_only_after_restart() {
         .unwrap();
     assert!(!app.runtime.capabilities().is_empty());
     let inventory = app.inventory().unwrap();
-    for id in ["template", "parameters"] {
-        let plugin = inventory["plugins"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|plugin| plugin["id"] == id)
-            .unwrap();
-        assert_eq!(plugin["active"], true);
-        assert_eq!(plugin["enabled_next_start"], false);
-    }
+    let plugin = inventory["plugins"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|plugin| plugin["id"] == "template")
+        .unwrap();
+    assert_eq!(plugin["active"], true);
+    assert_eq!(plugin["enabled_next_start"], false);
     let saved = app.dispatch("GET", "/api/v2/config", json!({})).unwrap();
     let preview = app
         .dispatch(
@@ -317,11 +315,31 @@ fn configuration_changes_apply_only_after_restart() {
 }
 
 #[test]
-fn configuration_explicit_companions_keep_dependency_checks() {
-    let cases = vec![("template", "parameters", "template")];
+fn configuration_external_companions_keep_dependency_checks() {
+    let cases = vec![("template", "reporter", "template")];
     for (profile, companion, provider) in cases {
         let temp = Temp::new();
         let app = temp.app("template");
+        // An installed external companion that depends on the template service.
+        let source = temp.0.join("reporter-plugin");
+        std::fs::create_dir(&source).unwrap();
+        let mut descriptor = PluginDescriptor::builtin(companion);
+        descriptor.requires.push(Requirement {
+            id: "template.render".into(),
+            version: 1,
+        });
+        let manifest = json!({"descriptor":descriptor,"command":["nctool-companion-must-not-execute"],"actions":[ActionDescriptor::new("reporter.run","Report",object_schema())]});
+        std::fs::write(
+            source.join("plugin.json"),
+            serde_json::to_vec(&manifest).unwrap(),
+        )
+        .unwrap();
+        app.dispatch(
+            "POST",
+            "/api/v2/plugins/install",
+            json!({"source":source.to_string_lossy()}),
+        )
+        .unwrap();
         let before = app.dispatch("GET", "/api/v2/config", json!({})).unwrap();
         let mut config = before["config"].clone();
         config["profile"] = json!(profile);
@@ -859,10 +877,6 @@ fn workspace_bundle_rolls_back_completed_collections_when_a_later_provider_fails
         vec![
             std::sync::Arc::new(
                 nctool_plugin_template::TemplatePlugin::new(&target.0.join("workspace")).unwrap(),
-            ),
-            std::sync::Arc::new(
-                nctool_plugin_parameters::ParametersPlugin::new(&target.0.join("workspace"))
-                    .unwrap(),
             ),
             std::sync::Arc::new(FailingCollection),
         ],

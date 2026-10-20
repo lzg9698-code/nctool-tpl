@@ -1,5 +1,4 @@
 import {
-  clone,
   defaultValue,
   encode,
   mergeDefaults,
@@ -9,41 +8,34 @@ import {
   type Document,
 } from "./data";
 
-export function sharedParameterDocument(
-  asset: Asset,
-  actionId?: string,
-): boolean {
-  return (
-    actionId === "template.render.managed" &&
-    !Object.hasOwn(asset.metadata || {}, "nc")
+export function initialDocumentContext(asset: Asset): Data {
+  return mergeDefaults(
+    defaultValue(asset.schema || { type: "object" }),
+    asset.defaults,
   );
 }
 
-export function initialDocumentContext(asset: Asset, actionId?: string): Data {
-  const requested =
-    actionId ??
-    asset.metadata?.execution?.action ??
-    (asset.metadata?.parameters ? "template.render.managed" : undefined);
-  if (sharedParameterDocument(asset, requested)) return {};
-  return asset.metadata?.parameters
-    ? clone(asset.defaults || {})
-    : mergeDefaults(
-        defaultValue(asset.schema || { type: "object" }),
-        asset.defaults,
-      );
+export function resetDocumentParameters(doc: Document): Partial<Document> {
+  return {
+    context: initialDocumentContext(doc.asset),
+    jsonInput: undefined,
+  };
 }
 
-export function resetDocumentParameters(
+// SchemaEditor updates the schema and defaults separately. Apply this patch to
+// the current document so its callbacks cannot resurrect a removed field.
+export function removeDocumentParameter(
   doc: Document,
-  actionId?: string,
+  name: string,
 ): Partial<Document> {
+  function withoutField(value: Data): Data {
+    return value && Object.hasOwn(value, name)
+      ? Object.fromEntries(Object.entries(value).filter(([key]) => key !== name))
+      : value;
+  }
   return {
-    context: sharedParameterDocument(doc.asset, actionId)
-      ? {}
-      : mergeDefaults(
-          defaultValue(doc.asset.schema || { type: "object" }),
-          doc.asset.defaults,
-        ),
+    asset: { ...doc.asset, defaults: withoutField(doc.asset.defaults) },
+    context: withoutField(doc.context),
     jsonInput: undefined,
   };
 }
@@ -55,23 +47,4 @@ export function documentForGeneration(doc: Document): Document {
     doc.jsonInput === undefined ? doc.context : parseData(doc.jsonInput);
   encode(context); // Also rejects incomplete numeric form drafts.
   return { ...doc, context };
-}
-
-export function templatePresetParameters(doc: Document): Data {
-  return {
-    context: clone(doc.context),
-    parameter_selection: clone(
-      doc.parameterSelection ?? doc.asset.metadata?.parameters?.selection ?? {},
-    ),
-  };
-}
-
-export function loadTemplatePresetParameters(preset: Data): Partial<Document> {
-  return {
-    context: clone(preset.context),
-    ...(Object.hasOwn(preset, "parameter_selection")
-      ? { parameterSelection: clone(preset.parameter_selection) }
-      : {}),
-    jsonInput: undefined,
-  };
 }
