@@ -21,7 +21,7 @@ body:
     attributes:
       label: nctool 版本
       description: 运行 `nctool --version` 的输出
-      placeholder: "nctool 2.2.0"
+      placeholder: "nctool 2.2.1"
     validations:
       required: true
 
