@@ -10,6 +10,12 @@
 
 ---
 
+## [Unreleased]
+
+### Restored
+
+- Restore shared parameter definitions, presets, template bindings, and managed rendering for the 2.2 workbench while retaining the current 2.2.1 host version and UI fixes.
+
 ## [2.3.0-preview.1] - 未发布
 
 ### Changed（破坏性）
