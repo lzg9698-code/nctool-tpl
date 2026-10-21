@@ -273,8 +273,12 @@ pub fn set_pointer(value: &mut Value, pointer: &str, field: Value) -> PluginResu
     }
     Ok(())
 }
-pub fn effective_bindings(asset: &Value, requested: Option<&Value>) -> PluginResult<Value> {
-    let mut result = asset.as_object().cloned().unwrap_or_default();
+pub fn effective_bindings(asset: Option<&Value>, requested: Option<&Value>) -> PluginResult<Value> {
+    let mut result = match asset {
+        None => Default::default(),
+        Some(Value::Object(bindings)) => bindings.clone(),
+        Some(_) => return Err(PluginError::new("invalid_binding", "绑定必须为对象")),
+    };
     if let Some(requested) = requested {
         let requested = requested
             .as_object()
@@ -298,10 +302,11 @@ pub fn resolve(input: &Value, snapshot: &Value) -> PluginResult<Value> {
             "参数快照格式或版本无效",
         ));
     }
-    if input.get("bindings").is_some_and(|v| !v.is_object()) {
-        return Err(PluginError::new("invalid_binding", "绑定必须为对象"));
-    }
-    let bindings = input["bindings"].as_object().cloned().unwrap_or_default();
+    let bindings = match input.get("bindings") {
+        None => Default::default(),
+        Some(Value::Object(bindings)) => bindings.clone(),
+        Some(_) => return Err(PluginError::new("invalid_binding", "绑定必须为对象")),
+    };
     let mut values = json!({});
     let defaults = input.get("defaults").cloned().unwrap_or_else(|| json!({}));
     if !defaults.is_object() {
@@ -594,11 +599,20 @@ impl Plugin for ParametersPlugin {
             }
             let snapshot = ctx.call("template.inspect", 1, inspect)?.data["snapshot"].clone();
             let asset = &snapshot["asset"];
+            if snapshot["metadata"][snapshot["template"].as_str().unwrap_or_default()]
+                .get("malformed-bindings")
+                .is_some()
+            {
+                return Err(PluginError::new(
+                    "invalid_binding",
+                    "保存的绑定格式无效，必须为对象",
+                ));
+            }
             let parameters = match input.get("parameter_snapshot") {
                 Some(v) => v.clone(),
                 None => self.library.capture()?,
             };
-            let mut request = json!({"bindings":effective_bindings(&asset["metadata"]["parameters"]["bindings"],input.get("bindings"))?,"values":input.get("context").cloned().unwrap_or_else(||json!({})),"defaults":input.get("defaults").cloned().or_else(||asset.get("defaults").cloned()).unwrap_or_else(||json!({}))});
+            let mut request = json!({"bindings":effective_bindings(asset["metadata"]["parameters"].get("bindings"),input.get("bindings"))?,"values":input.get("context").cloned().unwrap_or_else(||json!({})),"defaults":input.get("defaults").cloned().or_else(||asset.get("defaults").cloned()).unwrap_or_else(||json!({}))});
             for key in ["schema", "preset_id"] {
                 // or_else runs only when the field is absent, so an explicit preset_id
                 // (including an explicit null declining it) overrides the saved asset choice.
@@ -628,7 +642,7 @@ impl Plugin for ParametersPlugin {
                 validate_schema(&descriptor.input_schema, original, "parameter_validation")?;
                 request = original.clone();
                 request["bindings"] = effective_bindings(
-                    &asset["metadata"]["parameters"]["bindings"],
+                    asset["metadata"]["parameters"].get("bindings"),
                     original.get("bindings"),
                 )?;
             }

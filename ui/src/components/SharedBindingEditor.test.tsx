@@ -85,15 +85,26 @@ describe("SharedBindingEditor", () => {
     expect(labels.some((label) => label === `${id} (${id})`)).toBe(false);
   });
 
+  it("persists the template default preset in the field read by managed rendering", async () => {
+    render(<Harness initial={asset()} />);
+    await screen.findByLabelText("模板默认共享预置");
+    fireEvent.change(screen.getByLabelText("模板默认共享预置"), { target: { value: "rough" } });
+    await waitFor(() => {
+      const saved = JSON.parse(screen.getByLabelText("资产快照").textContent!);
+      expect(saved.metadata.parameters.preset_id).toBe("rough");
+    });
+  });
+
   it("retains unknown current definitions and presets, and explicit preset null", async () => {
     const initial = asset();
     initial.metadata!.parameters.bindings = { "/width": "removed-definition" };
     initial.metadata!.parameters.selection.preset_id = "removed-preset";
+    delete initial.metadata!.parameters.preset_id;
     render(<Harness initial={initial} />);
     expect(await screen.findByText("removed-definition（未知定义，保留当前值）")).toBeTruthy();
     expect(screen.getByText("removed-preset（当前选择，目录中未知）")).toBeTruthy();
     fireEvent.change(screen.getByLabelText("模板默认共享预置"), { target: { value: "" } });
-    await waitFor(() => expect(JSON.parse(screen.getByLabelText("资产快照").textContent!).metadata.parameters.selection.preset_id).toBeNull());
+    await waitFor(() => expect(JSON.parse(screen.getByLabelText("资产快照").textContent!).metadata.parameters.preset_id).toBeNull());
   });
 
   it("reports catalog failure and keeps editing unavailable where needed", async () => {

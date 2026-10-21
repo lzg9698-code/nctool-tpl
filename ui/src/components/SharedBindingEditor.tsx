@@ -146,8 +146,7 @@ export function SharedBindingEditor({ asset, onChange }: SharedBindingEditorProp
     setNewDefinition("");
   }
   function choosePreset(value: string) {
-    const selection = { ...(parameters.selection || {}), preset_id: value || null };
-    emit({ ...parameters, selection });
+    emit({ ...parameters, preset_id: value || null });
   }
   async function runCheck() {
     if (!request || malformed || requestError) return;
