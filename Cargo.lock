@@ -841,7 +841,7 @@ dependencies = [
 
 [[package]]
 name = "nctool-cli"
-version = "2.3.0-preview.1"
+version = "2.2.1"
 dependencies = [
  "axum",
  "clap",

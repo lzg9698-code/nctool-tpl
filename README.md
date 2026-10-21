@@ -69,7 +69,7 @@ cargo run -p nctool-cli -- run report.compute --input examples/v2/report.json
 | 查看进展与发布流程 | [项目状态](docs/PROJECT_STATUS.md) · [路线图](docs/ROADMAP.md) · [发布说明](docs/RELEASE.md) · [变更记录](CHANGELOG.md) |
 | 查阅旧版与验证记录 | [历史归档](docs/archive/README.md) |
 
-CLI/WebUI 当前预览版本为 2.3.0-preview.1；引擎、SDK、运行时和内置插件等组件为 2.0.0。旧 Tauri 桌面 GUI 源码及启动入口已移除，当前界面入口为浏览器 WebUI。旧 CLI、`/api` 路由、旧加工工序格式及业务模板不自动迁移；发行包不包含旧业务模板或内置机床方案。
+CLI/WebUI 当前版本为 2.2.1；引擎、SDK、运行时和内置插件等组件为 2.0.0。旧 Tauri 桌面 GUI 源码及启动入口已移除，当前界面入口为浏览器 WebUI。旧 CLI、`/api` 路由、旧加工工序格式及业务模板不自动迁移；发行包不包含旧业务模板或内置机床方案。
 
 ## 已知限制
 
