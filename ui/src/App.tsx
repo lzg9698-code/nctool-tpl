@@ -9,21 +9,11 @@ import {
   documentSignature,
 } from "./lib/documentExecution";
 import { WorkspaceImport } from "./components/WorkspaceImport";
-import { useManagedDependencies } from "./lib/managedDependencies";
-import { ParameterSelection } from "./plugins/ParameterViews";
-import { SharedParameterInputs } from "./components/SharedParameterInputs";
-const SharedBindingEditor = lazy(() =>
-  import("./components/SharedBindingEditor").then((module) => ({
-    default: module.SharedBindingEditor,
-  })),
-);
 import {
-  sharedParameterDocument,
   initialDocumentContext,
+  removeDocumentParameter,
   resetDocumentParameters,
   documentForGeneration,
-  templatePresetParameters,
-  loadTemplatePresetParameters,
 } from "./lib/appDocumentParameters";
 import {
   cloneDocumentForCopy,
@@ -183,10 +173,7 @@ export default function App() {
       Record<string, { id: string; signature: string }>
     >({}),
     [selectedHistory, setSelectedHistory] = useState<Run | null>(null);
-  const [inspector, setInspector] = useState<"definition" | "defaults" | "bindings">(
-      "definition",
-    ),
-    [paramMode, setParamMode] = useState<"form" | "json">("form"),
+  const [paramMode, setParamMode] = useState<"form" | "json">("form"),
     [jsonError, setJsonError] = useState(""),
     [resultTab, setResultTab] = useState<
       "result" | "diagnostics" | "parameters"
@@ -235,18 +222,8 @@ export default function App() {
       )
     : {};
   const generation = selection.entry;
-  const sharedParameters =
-    !!doc && sharedParameterDocument(doc.asset, generation?.id);
-  function actionForAsset(asset: Asset) {
-    return selectDocumentAction(
-      { ...newDocument(), asset },
-      capabilities.actions,
-      capabilities.document_actions,
-    ).entry?.id;
-  }
   const latest =
     doc && execution[doc.key] ? runs[execution[doc.key].id] : undefined;
-  const managedDependencies = useManagedDependencies(latest);
   const running = Object.values(runs).filter((run) =>
     ["queued", "running"].includes(run.status),
   );
@@ -257,8 +234,7 @@ export default function App() {
   const stale = !!(
     doc &&
     latest &&
-    (managedDependencies.stale ||
-      execution[doc.key]?.signature !== documentSignature(doc, generation?.id))
+    execution[doc.key]?.signature !== documentSignature(doc, generation?.id)
   );
   function resizePane(value: number) {
     const mode = doc?.mode || "use";
@@ -447,7 +423,6 @@ export default function App() {
         item.id,
         result.data.asset,
         result.data.fingerprint,
-        actionForAsset(result.data.asset),
       );
       setDocuments((docs) => [...docs, loaded]);
       setActive(loaded.key);
@@ -555,7 +530,6 @@ export default function App() {
                         doc.id!,
                         response.data.asset,
                         response.data.fingerprint,
-                        actionForAsset(response.data.asset),
                       ),
                       key: savingKey,
                       mode: doc.mode,
@@ -600,7 +574,6 @@ export default function App() {
           id,
           result.data.asset,
           result.data.fingerprint,
-          actionForAsset(result.data.asset),
         );
         copied.mode = "edit";
         setDocuments((d) => [...d, copied]);
@@ -675,7 +648,7 @@ export default function App() {
       draft.asset = asset;
       draft.title =
         asset.metadata?.title || file.name.replace(/\.(json|j2|jinja2)$/, "");
-      draft.context = initialDocumentContext(asset, actionForAsset(asset));
+      draft.context = initialDocumentContext(asset);
       setDocuments((d) => [...d, draft]);
       setActive(draft.key);
       setPage("workbench");
@@ -713,7 +686,6 @@ export default function App() {
         inspected.data.variables,
       );
       if (merged.changed) editDoc({ asset: merged.asset }, request.key);
-      setInspector("definition");
       notify(
         merged.added
           ? `发现 ${merged.added} 个新参数，请选择类型`
@@ -846,107 +818,11 @@ export default function App() {
       code.current?.focus();
     }
   }
-  function savePreset() {
-    if (!doc) return;
-    let name = "";
-    setDialog({
-      title: "保存参数预设",
-      body: (
-        <label>
-          预设名称
-          <input
-            placeholder="例如：标准尺寸"
-            onChange={(e) => (name = e.target.value)}
-          />
-        </label>
-      ),
-      buttons: (
-        <>
-          <button className="button secondary" onClick={() => setDialog(null)}>
-            取消
-          </button>
-          <button
-            className="button primary"
-            onClick={async () => {
-              if (!name.trim()) {
-                notify("请输入预设名称", true);
-                return;
-              }
-              try {
-                await action("preset.save", {
-                  name: "preset-" + crypto.randomUUID(),
-                  asset: {
-                    title: name,
-                    template: doc.id,
-                    document_title: doc.title,
-                    ...templatePresetParameters(documentForGeneration(doc)),
-                  },
-                });
-                setDialog(null);
-                notify("预设已保存");
-              } catch (error) {
-                fail(error);
-              }
-            }}
-          >
-            保存预设
-          </button>
-        </>
-      ),
-    });
-  }
-  async function loadPreset() {
-    try {
-      const listed = await action("preset.list", {});
-      const entries = await Promise.all(
-        listed.data.names.map(async (name: string) => {
-          const read = await action("preset.read", { name });
-          return { id: name, ...read.data.asset };
-        }),
-      );
-      const relevant = entries.filter((entry: Data) =>
-        doc?.id
-          ? entry.template === doc.id
-          : entry.document_title === doc?.title,
-      );
-      setDialog({
-        title: "选择参数预设",
-        body: (
-          <div className="preset-list">
-            {relevant.length ? (
-              relevant.map((entry: Data) => (
-                <button
-                  key={entry.id}
-                  onClick={() => {
-                    editDoc(loadTemplatePresetParameters(entry));
-                    setJsonError("");
-                    setDialog(null);
-                  }}
-                >
-                  <FileCode2 size={16} />
-                  {entry.title || entry.id}
-                  <ChevronRight size={14} />
-                </button>
-              ))
-            ) : (
-              <Empty
-                title="还没有这个模板的预设"
-                description="填写好参数后，可以保存为预设供下次使用。"
-              />
-            )}
-          </div>
-        ),
-      });
-    } catch (error) {
-      fail(error);
-    }
-  }
   async function restoreRun(run: Run) {
     try {
       // restoreDocument owns the rules: retired machining intent and unavailable
-      // actions are refused, and every generic render action — including shared
-      // parameters — restores its frozen input, preset choice, extensions and
-      // run binding instead of only the plain render action.
+      // actions are refused; ordinary rendering restores its frozen sources,
+      // context and extensions without reading live assets.
       const restored = restoreDocument(run, capabilities.actions);
       setDocuments((d) => [...d, restored]);
       setActive(restored.key);
@@ -1030,7 +906,7 @@ export default function App() {
           <div className="brand-name">
             NCtool<span>模板工作台</span>
           </div>
-          <span className="version-label">2.2</span>
+          <span className="version-label">2.3 preview</span>
         </div>
         <div className="workspace-indicator">
           <span className="online-dot" />
@@ -1657,101 +1533,63 @@ export default function App() {
                       </section>
                       <section className="definition-pane">
                         <div className="pane-toolbar">
-                          <div className="pane-tabs">
-                            <button
-                              aria-pressed={inspector === "definition"}
-                              className={
-                                inspector === "definition" ? "selected" : ""
-                              }
-                              onClick={() => setInspector("definition")}
-                            >
-                              参数定义
-                            </button>
-                            <button
-                              aria-pressed={inspector === "defaults"}
-                              className={
-                                inspector === "defaults" ? "selected" : ""
-                              }
-                              onClick={() => setInspector("defaults")}
-                            >
-                              默认参数
-                            </button>
-                            <button
-                              aria-pressed={inspector === "bindings"}
-                              className={inspector === "bindings" ? "selected" : ""}
-                              onClick={() => setInspector("bindings")}
-                            >
-                              共享绑定
-                            </button>
-                          </div>
+                          <strong>参数</strong>
                         </div>
                         <div className="pane-scroll">
-                          {inspector === "bindings" ? (
-                            <Suspense fallback={<p>正在加载共享绑定…</p>}>
-                            <SharedBindingEditor
-                              key={doc.key}
-                              asset={doc.asset}
-                              onChange={(asset) => editDoc((current) => {
-                                const before = !!current.asset.metadata?.parameters;
-                                const after = !!asset.metadata?.parameters;
-                                return {
-                                  ...current,
-                                  asset,
-                                  parameterSelection: undefined,
-                                  replayInput: undefined,
-                                  ...(before !== after ? {
-                                    generationAction: after ? "template.render.managed" : "template.render",
-                                  } : {}),
-                                };
-                              })}
-                            />
-                            </Suspense>
-                          ) : inspector === "definition" ? (
-                            <SchemaEditor
-                              schema={normalizeSchema(doc.asset)}
+                          <p className="hint">
+                            每个模板自己管理参数。这里设置的默认值用于新打开的使用任务；
+                            本次填写不会改动默认值。
+                          </p>
+                          <SchemaEditor
+                            schema={normalizeSchema(doc.asset)}
+                            onChange={(schema) =>
+                              editDoc((d) => ({
+                                ...d,
+                                asset: { ...d.asset, schema },
+                              }))
+                            }
+                            defaults={doc.asset.defaults}
+                            onDefaultsChange={(defaults) =>
+                              editDoc((d) => ({
+                                ...d,
+                                asset: { ...d.asset, defaults },
+                              }))
+                            }
+                            onRemoveField={(name) =>
+                              setDocuments((documents) =>
+                                documents.map((current) =>
+                                  current.key === doc.key
+                                    ? { ...current, ...removeDocumentParameter(current, name) }
+                                    : current,
+                                ),
+                              )
+                            }
+                            onInsert={(name) =>
+                              code.current?.insert("{{ " + name + " }}")
+                            }
+                          />
+                          <button
+                            className="button secondary full-width"
+                            onClick={() => {
+                              editDoc(resetDocumentParameters(doc));
+                              setJsonError("");
+                            }}
+                          >
+                            将默认参数用于本次试运行
+                          </button>
+                          <details className="template-parameter-json">
+                            <summary>高级规格 JSON</summary>
+                            <JsonEditor
+                              value={normalizeSchema(doc.asset)}
                               onChange={(schema) =>
                                 editDoc((d) => ({
                                   ...d,
                                   asset: { ...d.asset, schema },
                                 }))
                               }
-                              onInsert={(name) =>
-                                code.current?.insert("{{ " + name + " }}")
-                              }
+                              label="高级参数规格"
                             />
-                          ) : (
-                            <>
-                              <p className="hint">
-                                默认值会应用到新的使用任务；不覆盖已经填写的值。
-                              </p>
-                              <Form
-                                schema={normalizeSchema(doc.asset)}
-                                value={doc.asset.defaults || {}}
-                                onChange={(defaults) =>
-                                  editDoc((d) => ({
-                                    ...d,
-                                    asset: { ...d.asset, defaults },
-                                  }))
-                                }
-                              />
-                              <button
-                                className="button secondary full-width"
-                                onClick={() => {
-                                  editDoc(
-                                    resetDocumentParameters(
-                                      doc,
-                                      generation?.id,
-                                    ),
-                                  );
-                                  setJsonError("");
-                                }}
-                              >
-                                {sharedParameters
-                                  ? "清除本次覆盖并试用继承参数"
-                                  : "将默认参数用于本次试运行"}
-                              </button>
-                            </>
-                          )}
+                          </details>
                         </div>
                       </section>
                     </>
@@ -1782,41 +1620,15 @@ export default function App() {
                       <div className="parameter-actions">
                         <button
                           className="text-button"
-                          onClick={() => void loadPreset()}
+                          onClick={() => {
+                            editDoc(resetDocumentParameters(doc));
+                            setJsonError("");
+                          }}
                         >
-                          <FolderOpen size={13} />
-                          加载预设
+                          恢复默认值
                         </button>
-                        <button className="text-button" onClick={savePreset}>
-                          <Save size={13} />
-                          保存预设
-                        </button>
-                        {!sharedParameters && (
-                          <button
-                            className="text-button"
-                            onClick={() => {
-                              editDoc(
-                                resetDocumentParameters(doc, generation?.id),
-                              );
-                              setJsonError("");
-                            }}
-                          >
-                            恢复默认值
-                          </button>
-                        )}
                       </div>
-                      {sharedParameters ? (
-                        <SharedParameterInputs
-                          key={doc.key}
-                          doc={doc}
-                          mode={paramMode}
-                          onChange={(patch) => editDoc(patch)}
-                          errors={errors}
-                          disabled={busy}
-                          jsonError={jsonError}
-                          onJsonError={setJsonError}
-                        />
-                      ) : paramMode === "json" ? (
+                      {paramMode === "json" ? (
                         <JsonEditor
                           draft={doc.jsonInput}
                           onRawChange={(jsonInput) => editDoc({ jsonInput })}
@@ -1830,18 +1642,6 @@ export default function App() {
                         />
                       ) : (
                         <div className="pane-scroll">
-                          {doc.asset.metadata?.parameters && (
-                            <ParameterSelection
-                              value={
-                                doc.parameterSelection ||
-                                doc.asset.metadata.parameters.selection ||
-                                {}
-                              }
-                              onChange={(parameterSelection) =>
-                                editDoc({ parameterSelection })
-                              }
-                            />
-                          )}
                           <Form
                             schema={normalizeSchema(doc.asset)}
                             value={mergeDefaults(
@@ -1866,7 +1666,7 @@ export default function App() {
                           )}
                         </div>
                       )}
-                      {!sharedParameters && jsonError && (
+                      {jsonError && (
                         <div className="inline-error">{jsonError}</div>
                       )}
                       <div className="parameter-footer">

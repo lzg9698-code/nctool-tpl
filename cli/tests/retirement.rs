@@ -63,11 +63,11 @@ impl Drop for Fixture {
 #[test]
 fn legacy_config_check_is_read_only_and_migration_has_exact_backup_and_conflict_guards() {
     let f = Fixture::new();
-    let original = f.config(json!({"profile":"nc","enabled":["nc","process","parameters"],"disabled":["undercut"],"providers":{"nc.generate":"nc"},"plugins":{"nc":{"custom":"preserved in backup"},"parameters":{}}}));
+    let original = f.config(json!({"profile":"nc","enabled":["nc","process","template"],"disabled":["undercut"],"providers":{"nc.generate":"nc"},"plugins":{"nc":{"custom":"preserved in backup"},"template":{}}}));
     let preview = App::migration_check_at(&f.home()).unwrap();
     assert_eq!(preview["valid"], true);
     assert_eq!(preview["proposed"]["profile"], "template");
-    assert_eq!(preview["proposed"]["enabled"], json!(["parameters"]));
+    assert_eq!(preview["proposed"]["enabled"], json!(["template"]));
     assert_eq!(preview["changes"].as_array().unwrap().len(), 6);
     assert_eq!(
         std::fs::read(f.home().join("config.json")).unwrap(),
@@ -187,7 +187,7 @@ fn retired_nc_plugins_are_gone_and_builtin_ids_remain_reserved() {
         .map(|d| d.id)
         .collect();
     active.sort();
-    assert_eq!(active, ["parameters", "template"]);
+    assert_eq!(active, ["template"]);
     let inventory = app.inventory().unwrap();
     let plugins = inventory["plugins"].as_array().unwrap();
     // Math survives as an optional, non-domain extension.
@@ -259,7 +259,7 @@ fn retired_nc_plugins_are_gone_and_builtin_ids_remain_reserved() {
 }
 
 #[test]
-fn domain_intent_requires_nc_actions_across_live_drafts_snapshots_managed_and_cli() {
+fn domain_intent_requires_nc_actions_across_live_drafts_snapshots_and_cli() {
     let f = Fixture::new();
     let app = f.app();
     for (index, metadata) in [
@@ -300,22 +300,23 @@ fn domain_intent_requires_nc_actions_across_live_drafts_snapshots_managed_and_cl
             json!({"template":name,"source":"new {{ value }}","context":{"value":1}}),
             json!({"snapshot":snapshot,"context":{"value":1}}),
         ] {
-            for action in ["template.render", "template.render.managed"] {
-                assert_eq!(
-                    app.runtime.invoke(action, input.clone()).unwrap_err().code,
-                    "domain_action_required"
-                );
-                assert_eq!(
-                    app.dispatch(
-                        "POST",
-                        &format!("/api/v2/actions/{action}"),
-                        json!({"input":input})
-                    )
+            assert_eq!(
+                app.runtime
+                    .invoke("template.render", input.clone())
                     .unwrap_err()
                     .code,
-                    "domain_action_required"
-                );
-            }
+                "domain_action_required"
+            );
+            assert_eq!(
+                app.dispatch(
+                    "POST",
+                    "/api/v2/actions/template.render",
+                    json!({"input":input})
+                )
+                .unwrap_err()
+                .code,
+                "domain_action_required"
+            );
         }
         let input = f.0.join("input.json");
         std::fs::write(
@@ -399,13 +400,14 @@ fn domain_dependencies_are_checked_when_loaded_and_frozen_with_their_intent() {
                 json!({"snapshot":snapshot,"context":{"selected":"old"}}),
                 json!({"source":source,"templates":{"old":"replacement"},"context":{"selected":"old"}}),
             ] {
-                for action in ["template.render", "template.render.managed"] {
-                    assert_eq!(
-                        app.runtime.invoke(action, input.clone()).unwrap_err().code,
-                        "domain_action_required",
-                        "{action}: {input}"
-                    );
-                }
+                assert_eq!(
+                    app.runtime
+                        .invoke("template.render", input.clone())
+                        .unwrap_err()
+                        .code,
+                    "domain_action_required",
+                    "{input}"
+                );
             }
         }
         for source in [
@@ -414,21 +416,11 @@ fn domain_dependencies_are_checked_when_loaded_and_frozen_with_their_intent() {
             "{% include ['safe','old'] %}",
             "{% include 'missing' ignore missing %}SAFE",
         ] {
-            for action in ["template.render", "template.render.managed"] {
-                let result = app
-                    .runtime
-                    .invoke(action, json!({"source":source}))
-                    .unwrap();
-                assert_eq!(result.data["text"], "SAFE");
-                if action.ends_with("managed") {
-                    let replay = &result.data["replay_input"];
-                    assert_eq!(replay["snapshot"]["metadata"]["old"], metadata);
-                    assert_eq!(
-                        app.runtime.invoke(action, replay.clone()).unwrap().data["text"],
-                        "SAFE"
-                    );
-                }
-            }
+            let result = app
+                .runtime
+                .invoke("template.render", json!({"source":source}))
+                .unwrap();
+            assert_eq!(result.data["text"], "SAFE");
         }
     }
     // Frozen intent must not change when the live asset is explicitly converted.
@@ -451,25 +443,23 @@ fn domain_dependencies_are_checked_when_loaded_and_frozen_with_their_intent() {
             json!({"name":"old","expected":old.data["fingerprint"],"asset":{"source":"SAFE"}}),
         )
         .unwrap();
-    for action in ["template.render", "template.render.managed"] {
-        assert_eq!(
-            app.runtime
-                .invoke(
-                    action,
-                    json!({"snapshot":snapshot,"context":{"selected":"old"}})
-                )
-                .unwrap_err()
-                .code,
-            "domain_action_required"
-        );
-        assert_eq!(
-            app.runtime
-                .invoke(action, json!({"source":"{% include 'old' %}"}))
-                .unwrap()
-                .data["text"],
-            "SAFE"
-        );
-    }
+    assert_eq!(
+        app.runtime
+            .invoke(
+                "template.render",
+                json!({"snapshot":snapshot,"context":{"selected":"old"}})
+            )
+            .unwrap_err()
+            .code,
+        "domain_action_required"
+    );
+    assert_eq!(
+        app.runtime
+            .invoke("template.render", json!({"source":"{% include 'old' %}"}))
+            .unwrap()
+            .data["text"],
+        "SAFE"
+    );
 }
 
 #[test]
@@ -484,7 +474,8 @@ fn domain_dependency_failure_never_delivers_cli_or_task_artifacts() {
             .invoke("template.save", json!({"name":name,"asset":asset}))
             .unwrap();
     }
-    for action in ["template.render", "template.render.managed"] {
+    {
+        let action = "template.render";
         let input = json!({"source":"prefix{% include 'bridge' %}","context":{"selected":"old"}});
         let input_file = f.0.join("input.json");
         std::fs::write(&input_file, serde_json::to_vec(&input).unwrap()).unwrap();
@@ -547,7 +538,8 @@ fn domain_dependency_failure_never_delivers_cli_or_task_artifacts() {
 fn legacy_snapshot_replay_preserves_root_checks_and_rejects_unknown_dependency_intent() {
     let f = Fixture::new();
     let app = f.app();
-    for action in ["template.render", "template.render.managed"] {
+    {
+        let action = "template.render";
         for (source, expected) in [
             ("SAFE", Ok("SAFE")),
             (

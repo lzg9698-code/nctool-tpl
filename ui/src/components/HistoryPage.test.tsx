@@ -160,9 +160,9 @@ describe("history controls follow current providers", () => {
     );
     expect(html).toContain("已移除的加工");
   });
-  it("disables missing external actions too, and enables generic managed recovery", () => {
+  it("disables missing external actions too, and enables ordinary template recovery", () => {
     expect(markup("external.render", [])).toContain("当前没有可用提供方");
-    const html = markup("template.render.managed", ["template.render.managed"]);
+    const html = markup("template.render", ["template.render"]);
     expect(html).not.toMatch(/<button[^>]*disabled=""[^>]*>恢复输入<\/button>/);
     expect(html).not.toMatch(
       /<button[^>]*disabled=""[^>]*>按历史输入重新执行<\/button>/,

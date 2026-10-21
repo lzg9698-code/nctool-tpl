@@ -51,7 +51,7 @@ def write_fixture(root: Path, size: int) -> Path:
         record = {
             "id": f"run-{i:06d}",
             "title": f"alpha batch {i}" if i % 100 == 0 else f"Job {i}",
-            "action": "template.render" if i % 2 == 0 else "parameter.resolve",
+            "action": "template.render" if i % 2 == 0 else "external.run",
             "status": "succeeded" if i % 3 == 0 else "failed",
             "started_at": size - i,
             "finished_at": None,

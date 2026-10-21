@@ -104,18 +104,18 @@ Python 适配器位于 [sdk/python/nctool_plugin.py](../sdk/python/nctool_plugin
 
 通用模板动作声明 default；领域动作通过 match_metadata 匹配资产元数据键。用户选择的生成方式优先，其次是可选 metadata.execution.action，再次是唯一的元数据匹配/默认提供方。多个匹配不会按加载顺序覆盖，不可用的显式选择不会降级为文本渲染。
 
-模板库的按钮、异步任务和输出按这个动作执行；源码草稿与共享参数绑定随当次输入提交。通用渲染器保持领域中立，不内置针对所有第三方内容的分类器。
+模板库的按钮、异步任务和输出按这个动作执行；源码草稿、参数定义与本次输入随当次输入提交。通用渲染器保持领域中立，不内置针对所有第三方内容的分类器。
 
 
 ### 执行、数值与领域校验补充（2026-10-03）
 
-宿主能力接口的 `document_actions` 包含已安装但未激活的文档动作声明，不代表该动作可执行。声明的元数据匹配存在、对应动作未激活时，WebUI 阻止执行。composition 入口识别带旧加工元数据（`metadata.nc` 或加工 `execution.action`）的文档并拒绝其为普通/受管渲染，但不加载任何 NC 实现。保存文档时把所选动作写入 `metadata.execution.action`；用户可以明确切换普通文本，宿主不自动降级。
+宿主能力接口的 `document_actions` 包含已安装但未激活的文档动作声明，不代表该动作可执行。声明的元数据匹配存在、对应动作未激活时，WebUI 阻止执行。composition 入口识别带旧加工元数据（`metadata.nc` 或加工 `execution.action`）的文档并拒绝其为普通渲染，但不加载任何 NC 实现。保存文档时把所选动作写入 `metadata.execution.action`；用户可以明确切换普通文本，宿主不自动降级。
 
 JSON 入口接受 `[-2^63, 2^64-1]` 范围内的整数字面量，超出范围返回 `numeric_range`；字符串中的数字不转换。小数/指数走有限 f64 表示，非零值归零返回 `numeric_underflow`。资产、HTTP/CLI、运行记录和外部 RPC 共用同一入口检查；它们不承诺任意精度小数。
 
-`template.render` 与受管渲染接受可选 `schema`（对象或布尔）与 `defaults`（对象）。没有显式值时，使用冻结根资产的定义；传源码草稿不会丢掉所选根资产的元数据。默认值优先级为共享定义默认 → 模板默认 → 显式/根资产通用 defaults → 模板内联 default；显式人工输入覆盖同名值。Schema 对有效参数执行类型、范围与 `additionalProperties` 校验。
+`template.render` 接受可选 `schema`（对象或布尔）与 `defaults`（对象）。没有显式值时，使用冻结根资产的定义；传源码草稿不会丢掉所选根资产的元数据。模板 `defaults` 提供初始值，显式 `context` 覆盖同名顶层值；模板内联 `default` 仍可作为 Jinja 兜底。Schema 对有效参数执行类型、范围与 `additionalProperties` 校验。
 
-通用渲染与受管渲染支持数值、i64 整数、字符串、布尔、递归列表以及对象/null。动态 include/import/extends 仍可用。受管渲染的请求 `lenient` 不放宽未定义字段；显式 default 与 is defined 的可选分支仍可用；缺失成员、动态下标或子模板参数不会静默清空。普通 template.render 保持独立的严格/宽松选择。
+通用渲染支持数值、i64 整数、字符串、布尔、递归列表以及对象/null。动态 include/import/extends 仍可用。请求 `lenient` 不放宽未定义字段；显式 default 与 is defined 的可选分支仍可用；缺失成员、动态下标或子模板参数不会静默清空。
 
 模板 inspect 冻结所有可用源码，静态引用列举是诊断信息，不替代 Jinja 执行控制流。缺失的可选引用、候选 include、未执行分支由实际渲染决定，CLI、直接动作与后台任务采用相同语义。
 

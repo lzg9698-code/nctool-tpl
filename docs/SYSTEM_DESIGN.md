@@ -8,7 +8,7 @@ CLI 全局参数为 `--home`、`--workspace`、`--profile template`。其他 pro
 
 home 包含 `config.json` 和已安装的 `plugins/`，工作区包含资产和 `.nctool/runs/`。浏览器草稿按工作区标识隔离，不属于已保存资产。WebUI 默认 `127.0.0.1:8788`，可用 `ui --host <回环 IP> --port <端口>` 修改。
 
-默认构建包含通用模板与共享参数组合；数学扩展需以 `--features math` 构建或使用完整发行二进制。构建步骤见[贡献指南](CONTRIBUTING.md)。
+默认构建只包含通用模板；数学扩展需以 `--features math` 构建或使用完整发行二进制。构建步骤见[贡献指南](CONTRIBUTING.md)。
 
 ## 配置组合
 
@@ -24,7 +24,7 @@ home 包含 `config.json` 和已安装的 `plugins/`，工作区包含资产和 
 }
 ```
 
-启动选择顺序：CLI `--profile` 覆盖已保存 profile；profile 的基础插件加 `enabled`；最后移除 `disabled`。`template` 组合加载模板与共享参数服务；独立 `math` 扩展或外部插件须在 `enabled` 中显式启用。外部插件只在显式启用后启动。
+启动选择顺序：CLI `--profile` 覆盖已保存 profile；profile 的基础插件加 `enabled`；最后移除 `disabled`。`template` 组合加载模板；独立 `math` 扩展或外部插件须在 `enabled` 中显式启用。外部插件只在显式启用后启动。
 
 `plugins` 是按插件 ID 保存的配置，按插件的 `config_schema` 验证；`providers` 是服务 ID 到提供方插件 ID 的显式映射。多候选服务没有选择时失败，不默认选择最后加载者。
 
@@ -32,7 +32,7 @@ home 包含 `config.json` 和已安装的 `plugins/`，工作区包含资产和 
 
 ## 资产
 
-工作区下 `templates/<id>.json`、`presets/<id>.json` 及插件声明的其他集合（共享参数为 `parameters/<id>.json`）。资产 ID 是单个合法路径段；引用别的模板使用资产 ID，不从全局目录分类推断类型。
+工作区下 `templates/<id>.json`、`presets/<id>.json` 及外部插件声明的其他集合；参数定义与默认值保存在模板资产内。资产 ID 是单个合法路径段；引用别的模板使用资产 ID，不从全局目录分类推断类型。
 
 模板资产示例：
 
@@ -56,9 +56,8 @@ JSON 输入经过数值下溢扫描与实际解析器确认：非零十进制值
 
 `template.render`：支持 `source` 或已保存的 `template`、`templates` 内存引用集合、`context` 对象、`schema/defaults`、`lenient`、`trim_blocks/lstrip_blocks`、显式 `extensions`。
 
-`template.inspect`：递归收集静态模板引用及变量的必选/可选、文件名和行列位置。动态引用无法静态穷举，最终由渲染器解析。`include_snapshot:true` 同时返回模板集合和主模板资产元数据的不可变快照；`template.render` 可仅传入该 `snapshot` 和 context，完全不重读资产。受管渲染的校验与渲染共用同一份快照，避免编辑发生在校验与渲染之间时改变程序内容。
+`template.inspect`：递归收集静态模板引用及变量的必选/可选、文件名和行列位置。动态引用无法静态穷举，最终由渲染器解析。`include_snapshot:true` 同时返回模板集合和主模板资产元数据的不可变快照；`template.render` 可仅传入该 `snapshot` 和 context，完全不重读资产。使用快照渲染时，校验与渲染共用同一份冻结内容，避免编辑发生在两者之间时改变程序内容。
 
-`template.render.managed`：普通模板输入另加共享参数 `bindings`、可选 `preset_id`；先解析共享定义/预置与人工输入得到冻结上下文，再走通用渲染，返回渲染结果、参数解析与冻结 `replay_input`。冻结形式不能与 `context/schema/defaults/bindings/preset_id` 混用。字段与服务见[参数管理指南](PARAMETER_MANAGEMENT.md)。
 
 动作实例与 JSON Schema 以 `nctool actions` / `/api/v2/capabilities` 为运行时真值。
 
@@ -103,18 +102,18 @@ WebUI 使用模式只显示参数表单与结果，编辑模式显示源码和�
 - `POST /api/v2/plugins/inspect {source}`：检查本地插件目录，返回声明，不启动入口。
 - `POST /api/v2/plugins/install {source}`：校验后复制到 home/plugins；不自动启用。
 - `POST /api/v2/plugins/uninstall {id}`：只卸载当前未运行的外部插件。
-- `POST /api/v2/runs/<id>/rerun`：生成新任务，优先使用提供方的 replay_input。成功的受管渲染结果固定模板与冻结参数；执行器版本仍是当前版本，不承诺跨版本逐字一致。
+- `POST /api/v2/runs/<id>/rerun`：生成新任务，优先使用提供方的 replay_input。成功结果固定模板与输入快照；执行器版本仍是当前版本，不承诺跨版本逐字一致。
 - `GET /api/v2/bundle`：导出当前启用插件声明的所有资产集合。
 - `POST /api/v2/bundle/validate {bundle}`：检查完整性、提供方可用性、资产结构与同名冲突，返回集合及稳定标识映射，不写入资产。
 - `POST /api/v2/bundle/import {bundle}`：全部预检查后应用，失败时通过各集合返回的 receipt 反向回滚已导入资产。指纹不匹配时不会删除其他编辑写入的数据，回滚冲突会明确报告。
 
 资产包结构为 `{format:"nctool-workspace",version:1,collections:{id:data},manifest:[{collection,provider,version,fingerprint}]}`。内容指纹用于发现改动，不是签名或来源认证。导出保留所有稳定标识，模板引用无需重写；首版导入拒绝同名冲突，不自动重命名，也不导入运行历史或宿主启动配置。
 
-模板集合包含 templates/presets，共享参数插件贡献 definitions/presets 集合。单个资产最多 1 MiB、每集合最多 2048 项、整体包最多 64 MiB。集合插件负责内容与路径校验；外部提供方必须遵守 validate_only 和回滚契约。内置导入具备受保护的原子单文件写入和回滚，跨插件导入不提供隔离外部副作用的数据库事务。
+模板集合包含 templates/presets；参数定义与默认值是模板资产的一部分。单个资产最多 1 MiB、每集合最多 2048 项、整体包最多 64 MiB。集合插件负责内容与路径校验；外部提供方必须遵守 validate_only 和回滚契约。内置导入具备受保护的原子单文件写入和回滚，跨插件导入不提供隔离外部副作用的数据库事务。
 
-通用模板视图通过已保存模板的 schema 生成参数控件；无 schema 时按基础类型渲染。共享参数绑定、预置选择与草稿按工作区恢复，未完成数值不转成合法旧值。
+通用模板视图通过已保存模板的 schema 生成参数控件；无 schema 时按基础类型渲染。本次输入与草稿按工作区恢复，未完成数值不转成合法旧值。
 
-模板可通过 `metadata.parameters.bindings` 声明共享参数绑定；工作台据此生成控件并写入请求。显式输入优先，有效选择进入 replay_input。
+模板参数定义、默认值和本次输入随普通渲染请求发送；显式输入覆盖同名顶层默认值。
 
 ## 历史重执行环境
 
