@@ -46,7 +46,7 @@ const plugin = (id: string, extra: Data = {}) => ({
   builtin: true,
   available: true,
   active: false,
-  enabled_next_start: id === "template",
+  enabled_next_start: ["template", "parameters"].includes(id),
   ...extra,
 });
 
@@ -71,6 +71,7 @@ async function setup(
       inventory={{
         plugins: [
           plugin("template"),
+          plugin("parameters"),
           plugin("math"),
           ...extraPlugins,
         ],
@@ -80,7 +81,7 @@ async function setup(
       fail={vi.fn()}
     />,
   );
-  await screen.findByText("通用模板");
+  await screen.findByText("共享参数");
   return { user: userEvent.setup(), reload };
 }
 
@@ -130,67 +131,77 @@ describe("PluginSettings capability selection", () => {
     ).toBeTruthy();
   });
 
-  it("shows template enabled by default and math disabled", async () => {
+  it("shows parameters enabled by default and math disabled", async () => {
     await setup();
     expectEnabled("通用模板", true);
+    expectEnabled("共享参数", true);
     expectEnabled("数学扩展", false);
   });
 
-  it("lets math toggle on and back off in the unsaved draft", async () => {
+  it("lets parameters toggle off and back on in the unsaved draft", async () => {
     const { user, reload } = await setup();
     await user.click(
-      within(card("数学扩展")).getByRole("button", { name: "设为启用" }),
+      within(card("共享参数")).getByRole("button", { name: "设为停用" }),
     );
-    expectEnabled("数学扩展", true);
+    expectEnabled("共享参数", false);
     await waitFor(() =>
       expect(api).toHaveBeenCalledWith("config/validate", {
-        config: { ...baseConfig, enabled: ["math"] },
+        config: { ...baseConfig, disabled: ["parameters"] },
       }),
     );
     await user.click(
-      within(card("数学扩展")).getByRole("button", { name: "设为停用" }),
+      within(card("共享参数")).getByRole("button", { name: "设为启用" }),
     );
-    expectEnabled("数学扩展", false);
+    expectEnabled("共享参数", true);
     await waitFor(() =>
       expect(api).toHaveBeenLastCalledWith("config/validate", {
-        config: { ...baseConfig, disabled: ["math"] },
+        config: { ...baseConfig, enabled: ["parameters"] },
       }),
     );
     expect(api).not.toHaveBeenCalledWith("config", expect.anything());
     expect(reload).not.toHaveBeenCalled();
   });
 
-  it("toggles the template capability in the unsaved draft", async () => {
+  it("makes implicit parameters follow template toggle before saving", async () => {
     const { user } = await setup();
     await user.click(
       within(card("通用模板")).getByRole("button", { name: "设为停用" }),
     );
     expectEnabled("通用模板", false);
+    expectEnabled("共享参数", false);
     await user.click(
       within(card("通用模板")).getByRole("button", { name: "设为启用" }),
     );
-    expectEnabled("通用模板", true);
+    expectEnabled("共享参数", true);
   });
 
-  it("keeps explicitly enabled math independent from the template toggle", async () => {
-    await setup({ enabled: ["math"], disabled: ["template"] });
+  it("retains explicitly enabled parameters with template disabled, with disabled taking precedence", async () => {
+    await setup({ enabled: ["parameters"], disabled: ["template"] });
     expectEnabled("通用模板", false);
-    expectEnabled("数学扩展", true);
-    editDraft({ enabled: ["math"], disabled: ["template", "math"] });
-    expectEnabled("数学扩展", false);
+    expectEnabled("共享参数", true);
+    editDraft({
+      enabled: ["parameters"],
+      disabled: ["template", "parameters"],
+    });
+    expectEnabled("共享参数", false);
   });
 
-  it("recomputes the external selection on JSON draft edits despite saved inventory", async () => {
+  it("recomputes companions and external selection on JSON draft edits despite saved inventory", async () => {
     await setup({}, [
       plugin("custom-external", { builtin: false, enabled_next_start: false }),
     ]);
     editDraft({ disabled: ["template"], enabled: ["custom-external"] });
-    expectEnabled("通用模板", false);
+    expectEnabled("共享参数", false);
     expectEnabled("custom-external", true);
-    editDraft({ disabled: ["template", "custom-external"] });
+    editDraft({
+      disabled: ["template", "custom-external"],
+      enabled: ["parameters", "custom-external"],
+    });
+    expectEnabled("共享参数", true);
     expectEnabled("custom-external", false);
-    editDraft({ disabled: [] });
+    editDraft({ disabled: ["parameters"] });
     expectEnabled("通用模板", true);
+    expectEnabled("共享参数", false);
   });
 });
 

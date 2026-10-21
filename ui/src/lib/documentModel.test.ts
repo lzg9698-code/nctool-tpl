@@ -29,8 +29,13 @@ describe("shared document model", () => {
     expect(normalizeSchema({ source: "x", schema })).toBe(schema);
   });
 
-  it("starts every document from the template's own defaults", () => {
-    expect(prepareDocument("tpl-a", asset, "fp").context).toEqual({ a: 1 });
+  it("starts shared parameters from empty overrides and plain ones from defaults", () => {
+    expect(prepareDocument("tpl-a", asset, "fp", "template.render").context).toEqual({
+      a: 1,
+    });
+    expect(
+      prepareDocument("tpl-b", asset, "fp", "template.render.managed").context,
+    ).toEqual({});
     expect(prepareDocument("tpl-c", asset, "fp").saved).toBeTruthy();
   });
 

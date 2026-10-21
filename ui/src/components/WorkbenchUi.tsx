@@ -16,6 +16,7 @@ import {
   AlertTriangle,
 } from "lucide-react";
 import { Editor } from "./LazyEditor";
+import { useManagedDependencies } from "../lib/managedDependencies";
 import {
   encode,
   parseData,
@@ -285,6 +286,7 @@ export function RunDetail({
   rerun,
   stale = false,
   replayCheck,
+  workspaceId,
   rerunReason,
   restoreReason,
 }: {
@@ -293,9 +295,16 @@ export function RunDetail({
   rerun?: () => void;
   stale?: boolean;
   replayCheck?: ReplayCheck;
+  workspaceId?: string;
   rerunReason?: string;
   restoreReason?: string;
 }) {
+  const dependency = useManagedDependencies(
+    run,
+    !restore && !rerun,
+    workspaceId,
+  );
+  stale = stale || dependency.stale;
   const text =
     run.status === "succeeded"
       ? run.result?.data.text || run.result?.artifacts?.[0]?.text || ""
@@ -335,7 +344,7 @@ export function RunDetail({
       )}
       {stale && (
         <div className="stale-banner">
-          结果对应旧输入，重新执行后才能导出当前文件。
+          {dependency.message || "结果对应旧输入，重新执行后才能导出当前文件。"}
         </div>
       )}
       <div className="run-detail-toolbar">

@@ -179,7 +179,7 @@ async function main() {
   page.on("request", observe);
   assert.equal(submitted, 0);
   // The legacy asset remains readable, but neither generic action can execute it.
-  for (const id of ["template.render"]) {
+  for (const id of ["template.render", "template.render.managed"]) {
     const refused = await fetch(url + "/api/v2/actions/" + id, {
       method: "POST",
       headers: { "Content-Type": "application/json" },

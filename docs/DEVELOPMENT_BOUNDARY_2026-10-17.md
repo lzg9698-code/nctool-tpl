@@ -15,18 +15,19 @@
 6. [运行时 `nctool-runtime`](#6-运行时-nctool-runtime)
 7. [CLI 与 HTTP](#7-cli-与-httpcli)
 8. [模板插件 `nctool-plugin-template`](#8-模板插件-nctool-plugin-template)
-9. [数学插件 `nctool-plugin-math`](#9-数学插件-nctool-plugin-math)
-10. [前端 WebUI](#10-前端-webui)
-11. [复刻时必须保留的硬约束](#11-复刻时必须保留的硬约束架构门禁)
-12. [完整验证命令](#12-完整验证命令复刻后照跑)
-13. [文档与源码的已知偏差](#13-文档与源码的已知偏差复刻时以源码为准)
-14. [复刻顺序建议](#14-复刻顺序建议)
+9. [共享参数插件 `nctool-plugin-parameters`](#9-共享参数插件-nctool-plugin-parameters)
+10. [数学插件 `nctool-plugin-math`](#10-数学插件-nctool-plugin-math)
+11. [前端 WebUI](#11-前端-webui)
+12. [复刻时必须保留的硬约束](#12-复刻时必须保留的硬约束架构门禁)
+13. [完整验证命令](#13-完整验证命令复刻后照跑)
+14. [文档与源码的已知偏差](#14-文档与源码的已知偏差复刻时以源码为准)
+15. [复刻顺序建议](#15-复刻顺序建议)
 
 ---
 
 ## 1. 一句话边界
 
-一个**领域中立**的通用 Jinja 文本渲染平台：模板资产管理 + 模板内参数 + 可撤销的通用插件运行时 + 独立可选数学扩展 + 本地回环 WebUI。**不含**任何加工/NC 领域模型；领域能力只能通过通用插件机制从外部提供。
+一个**领域中立**的通用 Jinja 文本渲染平台：模板资产管理 + 共享参数解析 + 可撤销的通用插件运行时 + 独立可选数学扩展 + 本地回环 WebUI。**不含**任何加工/NC 领域模型；领域能力只能通过通用插件机制从外部提供。
 
 版本：CLI/WebUI `2.2.0`，其余 workspace crate `2.0.0`，插件协议/服务版本 `1`（三者独立维护，不要统一数字）。
 
@@ -34,7 +35,7 @@
 
 ## 2. Workspace 结构与依赖方向
 
-7 个 crate（[Cargo.toml](../Cargo.toml)）：
+8 个 crate（[Cargo.toml](../Cargo.toml)）：
 
 | crate | 版本 | 路径 | 职责 |
 | --- | --- | --- | --- |
@@ -43,6 +44,7 @@
 | `nctool-plugin-sdk` | 2.0.0 | `sdk/` | 插件/动作/服务/诊断/取消/扩展契约 + Python 适配器 |
 | `nctool-runtime` | 2.0.0 | `runtime/` | 插件组合、Schema 校验、配置、服务依赖、外部进程 RPC |
 | `nctool-plugin-template` | 2.0.0 | `plugins/template/` | 模板/预设资产、检查、渲染、冻结快照 |
+| `nctool-plugin-parameters` | 2.0.0 | `plugins/parameters/` | 共享参数定义/预置/绑定、来源解析、受管渲染 |
 | `nctool-plugin-math` | 2.0.0 | `plugins/math/` | 可选数学过滤器 |
 | `nctool-cli` | 2.2.0 | `cli/` | 装配根、CLI 命令、回环 HTTP、任务/历史、资产包 |
 
@@ -55,10 +57,11 @@ nctool-assets         -> {}
 nctool-plugin-sdk     -> {nctool-assets, nctool-tpl}
 nctool-runtime        -> {nctool-assets, nctool-plugin-sdk}
 nctool-plugin-template-> {nctool-assets, nctool-plugin-sdk, nctool-tpl}
+nctool-plugin-parameters -> {nctool-assets, nctool-plugin-sdk}
 nctool-tpl            -> {minijinja}   # 且仅此一个
 ```
 
-CLI 依赖全部 5 个内部 crate，其中 `nctool-plugin-math` 为 `optional`。`cli` features：`default = []`，`math = ["dep:nctool-plugin-math"]`（**唯一**可选 feature，不存在 `nc-bundle`）。
+CLI 依赖全部 6 个内部 crate，其中 `nctool-plugin-math` 为 `optional`。`cli` features：`default = []`，`math = ["dep:nctool-plugin-math"]`（**唯一**可选 feature，不存在 `nc-bundle`）。
 
 根引擎 minijinja 依赖固定为：
 
@@ -564,7 +567,7 @@ providers 里的 key 必须都是已知 service，否则 provider_missing
 ### 6.5 配置（`config.rs`）
 
 ```rust
-pub const BUILTIN_PLUGIN_IDS: &[&str] = &["template","math"];
+pub const BUILTIN_PLUGIN_IDS: &[&str] = &["template","parameters","math"];
 pub const RETIRED_PLUGIN_IDS: &[&str] = &["nc","nc-parameters","nc-managed","sync-turning","undercut","process","process-parameters"];
 const RETIRED_DOMAIN_TOKENS: &[&str] = &["nc","machine","process","sync-turning","undercut"];
 const RETIRED_COLLECTION_IDS: &[&str] = &["nc","nc-parameters","sync-turning-assets","undercut-assets"];
@@ -683,18 +686,18 @@ pub struct App { pub runtime: Arc<Runtime>, pub home: PathBuf, pub profile: Stri
 2. `--profile` 覆盖 `config.profile`；
 3. `config::validate`；
 4. `selected_ids(config)`；
-5. 按 id 构造内置插件：`template` → `TemplatePlugin::new(workspace)`；`math` 在 `#[cfg(feature="math")]` 下构造，否则若被选中返回 `feature_unavailable`；
+5. 按 id 构造内置插件：`template` → `TemplatePlugin::new(workspace)`、`parameters` → `ParametersPlugin::new(workspace)`；`math` 在 `#[cfg(feature="math")]` 下构造，否则若被选中返回 `feature_unavailable`；
 6. `config::external_plugins(home, &config)`；
 7. `Runtime::start(plugins, config.plugins, config.providers)`；
 8. `Workbench::new(runtime, workspace)`。
 
-`selected_ids`：基础集合 = `{"template"}` ∪ `config.enabled`，再移除 `config.disabled`。
+`selected_ids`：基础集合 = `{"template","parameters"}` ∪ `config.enabled`，再移除 `config.disabled`；若 `template` 不在且 `parameters` 不是显式启用，则移除 `parameters`（二者同进同退的兜底）。
 
-`definitions_at` 顺序固定：`template` → (`math`) → 外部已安装。
+`definitions_at` 顺序固定：`parameters` → `template` → (`math`) → 外部已安装。
 
 `validate_config_at`：`config::validate` → 每个启用的 id 必须有对应 definition（`plugin_missing`）→ `validate_descriptor` → `validate_schema(config_schema, config.plugins[id] ?? {}, "invalid_config")` → action id 不得重复（`duplicate_action`）→ `resolve_composition` → 返回 `{"valid":true,"plan":..,"plugins":..,"applies":"next_start"}`。
 
-`inventory()`：内置两项（`available = id == "template" || cfg!(feature="math")`）+ 退役 ID（`retired:true, available:false, descriptor:null`）+ 外部插件；`restart_required = saved != boot_config`。
+`inventory()`：内置三项（`available = ["template","parameters"].contains(id) || cfg!(feature="math")`）+ 退役 ID（`retired:true, available:false, descriptor:null`）+ 外部插件；`restart_required = saved != boot_config`。
 
 **配置迁移**（`migration_at`）：读 `config.json` 指纹；读两次指纹不一致 → `conflict`；解析旧配置（只读）；`profile == "template"` 不动；`profile == "nc"` → 改为 `template` 并记录 change；**其它 profile → `invalid_profile`**（不静默改写）；从 `enabled`/`disabled` 移除退役插件 ID；`providers` 里 provider 是退役 ID 或 service key 是退役命名空间的，整项移除；`plugins` 移除退役 ID；`validate(proposed)`。
 `migration_apply_at`：`expected != fingerprint` → `conflict`；`changes` 为空 → `{"migrated":false,...}`；否则写备份 `config.backup-<pid>-<nanos>.json`（`write_guarded(..., None)` 新建语义），再 `config::save(home, proposed, expected)`；save 失败则删除备份。
@@ -947,9 +950,110 @@ descriptor：`asset_collections = [{id:"template", export:"template.collection.e
 
 ---
 
-## 9. 共享参数插件（已删除）
+## 9. 共享参数插件 `nctool-plugin-parameters`
 
-`plugins/parameters` 及其集成测试已删除。参数定义和默认值随每个模板的 `schema`/`defaults` 保存，通过普通 `template.render` 使用；不再有共享定义、预置、绑定或 `template.render.managed`。
+源码：[plugins/parameters/src/lib.rs](../plugins/parameters/src/lib.rs)。
+
+### 9.1 资产
+
+- 目录：`parameters/definitions/<id>.json`、`parameters/presets/<id>.json`。
+- 定义：`{"format_version":1,"id":"part-depth","title":"加工深度","schema":{...},"unit":"mm","group":"零件","description":"...","default":<可选>}`
+- 预置：`{"format_version":1,"id":"rough","title":"...","values":{"part-depth":5}}`
+- 绑定（在模板 `metadata.parameters.bindings`）：`{"/part/depth":{"id":"part-depth","unit":"mm"}}`（`id` 也可直接写成字符串）
+
+`validate_parameter`：`format_version == 1` 且 `id == 文件名`；definitions 组 `compile_schema(schema)` 且有 `default` 时用该 schema 校验 default；presets 组 `values` 必须是对象。
+
+### 9.2 JSON Pointer 绑定规则（`tokens`）
+
+- 必须以 `/` 开头且长度 ≤ 1024，否则 `invalid_binding`；
+- `~1` → `/`、`~0` → `~`（RFC 6901）；
+- token 为空、或为 `__proto__`/`constructor`/`prototype` → `invalid_binding`；
+- **路径重叠拒绝**：任一分组 `{pointer}/` 是另一个的前缀 → `invalid_binding`。
+
+`set_pointer(value, pointer, field)`：数组段必须能 `parse::<usize>()`（`invalid_binding`）且下标不越界；非容器段穿过 → `invalid_binding`；中间段自动建对象。
+
+### 9.3 解析优先级（`resolve`，复刻核心）
+
+输入：`{bindings, fallback_defaults, defaults, values, schema, preset_id, snapshot, defer_validation}`。
+
+顺序（后者覆盖前者）：
+
+1. **definition**：每个绑定找到定义；定义有 `default` → `set_pointer(values, pointer, default)`，`origins[pointer]="definition"`；
+2. **fallback_defaults**：`merge(values, layer)`，命中 pointer 的 `origins="spec_default"`；
+3. **defaults**（模板默认）：同样 merge，命中则 `origins="template_default"`；
+4. **preset**：`preset_id` 是字符串时取预置，对每个 `definitions[pointer]["id"]` 在 `preset["values"]` 里有值的 → `set_pointer`，`origins="preset:{id}"`；
+5. **values**（人工输入）：`merge(values, supplied)`，命中 pointer 的 `origins="manual"`。
+
+然后：
+- 每个有值的 pointer 用**定义的 schema** 校验，失败时 message 前加 `"{pointer}: "`，code `parameter_validation`；
+- `defer_validation != true` 且有 `schema` → 用请求 schema 校验整个 `values`。
+
+`merge` 语义：source 是对象而 target 不是 → target 变 `{}`；两侧都是对象则**递归**合并（对象逐键，非对象整体替换）。
+
+返回 `{"values","origins","definitions","snapshot"}`。
+
+单位与类型约束（每个绑定）：
+- `binding.unit` 存在且 `definition.unit` 不同 → `unit_conflict`；
+- 请求 schema 在该 pointer 处的 `x-unit` 或 `unit` 与定义 unit 不同 → `unit_conflict`；
+- 类型交集为空 → `type_conflict`（`number` 与 `integer` 视为相容）。
+
+### 9.4 `effective_bindings`
+
+模板资产绑定 + 请求绑定合并；**若同一 path 上请求绑定与已存绑定不同 → `binding_conflict`**（不能替换模板的共享定义绑定）。
+
+### 9.5 动作
+
+| 动作 | 输入 | 输出 |
+| --- | --- | --- |
+| `parameter.snapshot` | `{}` | `capture()`：`{"version":1,"records":[{group,name,asset,fingerprint}]}` |
+| `parameter.dependencies.check` | `{snapshot, template_snapshot?}` | `{current: bool, changes: [..]}` |
+| `parameter.resolve` | 见 9.3 | `{values,origins,definitions,snapshot}` |
+| `template.render.managed` | 见 9.6 | 渲染结果 + `parameters` + `replay_input` |
+| `parameter.catalog/read/save/remove` | `{group,name,asset,expected}` | 通用 |
+| `parameter.collection.export/import` | | 通用 |
+
+`changed(snapshot)`：组锁内逐条比对 `asset == row["asset"]`；不匹配或 `not_found` → `changes.push("{group}/{id}")`。
+
+`dependencies.check` 额外逻辑（有 `template_snapshot` 时）：
+- 用 `template.inspect` 带 `{template:name, source:"", include_snapshot:true}` 取**当前**磁盘快照；
+- 用 `template.inspect` 带 `{snapshot: frozen}` 取**冻结**快照的 `references`（可达集合）；
+- 对每个可达名（除根名）：`current.templates[key] != frozen.templates[key]` → `changes.push("templates/{key}")`；
+- `current.asset != frozen.asset` → `changes.push("template_metadata")`；
+- 冻结集合没引用的新资产**不报**（不是依赖）。
+
+`parameter.resolve` 与 `template.render.managed` 都有：`snapshot`/`parameter_snapshot` 与**字符串** `preset_id` 互斥 → `invalid_input`。
+
+### 9.6 `template.render.managed` 流程
+
+1. 组装 `inspect = {include_snapshot:true, source|template|templates|snapshot}`；
+2. `ctx.call("template.inspect", 1, inspect)` → `snapshot`；
+3. `parameter_snapshot` 缺省则 `library.capture()`；
+4. `request.bindings = effective_bindings(asset.metadata.parameters.bindings, input.bindings)`；
+5. `request.values = input.context ?? {}`；
+6. `request.defaults = input.defaults ?? asset.defaults ?? {}`；
+7. `schema`/`preset_id`：取 `input.<key>`，缺省回落 `asset[key]`（schema）或 `asset.metadata.parameters[key]`（preset_id）。**`or_else` 只在字段缺省时跑，所以显式 `preset_id: null` 能覆盖资产上的保存选择**；
+8. 若有 `parameter_request`（冻结形式）：必须同时有 `snapshot` 和 `parameter_snapshot`，且**不得**出现 `context/schema/defaults/bindings/preset_id`，否则 `invalid_input`；用 `parameter.resolve` 的 input_schema 校验它；然后 `request = parameter_request`，仅 `bindings` 重新过 `effective_bindings`；
+9. `resolved = resolve(request, parameters)`；
+10. 若资产有 `schema`，再用 `{bindings, values: resolved.values, schema: asset.schema}` 跑一次 `resolve`（请求 schema 不能隐藏资产里的类型/单位标注）；
+11. `rendered_input = {snapshot, context: resolved.values, schema: true, defaults: {}, extensions: input.extensions ?? []}`，加 `trim_blocks`/`lstrip_blocks`（若有）；
+12. `ctx.call("template.render", 1, rendered_input)`；
+13. 从 `rendered_input` 删掉 `context`/`schema`/`defaults`，加 `parameter_snapshot` 和 `parameter_request` → 作为 `result.data["replay_input"]`；
+14. `result.data["parameters"] = resolved`。
+
+`ui_schema`：
+
+```json
+{"document_input":{"title":"共享参数模板","match_metadata":"parameters",
+  "bindings":{"source":"source","template":"id","context":"context","schema":"schema",
+              "defaults":"defaults","bindings":"metadata.parameters.bindings",
+              "preset_id":"parameter_preset_id","extensions":"extensions"}}}
+```
+
+descriptor：`requires = [template.inspect@1, template.render@1]`；`provides = [parameter.snapshot, parameter.resolve, parameter.dependencies.check, template.render.managed]`；`asset_collections = [{id:"parameters", export/import: parameter.collection.*}]`；panel `parameters` view `parameter.library`。
+
+`Library` 的 `invoke(verb, input, validate)` 也持组锁；verb ∈ `export/import/catalog/read/save/remove`。
+
+---
 
 ## 10. 数学插件 `nctool-plugin-math`
 
@@ -1051,20 +1155,31 @@ const NUMBER = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
   2. `doc.generationAction || asset.metadata.execution.action` 显式选择：找到 → 用它；找不到 → error（**不降级**）；
   3. `knownActions` 里 `match_metadata` 键在 asset.metadata 上存在的：恰好 1 个 → 用它；>1 → error "多个插件支持这个模板，请明确选择生成方式。"；
   4. `document_input.default === true` 的：恰好 1 个 → 用它；否则 error。
-- `documentInput(doc, entry)`：构造 `values`（source/id/context/`effective_context`=mergeDefaults(defaults,context)/schema/defaults/extensions），按 `entry.ui_schema.document_input.bindings` 映射（`metadata.` 前缀走元数据路径；`undefined` 不发送）；对 `template.render` 强制补 `extensions`；
-- **replay 路径**：`doc.replayInput.snapshot` 存在且动作是 `template.render` 时 → `input.snapshot = clone(replay.snapshot)`，把根源码替换为当前草稿源码、`snapshot.asset = clone(doc.asset)`，删 `source`/`template`，补 `extensions/trim_blocks/lstrip_blocks/lenient`；
+- `documentInput(doc, entry)`：构造 `values`（source/id/context/`effective_context`=mergeDefaults(defaults,context)/schema/defaults/extensions/`parameter_selection`/`parameter_preset_id`），按 `entry.ui_schema.document_input.bindings` 映射（`metadata.` 前缀走元数据路径；`undefined` 不发送）；对 `template.render`/`template.render.managed` 强制补 `extensions`；
+- **replay 路径**：`doc.replayInput.snapshot` 存在且动作是那两个渲染动作时 → `input.snapshot = clone(replay.snapshot)`，把根源码替换为当前草稿源码、`snapshot.asset = clone(doc.asset)`，删 `source`/`template`，补 `extensions/trim_blocks/lstrip_blocks/lenient`；受管动作还带 `parameter_snapshot` + `parameter_request`（`values` 用当前 context，schema/defaults/bindings 依次回落 replay→input→asset），并删掉 `context/schema/defaults/bindings/preset_id`；
 - 最后 `encode(input)`：未完成数值必须抛错，**不能回退到旧的合法输入**；
-- `documentSignature(doc, action)` = `encode({id, source, schema, defaults, metadata, context, extensions, replay_input, action})`，抛错返回 `"invalid"`；
+- `documentSignature(doc, action)` = `encode({id, source, schema, defaults, metadata, context, parameter_selection, extensions, replay_input, action})`，抛错返回 `"invalid"`；
 - `historyExecutionReason(run, actions)`：领域动作/领域模板 → 拒绝；动作当前无提供方 → 拒绝；
-- `restoreDocument(run, actions)`：只支持 `template.render`；从 `replay_input ?? input` 恢复 asset/source/schema/defaults/context；`replayInput = snapshot ? input : undefined`；`mode:"use"`；记 `lastRunId`/`lastRunSignature`。
+- `restoreDocument(run, actions)`：只支持 `template.render` / `template.render.managed`；从 `replay_input ?? input` 恢复 asset/source/schema/defaults/metadata.parameters.bindings/context；`parameterSelection = input.preset_id === undefined ? {} : {preset_id: input.preset_id ?? null}`（**保留显式拒绝**）；`replayInput = snapshot ? input : undefined`；`mode:"use"`；记 `lastRunId`/`lastRunSignature`。
 
-### 11.6 模板参数（已简化）
+### 11.6 共享参数前端（`lib/managedParameters.ts` + `components/SharedParameterInputs.tsx`）
 
-参数定义与默认值随模板保存；使用页用 `Form` 直接渲染 `schema`，本次输入写入 `context`，“恢复默认值”调用 `resetDocumentParameters`。不再有共享预置、来源解析或前端参数请求。
+- `pointerTokens` / `pointerEscape`（RFC 6901）；
+- `overridePointer(values, pointer)`：路径任一段落在数组上，就返回到该数组层的 pointer（**数组只能整数组覆盖**）；
+- `setParameterOverride(overrides, effective, pointer, value)`：只记录用户改动的叶子；数组内清字段安全，清数组项则恢复整数组；
+- `removePointer`：删叶子并剪掉变空的父层；路径经过数组下标 → 拒绝；
+- `applyOverrides(previous, next, overrides)`：只把用户真正改过的叶子并入 overrides（表单回传的是整个可见对象，直接存会把继承值全冻结成 manual）；
+- `mergeParameterLayers(base, overrides)`：对象递归合并，数组与数字 token 原子；
+- `previewParameters(request)` → `action("parameter.resolve", payload)`；`preset_id !== undefined` 才放进 payload（保留显式 null）；
+- `managedRequest(doc)` = 后端会推导的同一个请求（bindings/values/defaults/schema/preset_id，preset 回落 `parameterSelection` → `metadata.parameters.preset_id`）；
+- `originLabel`：`definition`→"共享定义默认值"、`spec_default`→"规格默认值"、`template_default`→"模板默认值"、`manual`→"本次填写"、`preset:x`→"共享预置：x"；
+- `SharedParameterInputs`：共享预置下拉（`""` = 不使用，当前选择不在目录里也显示）、"清除全部本次覆盖"、"刷新共享参数"；表单显示**继承值**但只保存 manual 覆盖；JSON 模式只编辑覆盖层；`parameter.resolve` 预览 200ms 防抖，用 `key`（`encodeDraft([doc.key, request, doc.jsonInput, refresh])`）丢弃迟到响应；继承基线单独一次请求（`values:{}`），与编辑无关。
 
-### 11.7 依赖过期
+### 11.7 依赖过期（`lib/managedDependencies.ts`）
 
-结果过期由 `execution[key].signature !== documentSignature(doc, generation.id)` 判定；修改模板参数、源码或输入都会更新签名并禁止导出旧结果。
+- `managedDependencyRequest(run)`：`run.status === "succeeded"` 且有 `replay_input` 时才检查；`replay.parameter_snapshot` 存在 → `parameter.dependencies.check`，input = `{snapshot, template_snapshot}`；
+- 同一 run 的多个消费者共享一次在途检查和 3000ms 轮询；`result.data.current === true` → 不过期，否则 `"参数或模板依赖已变化，请重新生成。"`；请求失败 → `"无法核对当前参数依赖，请检查资产后重新生成。"`；
+- 订阅者全部消失即清 timer 并删条目。
 
 ### 11.8 任务轮询（`hooks/useRunPolling.ts`）
 
@@ -1081,11 +1196,11 @@ const NUMBER = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
 ### 11.10 App 壳（`App.tsx`，2236 行）
 
 - 页面状态 `page: "workbench" | ...`；`runs` / `runList` / `execution` 三类状态由 App 持有，**没有平行 store**；
-- 懒加载：`SyntaxGuide`、`PluginPage`、`PluginSettings`、`HistoryPage`，均包 `Suspense`；
+- 懒加载：`SharedBindingEditor`、`SyntaxGuide`、`PluginPage`、`PluginSettings`、`HistoryPage`，均包 `Suspense`；
 - 启动 effect：并行 `api("workspace"/"capabilities"/"plugins")` → 读 `localStorage["nctool:sidebar:"+w.id]`、`["nctool:layout:"+w.id]`（use/edit 各 25–70）→ `loadDrafts(w.id)` → 恢复 `execution` → 对每个 `lastRunId` 拉一次 run → `catalog()` → `api("runs")`；`cancelled` 守卫丢弃迟到响应；
 - 快捷键：Ctrl/Cmd+S 保存、Ctrl/Cmd+Enter 生成；有 `[role="dialog"]`/`[role="menu"]` 时禁用；
 - `generate()`：`busy` 门禁（queued/running 期间快捷键无法再排队）→ `jsonError/inputError` 拦截 → 非 managed 动作跑 `fieldErrors` → 源码非空 → `documentInput(documentForGeneration(doc), generation)` → `api("runs", {action, input, title})` → 乐观插入 pending run + 记 `execution[key]` 与 `lastRunId/lastRunSignature`；`numeric_underflow` 特殊提示；
-- `stale` = `execution[key].signature !== documentSignature(doc, generation.id)`。
+- `stale` = `managedDependencies.stale || execution[key].signature !== documentSignature(doc, generation.id)`。
 
 ### 11.11 历史页（`components/HistoryPage.tsx`）
 
@@ -1095,8 +1210,18 @@ const NUMBER = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
 
 ### 11.12 入门示例（`lib/starterExamples.ts`）
 
-两个示例：`plain-text`（`你好，{{ user.name }}！` → `你好，Ada！`）与 `parameter-report`（`报告：{{ report.name }}（{{ report.unit }}）` → `报告：零件 A（件）`），都只用模板内 `schema` 与 `defaults`。
-`buildStarterExample(id)` 构造完整 `{format:"nctool-workspace", version:1, collections:{template:{version:1,records:[...]}}, manifest:[{collection, provider, version:1, fingerprint}]}`；id 带 5 位随机后缀避免覆盖；fingerprint = 对 canonical（键排序）JSON 做 FNV-1a 64（与 Rust 端同算法）。
+两个示例：`plain-text`（`你好，{{ user.name }}！` → `你好，Ada！`）与 `shared-parameters`（`报告：{{ report.name }}（{{ report.unit }}）` → `报告：零件 A（件）`，含 definition + preset + 绑定 `/report/name`）。
+`buildStarterExample(id)` 构造完整 `{format:"nctool-workspace", version:1, collections:{template:{version:1,records:[...]}, parameters:{...}}, manifest:[{collection, provider, version:1, fingerprint}]}`；id 带 5 位随机后缀避免覆盖；fingerprint = 对 canonical（键排序）JSON 做 FNV-1a 64（与 Rust 端同算法）。
+
+### 11.13 共享绑定编辑面板（`components/SharedBindingEditor.tsx`）
+
+- 读 `parameter.catalog`（definitions + presets）；
+- `bindingShapeError`：`metadata.parameters` / `.bindings` / `.selection` 形状不符 → **禁用编辑**（避免丢数据）；
+- `pointerError`：必须以 `/` 开头、≤1024、不能等于 `/`、token 非空且 `~` 只能写作 `~0`/`~1`、禁 token、已绑定、与现有路径重叠；
+- 启用/停用、新增/移除绑定、更换定义（`withDefinition` 同步 unit）、选模板默认预置（`selection.preset_id`，空串 → `null`）；
+- "检查共享绑定" 调 `parameter.resolve`（`values:{}`），请求序号 + key 双丢弃迟到响应；修改后旧检查作废。
+
+---
 
 ## 12. 复刻时必须保留的硬约束（架构门禁）
 
@@ -1108,7 +1233,7 @@ const NUMBER = /^-?(?:0|[1-9]\d*)(?:\.\d+)?(?:[eE][+-]?\d+)?$/;
 4. `nctool-tpl` 生产依赖集合 == `{minijinja}`；
 5. `cli` `features.default == []`、无 `nc-bundle`、`math == ["dep:nctool-plugin-math"]` 且该依赖 optional；
 6. math 包只在 math 树里出现；
-7. `template` 依赖非 optional 且两棵树都有；`nctool-plugin-parameters` 不得出现在 workspace、CLI 依赖或两棵构建树；`plugins/parameters` 路径不存在；
+7. `template`/`parameters` 依赖非 optional 且两棵树都有；
 8. 不存在 `gui/` 目录与 `启动GUI.bat`；
 9. 不存在 12 个退役源文件路径（`plugins/nc`、`plugins/process`、`plugins/sync-turning`、`plugins/undercut`、`ui/src/plugins/{NcViews,SyncTurningView,TurningWorkbench,UndercutView}.tsx`、`ui/src/lib/{turningModel,syncAp2}.ts`、`ui/src/components/{SpecializedTemplateEditor,TrajectoryPresetEditor}.tsx`）；
 10. `src/renderer.rs` 不含 `with_v3_whitespace`、不含 `add_filter("nc_"/"sin"/"cos"/"tan"/"sqrt"`、`src/lint.rs` 不存在；
@@ -1175,5 +1300,5 @@ node scripts/browser_generic_parameters.cjs
 6. **参数插件**：`tokens`/`set_pointer` → `resolve` 优先级 → `effective_bindings` → `render.managed` → `dependencies.check`。
 7. **math 插件**（19 个过滤器 + 三重显式门槛）。
 8. **CLI**：`default_home` → `App::boot` → 子命令 → `deliver_artifacts` → `Workbench`（含启动恢复与 query）→ `server`（安全层 + dispatch）。
-9. **前端**：`api/data/drafts` → `documentModel/documentExecution/appDocumentParameters` → hooks → 各页面 → `App.tsx`。
+9. **前端**：`api/data/drafts` → `documentModel/documentExecution/managedParameters` → hooks → 各页面 → `App.tsx`。
 10. **门禁**：`check_v2.py` + `build_ui.mjs --check` 最后接入。

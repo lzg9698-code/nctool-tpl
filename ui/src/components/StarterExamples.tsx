@@ -86,16 +86,23 @@ export function StarterExamples({ onSaved, fail }: StarterExamplesProps) {
     </>}>
       <div className="toolbar" aria-label="选择示例">
         <button type="button" className="button secondary" disabled={busy} onClick={() => open("plain-text")}>普通文本</button>
-        <button type="button" className="button secondary" disabled={busy} onClick={() => open("parameter-report")}>参数报告</button>
+        <button type="button" className="button secondary" disabled={busy} onClick={() => open("shared-parameters")}>共享参数</button>
       </div>
       <p>{prepared.example.description}</p>
       <h3>模板源码</h3><pre>{prepared.example.source}</pre>
       <h3>默认预期输出</h3><pre>{prepared.example.expected}</pre>
-      <h3>模板参数</h3>
-      <p>保存后可在参数表单修改本地参数；默认值如下。</p>
-      <pre>{JSON.stringify(prepared.example.defaults, null, 2)}</pre>
-      <p>执行 action：<code>template.render</code>；输出文件：<code>{prepared.example.outputName}</code></p>
-      <details><summary>查看参数 schema 和默认值 JSON</summary><pre>{JSON.stringify({ schema: prepared.example.schema, defaults: prepared.example.defaults }, null, 2)}</pre></details>
+      {!prepared.example.definition && <p>执行 action：<code>{prepared.example.executionAction}</code>；输出文件：<code>{prepared.example.outputName}</code></p>}
+      {prepared.example.definition && <>
+        <h3>共享参数的对应关系</h3>
+        <p>目标字段 <code>/report/name</code> 绑定到共享定义“名称”（ID：<code>{prepared.example.definition.id}</code>）。目标字段 <code>/report/unit</code> 由模板默认值提供。</p>
+        <ul>
+          <li>定义默认值：{String(prepared.example.definition.default)}</li>
+          <li>模板默认值：名称“{prepared.example.defaults.report.name}”，单位“{prepared.example.defaults.report.unit}”</li>
+          <li>共享预置“示例报告”（ID：<code>{prepared.example.preset?.id}</code>）：名称“零件 A”</li>
+        </ul>
+        <p>执行 action：<code>{prepared.example.executionAction}</code>；输出文件：<code>{prepared.example.outputName}</code></p>
+        <details><summary>查看完整定义、预置和绑定 JSON</summary><pre>{JSON.stringify({ definition: prepared.example.definition, preset: prepared.example.preset, bindings: prepared.example.bindings }, null, 2)}</pre></details>
+      </>}
       {prepared.validated && <p role="status">示例校验通过。确认后才会将这个完整资产包导入工作区。</p>}
       {error && <p role="alert" className="inline-error">{error}。预览已保留，可以重试。</p>}
     </Modal>}

@@ -11,13 +11,13 @@
 
 ## 架构与输入边界
 
-- CLI/WebUI 为 2.3 预览版，核心组件为 2.0；不要为文档一致性统一版本数字。旧 Tauri 桌面 GUI 已移除，历史资料不代表当前构建入口。
+- CLI/WebUI 为 2.2，核心组件为 2.0；不要为文档一致性统一版本数字。旧 Tauri 桌面 GUI 已移除，历史资料不代表当前构建入口。
 - 内置 NC（NC 生成、机床、加工参数、工序、同步粗车、越程槽、轨迹）已彻底移除：不回到 workspace、依赖、动作/服务、配置、前端、资源或发行。保留通用插件机制与独立 `math` 扩展。
-- 根引擎保持领域中立，仅依赖 MiniJinja。资产、SDK、运行时与模板不得引入任何加工模型；数学是唯一可选扩展，以独立 `math` feature 编译，用户启用与单次渲染 `extensions` 均显式。
-- CLI 只在 composition root 构造内置插件。默认构建只加载 template，参数定义与默认值随各模板保存；`math` 为唯一可选 feature，不需要额外 profile（旧 `nc` profile 一律拒绝）。
+- 根引擎保持领域中立，仅依赖 MiniJinja。资产、SDK、运行时、模板与参数插件不得引入任何加工模型；数学是唯一可选扩展，以独立 `math` feature 编译，用户启用与单次渲染 `extensions` 均显式。
+- CLI 只在 composition root 构造内置插件。默认构建为 template + parameters 组合；`math` 为唯一可选 feature，不需要额外 profile（旧 `nc` profile 一律拒绝）。
 - 资产写入通过 JsonStore/WriteKernel，保留指纹冲突、原子写入与快照语义。历史重执行先检查环境，记录实际绑定及来源，不改写原历史。
-- 通用渲染接受嵌套 JSON/null，保留 Schema、非有限数与整数精度校验，不静默纠正非法输入；参数定义、默认值与本次输入保持区分。
-- 旧加工模板（`metadata.nc` 含 null、或加工 `execution.action`）与经 include/import/extends 实际加载的冻结来源不得降级为普通渲染；旧加工历史只读，混合加工资产包整体拒绝。配置迁移只做只读预检、显式指纹确认、备份与原子写入。
+- 通用渲染接受嵌套 JSON/null，保留 Schema、非有限数与整数精度校验，不静默纠正非法输入；共享参数保留定义/预置/来源/冻结语义。
+- 旧加工模板（`metadata.nc` 含 null、或加工 `execution.action`）与经 include/import/extends 实际加载的冻结来源不得降级为普通/受管渲染；旧加工历史只读，混合加工资产包整体拒绝。配置迁移只做只读预检、显式指纹确认、备份与原子写入。
 - 外部插件协议保留取消、超时及进程终止语义；不要把进程隔离描述为操作系统沙箱。协议变更同步版本、测试与文档。
 
 ## 修改与验证

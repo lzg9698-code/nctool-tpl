@@ -19,6 +19,7 @@ NEUTRAL_DEPENDENCIES = {
     "nctool-plugin-sdk": {"nctool-assets", "nctool-tpl"},
     "nctool-runtime": {"nctool-assets", "nctool-plugin-sdk"},
     "nctool-plugin-template": {"nctool-assets", "nctool-plugin-sdk", "nctool-tpl"},
+    "nctool-plugin-parameters": {"nctool-assets", "nctool-plugin-sdk"},
 }
 RETIRED_SOURCES = (
     "plugins/nc",
@@ -72,16 +73,10 @@ def check_architecture(packages, workspace_tree, template_tree, math_tree):
     assert MATH_PACKAGE not in template_tree, template_tree
     assert MATH_PACKAGE in math_tree, math_tree
     assert MATH_PACKAGE in workspace_tree, workspace_tree
-    for name in ("nctool-plugin-template",):
+    for name in ("nctool-plugin-template", "nctool-plugin-parameters"):
         dependency = next(d for d in cli["dependencies"] if d["name"] == name)
         assert not dependency["optional"], dependency
         assert name in template_tree and name in math_tree, name
-    # The shared-parameter plugin is fully retired: it must not remain a workspace
-    # member, a CLI dependency or part of either production build.
-    assert "nctool-plugin-parameters" not in packages, "retired parameters plugin"
-    for tree in (workspace_tree, template_tree, math_tree):
-        assert "nctool-plugin-parameters" not in tree, tree
-    assert not (ROOT / "plugins/parameters").exists(), "参数插件源码已删除"
 
 
 def main():

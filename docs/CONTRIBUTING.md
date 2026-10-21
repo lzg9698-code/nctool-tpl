@@ -32,7 +32,7 @@ cargo +1.89.0 check --workspace --all-features --locked
 
 外部协议测试需要 Python 3，会使用可用的 python3/python 命令。真实进程测试覆盖握手、逆向服务调用、精度检查、错误输出、消息限制、崩溃、堵塞 stdin、超时、取消与下一次调用恢复。
 
-`python3 scripts/check_v2.py` 验证默认 template 不包含 NC，`math` 为唯一可选 feature，领域中立组件只有白名单生产依赖，旧桌面入口移除、Tauri 隔离、引擎领域注册隔离、Python 适配器、UI 资源与 JavaScript 语法、基础包内容均无加工实现。数学由独立 `math` feature 提供，运行扩展仍需显式选择。
+`python3 scripts/check_v2.py` 验证默认 template + parameters 不包含 NC，`math` 为唯一可选 feature，领域中立组件只有白名单生产依赖，旧桌面入口移除、Tauri 隔离、引擎领域注册隔离、Python 适配器、UI 资源与 JavaScript 语法、基础包内容均无加工实现。数学由独立 `math` feature 提供，运行扩展仍需显式选择。
 
 `npm run --prefix ui lint` 执行 TypeScript 类型及未使用声明检查，不是 ESLint。前端依赖与测试环境必须声明在清单并锁定；不要依赖已有 node_modules 中未声明的包。当前范围与验收门槛见[路线图](ROADMAP.md)与[项目状态](PROJECT_STATUS.md)；2026-10-16 的 P0 方案已归档，仅作历史参考。
 
@@ -75,9 +75,9 @@ cargo +1.89.0 check --workspace --all-features --locked
 
 并行测试时不要让默认与 `math` 构建覆盖正在使用的同一个 `target/debug/nctool`。浏览器可通过 `NCTOOL_BINARY` 使用事先复制好的固定二进制；前端有改动后先运行 `node scripts/build_ui.mjs` 并重新编译宿主。
 
-## 模板参数与数学扩展回归
+## 共享参数与数学扩展回归
 
-运行 `node scripts/browser_generic_parameters.cjs`（与既有浏览器验收使用相同的 Playwright/Chromium 环境，`NCTOOL_BINARY` 指向固定程序）。这个脚本使用临时 home/workspace 覆盖模板内参数：参数定义与默认值、本次填写、恢复默认值、未完成数值与无效 JSON 阻止执行，以及修改参数使旧结果过期并禁止导出。二进制包含 `math` 扩展（`--features math`）时，脚本继续启用并重启临时服务，验证语法页试跑 math 示例、工作台生成携带 `extensions`、HTTP 无 `extensions` 报未知过滤器，以及后台 math 任务记录扩展且重执行不改写原历史。
+运行 `node scripts/browser_generic_parameters.cjs`（与既有浏览器验收使用相同的 Playwright/Chromium 环境，`NCTOOL_BINARY` 指向固定程序）。这个脚本使用临时 home/workspace 覆盖通用共享参数链：定义、预置与绑定模板的继承值和来源，手改覆盖及保留、共享预置切换、恢复跟随、取消预置，未完成数值与无效 JSON 阻止执行，修正后只发送本次覆盖，以及修改依赖使旧结果过期并禁止导出。二进制包含 `math` 扩展（`--features math`）时，脚本继续启用并重启临时服务，验证语法页试跑 math 示例、工作台生成携带 `extensions`、HTTP 无 `extensions` 报未知过滤器，以及后台 math 任务记录扩展且重执行不改写原历史；未包含扩展时打印限制并只验证共享参数链。
 
 ## 源码基线与发布门槛
 
