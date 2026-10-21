@@ -74,7 +74,7 @@ const nc = {
     },
   },
 };
-function run(action = "template.render"): Run {
+function run(action = "template.render.managed"): Run {
   return {
     id: "r1",
     title: "History",
@@ -172,12 +172,13 @@ describe("generic document execution", () => {
       text,
       report,
     ]);
-    // The built-in parameter library is no longer a panel; parameters live on each template.
     expect(activePanels(panels, [text, report])).toEqual([
+      { id: "parameters", view: "parameter.library", actions: [] },
       { id: "report", view: "report.form", actions: [report.id] },
     ]);
     // Even an explicitly provided retired action never re-enables its panel.
     expect(activePanels(panels, [text, report, nc])).toEqual([
+      { id: "parameters", view: "parameter.library", actions: [] },
       { id: "report", view: "report.form", actions: [report.id] },
     ]);
   });
@@ -202,19 +203,38 @@ describe("generic document execution", () => {
     doc.context.x = new DraftNumber("-");
     expect(() => documentInput(doc, report)).toThrow();
   });
-  it("forwards explicit extensions and invalidates a changed choice", () => {
+  it("forwards only explicit extensions on plain and managed rendering and invalidates changed choices", () => {
     const doc = newDocument();
     expect(documentInput(doc, text).extensions).toEqual([]);
-    doc.asset.metadata = { execution: { extensions: ["math"] } };
-    expect(selectDocumentAction(doc, [text, managed]).entry?.id).toBe(text.id);
-    expect(documentInput(doc, text).extensions).toEqual(["math"]);
-    const original = documentSignature(doc, text.id);
+    doc.asset.metadata = {
+      parameters: {},
+      execution: { extensions: ["math"] },
+    };
+    expect(selectDocumentAction(doc, [text, managed]).entry?.id).toBe(
+      managed.id,
+    );
+    expect(documentInput(doc, managed).extensions).toEqual(["math"]);
+    const original = documentSignature(doc, managed.id);
     doc.extensions = [];
-    expect(documentInput(doc, text).extensions).toEqual([]);
-    expect(documentSignature(doc, text.id)).not.toBe(original);
+    expect(documentInput(doc, managed).extensions).toEqual([]);
+    expect(documentSignature(doc, managed.id)).not.toBe(original);
   });
 });
 describe("history recovery", () => {
+  it("inherits an asset default when the selection has no preset choice", () => {
+    const doc = newDocument();
+    doc.asset.metadata = { parameters: { preset_id: "default-preset" } };
+    expect(documentInput(doc, managed).preset_id).toBe("default-preset");
+    doc.parameterSelection = {};
+    expect(documentInput(doc, managed).preset_id).toBe("default-preset");
+  });
+  it("forwards an explicit preset decline instead of dropping it", () => {
+    const doc = newDocument();
+    doc.asset.metadata = { parameters: { preset_id: "default-preset" } };
+    doc.parameterSelection = { preset_id: null };
+    // Dropping it would let the backend fall back to the asset's saved preset.
+    expect(documentInput(doc, managed).preset_id).toBeNull();
+  });
   it("keeps unavailable and retired runs readable but refuses execution and restoration", () => {
     for (const id of [
       "nc.generate",
@@ -223,8 +243,8 @@ describe("history recovery", () => {
       "missing.external",
     ]) {
       const history = run(id);
-      expect(historyExecutionReason(history, [text])).not.toBe("");
-      expect(() => restoreDocument(history, [text])).toThrow();
+      expect(historyExecutionReason(history, [text, managed])).not.toBe("");
+      expect(() => restoreDocument(history, [text, managed])).toThrow();
     }
   });
   it("keeps retired machining history read-only even when its action is available", () => {
@@ -246,24 +266,26 @@ describe("history recovery", () => {
     }
   });
   it("blocks ordinary history rendering of retired NC snapshots in either saved input", () => {
-    for (const useReplay of [false, true]) {
-      const history = run(text.id);
-      const input = { snapshot: { asset: { source: "old", metadata: { nc: null } } } };
-      history.input = useReplay ? {} : input;
-      history.result = {
-        artifacts: [],
-        diagnostics: [],
-        data: { replay_input: useReplay ? input : {} },
-      };
-      expect(historyExecutionReason(history, [text, nc])).toMatch(
-        "已移除的加工意图",
-      );
-      expect(() => restoreDocument(history, [text, nc])).toThrow(
-        "已移除的加工意图",
-      );
+    for (const provider of [text, managed]) {
+      for (const useReplay of [false, true]) {
+        const history = run(provider.id);
+        const input = { snapshot: { asset: { source: "old", metadata: { nc: null } } } };
+        history.input = useReplay ? {} : input;
+        history.result = {
+          artifacts: [],
+          diagnostics: [],
+          data: { replay_input: useReplay ? input : {} },
+        };
+        expect(historyExecutionReason(history, [provider, nc])).toMatch(
+          "已移除的加工意图",
+        );
+        expect(() => restoreDocument(history, [provider, nc])).toThrow(
+          "已移除的加工意图",
+        );
+      }
     }
   });
-  it("restores frozen template sources and the ordinary parameter input", () => {
+  it("restores the frozen parameter request and referenced sources without live asset resolution or history mutation", () => {
     const history = run();
     history.input = { source: "old live source", context: { x: 0 } };
     history.result = {
@@ -271,27 +293,63 @@ describe("history recovery", () => {
       diagnostics: [],
       data: {
         replay_input: parseData(
-          "{\"snapshot\":{\"template\":\"main\",\"templates\":{\"main\":\"{% include \\\"header\\\" %} {{ x }}\",\"header\":\"frozen header\"},\"asset\":{\"source\":\"older saved source\"}},\"context\":{\"x\":9007199254740993},\"defaults\":{\"y\":2},\"extensions\":[\"math\"]}",
+          '{"snapshot":{"template":"main","templates":{"main":"{% include \'header\' %} {{ x }}","header":"frozen header"},"asset":{"source":"older saved source","metadata":{"parameters":{"preset_id":"live-preset","bindings":{"x":"shared-x"}}}}},"parameter_snapshot":{"version":1,"records":[]},"parameter_request":{"values":{"x":9007199254740993},"defaults":{"y":2},"schema":{"type":"object"},"bindings":{"x":"shared-x"},"preset_id":"frozen-preset"},"extensions":["math"]}',
         ),
       },
     };
     const original = encode(history);
-    const doc = restoreDocument(history, [text]);
+    const doc = restoreDocument(history, [managed]);
     expect(doc.asset.source).toContain("include");
     expect(encode(doc.context)).toBe('{"x":9007199254740993}');
     expect(doc.asset.defaults).toEqual(parseData('{"y":2}'));
+    expect(doc.parameterSelection).toEqual({});
     expect(doc.extensions).toEqual(["math"]);
-    const input = documentInput(doc, text);
+    expect(doc.asset.metadata?.parameters).not.toHaveProperty("preset_id");
+    const input = documentInput(doc, managed);
     expect(input.snapshot.templates.header).toBe("frozen header");
+    expect(input.parameter_request.preset_id).toBe("frozen-preset");
+    expect(encode(input.parameter_request.values)).toBe(
+      '{"x":9007199254740993}',
+    );
     expect(input).not.toHaveProperty("source");
-    expect(encode(input.context)).toBe('{"x":9007199254740993}');
+    expect(input).not.toHaveProperty("context");
     doc.context.x = parseData("42");
     doc.asset.source += " edited";
-    const edited = documentInput(doc, text);
-    expect(encode(edited.context)).toBe('{"x":42}');
+    const edited = documentInput(doc, managed);
+    expect(encode(edited.parameter_request.values)).toBe('{"x":42}');
     expect(edited.snapshot.templates.main).toMatch("edited");
     expect(encode(history)).toBe(original);
     expect(decodeDraft(encodeDraft(doc))).toEqual(doc);
+    doc.parameterSelection = { preset_id: "new-live-preset" };
+    const live = documentInput(doc, managed);
+    expect(live.preset_id).toBe("new-live-preset");
+    expect(live).not.toHaveProperty("parameter_snapshot");
+    expect(live).not.toHaveProperty("parameter_request");
+  });
+  it("honours an explicit preset decline instead of inheriting the frozen replay preset", () => {
+    const history = run();
+    history.result = {
+      artifacts: [],
+      diagnostics: [],
+      data: {
+        replay_input: parseData(
+          '{"snapshot":{"template":"main","templates":{"main":"{{ x }}"},"asset":{"source":"{{ x }}"}},"parameter_snapshot":{"version":1,"records":[]},"parameter_request":{"values":{"x":1},"defaults":{},"schema":{"type":"object"},"bindings":{"x":"shared-x"},"preset_id":"frozen-preset"}}',
+        ),
+      },
+    };
+    const doc = restoreDocument(history, [managed]);
+    // The user explicitly turns the preset off after restoring the record. The
+    // frozen request must not put it back.
+    doc.parameterSelection = { preset_id: null };
+    const declined = documentInput(doc, managed);
+    expect(declined.preset_id).toBeNull();
+    expect(declined).not.toHaveProperty("parameter_snapshot");
+    expect(declined).not.toHaveProperty("parameter_request");
+    // Saying nothing still replays the frozen request, preset included.
+    doc.parameterSelection = {};
+    const replayed = documentInput(doc, managed);
+    expect(replayed.parameter_request.preset_id).toBe("frozen-preset");
+    expect(replayed).toHaveProperty("parameter_snapshot");
   });
   it("retains ordinary template snapshot references and original input defaults/extensions", () => {
     const history = run(text.id);

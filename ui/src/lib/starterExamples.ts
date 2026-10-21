@@ -1,6 +1,6 @@
-import type { Data, Schema } from "./data";
+import type { Data } from "./data";
 
-export type StarterExampleId = "plain-text" | "parameter-report";
+export type StarterExampleId = "plain-text" | "shared-parameters";
 
 export interface StarterExample {
   id: StarterExampleId;
@@ -8,9 +8,13 @@ export interface StarterExample {
   description: string;
   source: string;
   expected: string;
-  schema: Schema;
+  bindings: Record<string, string>;
   defaults: Data;
   outputName: string;
+  executionAction: "template.render" | "template.render.managed";
+  schema?: Data;
+  definition?: Data;
+  preset?: Data;
 }
 
 export interface StarterBundle {
@@ -20,32 +24,18 @@ export interface StarterBundle {
   manifest: Data[];
 }
 
-const examples: Record<StarterExampleId, Omit<StarterExample, "outputName">> = {
+const examples: Record<StarterExampleId, Omit<StarterExample, "bindings" | "defaults" | "outputName" | "executionAction">> = {
   "plain-text": {
     id: "plain-text",
     title: "普通文本",
-    description: "在参数表单填写姓名，渲染一段问候文本。",
+    description: "从上下文读取姓名，渲染一段问候文本。",
     source: "你好，{{ user.name }}！",
     expected: "你好，Ada！",
-    schema: {
-      type: "object",
-      properties: {
-        user: {
-          type: "object",
-          properties: {
-            name: { type: "string", title: "姓名" },
-          },
-          required: ["name"],
-        },
-      },
-      required: ["user"],
-    },
-    defaults: { user: { name: "Ada" } },
   },
-  "parameter-report": {
-    id: "parameter-report",
-    title: "参数报告",
-    description: "在参数表单填写名称和单位，使用模板内的默认值生成报告。",
+  "shared-parameters": {
+    id: "shared-parameters",
+    title: "共享参数",
+    description: "模板把 /report/name 绑定到共享定义，并可由共享预置提供值。",
     source: "报告：{{ report.name }}（{{ report.unit }}）",
     expected: "报告：零件 A（件）",
     schema: {
@@ -62,7 +52,11 @@ const examples: Record<StarterExampleId, Omit<StarterExample, "outputName">> = {
       },
       required: ["report"],
     },
-    defaults: { report: { name: "零件 A", unit: "件" } },
+    definition: {
+      schema: { type: "string" },
+      default: "未命名",
+    },
+    preset: { values: {} },
   },
 };
 
@@ -95,22 +89,40 @@ function collection(records: Data[]): Data {
 }
 
 export function buildStarterExample(id: StarterExampleId): { example: StarterExample; bundle: StarterBundle } {
-  const templateId = `example-${id}-${suffix()}`;
+  const definitionId = `example-name-${suffix()}`;
+  const presetId = `example-report-${suffix()}`;
+  const templateId = `example-report-${suffix()}`;
+  const base = examples[id];
+  const shared = id === "shared-parameters";
+  const definition = shared ? { ...base.definition, title: "名称", description: "报告中显示的名称", id: definitionId, format_version: 1 } : undefined;
+  const preset = shared ? { title: "示例报告", values: { [definitionId]: "零件 A" }, id: presetId, format_version: 1 } : undefined;
   const example: StarterExample = {
-    ...examples[id],
+    ...base,
+    defaults: shared ? { report: { name: "未命名", unit: "件" } } : { user: { name: "Ada" } },
     outputName: `${templateId}.txt`,
+    executionAction: shared ? "template.render.managed" : "template.render",
+    bindings: shared ? { "/report/name": definitionId } : {},
+    ...(shared ? { definition, preset } : {}),
   };
   const templateAsset = {
     source: example.source,
-    schema: example.schema,
     defaults: example.defaults,
-    metadata: { title: example.title, output_name: example.outputName, execution: { action: "template.render" } },
+    ...(shared ? { schema: example.schema } : {}),
+    metadata: shared
+      ? { title: base.title, output_name: example.outputName, execution: { action: example.executionAction }, parameters: { bindings: example.bindings, preset_id: presetId } }
+      : { title: base.title, output_name: example.outputName, execution: { action: example.executionAction } },
   };
   const records: Data[] = [{ group: "templates", name: templateId, asset: templateAsset }];
   const collections: Record<string, Data> = { template: collection(records) };
+  if (shared) {
+    collections.parameters = collection([
+      { group: "definitions", name: definitionId, asset: example.definition },
+      { group: "presets", name: presetId, asset: example.preset },
+    ]);
+  }
   const manifest = Object.entries(collections).map(([name, data]) => ({
     collection: name,
-    provider: "template",
+    provider: name === "parameters" ? "parameters" : "template",
     version: 1,
     fingerprint: fingerprint(data),
   }));

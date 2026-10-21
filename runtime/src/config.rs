@@ -10,7 +10,7 @@ use std::{
 };
 
 /// Builtins supported by the current distribution (availability is feature-dependent).
-pub const BUILTIN_PLUGIN_IDS: &[&str] = &["template", "math"];
+pub const BUILTIN_PLUGIN_IDS: &[&str] = &["template", "parameters", "math"];
 
 /// Builtin identities removed from this distribution. Their IDs stay reserved so a
 /// same-named external plugin cannot take over a retired execution identity.

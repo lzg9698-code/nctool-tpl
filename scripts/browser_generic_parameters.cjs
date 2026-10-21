@@ -1,4 +1,4 @@
-// Real-browser acceptance for template-local parameters and the optional
+// Real-browser acceptance for the generic shared-parameter chain and the optional
 // math extension. Runs against a fixed NCTOOL_BINARY with a disposable
 // home/workspace on a random loopback port; never reads or writes user assets.
 const { chromium } = require(process.env.NCTOOL_PLAYWRIGHT || "playwright");
@@ -189,59 +189,125 @@ async function main() {
   });
   fs.mkdirSync(reportDir, { recursive: true });
 
-  // ---- Template-local parameters: one schema/defaults pair on the template ----
+  // ---- Shared parameters: seed definitions, a preset and a bound template ----
   const server = await serve("template");
   const url = server.url;
-  assert.deepEqual(
-    cli("plugins", "list").builtins,
-    ["template", "math"],
-    "默认构建应为 template 加可选 math",
-  );
-  await action(url, "template.save", {
-    name: "local-demo",
+  await action(url, "parameter.save", {
+    group: "definitions",
+    name: "part-width",
     expected: null,
     asset: {
-      source: "宽度 {{ width }} mm，深度 {{ depth }} mm，{{ label }}",
+      format_version: 1,
+      id: "part-width",
+      title: "宽度",
+      unit: "mm",
+      schema: { type: "number", exclusiveMinimum: 0, maximum: 100 },
+      default: 20,
+    },
+  });
+  await action(url, "parameter.save", {
+    group: "definitions",
+    name: "part-depth",
+    expected: null,
+    asset: {
+      format_version: 1,
+      id: "part-depth",
+      title: "深度",
+      unit: "mm",
+      schema: { type: "number", exclusiveMinimum: 0 },
+      default: 6,
+    },
+  });
+  await action(url, "parameter.save", {
+    group: "presets",
+    name: "rough",
+    expected: null,
+    asset: {
+      format_version: 1,
+      id: "rough",
+      values: { "part-width": 5, "part-depth": 9 },
+    },
+  });
+  await action(url, "template.save", {
+    name: "shared-demo",
+    expected: null,
+    asset: {
+      source: "宽度 {{ width }} mm，深度 {{ depth }} mm",
       schema: {
         type: "object",
         properties: {
           width: { type: "number", title: "宽度", "x-unit": "mm" },
           depth: { type: "number", title: "深度", "x-unit": "mm" },
-          label: { type: "string", title: "标签" },
         },
       },
-      defaults: { width: 30, depth: 6, label: "A" },
-      metadata: { title: "本地参数示例" },
+      defaults: { width: 30 },
+      metadata: {
+        title: "共享参数示例",
+        parameters: {
+          bindings: {
+            "/width": { id: "part-width", unit: "mm" },
+            "/depth": { id: "part-depth", unit: "mm" },
+          },
+        },
+      },
       tags: [],
     },
   });
   const catalog = await action(url, "template.catalog", {});
   assert(
-    catalog.data.items.some((item) => item.id === "local-demo"),
-    "本地参数模板未保存",
+    catalog.data.items.some((item) => item.id === "shared-demo"),
+    "共享参数模板未保存",
   );
 
   await page.goto(url);
   await page
     .locator(".template-item")
-    .filter({ hasText: "本地参数示例" })
+    .filter({ hasText: "共享参数示例" })
     .click();
-  // The everyday surface is a plain parameter form: no shared preset or origin UI.
+  // The document routes to the real shared-parameter inputs, not the plain form.
   await page.locator('[data-field-path="/width"] > input').waitFor();
-  assert.equal(await page.locator(".shared-parameter-origins").count(), 0);
-  assert.equal(await page.getByLabel("共享预置", { exact: true }).count(), 0);
-  assert.equal(
-    await page.getByRole("button", { name: /本模板输入预设/ }).count(),
-    0,
-  );
+  await page.locator(".shared-parameter-origins").waitFor();
   await expectField("width", "30");
   await expectField("depth", "6");
-  step("模板默认值直接填入本次参数表单");
+  await expectOrigin("/width", "模板默认值");
+  await expectOrigin("/depth", "共享定义默认值");
+  await page.getByText("当前参数已通过解析校验", { exact: true }).waitFor();
+  step("继承值与来源（模板默认值/共享定义默认值）");
 
-  // A manual edit is this run's input and does not change the template default.
+  // A manual edit overrides one bound field only.
   await field("width").fill("12");
   await expectField("width", "12");
-  step("本次填写不改模板默认值");
+  await expectOrigin("/width", "本次填写");
+  const widthRow = page
+    .locator(".shared-parameter-origins li")
+    .filter({ hasText: "/width" });
+  await widthRow.getByRole("button", { name: "恢复跟随", exact: true }).waitFor();
+  step("手改字段并保留本次覆盖");
+
+  // Selecting a shared preset moves the untouched bound field but keeps the override.
+  await page.getByLabel("共享预置", { exact: true }).selectOption("rough");
+  await expectField("depth", "9");
+  await expectOrigin("/depth", "共享预置：rough");
+  await expectField("width", "12");
+  await expectOrigin("/width", "本次填写");
+  step("切换共享预置且保留本次覆盖");
+  await page.locator(".parameters-pane").screenshot({
+    path: path.join(reportDir, "shared-parameters.png"),
+  });
+
+  // Restoring follow drops the override and falls back to the preset value.
+  await widthRow.getByRole("button", { name: "恢复跟随", exact: true }).click();
+  await expectField("width", "5");
+  await expectOrigin("/width", "共享预置：rough");
+  step("恢复共享值（恢复跟随）");
+
+  // Declining the preset returns both fields to inherited defaults.
+  await page.getByLabel("共享预置", { exact: true }).selectOption("");
+  await expectField("width", "30");
+  await expectField("depth", "6");
+  await expectOrigin("/width", "模板默认值");
+  await expectOrigin("/depth", "共享定义默认值");
+  step("取消共享预置");
 
   // An incomplete number blocks execution and keeps the export disabled.
   let before = runPosts;
@@ -272,7 +338,7 @@ async function main() {
   assert.equal(runPosts, before, "无效 JSON 不应提交任务");
   step("无效 JSON 阻止执行");
 
-  // A corrected value generates successfully with the ordinary template action.
+  // A corrected value generates successfully; only the override is sent.
   await page.getByRole("button", { name: "表单", exact: true }).click();
   await field("width").fill("8");
   const successPost = page.waitForRequest(
@@ -287,31 +353,40 @@ async function main() {
   await page.locator(".result-pane .run-status.succeeded").waitFor();
   assert(
     (await content("生成结果").innerText()).includes("宽度 8 mm，深度 6 mm"),
-    "生成结果与本次输入不一致",
+    "生成结果与解析值不一致",
   );
-  assert.equal(successBody.action, "template.render");
-  assert.equal(successBody.input.context.width, 8);
-  step("修正后生成成功并提交普通模板");
+  assert.equal(successBody.action, "template.render.managed");
+  assert.deepEqual(successBody.input.context, { width: 8 });
+  assert.equal(successBody.input.preset_id, null);
+  assert.deepEqual(successBody.input.bindings, {
+    "/width": { id: "part-width", unit: "mm" },
+    "/depth": { id: "part-depth", unit: "mm" },
+  });
+  step("修正后生成成功且只发送本次覆盖");
 
-  // Restoring defaults returns the form to the template's own defaults.
-  await page.getByRole("button", { name: "恢复默认值", exact: true }).click();
-  await expectField("width", "30");
-  await expectField("depth", "6");
-  step("恢复默认值");
-
-  // Editing the parameter region updates schema and defaults in one place.
-  await page.getByRole("button", { name: "编辑模板", exact: true }).click();
-  await page.getByLabel("width类型", { exact: true }).waitFor();
-  await page.getByLabel(/^width默认值/).fill("40");
-  await page.getByRole("button", { name: "使用模板", exact: true }).click();
-  await page.getByRole("button", { name: "恢复默认值", exact: true }).click();
-  await expectField("width", "40");
-  step("编辑参数区同时更新类型和默认值");
-
-  // A saved parameter change invalidates the existing result.
+  // Editing a bound definition invalidates the frozen result and blocks export.
+  await waitExportEnabled();
+  const definition = (
+    await action(url, "parameter.read", {
+      group: "definitions",
+      name: "part-width",
+    })
+  ).data;
+  await action(url, "parameter.save", {
+    group: "definitions",
+    name: "part-width",
+    expected: definition.fingerprint,
+    asset: { ...definition.asset, default: 21 },
+  });
   await page.locator(".result-pane .run-status.stale").waitFor();
   await waitExportDisabled();
-  step("修改模板参数使旧结果过期且禁止导出");
+  assert(
+    (await page.locator(".stale-banner").innerText()).includes(
+      "结果对应旧输入，请重新生成以应用当前修改。",
+    ),
+    "过期提示缺失",
+  );
+  step("修改依赖使旧结果过期且禁止导出");
 
   // ---- Math extension is off by default: the syntax example cannot run yet ----
   await openSyntax();
@@ -326,10 +401,10 @@ async function main() {
   );
   step("math 未启用时语法示例试跑禁用");
 
-  const summary = `PASS (template parameters only): ${checks.join("、")}；math 链因二进制未包含扩展而跳过`;
+  const summary = `PASS (shared parameters only): ${checks.join("、")}；math 链因二进制未包含扩展而跳过`;
   if (!mathCapable) {
     console.log(
-      "LIMITATION: 固定二进制未包含 math 扩展（需 --features math 构建）；已跳过 math 链，仅验证模板参数链。",
+      "LIMITATION: 固定二进制未包含 math 扩展（需 --features math 构建）；已跳过 math 链，仅验证共享参数链。",
     );
   } else {
     // ---- Enable math, restart our own temporary server (applies next start) ----

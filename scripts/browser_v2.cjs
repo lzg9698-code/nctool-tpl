@@ -260,8 +260,10 @@ async function main() {
   await page.getByLabel("items类型", { exact: true }).selectOption("array");
   await page
     .locator(".definition")
-    .filter({ hasText: "items" })
-    .locator(".template-parameter-advanced > summary")
+    .filter({
+      has: page.locator(".definition-name").getByText("items", { exact: true }),
+    })
+    .locator("summary")
     .click();
   await page
     .getByLabel("items元素类型", { exact: true })
@@ -657,7 +659,7 @@ async function main() {
   fs.mkdirSync(out, { recursive: true });
   const bundle = await (await fetch(url + "/api/v2/bundle")).json();
   assert(bundle.data.collections.template, "缺少通用模板集合");
-  assert.equal(bundle.data.collections.parameters, undefined, "模板参数不应产生独立共享资产集合");
+  assert(bundle.data.collections.parameters, "缺少共享参数集合");
   assert.equal(
     bundle.data.manifest.some((entry) => entry.collection === "nc"),
     false,
@@ -671,8 +673,9 @@ async function main() {
   await exportDownload.saveAs(bundleFile);
   // 只保留通用模板集合，验证到全新工作区的导入闭环。
   const generic = JSON.parse(JSON.stringify(bundle.data));
+  delete generic.collections.parameters;
   generic.manifest = generic.manifest.filter(
-    (entry) => entry.collection === "template",
+    (entry) => entry.collection !== "parameters",
   );
   const genericFile = path.join(temp, "generic-bundle.json");
   fs.writeFileSync(genericFile, JSON.stringify(generic));

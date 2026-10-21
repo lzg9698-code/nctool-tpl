@@ -85,7 +85,7 @@ fn legacy_list_stays_capped_and_query_pages_past_one_hundred() {
             if i % 2 == 0 {
                 "template.render"
             } else {
-                "external.run"
+                "parameter.resolve"
             },
             if i % 3 == 0 { "succeeded" } else { "failed" },
             10_000 - i,
@@ -125,7 +125,14 @@ fn query_filters_status_and_case_insensitive_title_id_action() {
         "succeeded",
         3,
     );
-    summary(&workspace, "run-beta", "Other", "external.run", "failed", 2);
+    summary(
+        &workspace,
+        "run-beta",
+        "Other",
+        "parameter.resolve",
+        "failed",
+        2,
+    );
     summary(
         &workspace,
         "run-gamma",
