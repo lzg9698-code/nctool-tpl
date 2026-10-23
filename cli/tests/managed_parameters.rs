@@ -192,6 +192,44 @@ fn shared_parameters_intersect_schemas_and_preserve_null_and_snapshots() {
 }
 
 #[test]
+fn malformed_saved_template_bindings_are_rejected_instead_of_ignored() {
+    let f = Fixture::new("template");
+    f.definition("depth", json!({"default": 1}));
+    for (index, bindings) in [json!(null), json!([]), json!("bad")]
+        .into_iter()
+        .enumerate()
+    {
+        let name = format!("malformed-bindings-{index}");
+        f.invoke("template.save", json!({"name":name,"asset":{"source":"{{ depth }}","metadata":{"parameters":{"bindings":bindings}}}}));
+        for input in [
+            json!({"template":name,"context":{"depth":99}}),
+            json!({"template":name,"context":{"depth":99},"bindings":{}}),
+        ] {
+            let error = f
+                .app
+                .runtime
+                .invoke("template.render.managed", input)
+                .unwrap_err();
+            assert_eq!(error.code, "invalid_binding");
+        }
+    }
+
+    // A genuinely absent bindings field remains equivalent to an empty binding set.
+    f.invoke(
+        "template.save",
+        json!({"name":"no-bindings","asset":{"source":"{{ depth }}","metadata":{"parameters":{}}}}),
+    );
+    assert_eq!(
+        f.invoke(
+            "template.render.managed",
+            json!({"template":"no-bindings","context":{"depth":99}})
+        )
+        .data["text"],
+        "99"
+    );
+}
+
+#[test]
 fn explicit_null_declines_the_saved_shared_preset_without_losing_asset_inheritance() {
     let f = Fixture::new("template");
     f.definition("depth", json!({"default":1}));

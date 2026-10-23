@@ -11,12 +11,8 @@ impl Temp {
     fn new() -> Self {
         loop {
             let p = std::env::temp_dir().join(format!(
-                "nctool-v2-{}-{}-{}",
+                "nctool-v2-{}-{}",
                 std::process::id(),
-                std::time::SystemTime::now()
-                    .duration_since(std::time::UNIX_EPOCH)
-                    .unwrap()
-                    .as_nanos(),
                 NEXT_TEMP.fetch_add(1, Ordering::Relaxed),
             ));
             match std::fs::create_dir(&p) {

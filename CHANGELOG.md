@@ -29,7 +29,33 @@
 
 ---
 
-## [未发布]
+## 2026-10-23：共享参数恢复记录
+
+### Restored
+
+- Restore shared parameter definitions, presets, template bindings, and managed rendering for the 2.2 workbench while retaining the current 2.2.1 host version and UI fixes.
+
+## 历史方案 [2.3.0-preview.1] - 未发布（已由共享参数恢复取代）
+
+### Changed（破坏性）
+
+- 参数改为每个模板自己管理：编辑页只有一处“参数”区，每行设置名称、类型和默认值；使用页只填写本次值并支持恢复默认值。
+- 删除内置共享参数插件 `plugins/parameters`、共享定义/预置/绑定资产及其日常界面，移除 `template.render.managed`。
+- 默认运行组合为 `template`，`math` 仍为唯一可选扩展。
+- **迁移说明**：旧共享模板、`parameters/*` 资产和 `template.render.managed` 历史不能由 2.3 执行；需要继续使用这些资产时保留 `v2.2.0` 二进制。普通模板的 `schema`/`defaults` 不受影响，现有普通模板与历史可直接使用。
+
+### Added
+
+- 增加模板内参数示例 `examples/v2/template-parameters.json`，以及预览说明与已知限制。
+- 发布工作流把带后缀的标签识别为 prerelease，不覆盖最新稳定版。
+
+### Docs
+
+- 使用、参数、架构、系统设计、插件协议、贡献、验收、路线图和发布文档同步；历史共享参数记录保留在归档与带日期的记录中。
+
+### 2026-10-20：v2.2.1 版本准备
+
+- 统一原生下拉菜单与选择框样式；CLI/WebUI 版本号更新至 2.2.1。此版本尚未发布。
 
 ### 2026-10-17：v2.2.0 发布
 

@@ -1,0 +1,23 @@
+{
+  "source": "宽度 {{ part.width }} mm，深度 {{ part.depth }} mm",
+  "schema": {
+    "type": "object",
+    "properties": {
+      "part": {
+        "type": "object",
+        "properties": {
+          "width": { "type": "number", "title": "宽度", "x-unit": "mm" },
+          "depth": { "type": "number", "title": "深度", "x-unit": "mm" }
+        },
+        "required": ["width", "depth"]
+      }
+    },
+    "required": ["part"]
+  },
+  "defaults": {
+    "part": { "width": 30, "depth": 6 }
+  },
+  "context": {
+    "part": { "width": 42 }
+  }
+}
