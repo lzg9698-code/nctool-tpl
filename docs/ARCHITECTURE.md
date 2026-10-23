@@ -1,6 +1,6 @@
 # NCtool 架构与依赖边界
 
-适用于当前 2.2 CLI/WebUI 与 2.0 核心组件。操作入口见[文档总览](README.md)，字段与路由见[系统设计](SYSTEM_DESIGN.md)，当前限制见[项目状态](PROJECT_STATUS.md)。
+适用于当前 2.3.0 CLI/WebUI（未发布）与 2.0.0 核心组件；外部进程协议 2，版本化服务独立。操作入口见[文档总览](README.md)，字段与路由见[系统设计](SYSTEM_DESIGN.md)，当前限制见[项目状态](PROJECT_STATUS.md)。
 
 默认产品是通用 Jinja 模板平台；内置 NC 能力已移除，领域能力通过开放的通用插件机制提供，数学扩展独立可选。借鉴 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.md) 和 [Cordis](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cordis-primer.md) 的服务上下文、依赖声明、作用域注册与可撤销生命周期设计，在 Rust workspace 中实现。
 
@@ -46,21 +46,15 @@ flowchart TB
 
 旧架构、GUI 和迁移资料见[历史归档](archive/README.md)。
 
-## 2.2 WebUI 工作台
+## WebUI 工作台与宿主
 
-独立 React/TypeScript 前端由 Vite 构建，通过编译期静态资源表嵌入 Rust 服务。CodeMirror 提供 Jinja/JSON/输出编辑视图，结构化参数控件按 Schema 递归渲染，数值全程保留原始字面量。浏览器草稿采用隔离的工作区存储。
+当前入口为 ui/src/main.tsx → App.tsx，Ant Design 提供组件与主题，React Router 使用 Hash 路由，TanStack Query 管理工作区服务端状态及轮询，Zustand 管理新版独立草稿；CodeMirror 按需加载。页面按 workbench/history/parameters/plugins/help 分组，应用壳负责导航、模板目录和活动任务。旧 App 状态模型和旧浏览器存储不迁移，详见[WebUI 直接重写](UI_REWRITE.md)。
 
-宿主 Workbench 层负责通用异步任务、取消、工作区标识与记录，不导入任何领域模型。通用模板任务在执行前冻结模板集合，并把实际输入和快照写入记录。任务文件使用原子写入，活动任务持有 OS 文件锁；其他进程启动不会把仍在运行的任务标为中断。任务列表读取单独的轻量索引，避免加载所有历史产物。
+宿主负责异步任务、取消、工作区与执行历史。模板任务冻结源码集合与参数；任务文件原子写入，活动任务持有 OS 文件锁，历史列表使用可重建轻量索引。重执行比较声明版本、服务绑定及启动时内容/公开配置指纹，新记录另存来源，不改原记录；观察指纹不固定程序或外部环境。历史维护、隐私投影和有界调用诊断见[运行维护](OPERATIONS.md)。
 
-插件以 Panel.view 选择已注册的前端视图。领域专用视图由插件贡献并按需载入；未知视图回退到通用 Schema 表单，不运行第三方前端脚本。动作的可选 ui_schema.properties 提供显示提示，document_input 声明文档工作台的输入绑定与元数据匹配；后端校验仍以 input_schema 为准。
+能力驱动页面与动作，未知视图退回通用 Schema 表单，不运行第三方前端脚本。文档动作声明输入绑定；Schema 由服务端最终校验。集合导入导出由插件贡献，宿主调度并在后续失败时按 receipt 尝试回滚；这不是跨插件数据库事务。
 
-配置预检查与启动共用运行时的纯依赖解析函数；预检查读取描述和 Schema，不启动插件进程或创建领域资产。集合导入导出通过描述中的 asset_collections 动作扩展，宿主只调度集合，不导入具体资产类型。内置资产操作用工作区分组锁取得一致的短时快照，执行和渲染不持有整段锁。
-
-动作服务可返回 replay_input，记录原始模板快照与冻结参数。Workbench 重执行优先采用它；提供方没有该字段时使用原始输入。历史差异比较在前端进行，不修改记录。
-
-执行历史页面的列表、详情、差异比较和重执行请求集中在 `ui/src/components/HistoryPage.tsx`；应用壳继续持有共享任务状态与文档恢复逻辑，页面切换保留已选记录及比较状态。
-
-Workbench 在任务创建时记录宿主/插件版本和服务绑定；只读重执行预检查显示差异，新任务另外记录历史来源和实际比较结果。该记录跟踪声明版本，不固定插件二进制或配置。工作区资产包读取、预检查、导入确认和刷新流程集中在 `ui/src/components/WorkspaceImport.tsx`，保留后端集合校验与回滚边界。
+宿主响应类型、运行时校验与错误诊断见[宿主与插件契约](CONTRACTS.md)。动态插件数据与资产扩展字段保持开放，数值使用无损 JSON。字段路径与模板位置分别记录；外部协议为 2，旧协议明确拒绝。
 
 ## 基线与发布
 

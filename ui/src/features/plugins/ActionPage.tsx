@@ -46,7 +46,7 @@ export default function ActionPage() {
     problem = "";
   try {
     value = decode(raw);
-    if (entry?.input_schema?.type === "object" && !object(value))
+    if (object(entry?.input_schema) && entry.input_schema.type === "object" && !object(value))
       throw new Error("此动作的输入必须是 JSON 对象");
   } catch (error) {
     problem = errorText(error);
@@ -91,8 +91,9 @@ export default function ActionPage() {
         <Button
           type="primary"
           loading={start.isPending}
+          aria-busy={start.isPending}
           disabled={
-            !!problem ||
+            start.isPending || !!problem ||
             Object.keys(invalid).length > 0 ||
             running(current.data?.status)
           }

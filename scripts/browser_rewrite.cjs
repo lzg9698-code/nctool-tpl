@@ -24,6 +24,23 @@ suite("browser-v2", async (t) => {
   });
   await t.boot();
   const page = t.page;
+  await page.waitForLoadState("networkidle");
+  const resourceMetrics = () => page.evaluate(() => performance.getEntriesByType("resource")
+    .filter((entry)=>/\/assets\/.*\.(js|css)$/.test(entry.name))
+    .map((entry)=>({name:entry.name.split("/").pop(),transfer:entry.transferSize,encoded:entry.encodedBodySize})));
+  const coldResources = await resourceMetrics();
+  await page.reload();
+  await page.getByText("本地服务已连接",{exact:true}).waitFor();
+  await page.waitForLoadState("networkidle");
+  const warmResources = await resourceMetrics();
+  assert.ok(coldResources.reduce((n,e)=>n+e.transfer,0)>0);
+  assert.ok(warmResources.length>0 && warmResources.every((e)=>e.transfer===0),"hashed resources should be reused from browser cache");
+  const indexHeaders = await fetch(t.url).then((r)=>r.headers);
+  assert.equal(indexHeaders.get("cache-control"),"no-store");
+  const apiHeaders = await fetch(t.url+"/api/v2/workspace").then((r)=>r.headers);
+  assert.equal(apiHeaders.get("cache-control"),"no-store");
+  t.fs.writeFileSync(t.path.join(t.report,"resource-transfer.json"),JSON.stringify({cold:coldResources,warm:warmResources},null,2));
+  t.step("哈希资源复用浏览器缓存，HTML 与 API 保持 no-store");
   await t.open("验收模板");
   const widthSlider = page.getByRole("slider", { name: "输入区域宽度" });
   await widthSlider.focus();
@@ -203,6 +220,46 @@ suite("browser-v2", async (t) => {
     .click();
   await page.getByRole("textbox", { name: "模板名称", exact: true }).waitFor();
   t.step("历史检索、冻结重执行不改原记录及恢复草稿");
+  const recordPath = t.path.join(t.workspace, ".nctool/runs", first.id + ".json");
+  const recordedBytes = t.fs.readFileSync(recordPath);
+  const changedEnvironment = JSON.parse(recordedBytes);
+  changedEnvironment.environment.host_version = "0.0.0-test";
+  t.fs.writeFileSync(recordPath, JSON.stringify(changedEnvironment));
+  await page.goto(t.url + "#/history/" + first.id);
+  await page.getByText("执行环境已变化", {exact:true}).waitFor();
+  assert.equal((await api("runs/" + first.id + "/replay-check")).status, "changed");
+  delete changedEnvironment.environment;
+  t.fs.writeFileSync(recordPath, JSON.stringify(changedEnvironment));
+  await page.reload();
+  await page.getByText("执行环境信息不完整", {exact:true}).waitFor();
+  assert.equal((await api("runs/" + first.id + "/replay-check")).status, "unknown");
+  t.fs.writeFileSync(recordPath, recordedBytes);
+  await page.reload();
+  await page.getByText("执行环境一致", {exact:true}).waitFor();
+  await page.getByRole("button", {name:"恢复输入为新草稿",exact:true}).click();
+  await page.getByRole("textbox", {name:"模板名称",exact:true}).waitFor();
+  t.step("历史页面区分环境一致、已变化与信息不完整");
+  await page.getByText("编辑模板", { exact: true }).click();
+  await t.edit("模板源码", "Hello\n{% if %}");
+  const invalid = await t.generate();
+  assert.equal(invalid.status, "failed");
+  assert.equal(invalid.error.code, "template_parse");
+  const diagnostic = invalid.error.diagnostics[0];
+  assert.equal(diagnostic.line, 2);
+  assert.ok(diagnostic.column > 0);
+  assert.equal(typeof diagnostic.template, "string");
+  await page.getByRole("tab", {name: "检查信息 (1)", exact: true}).click();
+  await page.getByRole("button", {name: "定位问题", exact: true}).click();
+  await page.waitForFunction(() => {
+    const selection = window.getSelection();
+    return document.activeElement?.getAttribute("aria-label") === "模板源码" &&
+      selection?.anchorNode?.parentElement?.closest(".cm-line")?.textContent?.includes("{% if %}");
+  });
+  const direct = await t.request("actions/template.render", {input:{source:"Hello\n{% if %}",context:{}}});
+  assert.equal(direct.ok, false);
+  assert.equal(direct.error.code, "template_parse");
+  assert.equal(direct.error.diagnostics[0].line, 2);
+  t.step("任务与 HTTP 保留结构化语法诊断，页面按行列定位");
 }).catch((error) => {
   console.error(error);
   process.exitCode = 1;

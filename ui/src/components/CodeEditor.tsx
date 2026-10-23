@@ -14,6 +14,7 @@ export function CodeEditor({
   label = "模板源码",
   readOnly = false,
   line,
+  column,
 }: {
   value: string;
   onChange?: (value: string) => void;
@@ -21,6 +22,7 @@ export function CodeEditor({
   label?: string;
   readOnly?: boolean;
   line?: number;
+  column?: number;
 }) {
   const host = useRef<HTMLDivElement>(null),
     view = useRef<EditorView | null>(null),
@@ -88,15 +90,16 @@ export function CodeEditor({
   useEffect(() => {
     const editor = view.current;
     if (editor && line) {
-      const location = editor.state.doc.line(
+      const targetLine = editor.state.doc.line(
         Math.max(1, Math.min(line, editor.state.doc.lines)),
-      ).from;
+      );
+      const location = targetLine.from + Math.min(Math.max(0, (column ?? 1) - 1), targetLine.length);
       editor.dispatch({
         selection: { anchor: location },
         effects: EditorView.scrollIntoView(location, { y: "center" }),
       });
       editor.focus();
     }
-  }, [line]);
+  }, [line, column]);
   return <div className="code-editor" ref={host} />;
 }

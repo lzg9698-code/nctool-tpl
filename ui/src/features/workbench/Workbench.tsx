@@ -422,6 +422,7 @@ export default function Workbench() {
   const operations = useDocumentOperations(),
     screens = Grid.useBreakpoint(),
     [line, setLine] = useState<number>(),
+    [column, setColumn] = useState<number>(),
     [mobileTab, setMobileTab] = useState("input");
   const [paneRatio, setPaneRatio] = useState(52);
   const latest = useQuery(runQuery(id, draft?.runId));
@@ -525,6 +526,7 @@ export default function Workbench() {
                     value={draft.source}
                     onChange={(source) => patch({ source })}
                     line={line}
+                    column={column}
                   />
                 </>
               ),
@@ -627,12 +629,13 @@ export default function Workbench() {
             target.scrollIntoView({ block: "center" });
             target.querySelector<HTMLElement>("input,textarea")?.focus();
           } else {
-            const match = String(diagnostic.message).match(
-              /(?:line |第\s*|:)(\d+)/,
-            );
-            if (match) {
+            const rootTemplate = draft.replay ? decode(draft.replay).snapshot?.template : undefined;
+            if (diagnostic.template && ![draft.id, "__inline__", rootTemplate].includes(diagnostic.template)) {
+              message.info(`问题位于模板 ${diagnostic.template}，请打开该模板查看`);
+            } else if (diagnostic.line) {
               patch({ mode: "edit", tab: "source" });
-              setLine(Number(match[1]));
+              setLine(diagnostic.line);
+              setColumn(diagnostic.column);
               setMobileTab("input");
             }
           }

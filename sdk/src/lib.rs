@@ -7,7 +7,7 @@ use std::sync::{
     Arc,
 };
 
-pub const PROTOCOL_VERSION: u32 = 1;
+pub const PROTOCOL_VERSION: u32 = 2;
 pub type PluginResult<T> = Result<T, PluginError>;
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -45,7 +45,45 @@ impl From<serde_json::Error> for PluginError {
 }
 impl From<nctool_tpl::TplError> for PluginError {
     fn from(e: nctool_tpl::TplError) -> Self {
-        Self::new("template_error", e.to_string())
+        use nctool_tpl::TplError;
+        let (code, template, line, column) = match &e {
+            TplError::Parse {
+                name, line, col, ..
+            } => (
+                "template_parse",
+                Some(name.clone()),
+                Some(*line),
+                Some(*col),
+            ),
+            TplError::TemplateNotFound { name, .. } => {
+                ("template_not_found", Some(name.clone()), None, None)
+            }
+            TplError::UndefinedVariable { name, .. } => (
+                "template_undefined_variable",
+                Some(name.clone()),
+                None,
+                None,
+            ),
+            TplError::UnknownFilter { name, .. } => {
+                ("template_unknown_filter", Some(name.clone()), None, None)
+            }
+            TplError::UnknownTest { name, .. } => {
+                ("template_unknown_test", Some(name.clone()), None, None)
+            }
+            TplError::Render { name, .. } => ("template_render", Some(name.clone()), None, None),
+            _ => ("template_error", None, None, None),
+        };
+        let mut error = Self::new(code, e.to_string());
+        error.diagnostics.push(Diagnostic {
+            level: "error".into(),
+            code: code.into(),
+            message: error.message.clone(),
+            path: None,
+            template,
+            line,
+            column,
+        });
+        error
     }
 }
 
@@ -57,6 +95,15 @@ pub struct Diagnostic {
     pub message: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub path: Option<String>,
+    /// Source template identifier, distinct from a JSON instance path.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub template: Option<String>,
+    /// One-based source line, only when supplied by the engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub line: Option<usize>,
+    /// One-based best-effort source column, only when supplied by the engine.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub column: Option<usize>,
 }
 impl Diagnostic {
     pub fn warning(code: &str, message: impl Into<String>) -> Self {
@@ -65,6 +112,9 @@ impl Diagnostic {
             code: code.into(),
             message: message.into(),
             path: None,
+            template: None,
+            line: None,
+            column: None,
         }
     }
 }
@@ -230,6 +280,10 @@ impl RenderExtension {
 #[derive(Clone, Default)]
 pub struct Cancellation(Arc<AtomicBool>);
 impl Cancellation {
+    /// Identity of one request token, including clones crossing RPC callback threads.
+    pub fn same_request(&self, other: &Self) -> bool {
+        Arc::ptr_eq(&self.0, &other.0)
+    }
     pub fn cancel(&self) {
         self.0.store(true, Ordering::SeqCst);
     }
@@ -395,6 +449,9 @@ pub fn validate_schema(schema: &Value, value: &Value, code: &str) -> PluginResul
             code: code.into(),
             message: e.to_string(),
             path: Some(e.instance_path.to_string()),
+            template: None,
+            line: None,
+            column: None,
         });
         error
     })

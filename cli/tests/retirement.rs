@@ -672,7 +672,7 @@ fn math_is_opt_in_and_reports_a_clear_error_when_the_extension_is_missing() {
             json!({"source":"{{ 2 | pow(10) }}","context":{}}),
         )
         .unwrap_err();
-    assert_eq!(missing.code, "template_error");
+    assert_eq!(missing.code, "template_unknown_filter");
     let rendered = app
         .runtime
         .invoke(

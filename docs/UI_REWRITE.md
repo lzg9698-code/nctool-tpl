@@ -1,6 +1,6 @@
 # WebUI 直接重写
 
-2026-10-23；CLI/WebUI 仍为 2.2，Rust 核心及公共 API 不变。入口为 `ui/src/main.tsx → App.tsx`，全部页面连接到该生产入口。
+2026-10-23；CLI/WebUI 清单版本为 2.3.0（未发布），核心组件清单版本为 2.0.0。入口为 `ui/src/main.tsx → App.tsx`，全部页面连接到该生产入口。
 
 ## 技术与职责
 
@@ -42,6 +42,10 @@ python scripts/audit_dependencies.py
 
 真实浏览器新增专项：`scripts/browser_rewrite.cjs`、`scripts/browser_rewrite_parameters.cjs`、`scripts/browser_rewrite_plugins.cjs`。共用 `scripts/browser_rewrite_support.cjs`，每组创建独立临时 home/workspace 和本轮宿主；使用 `NCTOOL_BINARY`、`NCTOOL_PLAYWRIGHT`、`NCTOOL_CHROMIUM`、`PLAYWRIGHT_BROWSERS_PATH`；外部插件示例可用 `NCTOOL_PYTHON` 指定解释器。默认报告在 `target/ui-rewrite-20261023/`。
 
-原 `browser_v2.cjs`、`browser_review_fixes.cjs`、`browser_generic_parameters.cjs` 完整保留，尚按旧界面定位，不能作为新版通过证据。CI 仍引用这三组脚本；本次没有绕过或删除 CI 门槛，测试入口切换尚待完成。新增专项通过不表示原 CI 或三平台已通过。
+统一门禁为 `node scripts/browser_acceptance.cjs`，本地与 CI 均运行上述三组当前页面验收。原 `browser_v2.cjs`、`browser_review_fixes.cjs`、`browser_generic_parameters.cjs` 仅保留为对应新版脚本的命令别名，不再执行旧界面定位。每组启动后比较所有嵌入资源并记录构建摘要；报告由 CI 上传。覆盖范围与执行结果见[项目状态](PROJECT_STATUS.md)，跨语言类型和诊断见[宿主与插件契约](CONTRACTS.md)。
 
-本轮 Windows 报告包含主流程、数值与 JSON、草稿、冲突、四种视口、参数管理、示例保存、集合拒绝、历史恢复、外部插件安装/配置/动作/取消/失败，以及共享参数/math。npm 审计通过，RustSec 数据库下载超时，整体依赖审计未完成。实际最终数量和体积以本轮报告为准，不沿用历史验证。
+## 按钮名称回归
+
+本轮快速加载验收捕获到透明的默认 loading 图标在离场动画期间残留于可访问性树，使按钮名称变成 loading 加动作文字。全局按钮加载图标改为装饰用途（aria-hidden），保留加载期间的执行保护；插件执行按钮还显式标记 busy 和提交中禁用。单元测试覆盖快速加载切换，原插件脚本连续 5 次通过后再运行统一门禁，没有放宽原选择器或业务断言。
+
+API 查询中 Context7 仅提供 Ant Design 6.5.0，已注明版本差异并用本机锁定 6.6.7 的 button/ConfigProvider 源码与类型声明核对 loadingIcon 全局配置；依赖未升级。

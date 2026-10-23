@@ -61,7 +61,7 @@ export function Shell() {
   ).length;
   const terminal = observations
     .filter((query) => query.data && !running(query.data.status))
-    .map((query) => query.data.id)
+    .map((query) => query.data!.id)
     .join("|");
   useEffect(() => {
     if (!terminal) return;
@@ -272,7 +272,7 @@ export function Shell() {
           />
         )}
       </div>
-      {catalog.data?.diagnostics?.length > 0 && (
+      {(catalog.data?.diagnostics.length ?? 0) > 0 && (
         <Alert type="warning" title="部分模板读取失败，请检查工作区" />
       )}
       <div className="catalog-footer">

@@ -1,6 +1,6 @@
 # 开发与验收
 
-适用于 2.2 CLI/WebUI 与 2.0 核心组件。修改前确认 `git status`，不要丢弃用户未提交改动。历史升级快照与验证记录见[归档索引](archive/README.md)，它们不是当前验收或发行资产。
+适用于 2.3.0 CLI/WebUI（未发布）与 2.0.0 核心组件，外部协议 2。修改前确认 `git status`，不要丢弃用户未提交改动。历史升级快照与验证记录见[归档索引](archive/README.md)，它们不是当前验收或发行资产。
 
 ## 工具链与本地开发
 
@@ -48,7 +48,12 @@ cargo +1.89.0 check --workspace --all-features --locked
 
 ## 浏览器验收
 
-2026-10-23 直接重写后的新增 Chromium 专项为 `browser_rewrite.cjs`、`browser_rewrite_parameters.cjs`、`browser_rewrite_plugins.cjs`，运行环境变量与下方 Playwright 约定相同，可额外用 `NCTOOL_PYTHON` 指定插件解释器。当前旧三组脚本及 CI 引用完整保留，仍需适配新版控件，不能把新增专项通过当作原 CI 已通过。职责与边界见 [直接重写说明](UI_REWRITE.md)。
+本地与 CI 使用同一个门禁 `node scripts/browser_acceptance.cjs`，依次执行当前三组脚本；任一失败返回非零，Linux CI 上传报告。`NCTOOL_REPORT_ROOT` 指定三组报告的父目录，`NCTOOL_REPORT` 仅用于单组覆盖。每组在交互前比较宿主实际嵌入资源与当前生成文件。前端源码变化后，先构建资源再编译隔离宿主。
+
+类型、诊断与 Rust/TypeScript/Python 共享样例见[宿主与插件契约](CONTRACTS.md)。
+
+
+2026-10-23 直接重写后的新增 Chromium 专项为 `browser_rewrite.cjs`、`browser_rewrite_parameters.cjs`、`browser_rewrite_plugins.cjs`，运行环境变量与下方 Playwright 约定相同，可额外用 `NCTOOL_PYTHON` 指定插件解释器。CI 已切换到统一当前门禁，旧三个命令名仅转发到对应新版脚本；本地通过不代表远端 CI 已通过。职责与边界见 [直接重写说明](UI_REWRITE.md)。
 
 默认组合：无 NC/机床/工序导航；编辑嵌套参数、检查变量、渲染、保存/重新读取、陈旧保存冲突、下载产物。带旧加工元数据的模板被拒绝，不降级为普通渲染。
 
@@ -56,13 +61,13 @@ cargo +1.89.0 check --workspace --all-features --locked
 
 历史与迁移：比较两次成功输出，重新执行固定输入的历史任务；导出集合并在新工作区校验、导入，验证引用、预设和元数据，重复导入拒绝覆盖。含退役加工集合的资产包整体拒绝。
 
-历史环境：验证新记录的插件版本和服务绑定，环境一致、已变化及旧记录信息不完整三种提示。重执行必须记录来源与实际环境检查，不改写原历史文件。`scripts/browser_v2.cjs` 在临时工作区模拟旧版本记录；`cli/tests/platform.rs` 同时覆盖宿主、插件和服务绑定差异，兼容旧记录及不可比较的格式版本。
+历史环境：验证新记录的插件版本和服务绑定，环境一致、已变化及旧记录信息不完整三种提示。重执行必须记录来源与实际环境检查，不改写原历史文件。`scripts/browser_rewrite.cjs` 在临时工作区模拟旧版本记录；`cli/tests/platform.rs` 同时覆盖宿主、插件和服务绑定差异，兼容旧记录及不可比较的格式版本。
 
 外部插件：通过页面检查本地目录、安装、检查依赖、保存启用配置，重启后出现数据报告表单，可调用模板服务生成结果。配置页面显示当前状态与下次启动状态。
 
 同时检查 HTTP 的 Host/Origin/Content-Type/体积限制，任务运行时能查询能力与取消。平台发布需要 Linux/Windows/macOS CI 成功。
 
-自动浏览器验收：先构建 `cargo build -p nctool-cli --features math`，安装 Playwright 1.62.1 和 Chromium，再执行 `node scripts/browser_v2.cjs`。可用 `NCTOOL_PLAYWRIGHT` 指定独立安装目录，`NCTOOL_CHROMIUM` 指定浏览器路径。脚本使用临时 home/workspace，覆盖默认与数学组合、退役边界与 Python 插件，不修改用户配置。
+自动浏览器验收：先构建 `cargo build -p nctool-cli --features math`，安装 Playwright 1.62.1 和 Chromium，再执行 `node scripts/browser_acceptance.cjs`。可用 `NCTOOL_PLAYWRIGHT` 指定独立安装目录，`NCTOOL_CHROMIUM` 指定浏览器路径。脚本使用临时 home/workspace，覆盖默认与数学组合、退役边界与 Python 插件，不修改用户配置。
 
 `browser_v2.cjs` 还检查实际加载的编辑器样式：CSS 变量均有定义，关键字/数字/字符串/注释具有独立颜色，搜索面板和输入框背景不透明且文字可见，搜索命中高亮出现。报告目录保存 `editor-styles.json` 与 `editor-styles.png`，样式断言失败会阻断现有浏览器 CI。
 
@@ -71,7 +76,7 @@ cargo +1.89.0 check --workspace --all-features --locked
 
 ## 审查缺陷回归
 
-运行 `node scripts/browser_review_fixes.cjs`（与既有浏览器验收使用相同的 Playwright/Chromium 环境）。这个脚本使用临时工作区和一次性外部提供方，覆盖领域能力缺失、显式动作保存、错误 JSON 不提交、草稿跨页/刷新恢复、动作切换、取消/失败、过期导出以及真实 HTTP 数值入口。Linux 浏览器 CI 同时运行三个验收脚本。
+单独运行 `node scripts/browser_rewrite_plugins.cjs`（与既有浏览器验收使用相同的 Playwright/Chromium 环境）。这个脚本使用临时工作区和一次性外部提供方，覆盖领域能力缺失、显式动作保存、错误 JSON 不提交、草稿跨页/刷新恢复、动作切换、取消/失败、过期导出以及真实 HTTP 数值入口。Linux 浏览器 CI 同时运行三个验收脚本。
 
 `cli/tests/platform.rs` 的 `review_r*` 回归覆盖 CLI 原子输出不覆盖、直接动作、后台任务、历史快照、动态模板依赖、参数 Schema 与整数边界、集合导入，以及退役领域身份不再被声明为可执行。新增功能要保持这些边界；不要仅用单一路径通过来代替全部入口的约束。
 
@@ -79,7 +84,13 @@ cargo +1.89.0 check --workspace --all-features --locked
 
 ## 共享参数与数学扩展回归
 
-运行 `node scripts/browser_generic_parameters.cjs`（与既有浏览器验收使用相同的 Playwright/Chromium 环境，`NCTOOL_BINARY` 指向固定程序）。这个脚本使用临时 home/workspace 覆盖通用共享参数链：定义、预置与绑定模板的继承值和来源，手改覆盖及保留、共享预置切换、恢复跟随、取消预置，未完成数值与无效 JSON 阻止执行，修正后只发送本次覆盖，以及修改依赖使旧结果过期并禁止导出。二进制包含 `math` 扩展（`--features math`）时，脚本继续启用并重启临时服务，验证语法页试跑 math 示例、工作台生成携带 `extensions`、HTTP 无 `extensions` 报未知过滤器，以及后台 math 任务记录扩展且重执行不改写原历史；未包含扩展时打印限制并只验证共享参数链。
+单独运行 `node scripts/browser_rewrite_parameters.cjs`（与既有浏览器验收使用相同的 Playwright/Chromium 环境，`NCTOOL_BINARY` 指向固定程序）。这个脚本使用临时 home/workspace 覆盖通用共享参数链：定义、预置与绑定模板的继承值和来源，手改覆盖及保留、共享预置切换、恢复跟随、取消预置，未完成数值与无效 JSON 阻止执行，修正后只发送本次覆盖，以及修改依赖使旧结果过期并禁止导出。二进制包含 `math` 扩展（`--features math`）时，脚本继续启用并重启临时服务，验证帮助页试跑 math 示例、工作台生成携带 `extensions`、HTTP 无 `extensions` 报未知过滤器，以及后台 math 任务记录扩展且重执行不改写原历史；未包含扩展时打印限制并只验证共享参数链。
+
+## 插件作者与历史维护
+
+本地或 CI 可用 `python scripts/check_plugin.py --binary <本轮固定二进制> --source examples/plugins/protocol-probe --plan examples/plugins/protocol-probe/acceptance.json --output target/plugin-acceptance.json` 执行真实协议验收。Windows 可加 `--python <解释器>`。本地测试依赖与计划规则见[插件作者验收](PLUGIN_ACCEPTANCE.md)。
+
+历史保留、备份恢复、环境指纹与调用诊断见[运行维护](OPERATIONS.md)。代表性资产测量使用 `scripts/measure_assets.py`，只生成临时工作区。测量前后版本须使用独立源码快照和独立 target，不能跨快照混用 Cargo 产物；同时记录工作树源码摘要与二进制摘要。
 
 ## 源码基线与发布门槛
 

@@ -63,6 +63,42 @@ fn summary(workspace: &Path, id: &str, title: &str, action: &str, status: &str, 
 fn query(app: &App, body: Value) -> Value {
     app.dispatch("POST", "/api/v2/runs/query", body).unwrap()
 }
+#[test]
+fn summary_cache_observes_changes_deletion_and_expiry_when_metadata_is_preserved() {
+    let temp = Temp::new();
+    let app = app(&temp);
+    let workspace = temp.0.join("workspace");
+    summary(
+        &workspace,
+        "cached",
+        "AAA",
+        "template.render",
+        "succeeded",
+        1,
+    );
+    assert_eq!(query(&app, json!({}))["runs"][0]["title"], "AAA");
+    let path = index(&workspace).join("cached.json");
+    let original = std::fs::metadata(&path).unwrap().modified().unwrap();
+    summary(
+        &workspace,
+        "cached",
+        "BBB",
+        "template.render",
+        "succeeded",
+        1,
+    );
+    std::fs::File::options()
+        .write(true)
+        .open(&path)
+        .unwrap()
+        .set_times(std::fs::FileTimes::new().set_modified(original))
+        .unwrap();
+    // An external in-place rewrite preserving length and mtime has bounded visibility.
+    std::thread::sleep(std::time::Duration::from_millis(2100));
+    assert_eq!(query(&app, json!({}))["runs"][0]["title"], "BBB");
+    std::fs::remove_file(path).unwrap();
+    assert_eq!(query(&app, json!({}))["total"], 0);
+}
 fn ids(response: &Value) -> Vec<String> {
     response["runs"]
         .as_array()

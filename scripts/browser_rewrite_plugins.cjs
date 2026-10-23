@@ -1,4 +1,4 @@
-// Additional tests. Existing browser_review_fixes.cjs remains intact.
+// Current production UI acceptance; dispatched by browser_acceptance.cjs.
 const { suite } = require("./browser_rewrite_support.cjs");
 suite("rewrite-plugins", async (t) => {
   const { fs, path, assert, api, action } = t;
@@ -213,6 +213,18 @@ suite("rewrite-plugins", async (t) => {
     "report.alternate",
   );
   t.step("显式文档动作执行和保存不降级");
+  const privateValue="diagnostics-private-fixture-91721";
+  await action("template.render",{source:privateValue});
+  const metadata=await api("diagnostics");
+  assert.ok(metadata.calls.length>0 && metadata.calls.length<=256);
+  assert.equal(JSON.stringify(metadata).includes(privateValue),false);
+  assert.ok(metadata.calls.some((call)=>call.action==="template.render" && call.depth>0 && call.parent_action));
+  await page.getByRole("menuitem",{name:"插件与设置",exact:true}).click();
+  await page.getByRole("button",{name:"刷新调用诊断",exact:true}).click();
+  await page.getByRole("columnheader",{name:"关联标识",exact:true}).waitFor();
+  await page.getByRole("columnheader",{name:"耗时 (ms)",exact:true}).waitFor();
+  await page.screenshot({path:path.join(t.report,"diagnostics.png"),fullPage:true});
+  t.step("调用诊断界面展示关联标识和耗时，不记录参数正文");
 }).catch((error) => {
   console.error(error);
   process.exitCode = 1;

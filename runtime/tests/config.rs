@@ -38,7 +38,7 @@ impl Drop for Temp {
 
 fn manifest(id: &str) -> Value {
     json!({
-        "descriptor": {"id": id, "version": "1.0.0", "protocol_version": 1},
+        "descriptor": {"id": id, "version": "1.0.0", "protocol_version": 2},
         "command": [id],
         "actions": [{
             "id": format!("{id}.run"),

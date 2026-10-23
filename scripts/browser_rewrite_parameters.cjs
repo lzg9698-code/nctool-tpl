@@ -1,4 +1,4 @@
-// Additive tests for the new workbench; the existing three suites are retained.
+// Current production UI acceptance; dispatched by browser_acceptance.cjs.
 const { suite } = require("./browser_rewrite_support.cjs");
 suite("rewrite-parameters", async (t) => {
   const { assert, action, api } = t;

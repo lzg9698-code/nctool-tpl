@@ -11,6 +11,7 @@ import { useWorkspace } from "../app/context";
 import { deliveryReason } from "../lib/execution";
 import { encode, errorText, saveFile, type Data } from "../lib/json";
 import type { Draft } from "../state/session";
+import type { Diagnostic } from "../lib/contracts";
 import { diffLines } from "diff";
 
 export const statusNames: Record<string, string> = {
@@ -57,7 +58,7 @@ export function ResultPanel({
   runId?: string;
   draft?: Draft;
   historical?: boolean;
-  onDiagnostic?: (diagnostic: Data) => void;
+  onDiagnostic?: (diagnostic: Diagnostic) => void;
   forceReason?: string;
 }) {
   const { id } = useWorkspace(),
@@ -116,7 +117,7 @@ export function ResultPanel({
                   : "processing"
             }
           >
-            {statusNames[details?.status] || "正在读取"}
+            {statusNames[details?.status || ""] || "正在读取"}
           </Tag>
           <Typography.Text type="secondary">{runId}</Typography.Text>
         </Space>
@@ -201,14 +202,16 @@ export function ResultPanel({
             label: `检查信息 (${diagnostics.length})`,
             children: diagnostics.length ? (
               <Space vertical style={{ width: "100%" }}>
-                {diagnostics.map((entry: Data, index: number) => (
+                {diagnostics.map((entry, index: number) => (
                   <Alert
                     key={index}
                     type={entry.level === "error" ? "error" : "warning"}
                     title={entry.message}
-                    description={entry.path}
+                    description={entry.template
+                      ? `${entry.template}${entry.line ? `:${entry.line}${entry.column ? `:${entry.column}` : ""}` : ""}`
+                      : entry.path}
                     action={
-                      onDiagnostic && (
+                      onDiagnostic && (entry.path !== undefined || entry.line !== undefined) && (
                         <Button onClick={() => onDiagnostic(entry)}>
                           定位问题
                         </Button>

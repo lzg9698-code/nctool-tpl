@@ -1,19 +1,25 @@
 import { QueryClient, queryOptions } from "@tanstack/react-query";
 import { decode, encode, type Data } from "./json";
+import { readEnvelope, readActionResult, readRun, readCatalog, readAsset, readSaved,
+  type Reader, type PluginError, type ActionResult, type Catalog, type AssetRead, type AssetSaved } from "./contracts";
 
 export class ApiError extends Error {
   constructor(
-    public detail: Data,
+    public detail: PluginError,
     public status: number,
   ) {
     super(detail.message || `请求失败 (${status})`);
   }
 }
-export async function api<T = Data>(
+// Typed callers must supply a decoder; a generic assertion cannot validate a wire response.
+export function api<T>(path: string, body: Data, signal: AbortSignal | undefined, read: Reader<T>): Promise<T>;
+export function api(path: string, body?: Data, signal?: AbortSignal): Promise<Data>;
+export async function api(
   path: string,
   body?: Data,
   signal?: AbortSignal,
-): Promise<T> {
+  read?: Reader<unknown>,
+): Promise<unknown> {
   const response = await fetch("/api/v2/" + path, {
     method: body === undefined ? "GET" : "POST",
     signal,
@@ -22,26 +28,34 @@ export async function api<T = Data>(
     body: body === undefined ? undefined : encode(body),
   });
   const text = await response.text();
-  let envelope: Data;
+  let envelope: ReturnType<typeof readEnvelope>;
   try {
-    envelope = decode(text);
+    envelope = readEnvelope(decode(text));
   } catch {
     throw new Error(`服务响应无效 (${response.status})`);
   }
-  if (!response.ok || envelope.ok !== true)
-    throw new ApiError(envelope.error || {}, response.status);
-  return envelope.data as T;
+  if (!envelope.ok) throw new ApiError(envelope.error, response.status);
+  if (!response.ok) throw new Error(`服务响应状态无效 (${response.status})`);
+  return read ? read(envelope.data) : envelope.data;
 }
+export function action(id: "template.catalog", input?: Data, signal?: AbortSignal): Promise<ActionResult<Catalog>>;
+export function action(id: "template.read", input?: Data, signal?: AbortSignal): Promise<ActionResult<AssetRead>>;
+export function action(id: "template.save", input?: Data, signal?: AbortSignal): Promise<ActionResult<AssetSaved>>;
+export function action(id: string, input?: Data, signal?: AbortSignal): Promise<ActionResult>;
 export async function action(
   id: string,
   input: Data = {},
   signal?: AbortSignal,
-): Promise<Data> {
+): Promise<ActionResult> {
   const result = await api(
     "actions/" + encodeURIComponent(id),
     { input },
     signal,
+    readActionResult,
   );
+  if (id === "template.catalog") result.data = readCatalog(result.data);
+  if (id === "template.read") result.data = readAsset(result.data);
+  if (id === "template.save") result.data = readSaved(result.data);
   return result;
 }
 export const queryClient = new QueryClient({
@@ -62,7 +76,7 @@ export const runQuery = (workspace: string, id?: string) =>
     queryKey: [workspace, "run", id],
     enabled: !!id,
     queryFn: ({ signal }) =>
-      api("runs/" + encodeURIComponent(id!), undefined, signal),
+      api("runs/" + encodeURIComponent(id!), undefined, signal, readRun),
     refetchInterval: (query) =>
       running(query.state.data?.status) ? 500 : false,
     refetchIntervalInBackground: true,

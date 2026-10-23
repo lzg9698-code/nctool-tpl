@@ -1,4 +1,4 @@
-# NCtool 2.2 工作台
+# NCtool 通用模板工作台
 
 通用 **Jinja 模板平台**：编辑模板、定义参数、输入 JSON 数据并生成文本。内置 NC 能力（G 代码生成、机床配置、加工工序、同步粗车、越程槽、轨迹）已移除；领域能力通过开放的通用插件机制提供。
 
@@ -53,7 +53,7 @@ cargo run -p nctool-cli -- plugins enable python-report
 cargo run -p nctool-cli -- run report.compute --input examples/v2/report.json
 ```
 
-安装不会自动启用。安装、启停和配置修改在下次启动生效，已运行的 WebUI 需要重启。Windows 没有 `python3` 时，安装前将示例 `plugin.json` 的 `command[0]` 改为 `python` 或实际 Python 可执行文件路径。协议与生命周期见[插件协议](docs/PLUGIN_PROTOCOL.md)。
+安装不会自动启用。安装、启停和配置修改在下次启动生效，已运行的 WebUI 需要重启。Windows 没有 `python3` 时，安装前将示例 `plugin.json` 的 `command[0]` 改为 `python` 或实际 Python 可执行文件路径。协议与生命周期见[插件协议](docs/PLUGIN_PROTOCOL.md)，结构化诊断与跨语言验收见[宿主与插件契约](docs/CONTRACTS.md)。协议 1 插件须更新 SDK、描述与握手后重新安装。
 
 ## 文档导航
 
@@ -67,6 +67,6 @@ cargo run -p nctool-cli -- run report.compute --input examples/v2/report.json
 | 查看进展与发布流程 | [项目状态](docs/PROJECT_STATUS.md) · [路线图](docs/ROADMAP.md) · [发布说明](docs/RELEASE.md) · [变更记录](CHANGELOG.md) |
 | 查阅旧版与验证记录 | [历史归档](docs/archive/README.md) |
 
-CLI/WebUI 当前版本为 2.3.0；引擎、SDK、运行时和内置插件等组件为 2.0.0。旧 Tauri 桌面 GUI 源码及启动入口已移除，当前界面入口为浏览器 WebUI。旧 CLI、`/api` 路由、旧加工工序格式及业务模板不自动迁移；发行包不包含旧业务模板或内置机床方案。
+CLI/WebUI 当前清单版本为 2.3.0（未发布），外部进程协议为 2；引擎、SDK、运行时和内置插件等组件为 2.0.0。旧 Tauri 桌面 GUI 源码及启动入口已移除，当前界面入口为浏览器 WebUI。旧 CLI、`/api` 路由、旧加工工序格式及业务模板不自动迁移；发行包不包含旧业务模板或内置机床方案。
 
 示例仅用于软件行为验证。实际使用需要创建并核对自己的模板与参数资产。

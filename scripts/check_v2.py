@@ -97,6 +97,7 @@ def main():
     assert not re.search(r'add_filter\("(?:nc_|sin|cos|tan|sqrt)', renderer)
     assert not (ROOT / "src/lint.rs").exists()
     assert (ROOT / "sdk/python/nctool_plugin.py").read_bytes() == (ROOT / "examples/plugins/python-report/nctool_plugin.py").read_bytes()
+    assert (ROOT / "sdk/python/nctool_plugin.py").read_bytes() == (ROOT / "examples/plugins/protocol-probe/nctool_plugin.py").read_bytes()
     run("node", "scripts/build_ui.mjs", "--check")
     retired_chunks = re.compile(r"^(?:NcViews|TurningWorkbench|SyncTurningView|UndercutView|SpecializedTemplateEditor|TrajectoryPresetEditor)-")
     for directory in ("ui/dist/assets", "cli/ui/assets"):

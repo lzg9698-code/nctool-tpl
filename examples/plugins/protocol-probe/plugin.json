@@ -1,0 +1,81 @@
+{
+  "descriptor": {
+    "id": "protocol-probe",
+    "version": "1.0.0",
+    "protocol_version": 2,
+    "requires": [
+      {
+        "id": "template.render",
+        "version": 1
+      }
+    ],
+    "provides": [],
+    "config_schema": {
+      "type": "object",
+      "properties": {
+        "mode": {
+          "type": "string",
+          "x-nctool-public": true
+        },
+        "token": {
+          "type": "string",
+          "writeOnly": true
+        }
+      }
+    },
+    "panels": []
+  },
+  "command": [
+    "python3",
+    "plugin.py"
+  ],
+  "actions": [
+    {
+      "id": "probe.echo",
+      "title": "Protocol fixture echo",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ]
+      },
+      "output_schema": {
+        "type": "object",
+        "required": [
+          "echo",
+          "process_id"
+        ]
+      },
+      "example": {}
+    },
+    {
+      "id": "probe.wait",
+      "title": "Protocol fixture wait",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "milliseconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 30000
+          },
+          "ignore_cancel": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "milliseconds"
+        ]
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "example": {}
+    }
+  ]
+}

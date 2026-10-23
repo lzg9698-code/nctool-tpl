@@ -5,9 +5,11 @@ import { QueryClientProvider, useQuery } from "@tanstack/react-query";
 import { HashRouter, Navigate, Route, Routes } from "react-router-dom";
 import { api, queryClient } from "./lib/api";
 import { errorText } from "./lib/json";
+import { readWorkspace, readCapabilities } from "./lib/contracts";
 import { createSession } from "./state/session";
 import { Context } from "./app/context";
 import { Shell } from "./app/Shell";
+import { buttonConfig } from "./app/buttonConfig";
 import "./styles.css";
 
 const Workbench = lazy(() => import("./features/workbench/Workbench"));
@@ -23,8 +25,8 @@ function Workspace() {
     queryKey: ["workspace-bootstrap"],
     queryFn: async ({ signal }) => {
       const [workspace, capabilities] = await Promise.all([
-        api("workspace", undefined, signal),
-        api("capabilities", undefined, signal),
+        api("workspace", undefined, signal, readWorkspace),
+        api("capabilities", undefined, signal, readCapabilities),
       ]);
       return { workspace, capabilities };
     },
@@ -57,7 +59,7 @@ function Workspace() {
   return (
     <Context.Provider
       value={{
-        id: workspaceId,
+        id: startup.data.workspace.id,
         capabilities: startup.data.capabilities,
         store,
       }}
@@ -82,6 +84,7 @@ function Workspace() {
 export default function App() {
   return (
     <ConfigProvider
+      button={buttonConfig}
       locale={zhCN}
       componentSize="middle"
       theme={{

@@ -1,0 +1,12 @@
+{
+  "protocol_version": 2,
+  "action": {"id":"report.render","title":"报告","input_schema":{"type":"object"},"output_schema":{"type":"object"},"example":{},"ui_schema":{"document_input":{"bindings":{"source":"source"}}}},
+  "plugin": {"id":"report","version":"1.0.0","protocol_version":2,"requires":[],"provides":[],"config_schema":{"type":"object"},"panels":[]},
+  "asset": {"asset":{"source":"Hello {{ n }}","metadata":{"custom":{"n":9007199254740993}},"defaults":{"n":18446744073709551615},"schema":{"type":"object"},"tags":["报告"],"custom":[null,{"n":-9223372036854775808}]},"fingerprint":"fp-v2"},
+  "result": {"data":{"n":9007199254740993},"artifacts":[{"name":"报告.txt","media_type":"text/plain","text":"Hello"}],"diagnostics":[]},
+  "error": {"code":"template_parse","message":"报告.j2:2: 模板语法错误","diagnostics":[{"level":"error","code":"template_parse","message":"语法错误","template":"报告.j2","line":2,"column":4}]},
+  "field_error": {"code":"invalid_input","message":"字段无效","diagnostics":[{"level":"error","code":"invalid_input","message":"必须为整数","path":"/context/n"}]},
+  "run": {"id":"run-v2","title":"报告","action":"report.render","input":{"n":9007199254740993},"status":"failed","started_at":1792713600000,"finished_at":1792713600010,"result":null,"error":{"code":"template_parse","message":"语法错误","diagnostics":[{"level":"error","code":"template_parse","message":"语法错误","template":"报告.j2","line":2,"column":4}]},"plugins":[{"id":"report","version":"1.0.0","protocol_version":2,"requires":[],"provides":[],"config_schema":{"type":"object"},"panels":[]}],"environment":{"format_version":1,"host_version":"2.3.0","plugins":{"report":{"version":"1.0.0","protocol_version":2}},"services":{"report.render":[1,"report","report.render"]}},"replay":{"source_run_id":"earlier","check":{"status":"matching","differences":[]}}},
+  "page": {"runs":[{"id":"run-v2","title":"报告","action":"report.render","status":"failed","started_at":1792713600000,"finished_at":1792713600010,"diagnostic_count":1}],"total":1,"offset":0,"limit":25},
+  "capabilities": {"actions":[{"plugin":"report","id":"report.render","title":"报告","input_schema":{"type":"object"},"output_schema":{"type":"object"}}],"document_actions":[],"services":{"report.render":[1,"report","report.render"]},"panels":[{"id":"report","title":"报告","actions":["report.render"],"view":"form"}]}
+}

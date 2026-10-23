@@ -6,6 +6,8 @@ const fs = require("node:fs"),
   os = require("node:os"),
   assert = require("node:assert/strict");
 const root = path.resolve(__dirname, "..");
+const { createHash } = require("node:crypto");
+const sha256 = (bytes) => createHash("sha256").update(bytes).digest("hex");
 const binary =
   process.env.NCTOOL_BINARY ||
   path.join(
@@ -15,7 +17,7 @@ const binary =
 async function suite(name, execute) {
   const report =
     process.env.NCTOOL_REPORT ||
-    path.join(root, "target/ui-rewrite-20261023", name);
+    path.join(process.env.NCTOOL_REPORT_ROOT || path.join(root, "target/ui-rewrite-20261023"), name);
   fs.mkdirSync(report, { recursive: true });
   const temp = fs.mkdtempSync(path.join(os.tmpdir(), "nctool-rewrite-")),
     home = path.join(temp, "home"),
@@ -24,6 +26,9 @@ async function suite(name, execute) {
     errors = [],
     checks = [];
   let browser, page, url;
+  const evidence = { head: execFileSync("git", ["rev-parse", "HEAD"], {cwd: root}).toString().trim(),
+    binary_sha256: sha256(fs.readFileSync(binary)),
+    source_sha256: fs.readFileSync(path.join(root, "cli/ui/source.sha256"), "utf8").trim() };
   const stop = (child) => {
     if (child && child.exitCode === null) {
       try {
@@ -161,6 +166,18 @@ async function suite(name, execute) {
       .click();
   }
   async function boot() {
+    // A fresh host must serve the generated bundle belonging to this checkout.
+    // Check every embedded file, including lazily loaded chunks, before using UI evidence.
+    for (const file of fs.readdirSync(path.join(root, "cli/ui"), {recursive:true, withFileTypes:true})) {
+      if (!file.isFile() || ["assets.rs", "source.sha256"].includes(file.name)) continue;
+      const parent = file.parentPath || file.path;
+      const absolute = path.join(parent, file.name);
+      const relative = path.relative(path.join(root, "cli/ui"), absolute).split(path.sep).join("/");
+      const response = await fetch(url + (relative === "index.html" ? "/" : "/" + relative));
+      assert.equal(response.status, 200, relative);
+      assert.equal(sha256(Buffer.from(await response.arrayBuffer())), sha256(fs.readFileSync(absolute)), "stale embedded UI: " + relative);
+    }
+    evidence.resources_verified = true;
     browser = await chromium.launch({
       headless: true,
       ...(process.env.NCTOOL_CHROMIUM
@@ -233,6 +250,7 @@ async function suite(name, execute) {
           errors,
           binary,
           platform: process.platform,
+          evidence,
         },
         null,
         2,
@@ -258,6 +276,7 @@ async function suite(name, execute) {
           errors,
           error: String(error.stack || error),
           binary,
+          evidence,
         },
         null,
         2,

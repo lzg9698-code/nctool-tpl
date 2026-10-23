@@ -478,7 +478,7 @@ fn incompatible_manifest_and_package_symlink_rejected() {
     let temp = Temp::new();
     fixture(&temp.0, STARTUP_TIMEOUT_MS);
     let mut manifest = ExternalManifest::read(&temp.0).unwrap();
-    manifest.descriptor.protocol_version = 2;
+    manifest.descriptor.protocol_version = 1;
     assert_eq!(manifest.validate().unwrap_err().code, "protocol_version");
     #[cfg(unix)]
     {
@@ -510,7 +510,7 @@ from pathlib import Path
 m=json.loads(Path(__file__).with_name('plugin.json').read_text(encoding='utf-8'))
 for line in sys.stdin:
     r=json.loads(line)
-    if r['method']=='initialize': result={'plugin_id':m['descriptor']['id'],'protocol_version':1}
+    if r['method']=='initialize': result={'plugin_id':m['descriptor']['id'],'protocol_version':2}
     else: result={'descriptor':m['descriptor'],'actions':m['actions']}
     print(json.dumps({'jsonrpc':'2.0','id':r['id'],'result':result}),flush=True)
     if r['method']=='describe':

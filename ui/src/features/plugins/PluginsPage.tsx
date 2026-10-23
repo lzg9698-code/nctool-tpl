@@ -27,6 +27,7 @@ import {
 } from "../../lib/json";
 import { CodeEditor } from "../../components/LazyCodeEditor";
 import { SchemaFields } from "../../components/SchemaFields";
+import { DiagnosticsPanel } from "./DiagnosticsPanel";
 
 function BundleTools() {
   const { id } = useWorkspace(),
@@ -455,6 +456,7 @@ export default function PluginsPage() {
         </Card>
       </div>
       <BundleTools />
+      <Card title="调用诊断"><DiagnosticsPanel /></Card>
     </div>
   );
 }

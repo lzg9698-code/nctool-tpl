@@ -22,6 +22,11 @@ struct Cli {
 }
 #[derive(Subcommand)]
 enum Commands {
+    /// Explicit history backup, retention preview/apply and restore. Does not start plugins.
+    History {
+        #[command(subcommand)]
+        command: HistoryCommand,
+    },
     /// Start the local WebUI.
     Ui {
         #[arg(long, default_value = "127.0.0.1")]
@@ -71,7 +76,50 @@ enum PluginCommand {
     Disable { id: String },
     Uninstall { id: String },
 }
+#[derive(Subcommand)]
+enum HistoryCommand {
+    Backup {
+        #[arg(long)]
+        out: PathBuf,
+    },
+    Restore {
+        #[arg(long)]
+        archive: PathBuf,
+    },
+    Prune {
+        #[arg(long)]
+        before_ms: u64,
+        #[arg(long, default_value_t = 100)]
+        keep_latest: usize,
+        #[arg(long, requires = "backup")]
+        apply: Option<String>,
+        #[arg(long, requires = "apply")]
+        backup: Option<PathBuf>,
+    },
+}
 fn run(cli: Cli) -> PluginResult<()> {
+    if let Commands::History { command } = &cli.command {
+        let result = match command {
+            HistoryCommand::Backup { out } => nctool_cli::history::backup(&cli.workspace, out)?,
+            HistoryCommand::Restore { archive } => {
+                nctool_cli::history::restore(&cli.workspace, archive)?
+            }
+            HistoryCommand::Prune {
+                before_ms,
+                keep_latest,
+                apply,
+                backup,
+            } => nctool_cli::history::prune(
+                &cli.workspace,
+                *before_ms,
+                *keep_latest,
+                apply.as_deref(),
+                backup.as_deref(),
+            )?,
+        };
+        println!("{}", serde_json::to_string_pretty(&result)?);
+        return Ok(());
+    }
     if let Commands::Config { command } = &cli.command {
         let home = cli.home.as_deref().ok_or_else(|| {
             PluginError::new(
@@ -129,7 +177,11 @@ fn run(cli: Cli) -> PluginResult<()> {
         println!("{}", serde_json::to_string_pretty(&value)?);
         return Ok(());
     }
-    let app = App::boot(&home, &cli.workspace, cli.profile.as_deref())?;
+    let app = if matches!(&cli.command, Commands::Run { .. } | Commands::Actions) {
+        App::boot_for_actions(&home, &cli.workspace, cli.profile.as_deref())?
+    } else {
+        App::boot(&home, &cli.workspace, cli.profile.as_deref())?
+    };
     match cli.command {
         Commands::Actions => println!(
             "{}",
@@ -177,7 +229,9 @@ fn run(cli: Cli) -> PluginResult<()> {
         Commands::Ui { host, port } => {
             tokio::runtime::Runtime::new()?.block_on(nctool_cli::server::serve(app, host, port))?
         }
-        Commands::Plugins { .. } | Commands::Config { .. } => unreachable!(),
+        Commands::Plugins { .. } | Commands::Config { .. } | Commands::History { .. } => {
+            unreachable!()
+        }
     }
     Ok(())
 }

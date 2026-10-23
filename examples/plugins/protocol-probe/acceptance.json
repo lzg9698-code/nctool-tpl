@@ -1,0 +1,46 @@
+{
+  "timeout_ms": 2000,
+  "late_wait_ms": 5500,
+  "identity_field": "process_id",
+  "success": {
+    "action": "probe.echo",
+    "input": {
+      "text": "fixture-ok"
+    },
+    "expected": {
+      "echo": "fixture-ok"
+    },
+    "callback_actions": [
+      "template.render"
+    ]
+  },
+  "invalid": {
+    "action": "probe.echo",
+    "input": null
+  },
+  "cancel": {
+    "action": "probe.wait",
+    "input": {
+      "milliseconds": 10000,
+      "ignore_cancel": false
+    }
+  },
+  "timeout": {
+    "action": "probe.wait",
+    "input": {
+      "milliseconds": 5000,
+      "ignore_cancel": true
+    }
+  },
+  "unresponsive": {
+    "action": "probe.wait",
+    "input": {
+      "milliseconds": 10000,
+      "ignore_cancel": true
+    }
+  },
+  "config": {
+    "mode": "fixture",
+    "token": "private-plan-fixture-91721"
+  }
+}

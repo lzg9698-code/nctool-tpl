@@ -2,6 +2,7 @@ import { createStore } from "zustand/vanilla";
 import { persist, createJSONStorage } from "zustand/middleware";
 import type { StateStorage } from "zustand/middleware";
 import { encode, decode, merge, defaultFor, type Data } from "../lib/json";
+import type { TemplateAsset } from "../lib/contracts";
 
 export interface Draft {
   key: string;
@@ -49,7 +50,7 @@ export interface Session {
   activate: (key: string) => void;
   setAuxiliary: (key: string, draft: AuxiliaryDraft) => void;
 }
-export function assetOf(draft: Draft): Data {
+export function assetOf(draft: Draft): TemplateAsset {
   const schema = decode(draft.schema),
     defaults = decode(draft.defaults),
     metadata = decode(draft.metadata),

@@ -3,11 +3,12 @@ import { useStore } from "zustand";
 import { useMutation } from "@tanstack/react-query";
 import { api, queryClient } from "../lib/api";
 import { type Data } from "../lib/json";
+import { readCreated, type Capabilities } from "../lib/contracts";
 import type { Session, SessionStore } from "../state/session";
 
 export interface WorkspaceContext {
   id: string;
-  capabilities: Data;
+  capabilities: Capabilities;
   store: SessionStore;
 }
 export const Context = createContext<WorkspaceContext | null>(null);
@@ -31,7 +32,7 @@ export function useStartRun() {
       input: Data;
       title: string;
     }) => {
-      const created = await api("runs", { action, input, title });
+      const created = await api("runs", { action, input, title }, undefined, readCreated);
       queryClient.setQueryData([id, "run", created.id], {
         id: created.id,
         action,

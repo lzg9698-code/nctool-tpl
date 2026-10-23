@@ -91,7 +91,7 @@ fn history_replay_records_environment_changes_and_preserves_original_record() {
     let mut changed = record;
     changed["environment"]["plugins"]["template"]["version"] = json!("0.1.0");
     changed["environment"]["plugins"]["old-plugin"] =
-        json!({"version":"1.0.0","protocol_version":1});
+        json!({"version":"1.0.0","protocol_version":2});
     changed["environment"]["host_version"] = json!("0.0.1");
     changed["environment"]["services"] = json!({});
     let bytes = serde_json::to_vec(&changed).unwrap();
@@ -114,12 +114,40 @@ fn history_replay_records_environment_changes_and_preserves_original_record() {
     );
     assert_eq!(std::fs::read(path).unwrap(), bytes);
 }
+#[test]
+fn history_observes_boot_content_fingerprints_and_detects_provenance_changes() {
+    let temp = Temp::new();
+    let app = temp.app("template");
+    let id = app
+        .workbench
+        .start("template.render", json!({"source":"fixed"}), "provenance")
+        .unwrap();
+    let mut record = await_review_run(&app, &id);
+    assert_eq!(record["environment"]["format_version"], 2);
+    assert!(record["environment"]["provenance"]["host"]
+        .as_str()
+        .unwrap()
+        .starts_with("fnv1a64-v1:"));
+    assert_eq!(
+        record["environment"]["provenance"]["scope"],
+        "host_boot_observation"
+    );
+    record["environment"]["provenance"]["host"] = json!("changed-content-same-version");
+    let path = temp
+        .0
+        .join("workspace/.nctool/runs")
+        .join(format!("{id}.json"));
+    std::fs::write(&path, serde_json::to_vec(&record).unwrap()).unwrap();
+    let check = app.workbench.replay_check(&id).unwrap();
+    assert_eq!(check.status, "changed");
+    assert!(check.differences.iter().any(|s| s.contains("内容")));
+}
 
 #[test]
 fn legacy_and_future_history_environments_are_unknown_but_replayable() {
     let temp = Temp::new();
     let app = temp.app("template");
-    for format in [None, Some(999)] {
+    for format in [None, Some(1), Some(999)] {
         let id = app
             .workbench
             .start(

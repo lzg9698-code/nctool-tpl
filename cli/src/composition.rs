@@ -30,6 +30,29 @@ pub struct App {
 }
 impl App {
     pub fn boot(home: &Path, workspace: &Path, profile: Option<&str>) -> PluginResult<Arc<Self>> {
+        Self::boot_mode(home, workspace, profile, true)
+    }
+    /// One-shot action surfaces do not write execution history; avoid collecting
+    /// history-only image/package fingerprints for every CLI invocation.
+    pub fn boot_for_actions(
+        home: &Path,
+        workspace: &Path,
+        profile: Option<&str>,
+    ) -> PluginResult<Arc<Self>> {
+        Self::boot_mode(home, workspace, profile, false)
+    }
+    fn boot_mode(
+        home: &Path,
+        workspace: &Path,
+        profile: Option<&str>,
+        track_history: bool,
+    ) -> PluginResult<Arc<Self>> {
+        if workspace.join(".nctool/restore-incomplete.json").exists() {
+            return Err(PluginError::new(
+                "incomplete_restore",
+                "工作区历史恢复尚未完成，请恢复到新的目录",
+            ));
+        }
         let (mut config, _) = config::load(home)?;
         let boot_config = config.clone();
         if let Some(profile) = profile {
@@ -60,8 +83,28 @@ impl App {
             ));
         }
         plugins.extend(config::external_plugins(home, &config)?);
+        let provenance = if track_history {
+            let host_fingerprint = std::env::current_exe()
+                .ok()
+                .and_then(|path| std::fs::read(path).ok())
+                .map(|bytes| nctool_runtime::provenance::fingerprint(&bytes));
+            let installed = config::installed(home)?;
+            let provenance_plugins: std::collections::BTreeMap<_,_> = plugins.iter().map(|plugin| {
+            let descriptor = plugin.descriptor();
+            let package = installed.iter().find(|(manifest,_)| manifest.descriptor.id == descriptor.id)
+                .map(|(_,root)| nctool_runtime::provenance::package(root)).transpose()?;
+            let settings = config.plugins.get(&descriptor.id).cloned().unwrap_or_else(|| json!({}));
+            Ok((descriptor.id, json!({"package":package,"public_config":nctool_runtime::provenance::public_config(&descriptor.config_schema,&settings)})))
+        }).collect::<PluginResult<_>>()?;
+            Some(
+                json!({"scope":"host_boot_observation","host":host_fingerprint,"plugins":provenance_plugins}),
+            )
+        } else {
+            None
+        };
         let runtime = Runtime::start(plugins, config.plugins.clone(), config.providers.clone())?;
-        let workbench = crate::workbench::Workbench::new(runtime.clone(), workspace)?;
+        let workbench =
+            crate::workbench::Workbench::with_provenance(runtime.clone(), workspace, provenance)?;
         Ok(Arc::new(Self {
             runtime,
             workbench,
@@ -405,6 +448,9 @@ impl App {
                                 code: "rollback_failed".into(),
                                 message: rollback.message,
                                 path: None,
+                                template: None,
+                                line: None,
+                                column: None,
                             });
                         }
                     }
@@ -490,6 +536,9 @@ impl App {
                 }
             }
             ("GET", "/api/v2/plugins") => self.inventory(),
+            ("GET", "/api/v2/diagnostics") => Ok(
+                json!({"calls":self.runtime.diagnostics(),"capacity":256,"scope":"current_host_process"}),
+            ),
             ("GET", "/api/v2/capabilities") => {
                 // Document entry points are derived only from live, executable actions.
                 // Retired NC intents are recognized by the frontend from template

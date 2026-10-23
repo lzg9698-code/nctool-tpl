@@ -17,6 +17,7 @@ import { useWorkspace } from "../../app/context";
 import { api, queryClient, runQuery, running } from "../../lib/api";
 import { assertExecutable, restoreRun } from "../../lib/execution";
 import { errorText, encode, type Data } from "../../lib/json";
+import { readRunPage, readReplayCheck, readCreated, type RunSummary } from "../../lib/contracts";
 import {
   ResultPanel,
   statusNames,
@@ -46,6 +47,7 @@ export default function HistoryPage() {
           limit: 25,
         },
         signal,
+        readRunPage,
       ),
     refetchInterval: 3000,
   });
@@ -54,7 +56,7 @@ export default function HistoryPage() {
     queryKey: [id, "replay-check", runId],
     enabled: !!runId,
     queryFn: ({ signal }) =>
-      api(`runs/${encodeURIComponent(runId!)}/replay-check`, undefined, signal),
+      api(`runs/${encodeURIComponent(runId!)}/replay-check`, undefined, signal, readReplayCheck),
   });
   const comparisons = useQuery({
     queryKey: [id, "history", "comparison", compareSearch, comparePage],
@@ -69,6 +71,7 @@ export default function HistoryPage() {
           limit: 25,
         },
         signal,
+        readRunPage,
       ),
   });
   const before = useQuery(runQuery(id, baseline));
@@ -88,7 +91,7 @@ export default function HistoryPage() {
     }
   }
   const rerun = useMutation({
-    mutationFn: () => api(`runs/${encodeURIComponent(runId!)}/rerun`, {}),
+    mutationFn: () => api(`runs/${encodeURIComponent(runId!)}/rerun`, {}, undefined, readCreated),
     onSuccess: async (created) => {
       store.getState().track(created.id);
       await queryClient.invalidateQueries({ queryKey: [id, "history"] });
@@ -96,7 +99,7 @@ export default function HistoryPage() {
     },
     onError: (error) => message.error(errorText(error)),
   });
-  const remove = (run: Data) =>
+  const remove = (run: Pick<RunSummary, "id" | "title">) =>
     modal.confirm({
       title: "删除执行记录？",
       content: "记录及其输入和产物将永久删除。",
@@ -160,7 +163,7 @@ export default function HistoryPage() {
                   title: "按历史输入重新执行？",
                   content:
                     check.data?.status === "matching"
-                      ? "执行环境一致，将创建新记录。"
+                      ? "已记录的信息一致，将创建新记录；不保证生成结果相同。"
                       : "执行环境已变化或信息不完整，请核对下方环境差异。新记录将记载本次环境。",
                   okText: "创建新任务",
                   cancelText: "取消",
@@ -173,7 +176,7 @@ export default function HistoryPage() {
             <Button
               danger
               disabled={!detail.data || running(detail.data.status)}
-              onClick={() => remove(detail.data)}
+              onClick={() => detail.data && remove(detail.data)}
             >
               删除记录
             </Button>
@@ -198,7 +201,9 @@ export default function HistoryPage() {
                   ? "执行环境已变化"
                   : "执行环境信息不完整"
             }
-            description={(check.data.differences || []).join("；")}
+            description={check.data.status === "matching"
+              ? "已记录的版本、内容指纹与服务绑定一致。私密配置和包外依赖未比较。"
+              : (check.data.differences || []).join("；")}
           />
         )}
         <ResultPanel runId={runId} historical />
