@@ -1,5 +1,7 @@
 # WebUI 重构资源
 
+> **2026-10-23：本文以下内容是旧 UI 的选型记录，已被直接重写取代。当前生产架构、依赖、独立草稿和验证入口见 [WebUI 直接重写](UI_REWRITE.md)。旧源码已删除，没有旧 UI 适配层或浏览器数据迁移。本文的旧目录、旧组件和历史通过结果不代表当前实现。**
+
 本文件记录 WebUI「视觉设计 + 架构」重构的选型、实际采用情况与兼容边界。任务入口见 [nctool-ui-refactor skill](../.agents/skills/nctool-ui-refactor/SKILL.md)。
 
 > **后续变更（2026-10-17）**：本文描述的 `ui/src/features/workbench/**` 拆分实现从未被生产入口 `ui/src/main.tsx → App.tsx` 引用，已整目录删除；仅服务该入口的 `zustand`、`sonner` 依赖一并移除。表内这两项现为历史选型记录，不代表当前安装内容。当前活路径为 App 与其 `ui/src/lib/`、`ui/src/components/` 模块。详见[优化记录](archive/records/OPTIMIZATION_LOG_2026-10-17.md)。

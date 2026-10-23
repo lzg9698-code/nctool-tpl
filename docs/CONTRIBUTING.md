@@ -48,6 +48,8 @@ cargo +1.89.0 check --workspace --all-features --locked
 
 ## 浏览器验收
 
+2026-10-23 直接重写后的新增 Chromium 专项为 `browser_rewrite.cjs`、`browser_rewrite_parameters.cjs`、`browser_rewrite_plugins.cjs`，运行环境变量与下方 Playwright 约定相同，可额外用 `NCTOOL_PYTHON` 指定插件解释器。当前旧三组脚本及 CI 引用完整保留，仍需适配新版控件，不能把新增专项通过当作原 CI 已通过。职责与边界见 [直接重写说明](UI_REWRITE.md)。
+
 默认组合：无 NC/机床/工序导航；编辑嵌套参数、检查变量、渲染、保存/重新读取、陈旧保存冲突、下载产物。带旧加工元数据的模板被拒绝，不降级为普通渲染。
 
 数学扩展：默认构建未启用时不注册数学过滤器；显式编译、配置启用并在请求 `extensions` 选择后可渲染，历史保存扩展选择。

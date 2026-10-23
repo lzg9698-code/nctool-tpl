@@ -114,6 +114,8 @@ def invoke(action,data,server,request_id):
     mode=data.pop('mode','')
     if mode=='crash': os._exit(9)
     if mode=='sleep': time.sleep(30)
+    if mode=='never':
+        while True: time.sleep(1)
     if mode=='wait': time.sleep(1)
     if mode=='wait3': time.sleep(0.4)
     if mode=='wait4': time.sleep(4)
@@ -377,13 +379,52 @@ fn a_late_reply_after_a_timeout_does_not_break_a_concurrent_request() {
 }
 
 #[test]
+fn exhausted_abandoned_capacity_restarts_an_unresponsive_plugin() {
+    let temp = Temp::new();
+    fixture(&temp.0, CAPACITY_TIMEOUT_MS);
+    let manifest_path = temp.0.join("plugin.json");
+    let mut manifest: Value =
+        serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["limits"]["max_concurrency"] = json!(1);
+    std::fs::write(&manifest_path, serde_json::to_vec(&manifest).unwrap()).unwrap();
+    let runtime = boot(&temp.0, &temp.0.join("workspace"));
+    for _ in 0..2 {
+        let error = runtime
+            .invoke("report.compute", json!({"values":[1],"mode":"never"}))
+            .unwrap_err();
+        assert_eq!(error.code, "plugin_timeout");
+        let result = runtime
+            .invoke("report.compute", json!({"values":[4]}))
+            .expect("full abandoned capacity must restart rather than stay busy");
+        assert_eq!(result.data["total"], 4);
+    }
+    let worker = runtime.clone();
+    let cancelled = std::thread::spawn(move || {
+        worker.invoke_request(
+            "never-cancelled",
+            "report.compute",
+            json!({"values":[1],"mode":"never"}),
+        )
+    });
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while !runtime.cancel("never-cancelled") {
+        assert!(Instant::now() < deadline);
+        std::thread::sleep(Duration::from_millis(10));
+    }
+    assert_eq!(cancelled.join().unwrap().unwrap_err().code, "cancelled");
+    assert!(runtime
+        .invoke("report.compute", json!({"values":[4]}))
+        .is_ok());
+}
+
+#[test]
 fn abandoned_work_still_counts_against_plugin_capacity() {
     // After a timeout the host frees its own slot, but the plugin may still be busy. The
     // abandoned entry must keep occupying plugin capacity so work is not piled onto a
     // plugin that is already behind.
     let temp = Temp::new();
     fixture(&temp.0, CAPACITY_TIMEOUT_MS);
-    // Two slots: one held by the abandoned request, one by a long sibling.
+    // Two slots: start the sibling later so it is still live at the first timeout.
     let manifest_path = temp.0.join("plugin.json");
     let mut manifest: Value =
         serde_json::from_slice(&std::fs::read(&manifest_path).unwrap()).unwrap();
@@ -395,13 +436,13 @@ fn abandoned_work_still_counts_against_plugin_capacity() {
         .unwrap();
     let worker = runtime.clone();
     let sibling = std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(1500));
         worker.invoke_request(
             "sibling",
             "report.compute",
-            json!({"values":[9],"mode":"wait5"}),
+            json!({"values":[9],"mode":"wait"}),
         )
     });
-    std::thread::sleep(Duration::from_millis(100));
     let error = runtime
         .invoke("report.compute", json!({"values":[1],"mode":"late2"}))
         .unwrap_err();
@@ -429,10 +470,7 @@ fn abandoned_work_still_counts_against_plugin_capacity() {
         }
     };
     assert_eq!(result.data["total"], 4);
-    // The sibling outlived its own deadline (2 s) while the slot was contended; its
-    // timeout is expected and must not be counted as a transport failure. What matters is
-    // that the runtime is still usable afterwards, which the call above proves.
-    let _ = sibling.join().unwrap();
+    assert!(sibling.join().unwrap().is_ok(), "live sibling must survive");
 }
 
 #[test]
