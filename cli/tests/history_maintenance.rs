@@ -1,19 +1,26 @@
 use nctool_cli::history;
 use nctool_plugin_sdk::*;
 use std::path::PathBuf;
+use std::sync::atomic::{AtomicU64, Ordering};
+static NEXT_FIXTURE: AtomicU64 = AtomicU64::new(0);
 struct Fixture(PathBuf);
 impl Fixture {
     fn new() -> Self {
-        let root = std::env::temp_dir().join(format!(
-            "history-maintenance-{}-{}",
-            std::process::id(),
-            std::time::SystemTime::now()
-                .duration_since(std::time::UNIX_EPOCH)
-                .unwrap()
-                .as_nanos()
-        ));
-        std::fs::create_dir_all(root.join("workspace/.nctool/runs/_index")).unwrap();
-        Self(root)
+        loop {
+            let root = std::env::temp_dir().join(format!(
+                "history-maintenance-{}-{}",
+                std::process::id(),
+                NEXT_FIXTURE.fetch_add(1, Ordering::Relaxed)
+            ));
+            match std::fs::create_dir(&root) {
+                Ok(()) => {
+                    std::fs::create_dir_all(root.join("workspace/.nctool/runs/_index")).unwrap();
+                    return Self(root);
+                }
+                Err(error) if error.kind() == std::io::ErrorKind::AlreadyExists => continue,
+                Err(error) => panic!("cannot reserve history fixture: {error}"),
+            }
+        }
     }
     fn workspace(&self) -> PathBuf {
         self.0.join("workspace")
