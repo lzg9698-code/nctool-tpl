@@ -1,6 +1,8 @@
 # Changelog
 
-## 2.3.0（未发布）
+## [2.3.0] - 2026-10-24
+
+正式发行：[下载与升级说明](https://github.com/lzg9698-code/nctool-tpl/releases/tag/v2.3.0)。[发布流程](https://github.com/lzg9698-code/nctool-tpl/actions/runs/40043531922)验证、三平台构建与发布全部通过；三个二进制附 SHA-256。下载后校验通过，Windows 发行程序的 CLI 与 30 组浏览器验收通过。
 
 - 修复快速加载切换时装饰图标污染按钮可访问名称的问题，保留提交保护；补充回归与原插件场景连续验收。
 
