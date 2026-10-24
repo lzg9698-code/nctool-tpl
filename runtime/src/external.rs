@@ -99,11 +99,10 @@ impl Transport {
             if let Some(entry) = pending.get_mut(id) {
                 entry.abandoned = true;
             }
-            // Two full waves of abandoned work (every slot given up on, twice over) mean
-            // the plugin is not recovering on its own; restart it so the next call
-            // re-handshakes instead of wedging the plugin forever. One wave is kept as
-            // headroom: the plugin may still answer its late replies and free the slots.
-            pending.len() >= self.limits.max_concurrency.saturating_mul(2)
+            // Once every slot is abandoned, no further request can enter. Restart
+            // so the next call can re-handshake. Keep the transport while any live
+            // sibling remains: cancelling one request must not fail that sibling.
+            pending.len() >= self.limits.max_concurrency
                 && pending.values().all(|entry| entry.abandoned)
         };
         if exhausted {

@@ -145,7 +145,7 @@ fn schema_validation_and_protocol_version_are_enforced() {
     );
     assert!(runtime.invoke("a.echo", json!({"integer":8})).is_ok());
     let mut a = Probe::new("a", &log);
-    a.descriptor.protocol_version = 2;
+    a.descriptor.protocol_version = 1;
     assert_eq!(
         boot(vec![Arc::new(a)]).err().unwrap().code,
         "protocol_version"

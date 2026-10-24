@@ -1,6 +1,6 @@
-# 插件 SDK / 外部协议 v1
+# 插件 SDK / 外部协议 v2
 
-适用于当前 2.0 SDK、运行时及 2.2 宿主。协议/服务版本 1 与组件 SemVer 分开维护。配置与 HTTP 外层响应见[系统设计](SYSTEM_DESIGN.md)，安装操作见[WebUI 指南](WEBUI_USER_GUIDE.md#插件与设置)。
+适用于当前 2.0 SDK、运行时及 2.3.0 宿主（未发布）。外部协议版本 2、服务版本 1 与组件 SemVer 分开维护。配置与 HTTP 外层响应见[系统设计](SYSTEM_DESIGN.md)，安装操作见[WebUI 指南](WEBUI_USER_GUIDE.md#插件与设置)。
 
 ## 描述文件
 
@@ -9,7 +9,7 @@
 ```json
 {
   "descriptor": {
-    "id":"my-plugin", "version":"2.0.0", "protocol_version":1,
+    "id":"my-plugin", "version":"2.0.0", "protocol_version":2,
     "requires":[{"id":"template.render","version":1}],
     "provides":[{"id":"my.service","version":1,"action":"my.action"}],
     "config_schema":{"type":"object"},
@@ -38,7 +38,7 @@ Limits：timeout 10–3,600,000 ms；消息 1 KiB–16 MiB；并发 1–64。包
 
 宿主请求均有字符串 ID，如 `host-1`。启动顺序：
 
-1. `initialize`，params 为 `{protocol_version:1,plugin_id,config}`；返回 `{protocol_version:1,plugin_id}`。
+1. `initialize`，params 为 `{protocol_version:2,plugin_id,config}`；返回 `{protocol_version:2,plugin_id}`。
 2. `describe`；返回 `{descriptor,actions}`，必须与安装描述一致，包括缺省字段的规范值。
 3. `invoke`，params 为 `{action,input}`；返回下面的 ActionResult。
 
@@ -66,6 +66,8 @@ Limits：timeout 10–3,600,000 ms；消息 1 KiB–16 MiB；并发 1–64。包
 
 宿主发 `cancel` 通知 `{id:<活动宿主请求ID>}` 和 `shutdown` 通知 `{}`。取消或超时只终结对应请求并通知插件，不终止仍在服务其他请求的进程；该请求继续占用插件的并发名额，直到插件返回迟到响应。只有协议错误、进程退出，或连续两轮并发名额全部被已放弃的请求占满时才终止进程，下一次调用重新握手。插件应响应 `cancel` 尽快结束该请求；宿主的动作不会因取消而自动重试。进程启动不使用全局 shell 或表达式过滤器回调。
 
+结构化诊断新增可选 template/line/column，JSON 字段路径仍用 path；错误类别、协议 1 升级要求与跨语言样例见[宿主与插件契约](CONTRACTS.md)。Python SDK 保留并转发宿主错误的完整 detail。
+
 标准错误：JSON-RPC error `{code:-32000,message,data:{code,message,diagnostics}}`。未知响应 ID、错误 JSON、协议版本不一致、能力描述不一致及超大消息均明确失败。
 
 ## 内置 Rust 插件
@@ -80,7 +82,7 @@ Python 适配器位于 [sdk/python/nctool_plugin.py](../sdk/python/nctool_plugin
 
 `template.inspect` 接受 `include_snapshot:true`，响应增加 `snapshot:{template,templates,asset}`；其中 templates 是模板名到源码的完整集合，asset 是主模板的元数据或 null。`template.render` 接受 `{snapshot,context,...渲染选项}`，此时不再读取工作区；snapshot 不能与 source/template/templates 混用。领域校验和渲染应共用这份不可变数据。SDK 提供 `TemplateSnapshot` 类型。
 
-## 可选前端和集合贡献（SDK v1 扩展）
+## 可选前端和集合贡献（协议 2）
 
 旧描述不需要新增字段。缺省的 asset_collections 和 ui_schema 不序列化，保留已有进程握手形状。
 
@@ -92,9 +94,9 @@ Python 适配器位于 [sdk/python/nctool_plugin.py](../sdk/python/nctool_plugin
 
 ### 历史重执行环境（宿主 API 扩展）
 
-新任务记录增加可选 `environment:{format_version:1,host_version,plugins,services}`。plugins 为已启用插件 ID 到 `{version,protocol_version}` 的映射；services 保存执行时版本化服务的提供方和动作绑定。记录不保存插件配置、可执行文件内容或操作系统环境。
+新任务记录使用 `environment:{format_version:2,host_version,plugins,services,provenance}`。plugins 为已启用插件 ID 到 `{version,protocol_version}` 的映射；services 保存执行时版本化服务的提供方和动作绑定。provenance 记录启动时观察到的内容指纹和显式公开配置的脱敏摘要，不保存配置值、可执行文件正文或操作系统环境；格式 1 作为不可完全比较的历史信息。字段与隐私边界见[历史与追溯](OPERATIONS.md)。
 
-`GET /api/v2/runs/{id}/replay-check` 只读比较历史与当前宿主环境，返回 `{status,differences}`。status 为 matching（已记录版本和绑定一致）、changed（宿主版本、插件启停/版本/协议或服务绑定变化）、unknown（旧记录缺少环境或记录格式版本不可比较）。比较包含全部已启用插件，不承诺每个差异都影响所选动作。matching 不保证程序、配置和产物完全一致，同版本的程序修改仍需独立追踪。
+`GET /api/v2/runs/{id}/replay-check` 只读比较历史与当前宿主环境，返回 `{status,differences}`。status 为 matching（已记录版本、绑定与可比较指纹一致）、changed（宿主版本、插件启停/版本/协议或服务绑定变化）、unknown（旧记录缺少环境或记录格式版本不可比较）。比较包含全部已启用插件，不承诺每个差异都影响所选动作。matching 不保证程序、配置和产物完全一致，同版本的安装包内容变化可由启动观察指纹发现，但包外依赖、私密配置与启动后的动态变更不在比较范围。
 
 `POST /api/v2/runs/{id}/rerun` 保持原有请求和 `{id}` 响应，创建任务时重新比较实际环境并写入 `replay:{source_run_id,check}`，不依赖浏览器预检查结果。原历史记录和产物不改写。环境变化和 unknown 会在历史页明确提示；执行继续遵守当前动作的 Schema、能力和领域校验，不因提示放宽约束。旧记录仍可读取和重执行；新任务记录当前环境。
 
@@ -120,3 +122,5 @@ JSON 入口接受 `[-2^63, 2^64-1]` 范围内的整数字面量，超出范围�
 模板 inspect 冻结所有可用源码，静态引用列举是诊断信息，不替代 Jinja 执行控制流。缺失的可选引用、候选 include、未执行分支由实际渲染决定，CLI、直接动作与后台任务采用相同语义。
 
 通用插件页按工作区/面板保存值与原始 JSON 草稿，解析失败或顶层类型不符时不能用上一份有效值替代执行。结果绑定动作及提交输入签名；编辑、切换动作后标为过期，失败/取消无当前可交付产物。历史页保留明确的原始历史导出入口。编辑器的受控值同步不触发用户修改回调。
+
+插件作者可用[独立验收工具](PLUGIN_ACCEPTANCE.md)对测试包验证握手、回调、取消、超时、迟到响应与进程恢复。

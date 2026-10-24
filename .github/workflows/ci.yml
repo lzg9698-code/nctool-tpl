@@ -68,9 +68,17 @@ jobs:
           cargo build -p nctool-cli --features math --locked
           npm install --prefix "$RUNNER_TEMP/nctool-browser" --no-save playwright@1.62.1
           "$RUNNER_TEMP/nctool-browser/node_modules/.bin/playwright" install --with-deps chromium
-          NCTOOL_PLAYWRIGHT="$RUNNER_TEMP/nctool-browser/node_modules/playwright" node scripts/browser_v2.cjs
-          NCTOOL_PLAYWRIGHT="$RUNNER_TEMP/nctool-browser/node_modules/playwright" node scripts/browser_review_fixes.cjs
-          NCTOOL_PLAYWRIGHT="$RUNNER_TEMP/nctool-browser/node_modules/playwright" node scripts/browser_generic_parameters.cjs
+          NCTOOL_PLAYWRIGHT="$RUNNER_TEMP/nctool-browser/node_modules/playwright" node scripts/browser_acceptance.cjs
+          python scripts/check_plugin.py --binary target/debug/nctool --source examples/plugins/protocol-probe --plan examples/plugins/protocol-probe/acceptance.json --python "$(command -v python)" --output target/plugin-acceptance.json
+      - name: Upload browser acceptance evidence
+        if: always() && runner.os == 'Linux'
+        uses: actions/upload-artifact@v4
+        with:
+          name: browser-acceptance
+          path: |
+            target/ui-rewrite-20261023/
+            target/plugin-acceptance.json
+          if-no-files-found: warn
   msrv:
     runs-on: ubuntu-latest
     steps:

@@ -2,7 +2,7 @@
   "descriptor": {
     "id": "python-report",
     "version": "2.0.0",
-    "protocol_version": 1,
+    "protocol_version": 2,
     "requires": [
       {
         "id": "template.render",

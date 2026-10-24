@@ -98,6 +98,12 @@ async fn handle(State(state): State<WebState>, request: Request) -> Response {
                 .headers_mut()
                 .insert(header::CONTENT_TYPE, mime.parse().unwrap());
             secure_headers(&mut response);
+            if path.starts_with("/assets/") && (path.ends_with(".js") || path.ends_with(".css")) {
+                response.headers_mut().insert(
+                    header::CACHE_CONTROL,
+                    "private, max-age=31536000, immutable".parse().unwrap(),
+                );
+            }
             return response;
         }
     }

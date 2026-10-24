@@ -10,7 +10,7 @@ use std::{
         atomic::{AtomicU64, AtomicUsize, Ordering},
         Arc, Mutex,
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Instant, SystemTime, UNIX_EPOCH},
 };
 /// Readable text for a caught panic payload, without leaking panic internals.
 fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
@@ -27,7 +27,7 @@ fn panic_message(payload: Box<dyn std::any::Any + Send>) -> String {
 }
 /// Derived `_index` entry for one run. The index is the only history listing source, so
 /// it can be rebuilt from the authoritative `<id>.json` record at any time.
-fn summary_of(run: &Run) -> Value {
+pub(crate) fn summary_of(run: &Run) -> Value {
     json!({"id":run.id,"title":run.title,"action":run.action,"status":run.status,"started_at":run.started_at,"finished_at":run.finished_at,"diagnostic_count":run.result.as_ref().map(|r|r.diagnostics.len()).or_else(||run.error.as_ref().map(|e|e.diagnostics.len())).unwrap_or(0)})
 }
 fn now() -> u64 {
@@ -59,6 +59,8 @@ pub struct ExecutionEnvironment {
     pub host_version: String,
     pub plugins: BTreeMap<String, PluginVersion>,
     pub services: Value,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub provenance: Option<Value>,
 }
 #[derive(Clone, Serialize, Deserialize, PartialEq)]
 pub struct PluginVersion {
@@ -110,6 +112,28 @@ fn compare_environment(
     if recorded.services != current.services {
         differences.push("服务提供方或服务接口版本已改变".into());
     }
+    match (&recorded.provenance, &current.provenance) {
+        (Some(old), Some(new)) => {
+            if old["host"] != new["host"] {
+                differences.push("宿主内容指纹已改变".into());
+            }
+            if old["scope"] != new["scope"] {
+                differences.push("执行来源的比较范围已改变".into());
+            }
+            for id in current.plugins.keys() {
+                let previous = &old["plugins"][id];
+                let next = &new["plugins"][id];
+                if previous["package"] != next["package"] {
+                    differences.push(format!("插件 {id} 安装包内容指纹已改变"));
+                }
+                if previous["public_config"] != next["public_config"] {
+                    differences.push(format!("插件 {id} 公开配置摘要已改变"));
+                }
+            }
+        }
+        (old, new) if old != new => differences.push("历史与当前的启动来源信息不完整或不同".into()),
+        _ => {}
+    }
     ReplayCheck {
         status: if differences.is_empty() {
             "matching"
@@ -127,9 +151,30 @@ pub struct Workbench {
     counter: AtomicU64,
     active: AtomicUsize,
     pub workspace_id: String,
+    provenance: Option<Value>,
+    summary_cache: Mutex<BTreeMap<String, CachedSummary>>,
+}
+struct CachedSummary {
+    len: u64,
+    modified: SystemTime,
+    checked: Instant,
+    value: Value,
 }
 impl Workbench {
     pub fn new(runtime: Arc<Runtime>, workspace: &Path) -> PluginResult<Arc<Self>> {
+        Self::with_provenance(runtime, workspace, None)
+    }
+    pub fn with_provenance(
+        runtime: Arc<Runtime>,
+        workspace: &Path,
+        provenance: Option<Value>,
+    ) -> PluginResult<Arc<Self>> {
+        if workspace.join(".nctool/restore-incomplete.json").exists() {
+            return Err(PluginError::new(
+                "incomplete_restore",
+                "工作区历史恢复尚未完成，请核对归档并恢复到新的目录",
+            ));
+        }
         let folder = workspace.join(".nctool/runs");
         std::fs::create_dir_all(&folder)?;
         let workspace = workspace.canonicalize()?;
@@ -147,6 +192,8 @@ impl Workbench {
             counter: AtomicU64::new(0),
             active: AtomicUsize::new(0),
             workspace_id: id,
+            provenance,
+            summary_cache: Mutex::new(BTreeMap::new()),
         });
         // Interrupted records remain failures, never candidates for exporting a partial result.
         for summary in controller.summaries()? {
@@ -241,6 +288,8 @@ impl Workbench {
     /// records, so it is written separately from [`Self::save_run`]: an index-only
     /// failure leaves the authoritative record intact.
     fn save_summary(&self, run: &Run) -> PluginResult<()> {
+        let mut cache = self.summary_cache.lock().unwrap();
+        cache.remove(&run.id);
         let folder = self.root.root().join("_index");
         std::fs::create_dir_all(&folder)?;
         WriteKernel::write_atomic(
@@ -251,6 +300,8 @@ impl Workbench {
     }
     /// Drop a derived `_index` entry whose authoritative run record no longer exists.
     fn prune_summary(&self, id: &str) -> PluginResult<()> {
+        let mut cache = self.summary_cache.lock().unwrap();
+        cache.remove(id);
         let path = self.root.root().join("_index").join(format!("{id}.json"));
         if path.exists() {
             std::fs::remove_file(path)?;
@@ -280,12 +331,16 @@ impl Workbench {
             return Ok(vec![]);
         }
         let mut summaries = vec![];
+        let mut present = std::collections::BTreeSet::new();
         for entry in std::fs::read_dir(folder)? {
             let entry = entry?;
             if !entry.file_type()?.is_file()
                 || !entry.path().extension().is_some_and(|e| e == "json")
             {
                 continue;
+            }
+            if let Some(id) = entry.path().file_stem().and_then(|s| s.to_str()) {
+                present.insert(id.to_owned());
             }
             // The index is derived state: a single unreadable, oversized or unparseable
             // entry must not block boot or every history request. It is rebuilt from the
@@ -300,18 +355,52 @@ impl Workbench {
                 summaries.push(summary);
             }
         }
+        self.summary_cache
+            .lock()
+            .unwrap()
+            .retain(|id, _| present.contains(id));
         Ok(summaries)
     }
     /// Return a usable summary for one index entry, rebuilding a damaged one from its
     /// authoritative record. `None` when the entry is unusable and no record exists.
     fn repair_summary(&self, id: &str) -> Option<Value> {
         let path = self.root.root().join("_index").join(format!("{id}.json"));
+        let metadata = std::fs::metadata(&path).ok();
+        if let Some((len, modified)) = metadata
+            .as_ref()
+            .and_then(|m| m.modified().ok().map(|time| (m.len(), time)))
+        {
+            let cache = self.summary_cache.lock().unwrap();
+            if let Some(cached) = cache.get(id).filter(|c| {
+                c.len == len && c.modified == modified && c.checked.elapsed().as_secs() < 2
+            }) {
+                return Some(cached.value.clone());
+            }
+        }
         let readable = std::fs::read(&path)
             .ok()
-            .filter(|bytes| bytes.len() <= 1024 * 1024 && parse_json(bytes).is_ok());
-        if let Some(bytes) = readable {
-            return parse_json(&bytes).ok();
+            .filter(|bytes| bytes.len() <= 1024 * 1024)
+            .and_then(|bytes| parse_json(&bytes).ok());
+        if let Some(value) = readable {
+            if let Some((len, modified)) =
+                metadata.and_then(|m| m.modified().ok().map(|time| (m.len(), time)))
+            {
+                let mut cache = self.summary_cache.lock().unwrap();
+                if cache.len() < 16384 || cache.contains_key(id) {
+                    cache.insert(
+                        id.into(),
+                        CachedSummary {
+                            len,
+                            modified,
+                            checked: Instant::now(),
+                            value: value.clone(),
+                        },
+                    );
+                }
+            }
+            return Some(value);
         }
+        self.summary_cache.lock().unwrap().remove(id);
         if !nctool_runtime::valid_id(id) {
             return None;
         }
@@ -423,7 +512,7 @@ impl Workbench {
     }
     fn environment(&self) -> ExecutionEnvironment {
         ExecutionEnvironment {
-            format_version: 1,
+            format_version: 2,
             host_version: env!("CARGO_PKG_VERSION").into(),
             plugins: self
                 .runtime
@@ -440,6 +529,7 @@ impl Workbench {
                 })
                 .collect(),
             services: self.runtime.bindings(),
+            provenance: self.provenance.clone(),
         }
     }
     pub fn replay_check(&self, id: &str) -> PluginResult<ReplayCheck> {
@@ -614,6 +704,7 @@ impl Workbench {
         }
     }
     pub fn remove(&self, id: &str) -> PluginResult<()> {
+        self.summary_cache.lock().unwrap().remove(id);
         if self.controls.lock().unwrap().contains_key(id) {
             return Err(PluginError::new("conflict", "运行中的任务不能删除"));
         }

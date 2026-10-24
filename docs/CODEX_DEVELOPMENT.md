@@ -31,7 +31,7 @@ cargo build -p nctool-cli --features math --locked --target-dir target/codex-mat
 target/codex-math/debug/nctool --home <临时home> --workspace <临时workspace> ui --port 0
 ```
 
-打开启动日志的实际 loopback 地址。`--profile` 仅支持 `template`，旧 `nc` profile 以 `invalid_profile` 拒绝；数学扩展需以 `--features math` 构建（完整二进制已包含），在配置 `enabled` 中启用，并在请求 `extensions` 中显式选择。产品默认端口仍是 8788。不要改用用户工作台测试。批量回归运行 `scripts/browser_v2.cjs`、`scripts/browser_review_fixes.cjs` 与 `scripts/browser_generic_parameters.cjs`（后者独立覆盖通用共享参数链与可选 `math` 扩展），`NCTOOL_BINARY` 指向固定程序；Playwright/Chromium 方法见[贡献指南](CONTRIBUTING.md)。工具无法连接时记录限制，继续隔离自动回归；脚本通过不代表手工或全部平台验收通过。
+打开启动日志的实际 loopback 地址。`--profile` 仅支持 `template`，旧 `nc` profile 以 `invalid_profile` 拒绝；数学扩展需以 `--features math` 构建（完整二进制已包含），在配置 `enabled` 中启用，并在请求 `extensions` 中显式选择。产品默认端口仍是 8788。不要改用用户工作台测试。批量回归运行 `node scripts/browser_acceptance.cjs`，统一执行当前主流程、共享参数/math、插件三组验收，`NCTOOL_BINARY` 指向固定程序；Playwright/Chromium 方法见[贡献指南](CONTRIBUTING.md)。工具无法连接时记录限制，继续隔离自动回归；脚本通过不代表手工或全部平台验收通过。
 
 ## Context7
 

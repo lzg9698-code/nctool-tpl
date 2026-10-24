@@ -117,12 +117,17 @@ class ArchitectureTest(unittest.TestCase):
 
     def test_shared_parameter_module_keeps_generic_helpers_only(self):
         """共享参数模块必须保留通用 helper；NC 专用计算不应再存在。"""
-        module = CHECK.ROOT / "ui/src/lib/managedParameters.ts"
-        self.assertTrue(module.exists(), "共享参数模块缺失，引用方会失效")
-        text = module.read_text(encoding="utf-8")
-        for expected in ["pointerTokens", "pointerValue", "applyOverrides", "managedRequest", "managedFields"]:
-            with self.subTest(exported=expected):
-                self.assertIn(f"export function {expected}", text)
+        modules = {
+            "json.ts": ["getAt", "overrideAt", "merge", "pointer"],
+            "execution.ts": ["resolveRequest", "inputFor"],
+        }
+        for name, exports in modules.items():
+            module = CHECK.ROOT / "ui/src/lib" / name
+            self.assertTrue(module.exists(), f"通用参数模块缺失：{name}")
+            text = module.read_text(encoding="utf-8")
+            for expected in exports:
+                with self.subTest(module=name, exported=expected):
+                    self.assertIn(f"export function {expected}", text)
 
     def test_retired_nc_sources_must_not_come_back(self):
         for name in CHECK.RETIRED_SOURCES:

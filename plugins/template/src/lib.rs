@@ -394,7 +394,7 @@ impl Plugin for TemplatePlugin {
             for name in self.templates.list().map_err(asset_error)? {
                 match self.templates.read(&name) {
                     Ok((asset,fingerprint))=>items.push(json!({"id":name,"title":asset["metadata"]["title"].as_str().unwrap_or(&name),"description":asset["metadata"]["description"].as_str().unwrap_or(""),"tags":asset.get("tags").cloned().unwrap_or_else(||json!([])),"fingerprint":fingerprint})),
-                    Err(error)=>diagnostics.push(Diagnostic{level:"error".into(),code:"invalid_asset".into(),message:error.to_string(),path:Some(name)})
+                    Err(error)=>diagnostics.push(Diagnostic{level:"error".into(),code:"invalid_asset".into(),message:error.to_string(),path:Some(name),template:None,line:None,column:None})
                 }
             }
             let mut result = ActionResult::data(json!({"items":items}));

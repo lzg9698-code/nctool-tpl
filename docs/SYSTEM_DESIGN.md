@@ -1,6 +1,6 @@
 # 系统设计与配置
 
-当前 2.2 CLI/WebUI 与 2.0 插件的实现规范。历史 1.x 的配置、模型和路由不再作为当前契约。组件边界见[架构](ARCHITECTURE.md)，外部服务与 SDK 见[插件协议](PLUGIN_PROTOCOL.md)。
+当前 2.3.0 CLI/WebUI（未发布）与 2.0.0 插件的实现规范，外部协议 2。历史 1.x 的配置、模型和路由不再作为当前契约。组件边界见[架构](ARCHITECTURE.md)，外部服务与 SDK 见[插件协议](PLUGIN_PROTOCOL.md)。
 
 ## 目录与启动
 
@@ -62,7 +62,7 @@ JSON 输入经过数值下溢扫描与实际解析器确认：非零十进制值
 
 动作实例与 JSON Schema 以 `nctool actions` / `/api/v2/capabilities` 为运行时真值。
 
-CLI `actions` 返回动作数组，每项含 plugin 及展开的动作描述；`run` 成功时直接输出 ActionResult，包含 data/artifacts/diagnostics，生成正文在 `data.text`。HTTP 则使用下述 ok/data 外层包装，两者不能混用响应解析方式。
+CLI `actions` 返回动作数组，每项含 plugin 及展开的动作描述；`history backup/restore/prune` 用于独立于插件启动的历史维护，默认只读预览、确认前备份，见[历史维护](OPERATIONS.md)。`run` 成功时直接输出 ActionResult，包含 data/artifacts/diagnostics，生成正文在 `data.text`。HTTP 则使用下述 ok/data 外层包装，两者不能混用响应解析方式。
 
 ## HTTP 与运行约束
 
@@ -97,7 +97,7 @@ HTTP 使用 Axum/Tokio，仅回环地址；普通请求体上限 1 MiB，资产�
 
 WebUI 使用模式只显示参数表单与结果，编辑模式显示源码和参数定义。JSON 属于高级入口，无效 JSON 会保留并阻止执行，不能回退到旧的有效输入。生成结果带有输入关联，修改输入后旧结果的导出会禁用。
 
-## 2.2 插件管理与工作区迁移
+## 插件管理与工作区迁移
 
 - `POST /api/v2/config/validate {config}`：仅校验描述、配置、服务提供方与依赖，返回启动顺序。保存和启停接口也执行同一预检查，错误不会保存。
 - `POST /api/v2/plugins/inspect {source}`：检查本地插件目录，返回声明，不启动入口。
@@ -123,3 +123,9 @@ WebUI 使用模式只显示参数表单与结果，编辑模式显示源码和�
 replay-check 的 status 为 `matching`（已记录版本与绑定一致）、`changed`（宿主/插件/服务差异）或 `unknown`（缺少信息或格式不可比较），differences 为说明字符串数组。matching 不保证产物相同。
 
 rerun 无需请求体字段，响应 data 为 `{id}`；创建任务时后端重新比较环境，在新记录写入 `replay:{source_run_id,check}`，不改写原记录与产物。旧记录仍可读取和重执行，继续执行当前 Schema、能力与领域校验。完整记录契约见[插件协议](PLUGIN_PROTOCOL.md#历史重执行环境宿主-api-扩展)。
+
+## 调用元数据与静态资源
+
+`GET /api/v2/diagnostics` 返回当前宿主最近 256 次调用的关联标识、动作、层级、耗时和错误码，不含输入/输出/配置或错误正文。详情见[调用诊断](OPERATIONS.md#调用诊断)。
+
+HTML 和 API 保持 no-store；Vite 生成的哈希 JS/CSS 使用 private、长期 immutable 缓存，更新通过新资源名生效。没有引入运行时压缩或解压依赖。

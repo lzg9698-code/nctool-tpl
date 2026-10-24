@@ -4,9 +4,9 @@
 
 ## 版本与发行内容
 
-CLI/WebUI 当前版本为 2.2.1，其他 workspace 组件当前为 2.0.0；插件的声明版本、协议版本和服务版本分别维护。变更记录放在根 CHANGELOG 的未发布节，正式发布日期只在实际发布后登记。
+CLI/WebUI 当前清单版本为 2.3.0（未发布），其他 workspace 组件当前为 2.0.0；插件的声明版本、协议版本和服务版本分别维护。变更记录放在根 CHANGELOG 的未发布节，正式发布日期只在实际发布后登记。
 
-当前发布工作流由 `v2.*` 标签推送触发，构建带 `math` feature 的 CLI；默认配置只启用 `template`，参数定义与默认值保存在模板内，数学扩展需在配置 `enabled` 中启用并在请求 `extensions` 中显式选择。二进制包含 WebUI，运行不需要 Node.js；旧 GUI、旧业务模板及内置机床方案不在发行范围。
+当前发布工作流由 `v2.*` 标签推送触发，构建带 `math` feature 的 CLI；默认配置启用 `template` + `parameters`，数学扩展需在配置 `enabled` 中启用并在请求 `extensions` 中显式选择。二进制包含 WebUI，运行不需要 Node.js；旧 GUI、旧业务模板及内置机床方案不在发行范围。
 
 **现有工作流没有 crates.io 上传步骤。** 不沿用旧版三个 crate 的顺序上传或旧候选标签流程；crate 发布需要另行明确范围和流程。
 
@@ -42,7 +42,7 @@ CLI/WebUI 当前版本为 2.2.1，其他 workspace 组件当前为 2.0.0；插�
 
 - [ ] 记录标签、提交、Actions 运行链接、各平台结论与 Release 链接，确认全部预期资产存在。
 - [ ] 下载相应平台资产，核对 SHA-256，再执行 `nctool --version`、`actions` 与代表性渲染。
-- [ ] 检查默认 `template` 组合与完整二进制的 `math` 扩展，WebUI 可启动、输出可实际下载。
+- [ ] 检查默认 `template` + `parameters` 组合与完整二进制的 `math` 扩展，WebUI 可启动、输出可实际下载。
 - [ ] 在项目状态与 CHANGELOG 登记实际结果和日期，未执行的平台/设备保留待验状态。
 
 PowerShell 校验命令为 `Get-FileHash -Algorithm SHA256 <二进制路径>`；Linux 可使用 `sha256sum -c <校验文件>`，macOS 可使用 `shasum -a 256 -c <校验文件>`。在二进制与校验文件所在目录执行并核对文件名。

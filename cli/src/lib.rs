@@ -2,6 +2,7 @@
 pub mod composition;
 pub mod server;
 
+pub mod history;
 pub mod workbench;
 
 pub(crate) fn asset_error(error: nctool_assets::WriteError) -> nctool_plugin_sdk::PluginError {

@@ -26,7 +26,7 @@ description: 为 NCtool 改动选择并执行验证，运行隔离 CLI/WebUI 验
 - 使用独立 target（例如 `target/codex-math`）构建 `nctool-cli --features math --locked`；默认组合另建独立目录。固定 `NCTOOL_BINARY`，不覆盖运行中的二进制。
 - CLI 示例引用 `examples/v2`，显式指定临时 `--home`/`--workspace`。不得使用用户运行资产。
 - 浏览器工具先读取工具文档，在本轮启动的 `ui --port 0` 地址检查控件。`--profile` 仅支持 `template`；数学扩展需以 `--features math` 构建并在配置 `enabled` 与请求 `extensions` 中显式启用/选择。按改动选择草稿、冲突、失败、取消、导出、历史预检查及迁移场景。
-- 自动回归使用现有 `scripts/browser_v2.cjs`、`scripts/browser_review_fixes.cjs` 与 `scripts/browser_generic_parameters.cjs`（后者覆盖模板内参数链与可选 `math` 扩展）；Playwright/Chromium 放在独立依赖目录，以 `NCTOOL_PLAYWRIGHT`/`NCTOOL_CHROMIUM` 配置，不添加到产品依赖。
+- 自动回归使用现有 `scripts/browser_v2.cjs`、`scripts/browser_review_fixes.cjs` 与 `scripts/browser_generic_parameters.cjs`（后者覆盖通用共享参数链与可选 `math` 扩展）；Playwright/Chromium 放在独立依赖目录，以 `NCTOOL_PLAYWRIGHT`/`NCTOOL_CHROMIUM` 配置，不添加到产品依赖。
 - 只停止本轮进程/关闭本轮标签页；浏览器受限时记录原因，继续可用的隔离验证，不借用现有用户工作台。
 
 ## CI 与审计证据

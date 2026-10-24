@@ -1,12 +1,14 @@
 //! Dependency-driven plugin composition and domain-neutral action dispatch.
 pub mod config;
+pub mod diagnostics;
 pub mod external;
+pub mod provenance;
 use nctool_plugin_sdk::*;
 use serde::Serialize;
 use std::{
     collections::{BTreeMap, BTreeSet},
     sync::{
-        atomic::{AtomicBool, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
         Arc, Mutex, Weak,
     },
 };
@@ -38,6 +40,8 @@ pub struct Runtime {
     configs: BTreeMap<String, Value>,
     requests: Mutex<BTreeMap<String, Cancellation>>,
     closing: AtomicBool,
+    diagnostics: diagnostics::Diagnostics,
+    call_sequence: AtomicU64,
 }
 struct Bridge(Weak<Runtime>);
 impl Host for Bridge {
@@ -119,6 +123,8 @@ impl Runtime {
             configs,
             requests: Mutex::new(BTreeMap::new()),
             closing: AtomicBool::new(false),
+            diagnostics: diagnostics::Diagnostics::default(),
+            call_sequence: AtomicU64::new(1),
         });
         let mut available = BTreeMap::new();
         for plugin in plugins {
@@ -235,6 +241,48 @@ impl Runtime {
         cancellation: Cancellation,
         stack: &[String],
     ) -> PluginResult<ActionResult> {
+        let sequence = self.call_sequence.fetch_add(1, Ordering::Relaxed);
+        let trace_id = self
+            .requests
+            .lock()
+            .unwrap()
+            .iter()
+            .find(|(_, token)| token.same_request(&cancellation))
+            .map(|(id, _)| id.clone())
+            .unwrap_or_else(|| format!("call-{}-{sequence}", std::process::id()));
+        let owner = self
+            .state
+            .lock()
+            .unwrap()
+            .actions
+            .get(action)
+            .map(|a| a.owner.clone())
+            .unwrap_or_default();
+        let mut observation = self.diagnostics.observe(diagnostics::CallRecord {
+            trace_id,
+            call_id: sequence,
+            action: action.into(),
+            owner,
+            parent_action: stack.last().cloned(),
+            depth: stack.len(),
+            started_at: 0,
+            elapsed_us: 0,
+            error_code: None,
+        });
+        let result = self.invoke_core(action, input, cancellation, stack);
+        observation.finish(result.as_ref().err().map(|e| e.code.as_str()));
+        result
+    }
+    pub fn diagnostics(&self) -> Vec<diagnostics::CallRecord> {
+        self.diagnostics.records()
+    }
+    fn invoke_core(
+        self: &Arc<Self>,
+        action: &str,
+        input: Value,
+        cancellation: Cancellation,
+        stack: &[String],
+    ) -> PluginResult<ActionResult> {
         cancellation.check()?;
         if stack.len() >= 32 || stack.iter().any(|a| a == action) {
             return Err(PluginError::new("call_cycle", action));
@@ -298,7 +346,12 @@ impl Runtime {
         if self.closing.load(Ordering::SeqCst) {
             return Err(PluginError::new("closed", "runtime closed"));
         }
-        self.invoke_inner(action, input, Cancellation::default(), &[])
+        let id = format!(
+            "call-{}-{}",
+            std::process::id(),
+            self.call_sequence.fetch_add(1, Ordering::Relaxed)
+        );
+        self.invoke_request(&id, action, input)
     }
     pub fn invoke_request(
         self: &Arc<Self>,

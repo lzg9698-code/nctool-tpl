@@ -19,6 +19,7 @@ Usage:
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import platform
@@ -139,6 +140,8 @@ def measure(label: str, sizes: list[int], iterations: int, profile: str) -> dict
         "iterations": iterations,
         "sizes": sizes,
         "git_revision": git_revision(),
+        "source_sha256": {name: hashlib.sha256((REPO_ROOT / name).read_bytes()).hexdigest()
+                          for name in ("cli/src/workbench.rs", "runtime/src/lib.rs", "sdk/src/lib.rs", "Cargo.lock")},
         "rust": rust_version(),
         "platform": platform.platform(),
         "python": platform.python_version(),

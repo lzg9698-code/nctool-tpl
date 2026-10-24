@@ -5,6 +5,18 @@ import sys
 import threading
 
 
+PROTOCOL_VERSION = 2
+
+
+class PluginError(RuntimeError):
+    """Structured host/plugin error; forwarding preserves diagnostic locations."""
+    def __init__(self, detail):
+        super().__init__(detail["message"])
+        self.detail = detail
+        self.code = detail["code"]
+        self.diagnostics = detail.get("diagnostics", [])
+
+
 class PluginServer:
     def __init__(self, manifest, invoke):
         sys.stdin.reconfigure(encoding="utf-8")
@@ -45,10 +57,10 @@ class PluginServer:
         try:
             if method == "initialize":
                 params = message["params"]
-                if params["protocol_version"] != 1:
+                if params["protocol_version"] != PROTOCOL_VERSION:
                     raise ValueError("unsupported protocol version")
                 self.config = params.get("config", {})
-                result = {"plugin_id": self.manifest["descriptor"]["id"], "protocol_version": 1}
+                result = {"plugin_id": self.manifest["descriptor"]["id"], "protocol_version": PROTOCOL_VERSION}
             elif method == "describe":
                 result = {"descriptor": self.manifest["descriptor"], "actions": self.manifest["actions"]}
             elif method == "invoke":
@@ -60,7 +72,8 @@ class PluginServer:
         except Exception as error:
             self.send({"jsonrpc": "2.0", "id": request_id,
                        "error": {"code": -32000, "message": str(error),
-                                 "data": {"code": "plugin_error", "message": str(error), "diagnostics": []}}})
+                                 "data": error.detail if isinstance(error, PluginError) else
+                                 {"code": "plugin_error", "message": str(error), "diagnostics": []}}})
 
     def run(self):
         try:
@@ -78,7 +91,10 @@ class PluginServer:
                         future = self.pending.get(message.get("id"))
                     if future is not None and not future.done():
                         if "error" in message:
-                            future.set_exception(RuntimeError(message["error"]["message"]))
+                            detail = message["error"].get("data")
+                            if not isinstance(detail, dict) or not all(isinstance(detail.get(key), str) for key in ("code", "message")):
+                                detail = {"code": "host_error", "message": message["error"]["message"], "diagnostics": []}
+                            future.set_exception(PluginError(detail))
                         else:
                             future.set_result(message["result"])
         finally:

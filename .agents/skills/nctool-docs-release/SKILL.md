@@ -11,7 +11,7 @@ description: 整理 NCtool 中文文档、核对接口与示例、归档历史�
 
 - CLI/WebUI 2.2、核心 2.0 分别描述；旧 Tauri 桌面 GUI 源码已移除，仅保留历史资料。当前指南不沿用旧 CLI、GUI、`nctool.toml` 或内置业务机床/模板承诺。
 - 先核对实际参数、动作字段、HTTP 路由、配置路径、保存冲突和历史预检查，再写说明。保持软件验证与任何生产/工艺验收分离。
-- 示例优先用 `examples/v2`；在临时 home/workspace 验证采用的命令。默认组合为 `template`，参数随每个模板保存，`math` 为唯一可选 feature，需显式编译、启用并在请求 `extensions` 选择。
+- 示例优先用 `examples/v2`；在临时 home/workspace 验证采用的命令。默认组合为 `template` + `parameters`，`math` 为唯一可选 feature，需显式编译、启用并在请求 `extensions` 选择。
 - 根 README 保留快速开始，详细操作链接到 `docs/`；新增、移动或归档同步导航、Markdown/HTML 及 Issue/PR 模板引用。
 - 旧方案放 `docs/archive/legacy/`，阶段审查/验收放 `docs/archive/records/`。原文保留版本、日期、原路径与替代入口；JSON/补丁不重格式化。引用已消失文件时写“历史文件，当前仓库未保留”，不补造链接或证据。
 - 状态列当前能力、限制、待验证和证据。路线图仅保留待办，不新增日期承诺；CHANGELOG 以未发布节记录有依据的变化，不推断正式发布日期。
