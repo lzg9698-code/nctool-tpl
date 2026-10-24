@@ -58,6 +58,15 @@ jobs:
       - run: cargo test --workspace --all-targets --locked
       - run: cargo test --workspace --all-targets --all-features --locked
       - run: cargo test --workspace --all-features --doc --locked
+      - run: cargo fmt --manifest-path external/ftu/Cargo.toml -- --check
+      - run: cargo clippy --manifest-path external/ftu/Cargo.toml --all-targets --locked -- -D warnings
+      - run: cargo test --manifest-path external/ftu/Cargo.toml --locked
+      - run: python scripts/build_ftu.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: ftu-${{ matrix.os }}
+          path: target/ftu-package/
+          if-no-files-found: error
       - run: python scripts/check_v2.py
       - run: python -m unittest discover -s scripts/tests -p 'test_*.py'
       - run: cargo build -p nctool-cli --no-default-features --locked
@@ -69,6 +78,7 @@ jobs:
           npm install --prefix "$RUNNER_TEMP/nctool-browser" --no-save playwright@1.62.1
           "$RUNNER_TEMP/nctool-browser/node_modules/.bin/playwright" install --with-deps chromium
           NCTOOL_PLAYWRIGHT="$RUNNER_TEMP/nctool-browser/node_modules/playwright" node scripts/browser_acceptance.cjs
+          NCTOOL_PLAYWRIGHT="$RUNNER_TEMP/nctool-browser/node_modules/playwright" NCTOOL_PYTHON="$(command -v python)" node scripts/browser_engineering.cjs
           python scripts/check_plugin.py --binary target/debug/nctool --source examples/plugins/protocol-probe --plan examples/plugins/protocol-probe/acceptance.json --python "$(command -v python)" --output target/plugin-acceptance.json
       - name: Upload browser acceptance evidence
         if: always() && runner.os == 'Linux'
@@ -87,3 +97,4 @@ jobs:
         with:
           toolchain: '1.89.0'
       - run: cargo check --workspace --all-features --locked
+      - run: cargo check --manifest-path external/ftu/Cargo.toml --locked

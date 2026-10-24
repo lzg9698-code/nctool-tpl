@@ -26,6 +26,10 @@
 | [宿主与插件契约](CONTRACTS.md) | 跨语言类型、结构化诊断、协议版本与共享验收样例 |
 | [历史、追溯与调用诊断](OPERATIONS.md) | 历史保留、备份恢复、环境指纹和调用元数据 |
 | [插件作者验收](PLUGIN_ACCEPTANCE.md) | 独立开发验收工具、测试计划、故障注入与进程恢复 |
+| [独立项目插件开发规范](PLUGIN_INTEGRATION_SPEC.md) | 独立项目接入边界、最小描述与入口、配置存储、联调和交付验收 |
+| [FTU 初次源码核对](FTU_PLUGIN_MIGRATION.md) | 原项目功能与源码参考，实施方向已由新计划替代 |
+| [通用工程工作台与 FTU 重实现计划](ENGINEERING_WORKBENCH_PLAN.md) | 原生编辑器、二维场景、项目/执行底座和独立业务重实现 |
+| [原生工程工作台与 FTU 使用](ENGINEERING_WORKBENCH.md) | 当前本地实现的清单、项目 API、场景协议、构建安装及验证 |
 | [插件协议](PLUGIN_PROTOCOL.md) | SDK、双向 JSON-RPC、服务、页面和资产集合贡献 |
 | [贡献指南](CONTRIBUTING.md) | 工具链、构建、测试、源码快照与修改边界 |
 | [AI 开发工具与 Skills](CODEX_DEVELOPMENT.md) | Codex/Claude Code 环境、专用技能、环境自检、构建目录、GitHub、浏览器、Context7 与依赖审计 |
@@ -36,12 +40,14 @@
 | 文档 | 内容 |
 | --- | --- |
 | [项目状态](PROJECT_STATUS.md) | 当前能力、限制、待验证事项与历史证据入口 |
-| [路线图](ROADMAP.md) | 按 P0–P3 组织的待办与交付门槛，无交付日期承诺 |
+| [路线图](ROADMAP.md) | 后续待办、待讨论提案与交付边界，无交付日期承诺 |
+| [工艺与数控编程插件提案](MACHINING_PLUGINS_PLAN_2026-10-24.md) | 六类独立外部插件候选；首批建议与范围均待确认，尚未实施 |
+| [2026-10-24 文档与记忆对齐](DOC_MEMORY_ALIGNMENT_2026-10-24.md) | 当前事实基线、远端复核、历史纠偏及记忆维护边界 |
 | [2026-10-17 开发边界快照（历史参考）](DEVELOPMENT_BOUNDARY_2026-10-17.md) | 历史源码契约快照；当前实现以架构、宿主契约和源码为准 |
 | [发布说明](RELEASE.md) | `v2.*` 标签、CI 前置验证、二进制与校验文件 |
 | [变更记录](../CHANGELOG.md) | 未发布改动及原有版本历史 |
 
-阶段记录（发行候选、NC 移除实施、优化日志、开发方案、审查与修复记录）已移入[历史归档](archive/README.md)的 `records/`，仍可回溯，但不再作为当前操作说明。
+已归档的阶段记录（发行候选、NC 移除实施、优化日志、开发方案、审查与修复记录）见[历史归档](archive/README.md)的 `records/`。仍保留原路径的[旧预览说明](PREVIEW_2026-10-20.md)、[工程审计](ENGINEERING_AUDIT_2026-10-18.md)、[会话收尾](SESSION_CLOSEOUT_2026-10-19.md)、[旧 UI 选型](UI_REFACTOR_RESOURCES.md)和开发边界快照已明确历史范围，不作为当前操作说明。
 
 ## 历史资料
 

@@ -80,13 +80,19 @@ def main(argv=None):
     if output == ROOT or output == ROOT / "ui":
         parser.error("choose a dedicated report directory, for example target/dependency-audit")
     output.mkdir(parents=True, exist_ok=True)
-    paths = [ROOT / "Cargo.lock", ROOT / "ui/package-lock.json"]
+    external_locks = sorted((ROOT / "external").glob("*/Cargo.lock"))
+    paths = [ROOT / "Cargo.lock", ROOT / "ui/package-lock.json", *external_locks]
+    if any(output == path.parent for path in paths):
+        parser.error("audit reports must not use a package root as output")
     npm_scopes = [("ui", ROOT / "ui")]
     before = fingerprints(paths)
     cargo = shutil.which("cargo") or "cargo"
     npm = shutil.which("npm.cmd") or shutil.which("npm") or "npm"
     results = [run_audit("cargo", "cargo", [cargo, "audit", "--file", str(ROOT / "Cargo.lock"),
                "--db", str(output / "advisory-db"), "--json"], output)]
+    for lock in external_locks:
+        results.append(run_audit("cargo-" + lock.parent.name, "cargo", [cargo, "audit", "--file", str(lock),
+                       "--db", str(output / "advisory-db"), "--json"], output))
     for name, directory in npm_scopes:
         results.append(run_audit(name, "npm", [npm, "audit", "--prefix", str(directory),
                        "--audit-level=high", "--json", "--cache", str(output / "npm-cache")], output))

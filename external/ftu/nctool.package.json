@@ -1,0 +1,489 @@
+{
+  "format_version": 1,
+  "id": "ftu",
+  "workbenches": [
+    {
+      "id": "finishing",
+      "title": "精车轨迹",
+      "kind": "project",
+      "analyze_action": "ftu.analyze",
+      "generate_action": "ftu.generate",
+      "schema": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "version",
+          "mode",
+          "startZ",
+          "startDiameter",
+          "direction",
+          "reverse",
+          "cutting",
+          "features",
+          "entry",
+          "exit",
+          "stock",
+          "forbidden"
+        ],
+        "properties": {
+          "version": {
+            "type": "integer",
+            "title": "项目版本",
+            "enum": [
+              1
+            ]
+          },
+          "mode": {
+            "type": "string",
+            "title": "加工侧",
+            "enum": [
+              "outside",
+              "inside"
+            ]
+          },
+          "startZ": {
+            "type": "number",
+            "title": "起始 Z / mm",
+            "minimum": -1000000000,
+            "maximum": 1000000000
+          },
+          "startDiameter": {
+            "type": "number",
+            "title": "起始直径 / mm",
+            "exclusiveMinimum": 0,
+            "maximum": 1000000000
+          },
+          "direction": {
+            "type": "integer",
+            "title": "定义方向",
+            "enum": [
+              -1,
+              1
+            ]
+          },
+          "reverse": {
+            "type": "boolean",
+            "title": "反向走刀"
+          },
+          "cutting": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "mode",
+              "surfaceSpeedMPerMin",
+              "maxSpindleRpm"
+            ],
+            "properties": {
+              "mode": {
+                "type": "string",
+                "enum": [
+                  "constant-surface-speed"
+                ],
+                "title": "切削模式"
+              },
+              "surfaceSpeedMPerMin": {
+                "type": "number",
+                "title": "线速度 / m/min",
+                "exclusiveMinimum": 0,
+                "maximum": 1000000000
+              },
+              "maxSpindleRpm": {
+                "type": "number",
+                "title": "最高转速 / rpm",
+                "exclusiveMinimum": 0,
+                "maximum": 1000000000
+              }
+            }
+          },
+          "features": {
+            "type": "array",
+            "title": "轮廓特征",
+            "minItems": 1,
+            "maxItems": 500,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "id",
+                "type",
+                "feedPerRev",
+                "corner"
+              ],
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "title": "标识",
+                  "minLength": 1,
+                  "maxLength": 64
+                },
+                "type": {
+                  "type": "string",
+                  "title": "特征",
+                  "enum": [
+                    "cylinder",
+                    "cone",
+                    "face"
+                  ]
+                },
+                "length": {
+                  "type": "number",
+                  "title": "轴向长度 / mm",
+                  "exclusiveMinimum": 0,
+                  "maximum": 1000000000
+                },
+                "diameter": {
+                  "type": "number",
+                  "title": "终点直径 / mm",
+                  "exclusiveMinimum": 0,
+                  "maximum": 1000000000
+                },
+                "feedPerRev": {
+                  "type": "number",
+                  "title": "本段 F / mm/rev",
+                  "exclusiveMinimum": 0,
+                  "maximum": 1000000000
+                },
+                "corner": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "type",
+                    "value",
+                    "feedPerRev"
+                  ],
+                  "properties": {
+                    "type": {
+                      "type": "string",
+                      "title": "连接",
+                      "enum": [
+                        "none",
+                        "chamfer",
+                        "fillet"
+                      ]
+                    },
+                    "value": {
+                      "type": "number",
+                      "title": "修饰 C/R / mm",
+                      "minimum": -1000000000,
+                      "maximum": 1000000000
+                    },
+                    "feedPerRev": {
+                      "type": "number",
+                      "title": "连接 F / mm/rev",
+                      "exclusiveMinimum": 0,
+                      "maximum": 1000000000
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "entry": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "length",
+              "radius",
+              "angle",
+              "clearance",
+              "feedPerRev",
+              "clearanceFeedPerRev"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "title": "过渡",
+                "enum": [
+                  "line",
+                  "arc"
+                ]
+              },
+              "length": {
+                "type": "number",
+                "title": "切线长度 / mm",
+                "exclusiveMinimum": 0,
+                "maximum": 1000000000
+              },
+              "radius": {
+                "type": "number",
+                "title": "圆弧半径 / mm",
+                "exclusiveMinimum": 0,
+                "maximum": 1000000000
+              },
+              "angle": {
+                "type": "number",
+                "title": "扫角 / 度",
+                "exclusiveMinimum": 0,
+                "maximum": 180
+              },
+              "clearance": {
+                "type": "number",
+                "title": "径向间隙 / mm",
+                "exclusiveMinimum": 0,
+                "maximum": 1000000000
+              },
+              "feedPerRev": {
+                "type": "number",
+                "title": "过渡 F / mm/rev",
+                "exclusiveMinimum": 0,
+                "maximum": 1000000000
+              },
+              "clearanceFeedPerRev": {
+                "type": "number",
+                "title": "间隙 F / mm/rev",
+                "exclusiveMinimum": 0,
+                "maximum": 1000000000
+              }
+            },
+            "title": "入刀"
+          },
+          "exit": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "type",
+              "length",
+              "radius",
+              "angle",
+              "clearance",
+              "feedPerRev",
+              "clearanceFeedPerRev"
+            ],
+            "properties": {
+              "type": {
+                "type": "string",
+                "title": "过渡",
+                "enum": [
+                  "line",
+                  "arc"
+                ]
+              },
+              "length": {
+                "type": "number",
+                "title": "切线长度 / mm",
+                "exclusiveMinimum": 0,
+                "maximum": 1000000000
+              },
+              "radius": {
+                "type": "number",
+                "title": "圆弧半径 / mm",
+                "exclusiveMinimum": 0,
+                "maximum": 1000000000
+              },
+              "angle": {
+                "type": "number",
+                "title": "扫角 / 度",
+                "exclusiveMinimum": 0,
+                "maximum": 180
+              },
+              "clearance": {
+                "type": "number",
+                "title": "径向间隙 / mm",
+                "exclusiveMinimum": 0,
+                "maximum": 1000000000
+              },
+              "feedPerRev": {
+                "type": "number",
+                "title": "过渡 F / mm/rev",
+                "exclusiveMinimum": 0,
+                "maximum": 1000000000
+              },
+              "clearanceFeedPerRev": {
+                "type": "number",
+                "title": "间隙 F / mm/rev",
+                "exclusiveMinimum": 0,
+                "maximum": 1000000000
+              }
+            },
+            "title": "出刀"
+          },
+          "stock": {
+            "type": [
+              "object",
+              "null"
+            ],
+            "title": "简化毛坯",
+            "additionalProperties": false,
+            "required": [
+              "zMin",
+              "zMax",
+              "outerDiameter",
+              "innerDiameter"
+            ],
+            "properties": {
+              "zMin": {
+                "type": "number",
+                "title": "Z 最小 / mm",
+                "minimum": -1000000000,
+                "maximum": 1000000000
+              },
+              "zMax": {
+                "type": "number",
+                "title": "Z 最大 / mm",
+                "minimum": -1000000000,
+                "maximum": 1000000000
+              },
+              "outerDiameter": {
+                "type": "number",
+                "title": "毛坯外径 / mm",
+                "exclusiveMinimum": 0,
+                "maximum": 1000000000
+              },
+              "innerDiameter": {
+                "type": "number",
+                "title": "毛坯内径 / mm",
+                "minimum": 0,
+                "maximum": 1000000000
+              }
+            }
+          },
+          "forbidden": {
+            "type": "array",
+            "title": "轴向禁入区",
+            "maxItems": 100,
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "zMin",
+                "zMax"
+              ],
+              "properties": {
+                "zMin": {
+                  "type": "number",
+                  "title": "Z 最小 / mm",
+                  "minimum": -1000000000,
+                  "maximum": 1000000000
+                },
+                "zMax": {
+                  "type": "number",
+                  "title": "Z 最大 / mm",
+                  "minimum": -1000000000,
+                  "maximum": 1000000000
+                }
+              }
+            }
+          }
+        }
+      },
+      "example": {
+        "version": 1,
+        "mode": "outside",
+        "startZ": 0,
+        "startDiameter": 30,
+        "direction": -1,
+        "reverse": false,
+        "cutting": {
+          "mode": "constant-surface-speed",
+          "surfaceSpeedMPerMin": 120,
+          "maxSpindleRpm": 2500
+        },
+        "features": [
+          {
+            "id": "f1",
+            "type": "cylinder",
+            "length": 18,
+            "diameter": 30,
+            "feedPerRev": 0.1,
+            "corner": {
+              "type": "fillet",
+              "value": 2,
+              "feedPerRev": 0.08
+            }
+          },
+          {
+            "id": "f2",
+            "type": "face",
+            "length": 10,
+            "diameter": 40,
+            "feedPerRev": 0.1,
+            "corner": {
+              "type": "chamfer",
+              "value": 1,
+              "feedPerRev": 0.08
+            }
+          },
+          {
+            "id": "f3",
+            "type": "cylinder",
+            "length": 20,
+            "diameter": 40,
+            "feedPerRev": 0.1,
+            "corner": {
+              "type": "none",
+              "value": 1,
+              "feedPerRev": 0.1
+            }
+          },
+          {
+            "id": "f4",
+            "type": "cone",
+            "length": 12,
+            "diameter": 46,
+            "feedPerRev": 0.1,
+            "corner": {
+              "type": "none",
+              "value": 1,
+              "feedPerRev": 0.1
+            }
+          }
+        ],
+        "entry": {
+          "type": "arc",
+          "length": 2,
+          "radius": 2,
+          "angle": 90,
+          "clearance": 2,
+          "feedPerRev": 0.1,
+          "clearanceFeedPerRev": 0.1
+        },
+        "exit": {
+          "type": "arc",
+          "length": 2,
+          "radius": 2,
+          "angle": 90,
+          "clearance": 2,
+          "feedPerRev": 0.1,
+          "clearanceFeedPerRev": 0.1
+        },
+        "stock": null,
+        "forbidden": []
+      },
+      "tables": [
+        {
+          "field": "features",
+          "title": "轮廓特征",
+          "row": {
+            "id": "f",
+            "type": "cylinder",
+            "length": 10,
+            "diameter": 30,
+            "feedPerRev": 0.1,
+            "corner": {
+              "type": "none",
+              "value": 1,
+              "feedPerRev": 0.1
+            }
+          }
+        },
+        {
+          "field": "forbidden",
+          "title": "禁入区",
+          "row": {
+            "zMin": -100,
+            "zMax": -90
+          }
+        }
+      ],
+      "formats": [
+        "json",
+        "csv",
+        "svg",
+        "spf"
+      ],
+      "prepare_action": "ftu.prepare",
+      "template_action": "ftu.template"
+    }
+  ]
+}

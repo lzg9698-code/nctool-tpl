@@ -434,3 +434,61 @@ pre {
     width: 100%;
   }
 }
+/* Declarative engineering workbenches share the host layout and controls. */
+.engineering-page {
+  display: grid;
+  gap: 16px;
+  padding: 20px;
+  min-width: 0;
+}
+.engineering-grid {
+  display: grid;
+  grid-template-columns: minmax(380px, 1fr) minmax(380px, 1fr);
+  gap: 16px;
+  align-items: start;
+}
+.engineering-grid > *,
+.engineering-grid .ant-card {
+  min-width: 0;
+}
+.engineering-grid > div:not(.ant-card) {
+  display: grid;
+  gap: 16px;
+}
+.engineering-grid .ant-card-body,
+.engineering-grid .ant-tabs-content-holder,
+.engineering-grid .ant-tabs-tabpane {
+  min-width: 0;
+}
+.engineering-grid .schema-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 0 12px;
+}
+.engineering-grid .schema-fields > .ant-form-item:has(.schema-fields) {
+  grid-column: 1 / -1;
+}
+.engineering-grid .ant-table-cell .schema-fields {
+  grid-template-columns: minmax(0, 1fr);
+}
+.engineering-grid .ant-form-item {
+  margin-bottom: 12px;
+}
+.engineering-grid .ant-table-cell .ant-select {
+  width: 100%;
+}
+.engineering-selected > td {
+  background: #fff2e0 !important;
+}
+.engineering-scene {
+  display: grid;
+  gap: 8px;
+}
+@media (max-width: 1100px) {
+  .engineering-grid {
+    grid-template-columns: minmax(0, 1fr);
+  }
+  .engineering-page {
+    padding: 12px;
+  }
+}

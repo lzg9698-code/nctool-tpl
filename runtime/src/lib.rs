@@ -2,6 +2,7 @@
 pub mod config;
 pub mod diagnostics;
 pub mod external;
+pub mod package;
 pub mod provenance;
 use nctool_plugin_sdk::*;
 use serde::Serialize;

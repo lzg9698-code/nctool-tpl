@@ -26,6 +26,7 @@ pub struct App {
     pub profile: String,
     pub boot_config: Config,
     pub workbench: Arc<crate::workbench::Workbench>,
+    pub engineering: crate::engineering::Engineering,
     next_request: AtomicU64,
 }
 impl App {
@@ -105,9 +106,11 @@ impl App {
         let runtime = Runtime::start(plugins, config.plugins.clone(), config.providers.clone())?;
         let workbench =
             crate::workbench::Workbench::with_provenance(runtime.clone(), workspace, provenance)?;
+        let engineering = crate::engineering::Engineering::new(home, workspace, &runtime)?;
         Ok(Arc::new(Self {
             runtime,
             workbench,
+            engineering,
             home: home.into(),
             profile: config.profile.clone(),
             boot_config,
@@ -340,6 +343,13 @@ impl App {
         }
         source.into()
     }
+    fn invoke_collection(&self, action: &str, input: Value) -> PluginResult<ActionResult> {
+        if action.starts_with("$documents/") {
+            self.engineering.collection_call(action, &input)
+        } else {
+            self.runtime.invoke(action, input)
+        }
+    }
     fn export_bundle(&self) -> PluginResult<Value> {
         let mut collections = serde_json::Map::new();
         let mut manifest = vec![];
@@ -359,6 +369,23 @@ impl App {
                 }
                 manifest.push(json!({"collection":collection.id,"provider":descriptor.id,"version":descriptor.version,"fingerprint":fingerprint}));
             }
+        }
+        for collection in self.engineering.collections() {
+            let exported = self
+                .engineering
+                .collection_call(&collection.export_action, &json!({}))?;
+            let fingerprint = nctool_assets::FileFingerprint::of_bytes(
+                &serde_json::to_vec(&exported.data)?,
+                std::time::UNIX_EPOCH,
+            )
+            .as_string();
+            if collections
+                .insert(collection.id.clone(), exported.data)
+                .is_some()
+            {
+                return Err(PluginError::new("duplicate_collection", collection.id));
+            }
+            manifest.push(json!({"collection":collection.id,"provider":"host.documents","version":1,"fingerprint":fingerprint}));
         }
         let bundle = json!({"format":"nctool-workspace","version":1,"collections":collections,"manifest":manifest});
         if serde_json::to_vec(&bundle)?.len() > 64 * 1024 * 1024 {
@@ -396,6 +423,14 @@ impl App {
             }
         }
         let mut reports = vec![];
+        for collection in self.engineering.collections() {
+            if available
+                .insert(collection.id.clone(), collection)
+                .is_some()
+            {
+                return Err(PluginError::new("duplicate_collection", "资产集合声明冲突"));
+            }
+        }
         let mut imports = vec![];
         for (id, data) in records {
             let collection = available.get(id).ok_or_else(|| {
@@ -419,7 +454,7 @@ impl App {
                     format!("资产集合 {id} 与追踪清单不一致"),
                 ));
             }
-            let validated = self.runtime.invoke(
+            let validated = self.invoke_collection(
                 &collection.import_action,
                 json!({"collection":data,"validate_only":true}),
             )?;
@@ -431,7 +466,7 @@ impl App {
         }
         let mut applied: Vec<(String, Value)> = vec![];
         for (collection, data) in imports {
-            match self.runtime.invoke(
+            match self.invoke_collection(
                 &collection.import_action,
                 json!({"collection":data,"validate_only":false}),
             ) {
@@ -441,7 +476,7 @@ impl App {
                 Err(mut error) => {
                     for (action, receipt) in applied.into_iter().rev() {
                         if let Err(rollback) =
-                            self.runtime.invoke(&action, json!({"rollback":receipt}))
+                            self.invoke_collection(&action, json!({"rollback":receipt}))
                         {
                             error.diagnostics.push(Diagnostic {
                                 level: "error".into(),
@@ -485,6 +520,32 @@ impl App {
         )
     }
     pub fn dispatch(&self, method: &str, path: &str, body: Value) -> PluginResult<Value> {
+        if method == "POST" && path.starts_with("/api/v2/engineering/") {
+            let parts: Vec<_> = path["/api/v2/engineering/".len()..].split('/').collect();
+            if let [owner, view, operation] = parts.as_slice() {
+                if !nctool_runtime::valid_id(owner) || !nctool_runtime::valid_id(view) {
+                    return Err(PluginError::new("invalid_input", "工作台标识无效"));
+                }
+                if *operation == "preview" {
+                    let view = self.engineering.view(owner, view)?;
+                    let _slot = self.engineering.preview_slot()?;
+                    let request_id = body["request_id"]
+                        .as_str()
+                        .filter(|id| nctool_runtime::valid_id(id))
+                        .ok_or_else(|| {
+                            PluginError::new("invalid_request_id", "预览需要有效的请求标识")
+                        })?;
+                    return serde_json::to_value(self.runtime.invoke_request(
+                        request_id,
+                        &view.analyze_action,
+                        body["input"].clone(),
+                    )?)
+                    .map_err(Into::into);
+                }
+                return self.engineering.documents(owner, view, operation, &body);
+            }
+            return Err(PluginError::new("not_found", path));
+        }
         match (method, path) {
             ("GET", "/api/v2/workspace") => {
                 Ok(json!({"id":self.workbench.workspace_id,"profile":self.profile}))
@@ -501,7 +562,7 @@ impl App {
                     .ok_or_else(|| PluginError::new("invalid_input", "input required"))?;
                 let id = self.workbench.start(
                     action,
-                    input,
+                    self.engineering.prepare(&self.runtime, action, input)?,
                     body["title"].as_str().unwrap_or(action),
                 )?;
                 Ok(json!({"id":id}))
@@ -557,7 +618,7 @@ impl App {
                     .map(|action| json!(action))
                     .collect();
                 Ok(
-                    json!({"actions":self.runtime.capabilities(),"document_actions":document_actions,"services":self.runtime.bindings(),"panels":self.runtime.descriptors().into_iter().flat_map(|d|d.panels).collect::<Vec<_>>()}),
+                    json!({"actions":self.runtime.capabilities(),"document_actions":document_actions,"services":self.runtime.bindings(),"panels":self.runtime.descriptors().into_iter().flat_map(|d|d.panels).collect::<Vec<_>>(),"workbenches":self.engineering.views}),
                 )
             }
             ("GET", "/api/v2/config") => {

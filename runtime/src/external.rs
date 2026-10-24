@@ -50,6 +50,7 @@ impl ExternalManifest {
         let manifest: Self =
             serde_json::from_value(parse_json(&std::fs::read(root.join("plugin.json"))?)?)?;
         manifest.validate()?;
+        crate::package::Package::read(root, &manifest)?;
         Ok(manifest)
     }
     pub fn validate(&self) -> PluginResult<()> {

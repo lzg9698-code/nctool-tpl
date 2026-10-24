@@ -19,6 +19,9 @@ const ParametersPage = lazy(
 const HistoryPage = lazy(() => import("./features/history/HistoryPage"));
 const PluginsPage = lazy(() => import("./features/plugins/PluginsPage"));
 const ActionPage = lazy(() => import("./features/plugins/ActionPage"));
+const EngineeringPage = lazy(
+  () => import("./features/engineering/EngineeringPage"),
+);
 const HelpPage = lazy(() => import("./features/help/HelpPage"));
 function Workspace() {
   const startup = useQuery({
@@ -73,6 +76,10 @@ function Workspace() {
             <Route path="history/:runId?" element={<HistoryPage />} />
             <Route path="plugins" element={<PluginsPage />} />
             <Route path="actions/:panelId" element={<ActionPage />} />
+            <Route
+              path="engineering/:plugin/:viewId"
+              element={<EngineeringPage />}
+            />
             <Route path="help" element={<HelpPage />} />
             <Route path="*" element={<Navigate to="/workbench" replace />} />
           </Route>

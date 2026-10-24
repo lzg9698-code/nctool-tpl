@@ -9,7 +9,8 @@ import { api, queryClient, running, runQuery } from "../lib/api";
 import { checkResultDependencies } from "../lib/dependencies";
 import { useWorkspace } from "../app/context";
 import { deliveryReason } from "../lib/execution";
-import { encode, errorText, saveFile, type Data } from "../lib/json";
+import { encode, errorText, saveFile, saveBlob, type Data } from "../lib/json";
+import { artifactArchive } from "../lib/artifactArchive";
 import type { Draft } from "../state/session";
 import type { Diagnostic } from "../lib/contracts";
 import { diffLines } from "diff";
@@ -131,6 +132,25 @@ export function ResultPanel({
           </Button>
         )}
       </div>
+      {(details?.result?.artifacts?.length || 0) > 1 && (
+        <Button
+          icon={<DownloadOutlined aria-hidden />}
+          disabled={!!reason}
+          onClick={() => {
+            try {
+              const bytes = artifactArchive(details!.result!.artifacts);
+              saveBlob(
+                "artifacts.zip",
+                new Blob([bytes], { type: "application/zip" }),
+              );
+            } catch (error) {
+              message.error(errorText(error));
+            }
+          }}
+        >
+          导出全部文件
+        </Button>
+      )}
       {details?.error && <Alert type="error" title={details.error.message} />}
       {reason && !running(details?.status) && (
         <Alert type="info" title={reason} />
@@ -207,11 +227,15 @@ export function ResultPanel({
                     key={index}
                     type={entry.level === "error" ? "error" : "warning"}
                     title={entry.message}
-                    description={entry.template
-                      ? `${entry.template}${entry.line ? `:${entry.line}${entry.column ? `:${entry.column}` : ""}` : ""}`
-                      : entry.path}
+                    description={
+                      entry.template
+                        ? `${entry.template}${entry.line ? `:${entry.line}${entry.column ? `:${entry.column}` : ""}` : ""}`
+                        : entry.path
+                    }
                     action={
-                      onDiagnostic && (entry.path !== undefined || entry.line !== undefined) && (
+                      onDiagnostic &&
+                      (entry.path !== undefined ||
+                        entry.line !== undefined) && (
                         <Button onClick={() => onDiagnostic(entry)}>
                           定位问题
                         </Button>

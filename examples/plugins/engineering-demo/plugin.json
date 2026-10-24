@@ -1,0 +1,189 @@
+{
+  "descriptor": {
+    "id": "engineering-demo",
+    "version": "0.1.0",
+    "protocol_version": 2,
+    "requires": [],
+    "provides": [],
+    "config_schema": {
+      "type": "object"
+    },
+    "panels": []
+  },
+  "command": [
+    "python",
+    "plugin.py"
+  ],
+  "actions": [
+    {
+      "id": "drawing.analyze",
+      "title": "Drawing analyze",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "project"
+        ],
+        "properties": {
+          "project": {
+            "type": "object",
+            "required": [
+              "points"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "points": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 1000,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "x",
+                    "y"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "title": "标识"
+                    },
+                    "x": {
+                      "type": "number",
+                      "title": "X"
+                    },
+                    "y": {
+                      "type": "number",
+                      "title": "Y"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "formats": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "json"
+              ]
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "example": {
+        "project": {
+          "points": [
+            {
+              "id": "a",
+              "x": 0,
+              "y": 0
+            },
+            {
+              "id": "b",
+              "x": 10,
+              "y": 5
+            },
+            {
+              "id": "c",
+              "x": 20,
+              "y": 0
+            }
+          ]
+        },
+        "formats": [
+          "json"
+        ]
+      }
+    },
+    {
+      "id": "drawing.generate",
+      "title": "Drawing generate",
+      "input_schema": {
+        "type": "object",
+        "required": [
+          "project"
+        ],
+        "properties": {
+          "project": {
+            "type": "object",
+            "required": [
+              "points"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "points": {
+                "type": "array",
+                "minItems": 2,
+                "maxItems": 1000,
+                "items": {
+                  "type": "object",
+                  "required": [
+                    "id",
+                    "x",
+                    "y"
+                  ],
+                  "additionalProperties": false,
+                  "properties": {
+                    "id": {
+                      "type": "string",
+                      "title": "标识"
+                    },
+                    "x": {
+                      "type": "number",
+                      "title": "X"
+                    },
+                    "y": {
+                      "type": "number",
+                      "title": "Y"
+                    }
+                  }
+                }
+              }
+            }
+          },
+          "formats": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "json"
+              ]
+            }
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "example": {
+        "project": {
+          "points": [
+            {
+              "id": "a",
+              "x": 0,
+              "y": 0
+            },
+            {
+              "id": "b",
+              "x": 10,
+              "y": 5
+            },
+            {
+              "id": "c",
+              "x": 20,
+              "y": 0
+            }
+          ]
+        },
+        "formats": [
+          "json"
+        ]
+      }
+    }
+  ]
+}

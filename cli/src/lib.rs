@@ -1,5 +1,6 @@
 //! NCtool 2.0 host: configuration, composition, CLI/HTTP adapters. No domain models.
 pub mod composition;
+pub mod engineering;
 pub mod server;
 
 pub mod history;

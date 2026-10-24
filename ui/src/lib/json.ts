@@ -134,7 +134,10 @@ export function saveFile(
   text: string,
   mediaType = "text/plain;charset=utf-8",
 ) {
-  const url = URL.createObjectURL(new Blob([text], { type: mediaType }));
+  saveBlob(name, new Blob([text], { type: mediaType }));
+}
+export function saveBlob(name: string, blob: Blob) {
+  const url = URL.createObjectURL(blob);
   const link = document.createElement("a");
   link.href = url;
   link.download = name;

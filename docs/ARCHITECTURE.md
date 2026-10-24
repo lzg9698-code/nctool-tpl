@@ -1,6 +1,6 @@
 # NCtool 架构与依赖边界
 
-适用于当前 2.3.0 CLI/WebUI（未发布）与 2.0.0 核心组件；外部进程协议 2，版本化服务独立。操作入口见[文档总览](README.md)，字段与路由见[系统设计](SYSTEM_DESIGN.md)，当前限制见[项目状态](PROJECT_STATUS.md)。
+适用于当前 2.3.0 CLI/WebUI 与 2.0.0 核心组件；外部进程协议 2，版本化服务独立。2.3.0 已于 2026-10-24 发布，发行与验证范围见[项目状态](PROJECT_STATUS.md#v230-正式发行2026-10-24)。操作入口见[文档总览](README.md)，字段与路由见[系统设计](SYSTEM_DESIGN.md)。
 
 默认产品是通用 Jinja 模板平台；内置 NC 能力已移除，领域能力通过开放的通用插件机制提供，数学扩展独立可选。借鉴 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/architecture.md) 和 [Cordis](https://github.com/deepseek-ai/deepseek-harness/blob/master/docs/cordis-primer.md) 的服务上下文、依赖声明、作用域注册与可撤销生命周期设计，在 Rust workspace 中实现。
 

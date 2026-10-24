@@ -1,6 +1,8 @@
 # 插件 SDK / 外部协议 v2
 
-适用于当前 2.0 SDK、运行时及 2.3.0 宿主（未发布）。外部协议版本 2、服务版本 1 与组件 SemVer 分开维护。配置与 HTTP 外层响应见[系统设计](SYSTEM_DESIGN.md)，安装操作见[WebUI 指南](WEBUI_USER_GUIDE.md#插件与设置)。
+原生工程工作台的宿主侧扩展见[工程工作台](ENGINEERING_WORKBENCH.md)：使用独立版本化包清单，外部进程 RPC 仍为 2。此能力为当前工作树新增，未归入本页所述已发行版本。
+
+适用于当前 2.0 SDK、运行时及 2.3.0 宿主。2.3.0 已于 2026-10-24 发布，证据范围见[项目状态](PROJECT_STATUS.md#v230-正式发行2026-10-24)。外部协议版本 2、服务版本 1 与组件 SemVer 分开维护。配置与 HTTP 外层响应见[系统设计](SYSTEM_DESIGN.md)，安装操作见[WebUI 指南](WEBUI_USER_GUIDE.md#插件与设置)。
 
 ## 描述文件
 

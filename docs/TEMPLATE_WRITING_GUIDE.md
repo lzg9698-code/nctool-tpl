@@ -1,6 +1,6 @@
 # 模板编写指南
 
-适用于 NCtool 2.2 工作台及 2.0 模板插件。模板由 MiniJinja 解析与渲染；通用能力默认启用，数学扩展需显式编译、启用并在单次渲染中选择。页面操作见 [WebUI 使用指南](WEBUI_USER_GUIDE.md)，完整动作字段见[系统设计](SYSTEM_DESIGN.md)与运行时 `nctool actions`。
+适用于 NCtool 2.3.0 工作台及 2.0 模板插件。模板由 MiniJinja 解析与渲染；通用能力默认启用，数学扩展需显式编译、启用并在单次渲染中选择。页面操作见 [WebUI 使用指南](WEBUI_USER_GUIDE.md)，完整动作字段见[系统设计](SYSTEM_DESIGN.md)与运行时 `nctool actions`。
 
 ## 普通模板的最小示例
 

@@ -30,6 +30,7 @@ export interface Draft {
   replay?: string;
 }
 export interface AuxiliaryDraft {
+  documentId?: string;
   raw: string;
   expected: string | null;
   saved: string;

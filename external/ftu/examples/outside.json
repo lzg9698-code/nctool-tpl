@@ -1,0 +1,83 @@
+{
+  "version": 1,
+  "mode": "outside",
+  "startZ": 0,
+  "startDiameter": 30,
+  "direction": -1,
+  "reverse": false,
+  "cutting": {
+    "mode": "constant-surface-speed",
+    "surfaceSpeedMPerMin": 120,
+    "maxSpindleRpm": 2500
+  },
+  "features": [
+    {
+      "id": "f1",
+      "type": "cylinder",
+      "length": 18,
+      "diameter": 30,
+      "feedPerRev": 0.1,
+      "corner": {
+        "type": "fillet",
+        "value": 2,
+        "feedPerRev": 0.08
+      }
+    },
+    {
+      "id": "f2",
+      "type": "face",
+      "length": 10,
+      "diameter": 40,
+      "feedPerRev": 0.1,
+      "corner": {
+        "type": "chamfer",
+        "value": 1,
+        "feedPerRev": 0.08
+      }
+    },
+    {
+      "id": "f3",
+      "type": "cylinder",
+      "length": 20,
+      "diameter": 40,
+      "feedPerRev": 0.1,
+      "corner": {
+        "type": "none",
+        "value": 1,
+        "feedPerRev": 0.1
+      }
+    },
+    {
+      "id": "f4",
+      "type": "cone",
+      "length": 12,
+      "diameter": 46,
+      "feedPerRev": 0.1,
+      "corner": {
+        "type": "none",
+        "value": 1,
+        "feedPerRev": 0.1
+      }
+    }
+  ],
+  "entry": {
+    "type": "arc",
+    "length": 2,
+    "radius": 2,
+    "angle": 90,
+    "clearance": 2,
+    "feedPerRev": 0.1,
+    "clearanceFeedPerRev": 0.1
+  },
+  "exit": {
+    "type": "arc",
+    "length": 2,
+    "radius": 2,
+    "angle": 90,
+    "clearance": 2,
+    "feedPerRev": 0.1,
+    "clearanceFeedPerRev": 0.1
+  },
+  "stock": null,
+  "forbidden": []
+}

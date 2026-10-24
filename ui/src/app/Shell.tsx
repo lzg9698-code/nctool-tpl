@@ -145,6 +145,15 @@ export function Shell() {
       (!tag || item.tags?.includes(tag)),
   );
   const nav = [
+    ...(capabilities.workbenches || []).map((view) => ({
+      key:
+        "/engineering/" +
+        encodeURIComponent(view.plugin) +
+        "/" +
+        encodeURIComponent(view.id),
+      icon: <CodeOutlined aria-hidden />,
+      label: view.title,
+    })),
     {
       key: "/workbench",
       icon: <CodeOutlined aria-hidden />,

@@ -1,0 +1,83 @@
+{
+  "id": "engineering-demo",
+  "format_version": 1,
+  "workbenches": [
+    {
+      "id": "drawing",
+      "kind": "drawing",
+      "title": "折线绘图示例",
+      "schema": {
+        "type": "object",
+        "required": [
+          "points"
+        ],
+        "additionalProperties": false,
+        "properties": {
+          "points": {
+            "type": "array",
+            "minItems": 2,
+            "maxItems": 1000,
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "x",
+                "y"
+              ],
+              "additionalProperties": false,
+              "properties": {
+                "id": {
+                  "type": "string",
+                  "title": "标识"
+                },
+                "x": {
+                  "type": "number",
+                  "title": "X"
+                },
+                "y": {
+                  "type": "number",
+                  "title": "Y"
+                }
+              }
+            }
+          }
+        }
+      },
+      "example": {
+        "points": [
+          {
+            "id": "a",
+            "x": 0,
+            "y": 0
+          },
+          {
+            "id": "b",
+            "x": 10,
+            "y": 5
+          },
+          {
+            "id": "c",
+            "x": 20,
+            "y": 0
+          }
+        ]
+      },
+      "analyze_action": "drawing.analyze",
+      "generate_action": "drawing.generate",
+      "tables": [
+        {
+          "field": "points",
+          "title": "点列表",
+          "row": {
+            "id": "p",
+            "x": 0,
+            "y": 0
+          }
+        }
+      ],
+      "formats": [
+        "json"
+      ]
+    }
+  ]
+}
