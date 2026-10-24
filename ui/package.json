@@ -12,18 +12,18 @@
   "dependencies": {
     "@codemirror/commands": "6.11.1",
     "@codemirror/lang-json": "6.0.2",
-    "@codemirror/language": "6.12.4",
-    "@codemirror/legacy-modes": "6.5.4",
+    "@codemirror/language": "6.13.1",
+    "@codemirror/legacy-modes": "6.5.5",
     "@codemirror/state": "6.7.6",
-    "@codemirror/view": "6.43.13",
+    "@codemirror/view": "6.43.15",
     "@ant-design/icons": "6.3.4",
-    "@tanstack/react-query": "5.104.2",
+    "@tanstack/react-query": "5.104.5",
     "antd": "6.6.7",
     "codemirror": "6.0.2",
     "diff": "8.0.4",
-    "lossless-json": "4.3.1",
-    "react": "19.3.0",
-    "react-dom": "19.3.0",
+    "lossless-json": "4.3.2",
+    "react": "19.3.1",
+    "react-dom": "19.3.1",
     "react-router-dom": "7.18.4",
     "zustand": "5.0.16"
   },
@@ -38,6 +38,6 @@
     "jsdom": "28.0.0",
     "typescript": "5.9.3",
     "vite": "7.3.7",
-    "vitest": "5.0.3"
+    "vitest": "5.0.5"
   }
 }
