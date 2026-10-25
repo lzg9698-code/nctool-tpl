@@ -18,7 +18,6 @@ for stream in (sys.stdout, sys.stderr):
         stream.reconfigure(encoding="utf-8")
 
 ROOT = Path(__file__).resolve().parents[2]
-BRIEF = Path("D:/ai-brain/memory/projects/nctool-rustjinja/_brief.md")
 LIMIT = 6000
 
 
@@ -54,21 +53,6 @@ def status_summary() -> tuple[str, str]:
     return f"{branch} @ {head}（{len(lines)} 项未提交）", "\n".join(visible) + suffix
 
 
-def brief_text() -> str:
-    if not BRIEF.is_file():
-        return (
-            f"项目简报不存在：{BRIEF.as_posix()}\n"
-            "（这是正常状态；不要编造简报内容，也不要在本会话中创建它。）"
-        )
-    try:
-        text = BRIEF.read_text(encoding="utf-8").strip()
-    except OSError as error:
-        return f"项目简报无法读取：{error}"
-    if len(text) > 2000:
-        text = text[:2000].rstrip() + "\n…（已截断）"
-    return text
-
-
 def build() -> str:
     head, status = status_summary()
     parts = [
@@ -79,9 +63,7 @@ def build() -> str:
         "```",
         status,
         "```",
-        "- 项目简报：",
-        brief_text(),
-        "- 规则入口：AGENTS.md（经 CLAUDE.md 导入）；开发入口 docs/README.md。",
+        "- 规则入口：AGENTS.md；开发入口 docs/README.md。",
         "- 环境自检：`python scripts/dev/check_env.py`。",
     ]
     text = "\n".join(parts)

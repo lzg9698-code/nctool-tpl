@@ -231,55 +231,19 @@ def check_agent_env() -> list[Result]:
         )
     )
     claude_md = ROOT / "CLAUDE.md"
-    imported = claude_md.is_file() and bool(
-        re.search(r"^@AGENTS\.md\s*$", claude_md.read_text(encoding="utf-8"), re.MULTILINE)
-    )
-    results.append(
-        Result(
-            "CLAUDE.md 导入 AGENTS.md",
-            imported,
-            "已导入" if imported else "缺失或未导入",
-            "恢复 CLAUDE.md 中的 @AGENTS.md 行",
+    if claude_md.is_file():
+        imported = bool(
+            re.search(r"^@AGENTS\.md\s*$", claude_md.read_text(encoding="utf-8"), re.MULTILINE)
         )
-    )
-    mcp = ROOT / ".mcp.json"
-    ok, detail = False, "未声明"
-    if mcp.is_file():
-        try:
-            servers = json.loads(mcp.read_text(encoding="utf-8")).get("mcpServers", {})
-            ok = "basic-memory" in servers
-            detail = ", ".join(servers) or "无 server"
-        except ValueError as error:
-            detail = f"JSON 无效：{error}"
-    results.append(
-        Result(
-            ".mcp.json 声明 basic-memory",
-            ok,
-            detail,
-            "恢复 .mcp.json 中的 basic-memory 条目",
-            required=False,
-        )
-    )
-    if shutil.which("basic-memory") is None:
         results.append(
             Result(
-                "basic-memory 命令（可选）",
-                False,
-                "不在 PATH 中",
-                "uv tool install basic-memory",
+                "CLAUDE.md 导入 AGENTS.md",
+                imported,
+                "已导入" if imported else "缺少导入行",
+                "在 CLAUDE.md 中添加 @AGENTS.md",
                 required=False,
             )
         )
-    brief = Path("D:/ai-brain/memory/projects/nctool-rustjinja/_brief.md")
-    results.append(
-        Result(
-            "项目简报（可选）",
-            brief.is_file(),
-            brief.as_posix() if brief.is_file() else "尚未创建",
-            "按 D:/ai-brain/templates/brief.md 创建",
-            required=False,
-        )
-    )
     return results
 
 

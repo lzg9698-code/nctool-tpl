@@ -48,10 +48,11 @@ class SessionContextTests(unittest.TestCase):
         self.assertIn("NCtool 会话基线", context)
         self.assertLessEqual(len(context), 6000)
 
-    def test_context_never_claims_a_missing_brief(self) -> None:
+    def test_context_does_not_read_external_project_brief(self) -> None:
         result = run(sys.executable, str(DEV / "session_context.py"))
         context = json.loads(result.stdout)["hookSpecificOutput"]["additionalContext"]
-        self.assertIn("项目简报", context)
+        self.assertNotIn("项目简报", context)
+        self.assertIn("规则入口：AGENTS.md", context)
 
 
 class CleanTargetTests(unittest.TestCase):
@@ -177,14 +178,14 @@ class CheckEnvTests(unittest.TestCase):
             result = run(sys.executable, str(DEV / "check_env.py"), "--json")
         self.assertIn(result.returncode, (0, 1), result.stderr)
         report = json.loads(result.stdout)
-        self.assertTrue(any(item["name"].startswith("CLAUDE.md") for item in report))
+        self.assertFalse(any(item["name"].startswith("CLAUDE.md") for item in report))
         self.assertNotIn("�", result.stdout)
 
     def test_json_report_shape(self) -> None:
         result = run(sys.executable, str(DEV / "check_env.py"), "--json")
         self.assertIn(result.returncode, (0, 1), result.stderr)
         report = json.loads(result.stdout)
-        self.assertTrue(any(item["name"].startswith("CLAUDE.md") for item in report))
+        self.assertFalse(any(item["name"].startswith("CLAUDE.md") for item in report))
         self.assertTrue(all({"name", "status", "required"} <= set(item) for item in report))
 
 
