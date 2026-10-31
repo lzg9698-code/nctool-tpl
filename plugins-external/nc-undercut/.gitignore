@@ -1,0 +1,4 @@
+/target
+/dist
+/data/*.json
+/data/.*.tmp
