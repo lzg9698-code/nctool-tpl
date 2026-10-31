@@ -4,7 +4,7 @@
 
 ## 描述文件
 
-一个外部插件目录含 `plugin.json`、入口程序及其依赖文件。完整示例见 [Python 报告插件](../examples/plugins/python-report)。必需结构：
+一个外部插件目录含 `plugin.json`、入口程序及其依赖文件。完整示例见 [Python 报告插件](../examples/plugins/python-report)；覆盖各协议面（面板、资产集合、`host.call`、取消/超时恢复）的 Rust 真实领域示例见 [nc-undercut](../plugins-external/nc-undercut)。必需结构：
 
 ```json
 {

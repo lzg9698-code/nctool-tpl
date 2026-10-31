@@ -1,5 +1,12 @@
 # Changelog
 
+## [Unreleased]
+
+### Added
+
+- `plugins-external/nc-undercut`：首个覆盖协议 v2 各面的真实领域外部插件（Rust 独立 crate）。移植退役实现的 ES/FS 越程槽几何、V3 兼容轨迹与标准表，经 `host.call → template.render` 生成 `.SPF` 工件；覆盖 panels/ui_schema、版本化 provides、`asset_collections` 导出/导入/回滚、`replay_input` 与取消/超时/并发占满恢复。`src/rpc.rs` 为最小 Rust 协议客户端参考实现。
+- 注意：退役命名空间 `undercut.*`、`nc.*` 等被保留（`retired_identity`），插件动作使用 `nc-undercut.*` 命名空间。
+
 ## [2.3.0] - 2026-10-24
 
 正式发行：[下载与升级说明](https://github.com/lzg9698-code/nctool-tpl/releases/tag/v2.3.0)。[发布流程](https://github.com/lzg9698-code/nctool-tpl/actions/runs/40043531922)验证、三平台构建与发布全部通过；三个二进制附 SHA-256。下载后校验通过，Windows 发行程序的 CLI 与 30 组浏览器验收通过。

@@ -1,0 +1,505 @@
+{
+  "descriptor": {
+    "id": "nc-undercut",
+    "version": "0.1.0",
+    "protocol_version": 2,
+    "requires": [
+      {
+        "id": "template.render",
+        "version": 1
+      }
+    ],
+    "provides": [
+      {
+        "id": "nc-undercut.prepare",
+        "version": 1,
+        "action": "nc-undercut.prepare"
+      },
+      {
+        "id": "nc-undercut.generate",
+        "version": 1,
+        "action": "nc-undercut.generate"
+      }
+    ],
+    "config_schema": {
+      "type": "object",
+      "properties": {
+        "template": {
+          "type": "string",
+          "default": "program.j2",
+          "description": "插件目录 templates/ 下的程序模板文件名",
+          "x-nctool-public": true
+        }
+      },
+      "additionalProperties": false
+    },
+    "panels": [
+      {
+        "id": "undercut",
+        "title": "越程槽",
+        "actions": [
+          "nc-undercut.prepare",
+          "nc-undercut.generate"
+        ],
+        "view": "form"
+      }
+    ],
+    "asset_collections": [
+      {
+        "id": "nc-undercut.standards",
+        "export_action": "nc-undercut.standards.export",
+        "import_action": "nc-undercut.standards.import"
+      }
+    ]
+  },
+  "command": [
+    "./nc-undercut"
+  ],
+  "limits": {
+    "timeout_ms": 30000,
+    "max_message_bytes": 4194304,
+    "max_concurrency": 8
+  },
+  "actions": [
+    {
+      "id": "nc-undercut.describe",
+      "title": "能力说明",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "example": {}
+    },
+    {
+      "id": "nc-undercut.standards",
+      "title": "工艺标准（含自定义）",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "standard": {
+            "type": "object"
+          },
+          "fingerprint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "standard",
+          "fingerprint"
+        ],
+        "additionalProperties": false
+      },
+      "example": {}
+    },
+    {
+      "id": "nc-undercut.prepare",
+      "title": "计算越程槽",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "raw_diameter": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "safety_dis": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "target": {
+            "type": "string",
+            "enum": [
+              "right",
+              "left",
+              "all"
+            ]
+          },
+          "sides": {
+            "type": "object",
+            "properties": {
+              "right": {
+                "$ref": "#/definitions/side"
+              },
+              "left": {
+                "$ref": "#/definitions/side"
+              }
+            },
+            "additionalProperties": false
+          },
+          "standard_id": {
+            "type": "string"
+          },
+          "options": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "raw_diameter",
+          "safety_dis",
+          "sides"
+        ],
+        "additionalProperties": false,
+        "definitions": {
+          "row": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "gtype": {
+                "type": "string",
+                "enum": [
+                  "ES",
+                  "FS"
+                ]
+              },
+              "std_key": {
+                "type": "string"
+              },
+              "d1": {
+                "type": "number"
+              },
+              "z": {
+                "type": "number"
+              },
+              "d2": {
+                "type": "number"
+              },
+              "c": {
+                "type": "number"
+              },
+              "angle": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "additionalProperties": false
+          },
+          "side": {
+            "type": "object",
+            "properties": {
+              "rows": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/row"
+                },
+                "maxItems": 256
+              },
+              "trajectory": {
+                "type": "object",
+                "properties": {
+                  "preset_id": {
+                    "type": "string"
+                  },
+                  "overrides": {
+                    "type": "object",
+                    "properties": {
+                      "approach_extra": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1000
+                      },
+                      "cut_feed": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "maximum": 10000
+                      },
+                      "fs_exit_extension": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "maximum": 1000
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "rows"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object",
+        "properties": {
+          "sides": {
+            "type": "object"
+          },
+          "standard_id": {
+            "type": "string"
+          },
+          "input_fingerprint": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "sides",
+          "standard_id",
+          "input_fingerprint"
+        ],
+        "additionalProperties": false
+      },
+      "ui_schema": {
+        "properties": {
+          "raw_diameter": {
+            "title": "毛坯直径 (mm)"
+          },
+          "safety_dis": {
+            "title": "安全距离 (mm)"
+          },
+          "target": {
+            "title": "侧别"
+          },
+          "sides": {
+            "title": "左右端槽行"
+          }
+        }
+      },
+      "example": {
+        "raw_diameter": 100,
+        "safety_dis": 2,
+        "target": "all",
+        "sides": {
+          "right": {
+            "rows": [
+              {
+                "id": "A",
+                "gtype": "ES",
+                "std_key": "DIN509-E 0,2 x 0,1",
+                "d1": 80,
+                "z": 30,
+                "d2": 85,
+                "c": 0.5,
+                "angle": 45
+              }
+            ]
+          },
+          "left": {
+            "rows": [
+              {
+                "id": "B",
+                "gtype": "FS",
+                "std_key": "DIN509-F 0,2 x 0,1",
+                "d1": 80,
+                "z": 10
+              }
+            ]
+          }
+        }
+      }
+    },
+    {
+      "id": "nc-undercut.generate",
+      "title": "生成越程槽程序",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "raw_diameter": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "safety_dis": {
+            "type": "number",
+            "exclusiveMinimum": 0
+          },
+          "target": {
+            "type": "string",
+            "enum": [
+              "right",
+              "left",
+              "all"
+            ]
+          },
+          "sides": {
+            "type": "object",
+            "properties": {
+              "right": {
+                "$ref": "#/definitions/side"
+              },
+              "left": {
+                "$ref": "#/definitions/side"
+              }
+            },
+            "additionalProperties": false
+          },
+          "standard_id": {
+            "type": "string"
+          },
+          "options": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "raw_diameter",
+          "safety_dis",
+          "sides"
+        ],
+        "additionalProperties": false,
+        "definitions": {
+          "row": {
+            "type": "object",
+            "properties": {
+              "id": {
+                "type": "string",
+                "minLength": 1
+              },
+              "gtype": {
+                "type": "string",
+                "enum": [
+                  "ES",
+                  "FS"
+                ]
+              },
+              "std_key": {
+                "type": "string"
+              },
+              "d1": {
+                "type": "number"
+              },
+              "z": {
+                "type": "number"
+              },
+              "d2": {
+                "type": "number"
+              },
+              "c": {
+                "type": "number"
+              },
+              "angle": {
+                "type": "number"
+              }
+            },
+            "required": [
+              "id"
+            ],
+            "additionalProperties": false
+          },
+          "side": {
+            "type": "object",
+            "properties": {
+              "rows": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/definitions/row"
+                },
+                "maxItems": 256
+              },
+              "trajectory": {
+                "type": "object",
+                "properties": {
+                  "preset_id": {
+                    "type": "string"
+                  },
+                  "overrides": {
+                    "type": "object",
+                    "properties": {
+                      "approach_extra": {
+                        "type": "number",
+                        "minimum": 0,
+                        "maximum": 1000
+                      },
+                      "cut_feed": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "maximum": 10000
+                      },
+                      "fs_exit_extension": {
+                        "type": "number",
+                        "exclusiveMinimum": 0,
+                        "maximum": 1000
+                      }
+                    },
+                    "additionalProperties": false
+                  }
+                },
+                "additionalProperties": false
+              }
+            },
+            "required": [
+              "rows"
+            ],
+            "additionalProperties": false
+          }
+        }
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "example": {}
+    },
+    {
+      "id": "nc-undercut.standards.export",
+      "title": "导出自定义标准",
+      "input_schema": {
+        "type": "object",
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "example": {}
+    },
+    {
+      "id": "nc-undercut.standards.import",
+      "title": "导入自定义标准",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "collection": {
+            "type": "object"
+          },
+          "validate_only": {
+            "type": "boolean"
+          },
+          "rollback": {
+            "type": "object"
+          }
+        },
+        "additionalProperties": false
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "example": {}
+    },
+    {
+      "id": "nc-undercut.wait",
+      "title": "Protocol fixture wait",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "milliseconds": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 30000
+          },
+          "ignore_cancel": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "milliseconds"
+        ]
+      },
+      "output_schema": {
+        "type": "object"
+      },
+      "example": {}
+    }
+  ]
+}
