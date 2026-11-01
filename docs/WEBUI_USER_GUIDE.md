@@ -14,7 +14,7 @@
 nctool --workspace ./my-workspace --home ./my-config ui
 ```
 
-默认配置加载通用模板与共享参数插件。数学扩展需以 `--features math` 构建（完整二进制已包含），在 `home/config.json` 的 `enabled` 中启用，并在每次渲染请求的 `extensions` 中显式选择；`--profile` 仅支持 `template`，旧 `nc` profile 会以 `invalid_profile` 拒绝，请先运行 `nctool config check` / `nctool config migrate --expected <指纹>`。模板库为空时可在欢迎页选择“查看入门示例”，预览普通文本或共享参数示例，校验后点击“确认保存整个示例”。预览和校验不写入资产；确认保存采用新标识，不覆盖已有资产。保存后从模板库打开并生成，也可自行新建或导入模板。当前发行包不附带旧业务模板。
+默认配置加载通用模板与共享参数插件。数学扩展随默认构建启用，需在每次渲染请求的 `extensions` 中显式选择；`--profile` 仅支持 `template`，旧 `nc` profile 会以 `invalid_profile` 拒绝，请先运行 `nctool config check` / `nctool config migrate --expected <指纹>`。模板库为空时可在欢迎页选择“查看入门示例”，预览普通文本或共享参数示例，校验后点击“确认保存整个示例”。预览和校验不写入资产；确认保存采用新标识，不覆盖已有资产。保存后从模板库打开并生成，也可自行新建或导入模板。当前发行包不附带旧业务模板。
 
 桌面侧栏包含页面导航、模板列表和导入入口，可按名称、描述、标识或标签筛选。宽度不足 1100px 时，导航进入抽屉，输入与结果改为标签切换。长模板名悬停可查看完整内容，列表读取失败时可重试。
 

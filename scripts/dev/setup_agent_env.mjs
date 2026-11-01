@@ -224,13 +224,12 @@ const launchTemplate = () => {
     name,
     runtimeExecutable: process.execPath,
     runtimeArgs: [join(root, "scripts", "dev", "preview_ui.mjs"), variant],
-    port: name === "dev-template" ? 18788 : 18789,
+    port: 18788,
   });
   return {
     version: "0.0.1",
     configurations: [
       preview("dev-template", "default"),
-      preview("dev-math", "math"),
     ],
   };
 };
@@ -260,7 +259,7 @@ function setupLaunch() {
   }
   mkdirSync(dirname(path), { recursive: true });
   writeFileSync(path, content);
-  log("created", ".claude/launch.json", "仅保留默认与 math 两个预览配置");
+  log("created", ".claude/launch.json", "预览配置已生成");
 }
 
 function setupMemoryNote() {

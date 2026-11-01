@@ -200,7 +200,7 @@ class PreviewLaunchTests(unittest.TestCase):
             result = run("node", str(script), "--apply", "--with-launch", "--json")
             self.assertEqual(result.returncode, 0, result.stderr)
             config = json.loads((root / ".claude/launch.json").read_text(encoding="utf-8"))
-            self.assertEqual([c["name"] for c in config["configurations"]], ["dev-template", "dev-math"])
+            self.assertEqual([c["name"] for c in config["configurations"]], ["dev-template"])
             self.assertFalse((root / ".claude/settings.json").exists())
 
     def test_launch_check_exit_codes_match_missing_stale_and_ready(self) -> None:
@@ -242,20 +242,18 @@ class PreviewLaunchTests(unittest.TestCase):
             scripts = root / "scripts" / "dev"
             scripts.mkdir(parents=True)
             shutil.copy2(DEV / "preview_ui.mjs", scripts / "preview_ui.mjs")
-            reports = []
-            for variant in ("default", "math"):
-                result = run("node", str(scripts / "preview_ui.mjs"), variant, "--check")
-                self.assertEqual(result.returncode, 0, result.stderr)
-                report = json.loads(result.stdout)
-                self.assertFalse(report["exists"])
-                self.assertIn("platform-" + variant, report["binary"])
-                self.assertIn("--locked", report["build"])
-                self.assertIn("--home", report["launch"])
-                self.assertIn("--workspace", report["launch"])
-                reports.append(report)
-            self.assertNotIn("--features", reports[0]["build"])
-            self.assertEqual(reports[1]["build"][-2:], ["--features", "math"])
-            self.assertNotEqual(reports[0]["binary"], reports[1]["binary"])
+            result = run("node", str(scripts / "preview_ui.mjs"), "default", "--check")
+            self.assertEqual(result.returncode, 0, result.stderr)
+            report = json.loads(result.stdout)
+            self.assertFalse(report["exists"])
+            self.assertIn("platform-default", report["binary"])
+            self.assertIn("--locked", report["build"])
+            self.assertIn("--home", report["launch"])
+            self.assertIn("--workspace", report["launch"])
+            self.assertNotIn("--features", report["build"])
+            # math is built in now; the retired math variant must be rejected.
+            rejected = run("node", str(scripts / "preview_ui.mjs"), "math", "--check")
+            self.assertEqual(rejected.returncode, 2)
             self.assertFalse((root / "target").exists())
 
     def test_invalid_variant_fails_before_creating_files(self) -> None:

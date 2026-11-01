@@ -187,14 +187,14 @@ fn retired_nc_plugins_are_gone_and_builtin_ids_remain_reserved() {
         .map(|d| d.id)
         .collect();
     active.sort();
-    assert_eq!(active, ["parameters", "template"]);
+    assert_eq!(active, ["math", "parameters", "template"]);
     let inventory = app.inventory().unwrap();
     let plugins = inventory["plugins"].as_array().unwrap();
-    // Math survives as an optional, non-domain extension.
+    // Math survives as a built-in, non-domain extension enabled by default.
     nctool_runtime::config::ensure_plugin_allowed("math").unwrap();
     let math = plugins.iter().find(|p| p["id"] == "math").unwrap();
-    assert_eq!(math["active"], false);
-    assert_eq!(math["available"], cfg!(feature = "math"));
+    assert_eq!(math["active"], true);
+    assert_eq!(math["available"], true);
     assert_eq!(math["retired"], false);
     // Every NC identity is retired: unavailable, listed for explanation, and its ID
     // stays reserved so a same-named external plugin cannot take over.
@@ -656,12 +656,9 @@ fn unavailable_nc_history_keeps_original_artifacts_and_refuses_replay() {
     assert_eq!(std::fs::read(&path).unwrap(), original);
 }
 
-#[cfg(feature = "math")]
 #[test]
-fn math_is_opt_in_and_reports_a_clear_error_when_the_extension_is_missing() {
+fn math_is_on_by_default_and_run_extension_selection_stays_explicit() {
     let f = Fixture::new();
-    App::boot(&f.home(), &f.workspace(), None).unwrap();
-    nctool_runtime::config::set_enabled(&f.home(), "math", true).unwrap();
     let app = App::boot(&f.home(), &f.workspace(), None).unwrap();
     assert!(app.runtime.descriptors().iter().any(|d| d.id == "math"));
     // The filter is not global: it only exists when the run selects the extension.
@@ -681,24 +678,6 @@ fn math_is_opt_in_and_reports_a_clear_error_when_the_extension_is_missing() {
         )
         .unwrap();
     assert_eq!(rendered.data["text"], "1024.0");
-}
-
-#[cfg(not(feature = "math"))]
-#[test]
-fn math_enable_is_rejected_on_a_build_without_the_feature() {
-    let f = Fixture::new();
-    assert_eq!(
-        App::boot(&f.home(), &f.workspace(), None)
-            .unwrap()
-            .inventory()
-            .unwrap()["plugins"]
-            .as_array()
-            .unwrap()
-            .iter()
-            .find(|p| p["id"] == "math")
-            .unwrap()["available"],
-        false
-    );
 }
 
 #[test]

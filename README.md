@@ -2,7 +2,7 @@
 
 通用 **Jinja 模板平台**：编辑模板、定义参数、输入 JSON 数据并生成文本。内置 NC 能力（G 代码生成、机床配置、加工工序、同步粗车、越程槽、轨迹）已移除；领域能力通过开放的通用插件机制提供。
 
-模板引擎基于 MiniJinja，支持其 Jinja 兼容语法；不声称与 Python Jinja 的全部扩展等价。默认构建提供通用模板与共享参数能力，不注入机床上下文或注册数学过滤器。数学是唯一可选扩展，以独立 `math` feature 编译，启用与单次渲染的扩展选择都显式。
+模板引擎基于 MiniJinja，支持其 Jinja 兼容语法；不声称与 Python Jinja 的全部扩展等价。默认构建提供通用模板、共享参数与数学扩展能力，不注入机床上下文。数学扩展随默认构建启用，单次渲染的扩展选择仍显式。
 
 ## 快速开始
 
@@ -14,19 +14,15 @@
 npm ci --prefix ui
 node scripts/build_ui.mjs
 
-# 默认通用模板工作台（template + parameters），浏览器访问 http://127.0.0.1:8788
+# 默认通用模板工作台（template + parameters + math），浏览器访问 http://127.0.0.1:8788
 cargo run -p nctool-cli -- ui
 
 # 查看动作及其 Schema，运行普通文本示例
 cargo run -p nctool-cli -- actions
 cargo run -p nctool-cli -- run template.render --input examples/v2/render.json
-
-# 数学扩展：以 math feature 编译，启动后再启用并在每次渲染显式选择 extensions
-cargo run -p nctool-cli --features math -- ui
-cargo run -p nctool-cli --features math -- run template.render --input examples/v2/render.json
 ```
 
-已下载完整二进制时，使用 `nctool ui`。默认组合始终为 `template` + `parameters`；数学扩展需以 `--features math` 构建（完整二进制已包含），在 `home/config.json` 的 `enabled` 中启用，并在每次渲染请求的 `extensions` 中显式选择，否则不注册任何数学过滤器。
+已下载完整二进制时，使用 `nctool ui`。默认组合始终为 `template` + `parameters` + `math`；数学过滤器需在每次渲染请求的 `extensions` 中显式选择，否则不注册任何数学过滤器。
 
 全局参数：`--home <插件配置目录>`、`--workspace <资产目录>`、`--profile <组合>`。旧 `nc` profile 不再支持，会以 `invalid_profile` 拒绝；历史配置请用 `nctool config check` 只读预检、`nctool config migrate --expected <指纹>` 显式备份并迁移，启动不会自动改写配置。工作区默认是当前目录；配置目录优先使用 `NCTOOL_HOME`，Windows 默认 `%LOCALAPPDATA%/nctool`，其他平台使用 `$XDG_CONFIG_HOME/nctool` 或 `~/.config/nctool`。目录与配置详见[系统设计](docs/SYSTEM_DESIGN.md)。
 
