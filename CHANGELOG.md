@@ -2,6 +2,13 @@
 
 ## [Unreleased]
 
+### Added
+
+- `plugins-external/nc-undercut`：首个覆盖协议 v2 各面的真实领域外部插件（Rust 独立 crate）。移植退役实现的 ES/FS 越程槽几何、V3 兼容轨迹与标准表，经 `host.call → template.render` 生成 `.SPF` 工件；覆盖 panels/ui_schema、版本化 provides、`asset_collections` 导出/导入/回滚、`replay_input` 与取消/超时/并发占满恢复。`src/rpc.rs` 为最小 Rust 协议客户端参考实现。
+- 注意：退役命名空间 `undercut.*`、`nc.*` 等被保留（`retired_identity`），插件动作使用 `nc-undercut.*` 命名空间。
+
+### Changed
+
 - `math` 扩展彻底内化：移除 CLI 的 `math` cargo feature 门槛，`nctool-plugin-math` 改为非可选依赖随默认构建编译，并加入默认启用组合（`template` + `parameters` + `math`）；单次渲染的 `extensions` 选择仍显式。CLI 不再声明任何 feature。
 
 ## [2.3.0] - 2026-10-24
