@@ -247,7 +247,7 @@ export default function PluginsPage() {
                 disabled={!config.data || !!problem || !plugin.available}
                 checked={
                   (parsed?.enabled || []).includes(plugin.id) ||
-                  ((plugin.id === "template" || plugin.id === "parameters") &&
+                  ((inventory.data?.builtins || []).includes(plugin.id) &&
                     !(parsed?.disabled || []).includes(plugin.id))
                 }
                 onChange={(checked) =>
