@@ -14,9 +14,9 @@
 ## 架构与输入边界
 
 - CLI/WebUI 为 2.2，核心组件为 2.0；不要为文档一致性统一版本数字。旧 Tauri 桌面 GUI 已移除，历史资料不代表当前构建入口。
-- 内置 NC（NC 生成、机床、加工参数、工序、同步粗车、越程槽、轨迹）已彻底移除：不回到 workspace、依赖、动作/服务、配置、前端、资源或发行。保留通用插件机制与独立 `math` 扩展。
-- 根引擎保持领域中立，仅依赖 MiniJinja。资产、SDK、运行时、模板与参数插件不得引入任何加工模型；数学是唯一可选扩展，以独立 `math` feature 编译，用户启用与单次渲染 `extensions` 均显式。
-- CLI 只在 composition root 构造内置插件。默认构建为 template + parameters 组合；`math` 为唯一可选 feature，不需要额外 profile（旧 `nc` profile 一律拒绝）。
+- 内置 NC（NC 生成、机床、加工参数、工序、同步粗车、越程槽、轨迹）已彻底移除：不回到 workspace、依赖、动作/服务、配置、前端、资源或发行。保留通用插件机制与内置 `math` 扩展。
+- 根引擎保持领域中立，仅依赖 MiniJinja。资产、SDK、运行时、模板与参数插件不得引入任何加工模型；数学是内置扩展，随默认构建启用，单次渲染 `extensions` 仍显式选择。
+- CLI 只在 composition root 构造内置插件。默认构建为 template + parameters + math 组合，不需要额外 profile（旧 `nc` profile 一律拒绝）。
 - 资产写入通过 JsonStore/WriteKernel，保留指纹冲突、原子写入与快照语义。历史重执行先检查环境，记录实际绑定及来源，不改写原历史。
 - 通用渲染接受嵌套 JSON/null，保留 Schema、非有限数与整数精度校验，不静默纠正非法输入；共享参数保留定义/预置/来源/冻结语义。
 - 旧加工模板（`metadata.nc` 含 null、或加工 `execution.action`）与经 include/import/extends 实际加载的冻结来源不得降级为普通/受管渲染；旧加工历史只读，混合加工资产包整体拒绝。配置迁移只做只读预检、显式指纹确认、备份与原子写入。
@@ -26,7 +26,7 @@
 
 - 先确定受影响组件与入口，再选择正常、失败和边界验证。命令以 [贡献指南](docs/CONTRIBUTING.md) 为准；Rust workspace 检查带 `--workspace` 与 `--locked`。
 - 前端编辑 `ui/src`；通过 `node scripts/build_ui.mjs` 生成资源。已有产物的一致性检查用 `--check`。不手改 `ui/dist`、`cli/ui` 生成资源。
-- 默认与 math 构建使用独立 target 目录，或通过 `NCTOOL_BINARY` 指定固定二进制，避免覆盖正在运行的程序。
+- 不同构建产物使用独立 target 目录，或通过 `NCTOOL_BINARY` 指定固定二进制，避免覆盖正在运行的程序。
 - CLI/浏览器验收使用临时 `--home`、`--workspace` 和空闲 loopback 端口（`ui --port 0`）。不使用用户运行资产；只关闭本轮创建的进程和标签页。
 - 依赖变更或安全审计执行 `python scripts/audit_dependencies.py`。保留报告，不运行 `npm audit fix`、自动放宽版本或无依据忽略告警。网络失败记为未完成。
 - 纯文档修改核对链接、锚点、示例与接口，不强制无关全量测试。发布准备执行完整 CI 门槛，不能拿历史结果替代当前验证。

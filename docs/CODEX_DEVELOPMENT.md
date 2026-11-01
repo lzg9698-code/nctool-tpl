@@ -26,12 +26,12 @@ gh run view <运行ID> --repo lzg9698-code/nctool-tpl --log-failed
 浏览器插件用于手工复现与页面检查。启动固定二进制：
 
 ```bash
-cargo build -p nctool-cli --features math --locked --target-dir target/codex-math
+cargo build -p nctool-cli --locked --target-dir target/codex-math
 # Windows 在二进制文件名后加 .exe
 target/codex-math/debug/nctool --home <临时home> --workspace <临时workspace> ui --port 0
 ```
 
-打开启动日志的实际 loopback 地址。`--profile` 仅支持 `template`，旧 `nc` profile 以 `invalid_profile` 拒绝；数学扩展需以 `--features math` 构建（完整二进制已包含），在配置 `enabled` 中启用，并在请求 `extensions` 中显式选择。产品默认端口仍是 8788。不要改用用户工作台测试。批量回归运行 `node scripts/browser_acceptance.cjs`，统一执行当前主流程、共享参数/math、插件三组验收，`NCTOOL_BINARY` 指向固定程序；Playwright/Chromium 方法见[贡献指南](CONTRIBUTING.md)。工具无法连接时记录限制，继续隔离自动回归；脚本通过不代表手工或全部平台验收通过。
+打开启动日志的实际 loopback 地址。`--profile` 仅支持 `template`，旧 `nc` profile 以 `invalid_profile` 拒绝；数学扩展随默认构建启用，需在请求 `extensions` 中显式选择。产品默认端口仍是 8788。不要改用用户工作台测试。批量回归运行 `node scripts/browser_acceptance.cjs`，统一执行当前主流程、共享参数/math、插件三组验收，`NCTOOL_BINARY` 指向固定程序；Playwright/Chromium 方法见[贡献指南](CONTRIBUTING.md)。工具无法连接时记录限制，继续隔离自动回归；脚本通过不代表手工或全部平台验收通过。
 
 ## Context7
 
@@ -68,6 +68,6 @@ CI 新增 `dependency-audit` 作业，推送/PR 与发布复用验证均执行�
 
 ## 自动准备预览
 
-运行 `node scripts/dev/setup_agent_env.mjs --apply --with-launch` 生成默认与 math 的本地预览配置。
+运行 `node scripts/dev/setup_agent_env.mjs --apply --with-launch` 生成本地预览配置。
 
-- 预览配置通过 `node scripts/dev/preview_ui.mjs default` 或 `math` 启动：先检查嵌入资源，缺失或过期时重建（缺少前端依赖则先 `npm ci --prefix ui`），再运行 Cargo 增量构建，最后启动隔离 home/workspace 的 UI。Windows 冷启动验证（2026-10-18）：在无 `ui/node_modules`、`ui/dist`、`cli/ui`、Rust target 的独立源码副本中，通过 `preview_start` 自动完成依赖准备、资源生成和宿主编译并打开页面；Rust 编译耗时 24.58 秒。本机 npm/Cargo 下载缓存可用，该结果不代表空下载缓存或其他平台。首次启动可能需要较长构建时间；已有服务占用同一二进制时，先停止对应预览再重启。`--check` 只输出路径、构建和启动参数，不写文件、不安装或构建。启动器接受预览工具设置的 `PORT`，默认端口为 18788/18789。
+- 预览配置通过 `node scripts/dev/preview_ui.mjs default` 启动：先检查嵌入资源，缺失或过期时重建（缺少前端依赖则先 `npm ci --prefix ui`），再运行 Cargo 增量构建，最后启动隔离 home/workspace 的 UI。Windows 冷启动验证（2026-10-18）：在无 `ui/node_modules`、`ui/dist`、`cli/ui`、Rust target 的独立源码副本中，通过 `preview_start` 自动完成依赖准备、资源生成和宿主编译并打开页面；Rust 编译耗时 24.58 秒。本机 npm/Cargo 下载缓存可用，该结果不代表空下载缓存或其他平台。首次启动可能需要较长构建时间；已有服务占用同一二进制时，先停止对应预览再重启。`--check` 只输出路径、构建和启动参数，不写文件、不安装或构建。启动器接受预览工具设置的 `PORT`，默认端口为 18788。

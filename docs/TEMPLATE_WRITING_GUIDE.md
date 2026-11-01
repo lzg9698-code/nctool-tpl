@@ -75,16 +75,13 @@ JSON 入口保留支持范围内的整数；小数/指数使用有限 f64，不�
 
 ## 渲染扩展
 
-数学是当前唯一随发行提供的内置可选扩展，以独立 `math` feature 编译，不在默认构建中。使用数学过滤器需要三步都显式：
+数学是随发行提供的内置扩展，随默认构建编译并启用。使用数学过滤器仍需在每次渲染请求中显式选择：
 
 ```bash
-# 以 math feature 构建，或使用已包含它的完整二进制
-cargo run -p nctool-cli --features math -- run template.render --input examples/v2/render.json
+cargo run -p nctool-cli -- run template.render --input examples/v2/render.json
 ```
 
-1. 编译：使用 `--features math` 构建，或使用完整二进制。
-2. 启用：在 `home/config.json` 的 `enabled` 中加入 `math`；默认构建未包含 math 时会在启动时报错。
-3. 单次选择：在渲染请求中显式列出 `extensions`：
+1. 单次选择：在渲染请求中显式列出 `extensions`：
 
 ```json
 {"source":"{{ x | sqrt }}","context":{"x":9},"extensions":["math"]}

@@ -71,16 +71,8 @@ impl App {
                 workspace,
             )?));
         }
-        #[cfg(feature = "math")]
         if ids.contains("math") {
             plugins.push(Arc::new(nctool_plugin_math::MathPlugin));
-        }
-        #[cfg(not(feature = "math"))]
-        if ids.contains("math") {
-            return Err(PluginError::new(
-                "feature_unavailable",
-                "此构建未包含 math 扩展；请使用 --features math 构建。",
-            ));
         }
         plugins.extend(config::external_plugins(home, &config)?);
         let provenance = if track_history {
@@ -255,7 +247,6 @@ impl App {
                 nctool_plugin_template::TemplatePlugin::action_definitions(),
             ),
         ];
-        #[cfg(feature = "math")]
         definitions.push((
             nctool_plugin_math::MathPlugin::definition(),
             nctool_plugin_math::MathPlugin::action_definitions(),
@@ -272,9 +263,13 @@ impl App {
     }
     /// Shared selection for boot, configuration preview and next-start inventory.
     fn selected_ids(config: &Config) -> BTreeSet<String> {
-        let mut enabled: BTreeSet<String> = ["template".to_string(), "parameters".to_string()]
-            .into_iter()
-            .collect();
+        let mut enabled: BTreeSet<String> = [
+            "template".to_string(),
+            "parameters".to_string(),
+            "math".to_string(),
+        ]
+        .into_iter()
+        .collect();
         enabled.extend(config.enabled.iter().cloned());
         for id in &config.disabled {
             enabled.remove(id);
@@ -468,7 +463,7 @@ impl App {
         let external = config::installed(&self.home)?;
         let mut plugins = Vec::new();
         for id in config::BUILTIN_PLUGIN_IDS {
-            let available = ["template", "parameters"].contains(id) || cfg!(feature = "math");
+            let available = true;
             plugins.push(json!({"id":id,"builtin":true,"retired":false,"available":available,"descriptor":definitions.iter().find(|(d,_)| d.id == *id).map(|(d,_)|d),"active":active.iter().any(|d| d.id == *id),"enabled_next_start":selected.contains(*id)}));
         }
         // Retired NC identities stay listed so the UI can explain that they are gone

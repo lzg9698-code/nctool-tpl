@@ -144,13 +144,6 @@ fn run(cli: Cli) -> PluginResult<()> {
             }
             PluginCommand::Enable { id } => {
                 config::ensure_plugin_allowed(id)?;
-                #[cfg(not(feature = "math"))]
-                if id == "math" {
-                    return Err(PluginError::new(
-                        "feature_unavailable",
-                        "此构建未包含 math 扩展；请使用 --features math 构建。",
-                    ));
-                }
                 if !config::BUILTIN_PLUGIN_IDS.contains(&id.as_str())
                     && !config::installed(&home)?
                         .iter()
@@ -171,7 +164,7 @@ fn run(cli: Cli) -> PluginResult<()> {
             }
             PluginCommand::List => {
                 let (c, _) = config::load(&home)?;
-                json!({"config":c,"installed":config::installed(&home)?.into_iter().map(|(m,_)|m.descriptor).collect::<Vec<_>>(),"builtins":config::BUILTIN_PLUGIN_IDS,"math_available":cfg!(feature="math"),"retired_reserved_ids":config::RETIRED_PLUGIN_IDS})
+                json!({"config":c,"installed":config::installed(&home)?.into_iter().map(|(m,_)|m.descriptor).collect::<Vec<_>>(),"builtins":config::BUILTIN_PLUGIN_IDS,"math_available":true,"retired_reserved_ids":config::RETIRED_PLUGIN_IDS})
             }
         };
         println!("{}", serde_json::to_string_pretty(&value)?);

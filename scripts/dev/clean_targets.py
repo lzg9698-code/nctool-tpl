@@ -32,11 +32,10 @@ PROTECTED = {
     "agent-tools",
     "agent-preview",
     "platform-default",
-    "platform-math",
     "browser-agent",
     "tmp",
 }
-PROTECTED_PREFIXES = ("agent-", "platform-", "browser-")
+PROTECTED_PREFIXES = ("agent-", "browser-")
 
 # Only files describing the current workflow protect a directory. Dated records,
 # review reports and archive pages cite old directories as evidence; that is not

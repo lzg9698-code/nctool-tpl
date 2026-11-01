@@ -314,9 +314,11 @@ fn configuration_changes_apply_only_after_restart() {
     let app = temp.app("template");
     app.dispatch("POST", "/api/v2/plugins/template/disable", json!({}))
         .unwrap();
+    app.dispatch("POST", "/api/v2/plugins/math/disable", json!({}))
+        .unwrap();
     assert!(!app.runtime.capabilities().is_empty());
     let inventory = app.inventory().unwrap();
-    for id in ["template", "parameters"] {
+    for id in ["template", "parameters", "math"] {
         let plugin = inventory["plugins"]
             .as_array()
             .unwrap()

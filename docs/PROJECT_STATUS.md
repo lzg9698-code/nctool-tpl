@@ -12,7 +12,7 @@
 | 执行与历史 | 异步任务、取消、错误诊断、历史查询/分页/单条删除/比较、环境预检查与来源记录；原历史不因重执行改写 |
 | WebUI | Ant Design、Hash 路由、Query 服务端状态、Zustand 独立草稿；CodeMirror 按需加载，多文档、冲突处理、窄屏布局和过期交付门禁 |
 | 插件 | 依赖/服务绑定、配置预检查、本地目录安装、双向 JSON-RPC、超时/取消/迟到响应、失效进程终止与下次调用恢复 |
-| 可选扩展 | math 单独编译、运行配置启用、单次 extensions 选择；默认 template + parameters |
+| 内置扩展 | math 随默认构建编译并启用、单次 extensions 选择；默认 template + parameters + math |
 
 内置 NC 能力与旧 Tauri GUI 已移除；退役元数据、动作、集合和历史执行意图仍明确拒绝。当前入口见[文档总览](README.md)、[架构](ARCHITECTURE.md)、[WebUI 说明](UI_REWRITE.md)。
 

@@ -67,14 +67,12 @@ def invoke(binary, home, workspace, source, context, extensions):
 
 
 def measure(binary, math, repetitions):
+    # `math` only adds the math-extension case; the plugin is built in and enabled
+    # by default in every binary now.
     with tempfile.TemporaryDirectory(prefix="nctool-p2-measure-") as folder:
         home, workspace = Path(folder) / "home", Path(folder) / "workspace"
         home.mkdir()
         workspace.mkdir()
-        if math:
-            (home / "config.json").write_text(json.dumps({
-                "profile": "template", "enabled": ["math"],
-            }), encoding="utf-8")
         cases = [
             ("small", "Hello {{ name }}", {"name": "NCtool"}, [], "Hello NCtool"),
             ("rows-1000", "{% for row in rows %}{{ row.id }}:{{ row.name }}\n{% endfor %}",
@@ -128,7 +126,8 @@ def compression(resources):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--default", type=Path, required=True)
-    parser.add_argument("--math", type=Path, required=True)
+    parser.add_argument("--math", type=Path, required=True,
+                        help="第二个被测二进制；仅额外运行 math 扩展示例，所有二进制均已内置 math")
     parser.add_argument("--resources", type=Path, default=Path("cli/ui"))
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--repetitions", type=int, default=9)

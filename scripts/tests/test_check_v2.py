@@ -22,27 +22,24 @@ def packages():
     }
     metadata["nctool-cli"] = {
         "name": "nctool-cli",
-        "features": {"default": [], "math": ["dep:" + CHECK.MATH_PACKAGE]},
+        "features": {"default": []},
         "dependencies": [
-            {"name": CHECK.MATH_PACKAGE, "kind": None, "optional": True},
-        ] + [
             {"name": "nctool-plugin-" + name, "kind": None, "optional": False}
-            for name in ("template", "parameters")
+            for name in ("math", "template", "parameters")
         ],
     }
     return metadata
 
 
-TEMPLATE_TREE = "nctool-plugin-template nctool-plugin-parameters"
-MATH_TREE = TEMPLATE_TREE + " " + CHECK.MATH_PACKAGE
-WORKSPACE_TREE = MATH_TREE
+TREE = "nctool-plugin-math nctool-plugin-template nctool-plugin-parameters"
+WORKSPACE_TREE = TREE
 
 
 class ArchitectureTest(unittest.TestCase):
-    def check(self, metadata=None, workspace=WORKSPACE_TREE, template=TEMPLATE_TREE, math=MATH_TREE):
-        CHECK.check_architecture(metadata or packages(), workspace, template, math)
+    def check(self, metadata=None, workspace=WORKSPACE_TREE, template=TREE):
+        CHECK.check_architecture(metadata or packages(), workspace, template)
 
-    def test_optional_math_and_pure_engine(self):
+    def test_builtin_math_and_pure_engine(self):
         self.check()
 
     def test_retired_nc_packages_are_rejected_everywhere(self):
@@ -75,27 +72,23 @@ class ArchitectureTest(unittest.TestCase):
         with self.assertRaises(AssertionError):
             self.check(metadata)
 
-    def test_math_is_the_only_optional_feature_and_complete(self):
-        for features in [{"default": ["math"]}, {"math": []}]:
-            with self.subTest(features=features):
-                metadata = packages()
-                metadata["nctool-cli"]["features"].update(features)
-                with self.assertRaises(AssertionError):
-                    self.check(metadata)
-        with self.assertRaises(AssertionError):
-            self.check(template=TEMPLATE_TREE + " " + CHECK.MATH_PACKAGE)
-        with self.assertRaises(AssertionError):
-            self.check(math=TEMPLATE_TREE)
+    def test_math_is_built_in_without_a_feature_gate(self):
         metadata = packages()
-        next(d for d in metadata["nctool-cli"]["dependencies"] if d["name"] == CHECK.MATH_PACKAGE)["optional"] = False
+        metadata["nctool-cli"]["features"]["math"] = ["dep:" + CHECK.MATH_PACKAGE]
+        with self.assertRaises(AssertionError):
+            self.check(metadata)
+        metadata = packages()
+        next(d for d in metadata["nctool-cli"]["dependencies"] if d["name"] == CHECK.MATH_PACKAGE)["optional"] = True
         with self.assertRaises(AssertionError):
             self.check(metadata)
 
-    def test_default_build_keeps_template_and_parameters(self):
-        for name in ("nctool-plugin-template", "nctool-plugin-parameters"):
+    def test_default_build_keeps_math_template_and_parameters(self):
+        for name in (CHECK.MATH_PACKAGE, "nctool-plugin-template", "nctool-plugin-parameters"):
             with self.subTest(name=name):
                 with self.assertRaises(AssertionError):
-                    self.check(template=TEMPLATE_TREE.replace(name, ""))
+                    self.check(template=TREE.replace(name, ""))
+                with self.assertRaises(AssertionError):
+                    self.check(workspace=WORKSPACE_TREE.replace(name, ""))
                 metadata = packages()
                 next(d for d in metadata["nctool-cli"]["dependencies"] if d["name"] == name)["optional"] = True
                 with self.assertRaises(AssertionError):
