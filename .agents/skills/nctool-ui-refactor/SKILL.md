@@ -22,7 +22,7 @@ description: 重构 NCtool WebUI 的视觉设计与前端架构，核对设计�
 - 资产写入：保留 `expected` 指纹、冲突保留草稿及加载磁盘/另存副本语义，不自动覆盖。
 - 交付门禁：stale 禁止当前复制/导出；失败、取消、中断不交付当前产物，多文件整体交付，资格由统一模型与执行签名派生。
 - 退役兼容：旧 `metadata.nc`（含空/null）、退役执行动作及混合加工包维持拒绝行为；旧加工历史只可查看原 artifact，不恢复为可执行文档或重跑。
-- 生成资源：源码在 `ui/src`，通过 `node scripts/build_ui.mjs` 生成 `ui/dist` 与 `cli/ui`，不手改生成文件。2026-10-14 当时保留 App.tsx 入口、api.ts 无损编码和 `check_v2.py` 的断言；其后 `check_v2.py` 已随 NC 移除改为检查退役源码路径、`math` 唯一可选 feature 与依赖白名单（见[资源文件第四节](../../../docs/UI_REFACTOR_RESOURCES.md#四重构期间的兼容边界)）。未来经授权改变文件组织时可以同步改为等价检查，不能把当时或当前的字符串断言误写成永久架构禁令。
+- 生成资源：源码在 `ui/src`，通过 `node scripts/build_ui.mjs` 生成 `ui/dist` 与 `cli/ui`，不手改生成文件。2026-10-14 当时保留 App.tsx 入口、api.ts 无损编码和 `check_v2.py` 的断言；其后 `check_v2.py` 已随 NC 移除改为检查退役源码路径、CLI 无 feature 门槛与依赖白名单（见[资源文件第四节](../../../docs/UI_REFACTOR_RESOURCES.md#四重构期间的兼容边界)）。未来经授权改变文件组织时可以同步改为等价检查，不能把当时或当前的字符串断言误写成永久架构禁令。
 - 请求限制：后端 `body_limit` 为 1 MiB，新增输入或上传交互沿用相应入口限制。
 
 ## 分步实施

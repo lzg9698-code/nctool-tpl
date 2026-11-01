@@ -6,7 +6,7 @@
 
 ## 准备与记录
 
-记录日期、平台、浏览器/版本、源码提交及未提交改动、CLI/插件版本、构建组合、实际执行项和证据路径。使用独立临时 home/workspace，按快速开始生成资源并编译宿主；启动默认 `template` + `parameters` 组合，必要时另起 `--features math` 构建验证数学扩展，默认地址 `http://127.0.0.1:8788`。
+记录日期、平台、浏览器/版本、源码提交及未提交改动、CLI/插件版本、构建组合、实际执行项和证据路径。使用独立临时 home/workspace，按快速开始生成资源并编译宿主；启动默认 `template` + `parameters` + `math` 组合，默认地址 `http://127.0.0.1:8788`。
 
 准备一个含对象、数组、数值、布尔和默认值的普通模板、一个可被引用的共享模板，以及一个共享参数定义/预置；可参考[模板编写指南](TEMPLATE_WRITING_GUIDE.md)和[现有示例](../examples/v2)。不使用用户的实际生产资产。
 
@@ -34,8 +34,8 @@
 
 ## 退役边界与数学扩展
 
-- [ ] 默认构建未以 `--features math` 编译时，启用 `math` 报错；未显式选择 `extensions:["math"]` 时不注册任何数学过滤器。
-- [ ] 显式编译、配置 `enabled` 启用并在请求 `extensions` 选择后，数学过滤器可用，扩展选择进入记录并可重放。
+- [ ] math 随默认构建启用；未显式选择 `extensions:["math"]` 时不注册任何数学过滤器。
+- [ ] 在请求 `extensions` 中选择 `math` 后，数学过滤器可用，扩展选择进入记录并可重放。
 - [ ] 旧 `nc` profile 以 `invalid_profile` 拒绝；`nctool config check` 只读预检、`nctool config migrate --expected <指纹>` 显式备份并以原子写入迁移，启动不自动改写配置。
 - [ ] 带旧加工元数据（`metadata.nc` 或加工 `execution.action`）的模板被拒绝，不降级为普通/受管渲染；经 include/import/extends 实际加载的冻结来源同样被检查。
 - [ ] 旧加工历史只可查看、比较和导出原成功产物，不能重跑或恢复为可执行文档；原历史文件不被改写。

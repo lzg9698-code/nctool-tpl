@@ -1,5 +1,9 @@
 # Changelog
 
+## [Unreleased]
+
+- `math` 扩展彻底内化：移除 CLI 的 `math` cargo feature 门槛，`nctool-plugin-math` 改为非可选依赖随默认构建编译，并加入默认启用组合（`template` + `parameters` + `math`）；单次渲染的 `extensions` 选择仍显式。CLI 不再声明任何 feature。
+
 ## [2.3.0] - 2026-10-24
 
 正式发行：[下载与升级说明](https://github.com/lzg9698-code/nctool-tpl/releases/tag/v2.3.0)。[发布流程](https://github.com/lzg9698-code/nctool-tpl/actions/runs/40043531922)验证、三平台构建与发布全部通过；三个二进制附 SHA-256。下载后校验通过，Windows 发行程序的 CLI 与 30 组浏览器验收通过。

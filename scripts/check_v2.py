@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
-"""Check domain-neutral architecture, independent math and generated WebUI without editing sources."""
+"""Check domain-neutral architecture, built-in math and generated WebUI without editing sources."""
 import json
 from pathlib import Path
 import re
 import subprocess
 
 ROOT = Path(__file__).resolve().parent.parent
-# The only optional builtin left is the domain-neutral math extension. Every NC
-# package must be gone from the workspace, dependencies and both build trees.
+# The domain-neutral math extension is built in and enabled by default. Every NC
+# package must be gone from the workspace, dependencies and the build tree.
 MATH_PACKAGE = "nctool-plugin-math"
 RETIRED_PACKAGES = {
     f"nctool-plugin-{name}" for name in ("nc", "process", "sync-turning", "undercut")
@@ -45,13 +45,13 @@ def run(*command):
     return result.stdout
 
 
-def check_architecture(packages, workspace_tree, template_tree, math_tree):
-    """Check production boundaries and the two supported CLI build compositions."""
+def check_architecture(packages, workspace_tree, template_tree):
+    """Check production boundaries and the single CLI build composition."""
     assert not {"nctool-gui", "nctool-core"} & packages.keys()
     assert not RETIRED_PACKAGES & packages.keys(), RETIRED_PACKAGES & packages.keys()
     retired_names = "|".join(sorted(re.escape(name) for name in RETIRED_PACKAGES))
     retired_tree = re.compile(rf"\b(?:{retired_names})\b")
-    for tree in (workspace_tree, template_tree, math_tree):
+    for tree in (workspace_tree, template_tree):
         assert not re.search(r"\b(?:tauri(?:-[\w-]+)?|nctool-gui)\b", tree), tree
         assert not retired_tree.search(tree), tree
     for name, allowed in NEUTRAL_DEPENDENCIES.items():
@@ -64,19 +64,16 @@ def check_architecture(packages, workspace_tree, template_tree, math_tree):
         d["name"] for d in packages["nctool-tpl"]["dependencies"] if d["kind"] != "dev"
     } == {"minijinja"}
     cli = packages["nctool-cli"]
-    assert cli["features"].get("default") == [], cli["features"]
-    # The only optional feature is math; there is no nc-bundle and no nc profile.
+    assert cli["features"].get("default", []) == [], cli["features"]
+    # Math is built in and enabled by default; there is no optional feature, no
+    # nc-bundle and no nc profile.
     assert "nc-bundle" not in cli["features"], cli["features"]
-    assert set(cli["features"].get("math", [])) == {"dep:" + MATH_PACKAGE}, cli["features"]
-    math = next(d for d in cli["dependencies"] if d["name"] == MATH_PACKAGE)
-    assert math["optional"], math
-    assert MATH_PACKAGE not in template_tree, template_tree
-    assert MATH_PACKAGE in math_tree, math_tree
-    assert MATH_PACKAGE in workspace_tree, workspace_tree
-    for name in ("nctool-plugin-template", "nctool-plugin-parameters"):
+    assert "math" not in cli["features"], cli["features"]
+    for name in (MATH_PACKAGE, "nctool-plugin-template", "nctool-plugin-parameters"):
         dependency = next(d for d in cli["dependencies"] if d["name"] == name)
         assert not dependency["optional"], dependency
-        assert name in template_tree and name in math_tree, name
+        assert name in template_tree, name
+        assert name in workspace_tree, name
 
 
 def main():
@@ -86,7 +83,6 @@ def main():
         packages,
         run("cargo", "tree", "--workspace", "--all-features", "--edges", "normal", "--locked"),
         run("cargo", "tree", "-p", "nctool-cli", "--no-default-features", "--edges", "normal", "--locked"),
-        run("cargo", "tree", "-p", "nctool-cli", "--no-default-features", "--features", "math", "--edges", "normal", "--locked"),
     )
     for name in ("gui", "启动GUI.bat"):
         assert not (ROOT / name).exists(), f"Retired source or entry point must not be present: {name}"
@@ -117,7 +113,7 @@ def main():
     assert not any(name.startswith(("cli/", "core/", "plugins/", "gui/", "templates/", "docs/", "ui/", "runtime/", "assets/", "sdk/", "shaft_programmer/")) for name in package.splitlines())
     manifest = json.loads((ROOT / "examples/plugins/python-report/plugin.json").read_text(encoding="utf-8"))
     assert manifest["descriptor"]["requires"] == [{"id": "template.render", "version": 1}]
-    print("PASS: domain-neutral dependencies, optional math only, no NC source/dependency/feature, scoped engine, Tauri-free workspace, Python example, generated WebUI/JavaScript and package contents")
+    print("PASS: domain-neutral dependencies, built-in math, no NC source/dependency/feature, scoped engine, Tauri-free workspace, Python example, generated WebUI/JavaScript and package contents")
 
 
 if __name__ == "__main__":

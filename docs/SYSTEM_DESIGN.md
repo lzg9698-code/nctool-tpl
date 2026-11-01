@@ -8,7 +8,7 @@ CLI 全局参数为 `--home`、`--workspace`、`--profile template`。其他 pro
 
 home 包含 `config.json` 和已安装的 `plugins/`，工作区包含资产和 `.nctool/runs/`。浏览器草稿按工作区标识隔离，不属于已保存资产。WebUI 默认 `127.0.0.1:8788`，可用 `ui --host <回环 IP> --port <端口>` 修改。
 
-默认构建包含通用模板与共享参数组合；数学扩展需以 `--features math` 构建或使用完整发行二进制。构建步骤见[贡献指南](CONTRIBUTING.md)。
+默认构建包含通用模板、共享参数与内置 math 扩展组合。构建步骤见[贡献指南](CONTRIBUTING.md)。
 
 ## 配置组合
 
@@ -24,7 +24,7 @@ home 包含 `config.json` 和已安装的 `plugins/`，工作区包含资产和 
 }
 ```
 
-启动选择顺序：CLI `--profile` 覆盖已保存 profile；profile 的基础插件加 `enabled`；最后移除 `disabled`。`template` 组合加载模板与共享参数服务；独立 `math` 扩展或外部插件须在 `enabled` 中显式启用。外部插件只在显式启用后启动。
+启动选择顺序：CLI `--profile` 覆盖已保存 profile；profile 的基础插件加 `enabled`；最后移除 `disabled`。`template` 组合加载模板、共享参数与内置 math 扩展；外部插件须在 `enabled` 中显式启用。外部插件只在显式启用后启动。
 
 `plugins` 是按插件 ID 保存的配置，按插件的 `config_schema` 验证；`providers` 是服务 ID 到提供方插件 ID 的显式映射。多候选服务没有选择时失败，不默认选择最后加载者。
 

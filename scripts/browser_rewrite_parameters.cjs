@@ -130,30 +130,18 @@ suite("rewrite-parameters", async (t) => {
   const mathCard = page
     .locator(".ant-card")
     .filter({ hasText: "数学扩展与角度单位" });
-  assert.equal(
-    await mathCard
-      .getByRole("button", { name: "试跑示例", exact: true })
-      .isDisabled(),
-    true,
-  );
-  t.step("未启用 math 时禁止扩展示例");
   const inventory = await api("plugins");
   if (!inventory.plugins.find((plugin) => plugin.id === "math")?.available) {
     console.log("LIMIT: math not compiled; extension cases not run");
     return;
   }
-  const config = await api("config");
-  await api("config", {
-    config: {
-      ...config.config,
-      enabled: [...new Set([...config.config.enabled, "math"])],
-    },
-    expected: config.fingerprint,
-  });
-  t.stop(t.children[0]);
-  await t.serve();
-  await page.goto(t.url);
-  await page.getByRole("menuitem", { name: "模板语法", exact: true }).click();
+  assert.equal(
+    await mathCard
+      .getByRole("button", { name: "试跑示例", exact: true })
+      .isDisabled(),
+    false,
+  );
+  t.step("内置 math 默认启用，扩展示例可直接试跑");
   const [sampleResponse] = await Promise.all([
     page.waitForResponse(
       (res) =>
@@ -165,7 +153,7 @@ suite("rewrite-parameters", async (t) => {
   assert.equal(sample.status, "succeeded");
   assert.deepEqual(sample.input.extensions, ["math"]);
   assert.equal(sample.result.data.text, "3.0");
-  t.step("启用 math 后示例携带显式 extensions");
+  t.step("扩展示例携带显式 extensions");
   assert.equal(
     (
       await t.request("actions/template.render", {

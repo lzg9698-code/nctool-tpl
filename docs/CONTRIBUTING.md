@@ -8,7 +8,7 @@
 
 Rust 1.89+，前端使用 Node.js 22.12+ 和 npm。Python 插件与验证脚本需要 Python 3；源码快照工具需要 Python 3.9+。Windows 可将下列 `python3` 改为可用的 `python`，不要依赖不可用的 WindowsApps 命令别名。
 
-先在仓库根目录执行 `npm ci --prefix ui` 和 `node scripts/build_ui.mjs`，再运行 `cargo run -p nctool-cli -- ui`。默认 WebUI 地址为 `http://127.0.0.1:8788`。数学扩展使用 `cargo run -p nctool-cli --features math -- ui`，并需在配置 `enabled` 中启用、在请求 `extensions` 中显式选择。
+先在仓库根目录执行 `npm ci --prefix ui` 和 `node scripts/build_ui.mjs`，再运行 `cargo run -p nctool-cli -- ui`。默认 WebUI 地址为 `http://127.0.0.1:8788`。数学扩展随默认构建启用，需在请求 `extensions` 中显式选择。
 
 前端开发可执行 `npm run --prefix ui dev`；Vite 将 `/api` 转发到 `127.0.0.1:8788`，同时运行 Rust 宿主。前端源码变更后重新生成嵌入资源并编译宿主，才能在发行式 WebUI 中看到更新。
 
@@ -32,7 +32,7 @@ cargo +1.89.0 check --workspace --all-features --locked
 
 外部协议测试需要 Python 3，会使用可用的 python3/python 命令。真实进程测试覆盖握手、逆向服务调用、精度检查、错误输出、消息限制、崩溃、堵塞 stdin、超时、取消与下一次调用恢复。
 
-`python3 scripts/check_v2.py` 验证默认 template + parameters 不包含 NC，`math` 为唯一可选 feature，领域中立组件只有白名单生产依赖，旧桌面入口移除、Tauri 隔离、引擎领域注册隔离、Python 适配器、UI 资源与 JavaScript 语法、基础包内容均无加工实现。数学由独立 `math` feature 提供，运行扩展仍需显式选择。
+`python3 scripts/check_v2.py` 验证默认 template + parameters + math 不包含 NC，CLI 无任何 feature 门槛，领域中立组件只有白名单生产依赖，旧桌面入口移除、Tauri 隔离、引擎领域注册隔离、Python 适配器、UI 资源与 JavaScript 语法、基础包内容均无加工实现。math 为内置扩展，随默认构建启用，运行扩展仍需显式选择。
 
 `npm run --prefix ui lint` 执行 TypeScript 类型及未使用声明检查，不是 ESLint。前端依赖与测试环境必须声明在清单并锁定；不要依赖已有 node_modules 中未声明的包。当前范围与验收门槛见[路线图](ROADMAP.md)与[项目状态](PROJECT_STATUS.md)；2026-10-16 的 P0 方案已归档，仅作历史参考。
 
@@ -67,7 +67,7 @@ cargo +1.89.0 check --workspace --all-features --locked
 
 同时检查 HTTP 的 Host/Origin/Content-Type/体积限制，任务运行时能查询能力与取消。平台发布需要 Linux/Windows/macOS CI 成功。
 
-自动浏览器验收：先构建 `cargo build -p nctool-cli --features math`，安装 Playwright 1.62.1 和 Chromium，再执行 `node scripts/browser_acceptance.cjs`。可用 `NCTOOL_PLAYWRIGHT` 指定独立安装目录，`NCTOOL_CHROMIUM` 指定浏览器路径。脚本使用临时 home/workspace，覆盖默认与数学组合、退役边界与 Python 插件，不修改用户配置。
+自动浏览器验收：先构建 `cargo build -p nctool-cli`，安装 Playwright 1.62.1 和 Chromium，再执行 `node scripts/browser_acceptance.cjs`。可用 `NCTOOL_PLAYWRIGHT` 指定独立安装目录，`NCTOOL_CHROMIUM` 指定浏览器路径。脚本使用临时 home/workspace，覆盖默认组合（含内置 math）、退役边界与 Python 插件，不修改用户配置。
 
 `browser_v2.cjs` 还检查实际加载的编辑器样式：CSS 变量均有定义，关键字/数字/字符串/注释具有独立颜色，搜索面板和输入框背景不透明且文字可见，搜索命中高亮出现。报告目录保存 `editor-styles.json` 与 `editor-styles.png`，样式断言失败会阻断现有浏览器 CI。
 
@@ -80,11 +80,11 @@ cargo +1.89.0 check --workspace --all-features --locked
 
 `cli/tests/platform.rs` 的 `review_r*` 回归覆盖 CLI 原子输出不覆盖、直接动作、后台任务、历史快照、动态模板依赖、参数 Schema 与整数边界、集合导入，以及退役领域身份不再被声明为可执行。新增功能要保持这些边界；不要仅用单一路径通过来代替全部入口的约束。
 
-并行测试时不要让默认与 `math` 构建覆盖正在使用的同一个 `target/debug/nctool`。浏览器可通过 `NCTOOL_BINARY` 使用事先复制好的固定二进制；前端有改动后先运行 `node scripts/build_ui.mjs` 并重新编译宿主。
+并行测试时不要让不同构建覆盖正在使用的同一个 `target/debug/nctool`。浏览器可通过 `NCTOOL_BINARY` 使用事先复制好的固定二进制；前端有改动后先运行 `node scripts/build_ui.mjs` 并重新编译宿主。
 
 ## 共享参数与数学扩展回归
 
-单独运行 `node scripts/browser_rewrite_parameters.cjs`（与既有浏览器验收使用相同的 Playwright/Chromium 环境，`NCTOOL_BINARY` 指向固定程序）。这个脚本使用临时 home/workspace 覆盖通用共享参数链：定义、预置与绑定模板的继承值和来源，手改覆盖及保留、共享预置切换、恢复跟随、取消预置，未完成数值与无效 JSON 阻止执行，修正后只发送本次覆盖，以及修改依赖使旧结果过期并禁止导出。二进制包含 `math` 扩展（`--features math`）时，脚本继续启用并重启临时服务，验证帮助页试跑 math 示例、工作台生成携带 `extensions`、HTTP 无 `extensions` 报未知过滤器，以及后台 math 任务记录扩展且重执行不改写原历史；未包含扩展时打印限制并只验证共享参数链。
+单独运行 `node scripts/browser_rewrite_parameters.cjs`（与既有浏览器验收使用相同的 Playwright/Chromium 环境，`NCTOOL_BINARY` 指向固定程序）。这个脚本使用临时 home/workspace 覆盖通用共享参数链：定义、预置与绑定模板的继承值和来源，手改覆盖及保留、共享预置切换、恢复跟随、取消预置，未完成数值与无效 JSON 阻止执行，修正后只发送本次覆盖，以及修改依赖使旧结果过期并禁止导出。二进制清单中 math 可用时，脚本继续验证帮助页试跑 math 示例、工作台生成携带 `extensions`、HTTP 无 `extensions` 报未知过滤器，以及后台 math 任务记录扩展且重执行不改写原历史；清单中不可用时打印限制并只验证共享参数链。
 
 ## 插件作者与历史维护
 
