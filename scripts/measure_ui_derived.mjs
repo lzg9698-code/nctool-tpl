@@ -1,15 +1,15 @@
 #!/usr/bin/env node
 // Independent measurement driver for the workbench derived-value read path.
 //
-// Bundles scripts/measure_workbench.harness.ts with esbuild (the real ui/src/lib
+// Bundles scripts/measure_ui_derived.harness.ts with esbuild (the real ui/src/lib
 // modules, with `./api` substituted for an in-memory mock so no HTTP server is
 // started), runs it under plain Node and records the emitted medians as JSON in
 // the Git-ignored target/agent-preview/optimization/ tree.
 //
 // Usage:
-//   node scripts/measure_workbench.mjs --label before
-//   node scripts/measure_workbench.mjs --label after --sections recompute
-//   node scripts/measure_workbench.mjs --compare before after
+//   node scripts/measure_ui_derived.mjs --label before
+//   node scripts/measure_ui_derived.mjs --label after --sections recompute
+//   node scripts/measure_ui_derived.mjs --compare before after
 //
 // This never starts the WebUI, never touches a user workspace and never writes
 // into version-controlled files.
@@ -23,7 +23,7 @@ import process from "node:process";
 const require = createRequire(import.meta.url);
 const REPO_ROOT = path.resolve(import.meta.dirname, "..");
 const OUT_DIR = path.join(REPO_ROOT, "target", "agent-preview", "optimization");
-const HARNESS = path.join(REPO_ROOT, "scripts", "measure_workbench.harness.ts");
+const HARNESS = path.join(REPO_ROOT, "scripts", "measure_ui_derived.harness.ts");
 const BUNDLE = path.join(OUT_DIR, "harness", "measure_workbench.bundle.mjs");
 const PREFIX = "WORKBENCH_METRIC_JSON ";
 
@@ -236,8 +236,8 @@ async function main() {
   const options = parseArgs(process.argv.slice(2));
   if (options.help || (!options.label && !options.compare)) {
     process.stdout.write(
-      "usage: node scripts/measure_workbench.mjs --label <name> [--sections ...]\n" +
-        "       node scripts/measure_workbench.mjs --compare <before> <after>\n",
+      "usage: node scripts/measure_ui_derived.mjs --label <name> [--sections ...]\n" +
+        "       node scripts/measure_ui_derived.mjs --compare <before> <after>\n",
     );
     return;
   }

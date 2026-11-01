@@ -1,0 +1,14 @@
+[package]
+name = "nctool-external-sdk"
+version = "2.0.0"
+edition = "2021"
+rust-version = "1.89"
+license = "MIT"
+description = "Minimal Rust client SDK for NCtool external plugins (protocol v2)"
+
+# Deliberately standalone: external plugins and this SDK must not depend on the
+# host's workspace crates. This keeps the crate buildable from a plain checkout.
+[workspace]
+
+[dependencies]
+serde_json = "1"

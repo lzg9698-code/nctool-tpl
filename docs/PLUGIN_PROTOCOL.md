@@ -76,7 +76,7 @@ Limits：timeout 10–3,600,000 ms；消息 1 KiB–16 MiB；并发 1–64。包
 
 `RenderExtension` 对一个新的 Renderer 注册过滤器；`EventListener` 订阅 ActionStarted/ActionFinished。注册归属插件，停止时释放；启动失败必须在 shutdown 清理自己的外部资源。外部插件首版仅提供动作与服务，复杂视图用 Schema 表单；不执行第三方前端脚本。
 
-Python 适配器位于 [sdk/python/nctool_plugin.py](../sdk/python/nctool_plugin.py)，使用独立输入循环、Future 响应分发和动作线程池，能在等待宿主回调时继续接收消息。
+Python 适配器位于 [sdk/python/nctool_plugin.py](../sdk/python/nctool_plugin.py)，使用独立输入循环、Future 响应分发和动作线程池，能在等待宿主回调时继续接收消息。Rust 适配器为 [plugins-external/rust-sdk](../plugins-external/rust-sdk)（`nctool-external-sdk`，独立 path 依赖 crate），nc-undercut 插件基于它构建，同样将 invoke 分发到 worker 线程。
 
 ## 模板快照契约
 
