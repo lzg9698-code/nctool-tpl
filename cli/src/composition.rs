@@ -236,7 +236,6 @@ impl App {
         Self::definitions_at(&self.home)
     }
     fn definitions_at(home: &Path) -> PluginResult<Vec<(PluginDescriptor, Vec<ActionDescriptor>)>> {
-        #[allow(unused_mut)]
         let mut definitions = vec![
             (
                 nctool_plugin_parameters::ParametersPlugin::definition(),
@@ -246,11 +245,11 @@ impl App {
                 nctool_plugin_template::TemplatePlugin::definition(),
                 nctool_plugin_template::TemplatePlugin::action_definitions(),
             ),
+            (
+                nctool_plugin_math::MathPlugin::definition(),
+                nctool_plugin_math::MathPlugin::action_definitions(),
+            ),
         ];
-        definitions.push((
-            nctool_plugin_math::MathPlugin::definition(),
-            nctool_plugin_math::MathPlugin::action_definitions(),
-        ));
         definitions.extend(
             config::installed(home)?
                 .into_iter()
@@ -463,8 +462,7 @@ impl App {
         let external = config::installed(&self.home)?;
         let mut plugins = Vec::new();
         for id in config::BUILTIN_PLUGIN_IDS {
-            let available = true;
-            plugins.push(json!({"id":id,"builtin":true,"retired":false,"available":available,"descriptor":definitions.iter().find(|(d,_)| d.id == *id).map(|(d,_)|d),"active":active.iter().any(|d| d.id == *id),"enabled_next_start":selected.contains(*id)}));
+            plugins.push(json!({"id":id,"builtin":true,"retired":false,"available":true,"descriptor":definitions.iter().find(|(d,_)| d.id == *id).map(|(d,_)|d),"active":active.iter().any(|d| d.id == *id),"enabled_next_start":selected.contains(*id)}));
         }
         // Retired NC identities stay listed so the UI can explain that they are gone
         // instead of offering an unknown plugin.

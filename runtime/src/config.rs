@@ -9,7 +9,7 @@ use std::{
     sync::Arc,
 };
 
-/// Builtins supported by the current distribution (availability is feature-dependent).
+/// Builtins supported by the current distribution; all are compiled in and enabled by default.
 pub const BUILTIN_PLUGIN_IDS: &[&str] = &["template", "parameters", "math"];
 
 /// Builtin identities removed from this distribution. Their IDs stay reserved so a
