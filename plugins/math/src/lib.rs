@@ -1,4 +1,4 @@
-//! Optional numerical extensions; never registered by the template engine.
+//! Built-in numerical extensions; registered only when a run opts into `extensions: ["math"]`.
 use nctool_plugin_sdk::*;
 fn checked_math(value: f64, name: &'static str) -> Result<f64, nctool_tpl::EngineError> {
     if value.is_finite() {
@@ -25,7 +25,7 @@ pub fn configure(renderer: &mut nctool_tpl::Renderer) -> Result<(), nctool_tpl::
     renderer.add_filter("floor", |v: f64| checked_math(v.floor(), "floor"))?;
     renderer.add_filter("ceil", |v: f64| checked_math(v.ceil(), "ceil"))?;
     // 角度制三角函数（工艺图纸按度输入）：`_d` 后缀 = degrees。
-    // 见上方「角度制 vs 弧度制」——新模板一律用这组，避免静默错坐标。
+    // 新模板一律用这组，避免弧度/角度混淆造成的静默错坐标。
     renderer.add_filter("sin_d", |v: f64| {
         checked_math(v.to_radians().sin(), "sin_d")
     })?;
@@ -69,9 +69,6 @@ impl MathPlugin {
         d.provides = vec![Service::new("math.ready", "math.info")];
         d
     }
-}
-
-impl MathPlugin {
     pub fn action_definitions() -> Vec<ActionDescriptor> {
         vec![ActionDescriptor::new(
             "math.info",
