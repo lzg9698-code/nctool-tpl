@@ -1,7 +1,7 @@
 //! Typed NC path plans (Siemens-style output) and the V3-compatible undercut
 //! strategy. Ported from the retired `plugins/nc/src/trajectory.rs` and the
 //! `plan()` routine in `plugins/undercut/src/lib.rs`.
-use crate::rpc::{PluginError, PluginResult};
+use nctool_external_sdk::{PluginError, PluginResult};
 use serde::{Deserialize, Serialize};
 use serde_json::{json, Value};
 

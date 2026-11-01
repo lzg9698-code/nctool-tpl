@@ -1,6 +1,6 @@
 # nc-undercut — 外部插件（协议 v2 真实领域验证）
 
-把已退役的内置「越程槽（undercut）」能力以**独立 Rust 外部插件**形式回归：几何计算、轨迹计划与标准表全部在插件内完成，最终程序文本通过 `host.call → template.render` 生成。它是第一个覆盖协议 v2 各面的真实领域插件，也是 Rust 外部插件客户端（`src/rpc.rs`）的参考实现。
+把已退役的内置「越程槽（undercut）」能力以**独立 Rust 外部插件**形式回归：几何计算、轨迹计划与标准表全部在插件内完成，最终程序文本通过 `host.call → template.render` 生成。它是第一个覆盖协议 v2 各面的真实领域插件，基于 Rust 外部插件 SDK [`plugins-external/rust-sdk`](../rust-sdk)（`nctool-external-sdk`）构建。
 
 ## 目录结构
 
@@ -8,7 +8,6 @@
 plugins-external/nc-undercut/
 ├── plugin.json          # 描述文件 + 动作清单 + limits（宿主以此为校验基准）
 ├── src/
-│   ├── rpc.rs           # 协议 v2 客户端：stdin/stdout JSON-RPC、host.call、取消、shutdown
 │   ├── calculation.rs   # ES/FS 几何计算（移植自退役内置实现，行为不变）
 │   ├── trajectory.rs    # Plan/Block/Word 轨迹与 V3 兼容策略
 │   ├── plugin.rs        # 动作实现与资产集合（自定义标准）
@@ -59,7 +58,7 @@ python3 scripts/check_plugin.py \
 
 ## 实现要点与协议摩擦记录
 
-`src/rpc.rs` 是可以原样抽出的最小 Rust 客户端，实现中确认/记录的点：
+协议客户端已由 `src/rpc.rs` 抽出为独立 crate `plugins-external/rust-sdk`（`nctool-external-sdk`，path 依赖），实现中确认/记录的点：
 
 - **stdin 读循环与请求处理必须分离**：invoke 处理在 worker 线程，否则处理线程阻塞在 `host.call` 等待时，宿主回来的响应帧无人读取，死锁。
 - **stdin EOF / shutdown 即退出**：收到 EOF 或 `shutdown` 通知必须尽快 `exit`，否则宿主按超时后杀进程路径处理；在途 worker 会被打断（可接受，宿主已在拆线）。

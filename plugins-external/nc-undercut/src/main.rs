@@ -6,20 +6,20 @@
 //! newline-delimited JSON-RPC on stdin/stdout and serves the declared actions.
 mod calculation;
 mod plugin;
-mod rpc;
 mod trajectory;
 
+use nctool_external_sdk::Server;
 use std::sync::Arc;
 
 fn main() {
     let root = std::env::current_dir().expect("plugin working directory");
     let manifest_path = root.join("plugin.json");
-    let manifest = rpc::Server::manifest_from(&manifest_path).unwrap_or_else(|e| {
+    let manifest = Server::manifest_from(&manifest_path).unwrap_or_else(|e| {
         eprintln!("nc-undercut: cannot load {}: {e}", manifest_path.display());
         std::process::exit(1);
     });
     let state = Arc::new(plugin::plugin(&root));
-    let server = rpc::Server::new(manifest, move |action, input, server, request_id| {
+    let server = Server::new(manifest, move |action, input, server, request_id| {
         state.invoke(action, input, server, request_id)
     });
     server.run();

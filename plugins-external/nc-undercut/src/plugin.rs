@@ -1,7 +1,7 @@
 //! nc-undercut action implementations.
 use crate::calculation;
-use crate::rpc::{PluginError, PluginResult, Server};
 use crate::trajectory;
+use nctool_external_sdk::{PluginError, PluginResult, Server};
 use serde_json::{json, Value};
 use std::path::{Path, PathBuf};
 use std::sync::Arc;

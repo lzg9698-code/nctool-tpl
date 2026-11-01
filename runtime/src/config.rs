@@ -139,16 +139,22 @@ pub fn save(
         .map_err(asset_error)?;
     Ok(())
 }
+/// Record or clear a plugin's selection state on an already-loaded config:
+/// `Some(true)` enables, `Some(false)` disables, `None` removes every record
+/// (used when the plugin itself goes away so no stale entries accumulate).
+pub fn apply_selection(config: &mut Config, id: &str, selection: Option<bool>) {
+    config.enabled.retain(|s| s != id);
+    config.disabled.retain(|s| s != id);
+    match selection {
+        Some(true) => config.enabled.push(id.into()),
+        Some(false) => config.disabled.push(id.into()),
+        None => {}
+    }
+}
 pub fn set_enabled(home: &Path, id: &str, enabled: bool) -> PluginResult<()> {
     ensure_plugin_allowed(id)?;
     let (mut config, fp) = load(home)?;
-    config.enabled.retain(|s| s != id);
-    config.disabled.retain(|s| s != id);
-    if enabled {
-        config.enabled.push(id.into());
-    } else {
-        config.disabled.push(id.into());
-    }
+    apply_selection(&mut config, id, Some(enabled));
     save(home, &config, fp)
 }
 /// A plugin directory that exists but cannot be loaded. It is kept as a record so the
@@ -331,10 +337,12 @@ fn copy_tree(source: &Path, target: &Path, files: &mut usize, bytes: &mut u64) -
     Ok(())
 }
 pub fn uninstall(home: &Path, id: &str) -> PluginResult<()> {
-    if !crate::valid_id(id) {
-        return Err(PluginError::new("invalid_plugin_id", id));
-    }
-    set_enabled(home, id, false)?;
+    ensure_plugin_allowed(id)?;
+    // The plugin itself is going away: drop its selection records entirely
+    // instead of parking the id in `disabled` where it would pile up forever.
+    let (mut config, fp) = load(home)?;
+    apply_selection(&mut config, id, None);
+    save(home, &config, fp)?;
     let path = home.join("plugins").join(id);
     if path.is_dir() {
         std::fs::remove_dir_all(path)?;

@@ -1,11 +1,17 @@
-//! Minimal external-plugin client for NCtool protocol v2.
+//! Minimal Rust client SDK for NCtool external plugins (protocol v2).
 //!
-//! Transport rules mirrored from the host (`runtime/src/external.rs`):
+//! A plugin binary reads its `plugin.json`, builds a [`Server`] with an invoke
+//! callback and calls [`Server::run`]. Transport rules mirrored from the host
+//! (`runtime/src/external.rs`):
 //! - stdout carries newline-terminated UTF-8 JSON-RPC only; logs go to stderr.
 //! - Host requests have string ids; responses must echo the id verbatim.
 //! - `cancel`/`shutdown` are notifications; `initialize`/`describe`/`invoke`
 //!   are requests handled on worker threads so the reader stays live while an
 //!   invoke waits on a `host.call` callback.
+//! - `run` exits the process on stdin EOF or `shutdown`, which the host relies
+//!   on for process teardown; in-flight `host.call` waiters are released first.
+//!
+//! See `plugins-external/nc-undercut` for a complete plugin built on this SDK.
 use serde_json::{json, Value};
 use std::collections::{HashMap, HashSet};
 use std::io::{BufRead, BufReader, Write};

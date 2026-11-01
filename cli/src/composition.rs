@@ -652,13 +652,7 @@ impl App {
                     return Err(PluginError::new("plugin_missing", id));
                 }
                 let (mut config, fingerprint) = config::load(&self.home)?;
-                config.enabled.retain(|value| value != id);
-                config.disabled.retain(|value| value != id);
-                if operation == "enable" {
-                    config.enabled.push(id.into());
-                } else {
-                    config.disabled.push(id.into());
-                }
+                config::apply_selection(&mut config, id, Some(operation == "enable"));
                 self.validate_config(&config)?;
                 config::save(&self.home, &config, fingerprint)?;
                 Ok(json!({"restart_required":true}))

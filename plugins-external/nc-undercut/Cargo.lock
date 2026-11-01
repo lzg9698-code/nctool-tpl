@@ -78,9 +78,17 @@ checksum = "cf8baf1c55e62ffcace7a9f06f4bd9cd3f0c4beb022d3b367256b91b87513d98"
 name = "nc-undercut"
 version = "0.1.0"
 dependencies = [
+ "nctool-external-sdk",
  "serde",
  "serde_json",
  "sha2",
+]
+
+[[package]]
+name = "nctool-external-sdk"
+version = "2.0.0"
+dependencies = [
+ "serde_json",
 ]
 
 [[package]]

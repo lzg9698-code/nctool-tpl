@@ -2,7 +2,7 @@
 //! `plugins/undercut/src/calculation.rs` (V3 `undercut_logic.py` semantics),
 //! cut free of the in-process SDK. Domain behavior is unchanged: same field
 //! names, same validation order, same derived context keys.
-use crate::rpc::{PluginError, PluginResult};
+use nctool_external_sdk::{PluginError, PluginResult};
 use serde_json::{json, Value};
 
 fn error(field: &str, message: &str) -> PluginError {
