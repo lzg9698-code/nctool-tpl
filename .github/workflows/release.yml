@@ -51,7 +51,7 @@ jobs:
           binary = Path('${{ matrix.artifact }}')
           checksum = hashlib.sha256(binary.read_bytes()).hexdigest()
           Path(str(binary) + '.sha256').write_text(checksum + '  ' + binary.name + '\n', encoding='utf-8')
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v7
         with:
           name: ${{ matrix.artifact }}
           path: |
